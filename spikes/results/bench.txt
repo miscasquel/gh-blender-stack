@@ -1,0 +1,10 @@
+B0 verts 50625 polys 50176
+B1 numpy read (verts+topology): 15.2 ms
+B2 evaluated mesh access: 0.1 ms
+B3 numpy -> mesh write (foreach_set): 21.8 ms
+B4 from_pydata write: 88.5 ms
+B5 JSON encode: 74.3 ms, size 3.8 MB
+B6 binary blob size: 1.81 MB, tobytes 0.0 ms
+Blender 5.2.2 LTS (hash d13f752e3b9c built 2026-09-22 17:10:25)
+
+Blender quit

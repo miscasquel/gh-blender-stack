@@ -1,0 +1,22 @@
+P0 helper local: [(0.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0), (1.0, 0.0, 0.0)]
+P1 ObjectInfo props: ['transform_space']
+P2 persistent_uid set: True 668223759
+P3 RELATIVE stack-local coords of output: [(0.0, 4.0, 0.0), (0.0, 5.0, 0.0), (0.0, 5.0, 1.0), (1.0, 5.0, 0.0)]
+P3 ORIGINAL stack-local coords of output: [(0.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0), (1.0, 0.0, 0.0)]
+P4 expected stack-local for helper data: [(0, 0, 0), (0, 0, 1), (0, 1, 0), (1, 0, 0)]
+P5 order after move: ['Extra', 'GH'] uid stable on reorder: True
+P6 modifiers: [('Extra', 'BEVEL'), ('GH', 'NODES')]
+P7 clone modifiers: [('Extra', True), ('GH', True)]
+P7b clone shares node group: True
+P8 clone prefix eval verts: 4
+P9 dups: [('GH', False, 'GH_Stage'), ('GH.001', True, 'GH_Stage')]
+P10 hidden helper stack verts: 4 [(0.0, 0.0, 0.0), (0.0, 0.0, 1.0), (0.0, 1.0, 0.0), (1.0, 0.0, 0.0)]
+Traceback (most recent call last):
+  File "/tmp/opencode/probe_arch.py", line 70, in <module>
+    coll.objects.link(helper); bpy.context.scene.collection.objects.unlink(helper)
+                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+RuntimeError: Error: Object 'GH_Helper' not in collection 'Scene Collection'
+
+Blender 5.2.2 LTS (hash d13f752e3b9c built 2026-09-22 17:10:25)
+
+Blender quit

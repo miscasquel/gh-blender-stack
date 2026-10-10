@@ -1,0 +1,244 @@
+# GH Stack protocol v2
+
+**Status:** draft (M0). Frozen at M2, after spikes S1–S4 have run. Until then, changes are made here and recorded in the changelog at the end.
+**Scope:** the messages between the Blender add-on (`gh_stack`, WebSocket server) and the Grasshopper plugin (`GhStack.gha`, WebSocket client).
+
+---
+
+## 1. Overview
+
+- Blender listens on `127.0.0.1:9130` (configurable). GH connects.
+- Each message is one binary WebSocket message: a small JSON header describing the message, followed by raw binary sections for geometry.
+- Blender owns identity and caching. It computes geometry hashes and request IDs. GH echoes them back and never computes them.
+- Parameters travel as JSON values in the header. Geometry travels as binary sections.
+- Nothing is polled. Both sides push.
+
+## 2. Transport
+
+- Library on the Blender side: `websockets` 17.2 (pure Python). The server runs on a background thread. Blender's main thread reads a queue.
+- Library on the GH side: `System.Net.WebSockets.ClientWebSocket`, on a background thread.
+- Loopback only. No authentication in v2. Connections from non-loopback addresses are refused.
+- Maximum message size: 512 MiB. Maximum header size: 1 MiB.
+- Keepalive: `ping` every 2 s from Blender. No `pong` within 6 s means `disconnected`.
+
+## 3. Frame
+
+```
++-----------------------+-------------------------+----------------------+
+| u32 little-endian     | header: UTF-8 JSON      | sections: raw bytes  |
+| header length (bytes) | (no BOM, canonical)     | in header order      |
++-----------------------+-------------------------+----------------------+
+```
+
+- All numbers in binary sections are little-endian. Floats are IEEE 754 single precision (`f32`) unless stated.
+- The header is a JSON object with at least `type` and `v`. A `sections` array may be present (see §5). Each entry gives `name`, `dtype`, `shape`, and `bytes`.
+- The sum of `bytes` over all sections must equal the length of the payload after the header. Anything else is a `bad_frame` error.
+- Canonical header encoding: UTF-8, keys sorted, no insignificant whitespace (`separators=(",", ":")` in Python; the equivalent in C#). Fixtures depend on this.
+
+## 4. Message types
+
+Every message carries `"v": 2`. A message with a different `v` is answered with `error` code `proto_mismatch` and the connection is closed.
+
+### 4.1 `hello` (GH → Blender)
+
+Sent once per connection, first.
+
+```json
+{"type":"hello","v":2,"client":"GhStack 0.1.0","doc":"Panels.gh",
+ "doc_units":"Millimeters",
+ "stages":[{"key":"panelize-3f9a","enabled":true}]}
+```
+
+- `stages` lists every Stage In or Stage Out in the document, with its key and enabled flag.
+- `doc` is the document's file name. It is for display only.
+
+### 4.2 `schema` (GH → Blender)
+
+Sent after `hello`, and again whenever a Param component's declaration changes.
+
+```json
+{"type":"schema","v":2,"stage":"panelize-3f9a","params":[
+  {"id":"6f1c…guid…","label":"Radius","type":"float",
+   "default":2.0,"min":0.0,"max":10.0,"step":0.01,"choices":[],"group":"Shape"}]}
+```
+
+- `type` is one of: `float`, `int`, `bool`, `vector3`, `color`, `choice`, `text`.
+- `choices` is used only for `choice` (a list of strings; the parameter value is the index).
+- `id` is a GUID generated once per Param component. It never changes, so keyframes survive renames.
+- Removed parameters are omitted from later `schema` messages. Blender moves their keys to the orphan list. It does not delete them.
+
+### 4.3 `request` (Blender → GH)
+
+```json
+{"type":"request","v":2,"stage":"panelize-3f9a",
+ "rid":"sha256:…","nonce":0,
+ "params":{"6f1c…guid…":2.5,"0b7e…guid…":3},
+ "geom":{"mode":"full","hash":"sha256:…"},
+ "units":"m","space":"stack-local",
+ "sections":[ … ]}
+```
+
+- `params` maps parameter `id` to a value cast to the schema type before encoding: floats as JSON numbers, ints as integers, bools as `true`/`false`, vectors and colors as arrays of three numbers, choices as integers, text as strings.
+- `geom.mode` is `full` or `ref`.
+  - `full`: `sections` carries the geometry (§5). `hash` is the geometry hash.
+  - `ref`: `sections` is empty. `hash` names geometry GH already holds for this stage. If GH does not hold it, GH answers `unknown_ref` and Blender resends `full`.
+- `units` is always `m`. GH converts to and from document units.
+- `space` is always `stack-local`. The geometry is in the stack object's local coordinates.
+
+### 4.4 `response` (GH → Blender)
+
+```json
+{"type":"response","v":2,"stage":"panelize-3f9a","rid":"sha256:…",
+ "out_hash":"sha256:…","status":"ok","error":null,
+ "warnings":[{"code":"subd_creases","message":"creases transferred as tags; semi-sharp and vertex creases are not available"}],
+ "counts":{"meshes":1,"subd":0,"curves":0,"points":0,"approximated_curves":0},
+ "sections":[ … ]}
+```
+
+- `rid` echoes the request's `rid`. For a GH-initiated change (a slider upstream of Stage Out moved), `rid` is the last one received for that stage.
+- `status` is `ok` or `error`. An `error` response has no sections, and `error` holds `{"code": …, "message": …}`.
+- `out_hash` identifies the output. Blender compares it for equality and never recomputes it (see §6.3).
+- `warnings` carries every loss or approximation, each with a code and a message. Blender shows them in the stage status and logs them.
+
+### 4.5 `ping` / `pong`
+
+```json
+{"type":"ping","v":2,"t":1234.5}
+{"type":"pong","v":2,"t":1234.5}
+```
+
+`t` is echoed unchanged.
+
+### 4.6 `error`
+
+```json
+{"type":"error","v":2,"code":"unknown_ref","message":"no geometry for hash","stage":"panelize-3f9a","rid":"sha256:…"}
+```
+
+`stage` and `rid` are optional.
+
+**Error codes**
+
+| Code | Meaning | Sender's recovery |
+|---|---|---|
+| `proto_mismatch` | `v` differs | Close the connection |
+| `bad_frame` | Header or sections inconsistent | Drop the message, log |
+| `unknown_stage` | Stage key not present in the document | Show error on the stage |
+| `unknown_ref` | `ref` for geometry GH does not hold | Blender resends `full` |
+| `duplicate_stage` | Two documents claim one key | Both stages to `error`, naming the other document |
+| `gh_solve_failed` | The GH document raised an error during solve | Keep last good output, show the message |
+| `too_large` | Message exceeds the size limit | Reject |
+
+## 5. Sections
+
+Sections come in two groups. Plain meshes use `mesh.*`. SubD cages use `subd.*`. A message can contain both. Names, dtypes, and shapes are fixed:
+
+| Name | dtype | Shape | Meaning |
+|---|---|---|---|
+| `mesh.verts` | f32 | [N,3] | Positions |
+| `mesh.face_counts` | u32 | [F] | Vertices per face (3, 4, or more) |
+| `mesh.face_indices` | u32 | [sum of face_counts] | Vertex indices |
+| `mesh.colors` | u8 | [N,4] | Optional vertex colors (RGBA) |
+| `mesh.crease_edges` | u32 | [E,2] | Optional edge vertex pairs |
+| `mesh.crease_values` | f32 | [E] | Crease value per edge in `mesh.crease_edges` |
+| `subd.verts` | f32 | [N,3] | SubD control cage positions |
+| `subd.face_counts` | u32 | [F] | Vertices per cage face |
+| `subd.face_indices` | u32 | [sum of face_counts] | Cage vertex indices |
+| `subd.crease_edges` | u32 | [E,2] | Optional edge pairs |
+| `subd.crease_values` | f32 | [E] | Crease value per edge: 1.0 crease, 0.0 smooth (D2) |
+| `crv.points` | f32 | [M,4] | x, y, z, weight |
+| `crv.counts` | u32 | [C] | Points per curve |
+| `crv.types` | u8 | [C] | 0 poly, 1 Bezier, 2 NURBS |
+| `crv.orders` | u8 | [C] | NURBS order (0 for other types) |
+| `crv.knots_mode` | u8 | [C] | 0 normal, 1 endpoint, 2 Bezier (NURBS only) |
+| `crv.cyclic` | u8 | [C] | 0 or 1 |
+| `pts.positions` | f32 | [P,3] | |
+| `pts.radii` | f32 | [P] | Optional |
+| `pts.colors` | u8 | [P,4] | Optional RGBA |
+
+Rules:
+- A section is present only if it has data. Absent sections mean "none".
+- `*.face_indices` length equals the sum of the matching `*.face_counts`.
+- Curve `crv.points` length equals the sum of `crv.counts`.
+- Blender sends `subd.*` for a mesh its stack object flags as SubD (the `gh_subd` marker, §6 of the plan). Otherwise it sends `mesh.*`.
+- `subd.colors` does not exist in v2.
+
+## 6. Identifiers, hashes, and apply rules
+
+### 6.1 Geometry hash (Blender only)
+
+SHA-256 over the canonical section list:
+
+```
+for section in [sections in the order of §5 table, only those present]:
+    update(name as UTF-8) ; update(0x00) ; update(raw little-endian bytes)
+```
+
+Prefixed with `sha256:` and hex-encoded. Computed with numpy on the Blender side. Never a hash of a file.
+
+### 6.2 Request ID (Blender only)
+
+SHA-256 over these fields, separated by 0x00 bytes, in this order:
+
+1. The literal `gh-stack/rid/v2`
+2. Stage key (UTF-8)
+3. Canonical parameter JSON (UTF-8). Keys sorted, values cast to schema types, floats encoded by Python's `repr`.
+4. Geometry hash (the string, including `sha256:`)
+5. Units (`m`)
+6. Space (`stack-local`)
+7. Nonce as a decimal integer. Push increments it.
+
+Prefixed with `sha256:`. GH never computes or validates request IDs. It echoes them.
+
+### 6.3 Output hash (GH only)
+
+SHA-256 over the response sections, in header order: name (UTF-8), 0x00, raw bytes. Prefixed with `sha256:`. Blender treats it as an opaque string.
+
+### 6.4 Apply rules (Blender)
+
+1. A response is applied when its `stage` matches, its `rid` equals the stage's current request ID, and its `out_hash` differs from the applied one.
+2. A response for another `rid` is stored in the cache under its own `rid`. It is not applied.
+3. A response with the current `rid` and a new `out_hash` (GH-initiated change) is applied.
+4. A cached result for the current `rid` is applied without sending anything to GH.
+5. An `error` response keeps the last good output and sets the stage to `error`. A later applied response clears the error.
+
+## 7. Lifecycle
+
+**Connect.** GH sends `hello`, then one `schema` per stage. Blender sends the current `request` for each stage, with `geom.mode = "full"` for the first request after a connection (GH may have lost its geometry).
+
+**Steady state.** Blender sends `request`s as the stack changes. GH sends `response`s after each solve whose output changed, and `schema` when declarations change.
+
+**Disconnect.** Blender keeps the last good output and sets stages to `disconnected`. GH retries with backoff, starting at 0.5 s and capped at 5 s. No user action is needed.
+
+**Timeouts.** A request with no response after 30 s (configurable) sets the stage to `error` with the message "timed out". The stage retries only on the next change or on Push.
+
+**GH disabled.** A Stage In or Stage Out set to disabled reports itself in `hello` as `enabled: false`. It sends no responses and holds no geometry.
+
+**Conflicts.** Two documents that claim one stage key both receive `duplicate_stage`.
+
+## 8. Versioning
+
+- `v` is the protocol version. This document is version 2.
+- Additive changes inside a version (new optional fields, new warning codes) are allowed. Readers ignore unknown fields.
+- Breaking changes bump `v`.
+
+## 9. Fixtures
+
+`protocol/fixtures/<name>/` holds:
+- `frame.bin`: the encoded frame.
+- `expect.json`: the decoded header and the expected section sizes and checksums.
+
+Both the Python and C# codecs must decode every fixture to the same values, and encode the expected values back to the same bytes (canonical header, §3). Fixtures are created in M2.
+
+## 10. Changes from plan rev 2
+
+- SubD and plain meshes use separate section groups (`subd.*` and `mesh.*`), not a flag on a single mesh. Each group has its own creases.
+- `mesh.crease_edges` and `mesh.crease_values` are two sections, not one.
+- The `error` message type is added. Protocol mismatches and unknown references need it.
+- `unknown_ref` is added so a `ref` request can fall back to `full`.
+- Blender does not verify output hashes. It compares them for equality only.
+- Canonical header encoding is specified, because golden fixtures depend on it.
+
+## 11. Changelog
+
+- 2026-10-10: draft created for M0.

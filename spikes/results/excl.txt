@@ -1,0 +1,6 @@
+Q0 before exclude verts: 4
+Q1 helper in view layer: True
+Q1 excluded-collection helper -> stack verts: 4
+Blender 5.2.2 LTS (hash d13f752e3b9c built 2026-09-22 17:10:25)
+
+Blender quit

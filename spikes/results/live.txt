@@ -1,0 +1,12 @@
+T1 nodedefault initial: 8 (expect 8)
+T2 bmesh in-place edit: 4 (expect 3 if live)
+T3 same mesh datablock: Cube.001 | modifier still on Result: True
+T4 PLY initial: 0 (expect 8)
+Traceback (most recent call last):
+  File "/tmp/opencode/probe_live.py", line 48, in <module>
+    m2.properties.bl_system_properties_get()["inputs"][pid] = p
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^
+TypeError: Cannot assign a 'str' value to the existing 'Socket_1' Group IDProperty
+Blender 5.2.2 LTS (hash d13f752e3b9c built 2026-09-22 17:10:25)
+
+Blender quit

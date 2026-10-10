@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Blender
+*.blend1
+*.blend2
+
+# Grasshopper / Rhino build output
+*.gha
+*.pdb
+grasshopper/build/out/
+
+# Packaging
+*.zip
+
+# Local data and caches (live under ~/.local/share/gh-stack, not here)
+/cache/
+/logs/
+
+# OS
+.DS_Store

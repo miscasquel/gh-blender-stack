@@ -1,0 +1,14 @@
+START nodedefault
+VERTS nodedefault 8 0.0
+00:00.222  reports          | ERROR Array length mismatch (got 9, expected more)
+Blender 5.2.2 LTS (hash d13f752e3b9c built 2026-09-22 17:10:25)
+Traceback (most recent call last):
+  File "/tmp/opencode/probe_hang3.py", line 18, in <module>
+    helper.data.from_pydata([(0,0,0),(1,0,0),(0,1,0)], [], [(0,1,2)]); helper.data.update()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/share/blender/5.2/scripts/modules/_bpy_types.py", line 783, in from_pydata
+    self.vertices.foreach_set("co", tuple(chain.from_iterable(vertices)))
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: internal error setting the array
+
+Blender quit

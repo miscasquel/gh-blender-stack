@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Layer A: pure-core tests. No Blender, no Grasshopper.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+PYTHONPATH="$PWD" python3 -m unittest discover -s blender/tests/core -t blender/tests/core -v

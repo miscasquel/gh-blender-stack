@@ -1,0 +1,8 @@
+A action attrs: ['layers', 'slots']
+A layers: 1 strips: 1
+A channelbag fcurves: ['["gh/p/Radius"]']
+D driver added FCurve
+D driver value frame4 (2.0 if driver drives): 2.0
+Blender 5.2.2 LTS (hash d13f752e3b9c built 2026-09-22 17:10:25)
+
+Blender quit

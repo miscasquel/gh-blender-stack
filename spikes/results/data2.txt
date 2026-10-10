@@ -1,0 +1,21 @@
+V 5.2.2 LTS
+S1 nurbs spline attrs: ['order_u', 'use_endpoint_u', 'use_bezier_u', 'use_cyclic_u']
+S1 point attrs: ['co', 'weight', 'radius', 'tilt']
+S1 bezier point attrs: ['co', 'handle_left', 'handle_right', 'handle_left_type']
+S1 curve prop enum: ['2D', '3D']
+S2 attribute ok: crease_edge EDGE
+S2 attribute ok: crease_vert POINT
+S2 attribute ok: sharp_edge EDGE
+S2 subsurf verts: 25
+S2 GN subd node: True
+K frame 1 value 1.0
+K frame 5 value 2.668
+K frame 10 value 5.0
+Traceback (most recent call last):
+  File "/tmp/opencode/probe_data.py", line 34, in <module>
+    fc = cube.animation_data.action.fcurves[0]; print("K fcurves", len(cube.animation_data.action.fcurves), flush=True)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'Action' object has no attribute 'fcurves'
+Blender 5.2.2 LTS (hash d13f752e3b9c built 2026-09-22 17:10:25)
+
+Blender quit

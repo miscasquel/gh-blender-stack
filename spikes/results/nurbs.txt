@@ -1,0 +1,8 @@
+N1 curves component: True
+N2 attributes: ['position', 'curve_type', 'cyclic', 'radius', 'tilt', 'resolution', 'nurbs_weight', 'nurbs_order', 'knots_mode', 'normal_mode'] points: 5
+N3 curve_type values: [bpy.data.hair_curves['Curves']...ByteIntAttributeValue]
+N4 weight-like attrs: ['nurbs_weight', 'nurbs_order', 'knots_mode']
+N5 legacy spline weight readback: 3.0 order: 4
+Blender 5.2.2 LTS (hash d13f752e3b9c built 2026-09-22 17:10:25)
+
+Blender quit

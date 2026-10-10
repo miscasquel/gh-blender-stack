@@ -1,0 +1,14 @@
+G1 Object.evaluated_geometry: True
+G2 SeparateComponents node: True
+G3 PointCloud data: True
+G4 mixed output: evaluated type = MESH data type = Mesh
+G5 geometry set components: []
+G6 GeometrySet type: GeometrySet
+G6 members: ['curves', 'from_evaluated_object', 'grease_pencil', 'instance_references', 'instances_pointcloud', 'mesh', 'mesh_base', 'name', 'pointcloud', 'volume']
+G7 curves component: Curves
+G7 curve_type enum: n/a
+G7 curves props: ['animation_data', 'asset_data', 'attributes', 'color_attributes', 'curve_offset_data', 'curves', 'id_type', 'is_editable', 'is_embedded_data', 'is_evaluated', 'is_library_indirect', 'is_linked_packed', 'is_missing', 'is_runtime_data', 'library', 'library_weak_reference', 'materials', 'name', 'name_full', 'normals', 'original', 'override_library', 'points', 'position_data', 'preview', 'selection_domain', 'session_uid', 'surface', 'surface_collision_distance', 'surface_uv_map', 'tag', 'use_extra_user', 'use_fake_user', 'use_mirror_x', 'use_mirror_y', 'use_mirror_z', 'use_sculpt_collision', 'users']
+G8 Curves types exist: True False
+Blender 5.2.2 LTS (hash d13f752e3b9c built 2026-09-22 17:10:25)
+
+Blender quit
