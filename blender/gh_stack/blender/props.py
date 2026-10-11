@@ -67,7 +67,9 @@ def _typed_default(entry):
 
 def apply_schema(obj, stage, params):
     """Create or refresh the custom properties for one stage from a schema
-    message. Existing values are kept, so keyframes survive a schema refresh."""
+    message. Existing values are kept, so keyframes survive a schema refresh —
+    except when a parameter's type changed, where the old value cannot be
+    reinterpreted and the property is recreated from the new default."""
     stage.params.clear()
     for param in params:
         entry = stage.params.add()
@@ -85,9 +87,36 @@ def apply_schema(obj, stage, params):
         entry.choices = "\n".join(str(c) for c in choices)
 
         name = stack_mod.param_prop_name(stage.key, entry.param_id)
+        if name in obj and not _matches_type(obj[name], entry.type):
+            # The GH side changed the parameter's type; the old value cannot be
+            # reinterpreted (a float is not a vector), so start from the default.
+            del obj[name]
+            print(
+                "[gh-stack] %s changed type to %s; its value was reset"
+                % (name, entry.type),
+                flush=True,
+            )
         if name not in obj:
             obj[name] = _initial_value(entry)
         _set_ui(obj, name, entry)
+
+
+def _matches_type(value, param_type):
+    """Whether an existing custom property can hold this parameter type."""
+    if param_type in ("vector3", "color"):
+        try:
+            return len(value) == 3
+        except TypeError:
+            return False
+    if param_type == "text":
+        return isinstance(value, str)
+    if param_type == "bool":
+        return isinstance(value, bool)
+    if param_type in ("int", "choice"):
+        return isinstance(value, int) and not isinstance(value, bool)
+    if param_type == "float":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return False
 
 
 def _default_text(param):
@@ -143,13 +172,36 @@ def read_values(obj, stage):
     return out
 
 
+def _safe_values(obj, stage):
+    """The stage's current values, dropping any that cannot be cast to their
+    schema type. A stale value (say a keyframed float on a parameter that is now
+    a vector) falls back to the schema default instead of stalling the engine."""
+    schema = schema_of(stage)
+    values = read_values(obj, stage)
+    safe = {}
+    for param in schema:
+        pid = param["id"]
+        if pid not in values:
+            continue
+        try:
+            core_params.cast(param["type"], values[pid])
+            safe[pid] = values[pid]
+        except (core_params.SchemaError, TypeError, ValueError):
+            print(
+                "[gh-stack] value for %s/%s does not fit type %s; using the default"
+                % (stage.key, pid, param["type"]),
+                flush=True,
+            )
+    return safe
+
+
 def canonical_json(obj, stage):
     """Canonical parameter JSON for the request ID (protocol §6.2)."""
-    return core_params.canonical_param_json(schema_of(stage), read_values(obj, stage))
+    return core_params.canonical_param_json(schema_of(stage), _safe_values(obj, stage))
 
 
 def cast_values(obj, stage):
-    return core_params.cast_params(schema_of(stage), read_values(obj, stage))
+    return core_params.cast_params(schema_of(stage), _safe_values(obj, stage))
 
 
 def register():

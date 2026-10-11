@@ -212,7 +212,39 @@ class ParamUiTests(unittest.TestCase):
         # The update callback writes the custom property, which is the real value.
         self.assertEqual(self.obj[self.name("ch1")], 2)
 
-    def test_09_text_property_round_trips(self):
+    def test_09_type_change_migrates_the_property(self):
+        """A parameter whose GH type changed must not break the engine: the
+        property is recreated from the new default, and a stale value that cannot
+        be cast falls back to the default instead of raising."""
+        obj = self.obj
+        stage = self.stage
+        props = self.props
+        name = self.name("f1")
+
+        # Pretend GH changed "f1" from float to vector3.
+        props.apply_schema(
+            obj,
+            stage,
+            [{"id": "f1", "label": "Float", "type": "vector3", "default": [1.0, 2.0, 3.0]}],
+        )
+        self.assertEqual(len(obj[name]), 3)
+        self.assertEqual(list(obj[name]), [1.0, 2.0, 3.0])
+
+        # A value that does not fit (as if keyframed before the change) is dropped
+        # from the cast, and the schema default is used.
+        obj[name] = 0.5
+        values = props.cast_values(obj, stage)
+        self.assertEqual(values["f1"], (1.0, 2.0, 3.0))
+
+        # Put it back for the later tests.
+        props.apply_schema(
+            obj,
+            stage,
+            [{"id": "f1", "label": "Float", "type": "float", "default": 1.0, "min": 0.0, "max": 10.0}],
+        )
+        self.assertIsInstance(obj[name], float)
+
+    def test_10_text_property_round_trips(self):
         obj = self.obj
         name = self.name("t1")
         obj[name] = "changed"
