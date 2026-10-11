@@ -101,6 +101,10 @@ def _handle_schema(header):
         if stage is not None:
             matched = True
             try:
+                # The plugin re-publishes on a heartbeat; only touch the UI when
+                # the schema actually changed.
+                if props.schema_signature(stage) == props.incoming_signature(params):
+                    continue
                 props.apply_schema(obj, stage, params)
             except Exception as exc:
                 # One bad schema must not take the engine down.

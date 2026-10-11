@@ -215,6 +215,31 @@ class ParamUiTests(unittest.TestCase):
         # The update callback writes the custom property, which is the real value.
         self.assertEqual(self.obj[self.name("ch1")], 2)
 
+    def test_08b_out_of_range_choice_is_clamped(self):
+        stage = self.stage
+        entry = None
+        for e in stage.params:
+            if e.param_id == "ch1":
+                entry = e
+        name = self.name("ch1")
+        self.obj[name] = 7  # as a stale value from a shorter choice list
+        self.props.apply_schema(
+            self.obj,
+            stage,
+            [{"id": "ch1", "label": "Mode", "type": "choice", "default": 1,
+              "choices": ["Ribbon", "Panel", "Grid"]}],
+        )
+        self.assertEqual(self.obj[name], 2)  # clamped to the last valid index
+        # The entry survives the refresh (reconciled, not rebuilt) and the
+        # dropdown proxy accepts the clamped index.
+        entry = None
+        for e in stage.params:
+            if e.param_id == "ch1":
+                entry = e
+        self.assertEqual(entry.choices, "Ribbon\nPanel\nGrid")
+        entry.choice_value = str(int(self.obj[name]))
+        self.assertEqual(entry.choice_value, "2")
+
     def test_09_type_change_migrates_the_property(self):
         """A parameter whose GH type changed must not break the engine: the
         property is recreated from the new default, and a stale value that cannot

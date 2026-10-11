@@ -96,15 +96,62 @@ class GHSTACK_PT_panel(bpy.types.Panel):
         col.use_property_decorate = True
         if entry.type == "choice" and entry.choices:
             # A dropdown over the custom property, which stays the real value
-            # (keyframable, and what the engine sends).
-            current = str(int(obj[name]))
+            # (keyframable, and what the engine sends). The index is clamped:
+            # assigning an out-of-range identifier raises inside the draw.
+            labels = [c for c in entry.choices.split("\n") if c]
+            index = int(obj[name])
+            if index < 0 or index >= len(labels):
+                index = 0
+                obj[name] = 0
+            current = str(index)
             if entry.choice_value != current:
-                entry.choice_value = current
+                try:
+                    entry.choice_value = current
+                except TypeError:
+                    pass
             col.prop(entry, "choice_value", text=entry.label or entry.param_id)
         else:
             # Custom properties are addressed with the bracket syntax in the UI;
             # a bare name (or a slash path) does not resolve.
             col.prop(obj, '["%s"]' % name, text=entry.label or entry.param_id)
+
+
+class GHSTACK_PT_diagnostics(bpy.types.Panel):
+    """What the add-on actually received, for when the panel and GH disagree.
+    Collapsed by default; Blender-style child panel."""
+
+    bl_label = "Diagnostics"
+    bl_idname = "GHSTACK_PT_diagnostics"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "GH Stack"
+    bl_parent_id = "GHSTACK_PT_panel"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        state = bridge.state
+        layout.label(text="connected: %s" % ("yes" if state["connected"] else "no"))
+        layout.label(text="doc: %s" % (state["doc"] or "-"))
+        if state.get("error"):
+            layout.label(text=state["error"], icon="ERROR")
+
+        obj = context.object
+        record = stack_mod.stack_of(obj) if obj is not None else None
+        if record is None or not record.stages:
+            layout.label(text="no stage on this object")
+            return
+        for stage in record.stages:
+            box = layout.box()
+            box.label(text="%s (%s)" % (stage.key, stage.state))
+            box.label(text="rid: %s" % (stage.rid[-16:] or "-"))
+            if stage.error:
+                box.label(text=stage.error, icon="ERROR")
+            for entry in stage.params:
+                detail = entry.type
+                if entry.type == "choice":
+                    detail += " (%d choices)" % len([c for c in entry.choices.split("\n") if c])
+                box.label(text="%s: %s" % (entry.label or entry.param_id, detail))
 
 
 def _state_text(stage):
@@ -131,7 +178,9 @@ def _port():
 
 def register():
     bpy.utils.register_class(GHSTACK_PT_panel)
+    bpy.utils.register_class(GHSTACK_PT_diagnostics)
 
 
 def unregister():
+    bpy.utils.unregister_class(GHSTACK_PT_diagnostics)
     bpy.utils.unregister_class(GHSTACK_PT_panel)

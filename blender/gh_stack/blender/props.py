@@ -65,14 +65,58 @@ def _typed_default(entry):
     return raw or ""
 
 
+def schema_signature(stage):
+    """What the stage currently holds, for comparison with an incoming schema."""
+    return [
+        (e.param_id, e.label, e.type, e.group, e.default, e.has_range,
+         round(e.min, 6), round(e.max, 6), round(e.step, 6), e.choices)
+        for e in stage.params
+    ]
+
+
+def incoming_signature(params):
+    """The same shape, built from a schema message."""
+    out = []
+    for param in params:
+        choices = param.get("choices") or []
+        out.append(
+            (
+                param.get("id", ""),
+                param.get("label") or param.get("id", ""),
+                param.get("type", "float"),
+                param.get("group") or "",
+                _default_text(param),
+                param.get("min") is not None or param.get("max") is not None,
+                round(float(param.get("min") or 0.0), 6),
+                round(float(param.get("max") or 1.0), 6),
+                round(float(param.get("step") or 0.01), 6),
+                "\n".join(str(c) for c in choices),
+            )
+        )
+    return out
+
+
 def apply_schema(obj, stage, params):
     """Create or refresh the custom properties for one stage from a schema
     message. Existing values are kept, so keyframes survive a schema refresh —
     except when a parameter's type changed, where the old value cannot be
-    reinterpreted and the property is recreated from the new default."""
-    stage.params.clear()
+    reinterpreted and the property is recreated from the new default.
+
+    Entries are reconciled in place rather than cleared and rebuilt: the plugin
+    re-publishes its schema on a heartbeat, and rebuilding the collection under
+    an open UI (a dropdown, a dragged slider) is what made the panel feel
+    unstable."""
+    wanted = [param.get("id", "") for param in params]
+    for index in range(len(stage.params) - 1, -1, -1):
+        if stage.params[index].param_id not in wanted:
+            stage.params.remove(index)
+    by_id = {entry.param_id: entry for entry in stage.params}
+
     for param in params:
-        entry = stage.params.add()
+        entry = by_id.get(param.get("id", ""))
+        if entry is None:
+            entry = stage.params.add()
+            by_id[entry.param_id] = entry
         entry.param_id = param.get("id", "")
         entry.stage_key = stage.key
         entry.label = param.get("label") or entry.param_id
@@ -98,6 +142,14 @@ def apply_schema(obj, stage, params):
             )
         if name not in obj:
             obj[name] = _initial_value(entry)
+        elif entry.type == "choice":
+            # A stale index (from a changed choice list) would break the dropdown
+            # and send an index GH cannot use; clamp it.
+            labels = [c for c in entry.choices.split("\n") if c]
+            if labels:
+                index = int(obj[name])
+                if index < 0 or index >= len(labels):
+                    obj[name] = max(0, min(index, len(labels) - 1))
         _set_ui(obj, name, entry)
 
 
