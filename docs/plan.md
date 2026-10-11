@@ -493,7 +493,7 @@ GH solve time will dominate real definitions. The transport is not the bottlenec
 |---|---|---|
 | M0 | Create `~/workspace/gh-blender-stack`. Move this plan into `docs/plan.md`. Write `docs/protocol.md` draft and ADRs for D1–D5. Copy the probe scripts from `/tmp/opencode` into `spikes/`. | Repo exists. Pure-core tests run (empty) |
 | M1 | Spikes S1–S8 | All gates passed, or the fallback is chosen and recorded. **S2 passed** |
-| M2 | Protocol v2 core, golden frames, rules | Layer A green |
+| M2 | Protocol v2 core, golden frames, rules | Layer A green. **Core done 2026-10-11**: codec, hashing, params, rules, cache, 43 tests green. Golden frames outstanding |
 | M3 | Engine against `tools/fake_gh` | Layer B green, including bake, undo, save and reload |
 | M4 | GH plugin: Stage In, Stage Out, Param | Layer C green: live round trip, parameter change, save and reopen, GH closed and reopened |
 | M5 | End-to-end with real definitions | Acceptance A1–A10 pass. Latency reported |
