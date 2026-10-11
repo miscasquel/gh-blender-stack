@@ -47,31 +47,66 @@ def canonical_json(obj):
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+_DTYPE_FMT = {
+    "f32": ("f", 4),
+    "u32": ("I", 4),
+    "u8": ("B", 1),
+}
+
+# numpy dtype strings, little-endian, used when the input carries its own buffer.
+_NP_DTYPE = {"f32": "<f4", "u32": "<u4", "u8": "u1"}
+
+
+def element_count(array_like):
+    """Element count of a flat or shaped sequence (numpy arrays report ``size``)."""
+    size = getattr(array_like, "size", None)
+    if size is not None:
+        return int(size)
+    total = 1
+    for dim in _shape_of(array_like):
+        total *= dim
+    return total
+
+
+def _shape_of(array_like):
+    shape = getattr(array_like, "shape", None)
+    if shape is not None:
+        return tuple(int(d) for d in shape)
+    if isinstance(array_like, (list, tuple)) and array_like and isinstance(array_like[0], (list, tuple)):
+        return (len(array_like), len(array_like[0]))
+    return (len(array_like),)
+
+
 def section_bytes(name, dtype, array_like):
     """Return the raw little-endian bytes for one section.
 
-    ``array_like`` may be a numpy array, a list of numbers, or anything supporting
-    the buffer protocol. Shapes are taken from the caller (the header), not
-    recomputed, so a section can be encoded from flat data.
+    The input may be a numpy array (any shape), a flat list, or anything with a
+    buffer. Shaped numpy input is flattened without importing numpy: the array's
+    own ``astype``/``tobytes`` do the work and keep the dtype explicit, which is
+    also the fast path. Plain sequences go through :mod:`struct`.
     """
-    if dtype == "f32":
-        return struct.pack("<%df" % (len(array_like),), *array_like)
-    if dtype == "u32":
-        return struct.pack("<%dI" % (len(array_like),), *array_like)
-    if dtype == "u8":
-        return struct.pack("%dB" % (len(array_like),), *array_like)
-    raise SectionError("unknown dtype %r for section %r" % (dtype, name))
+    if dtype not in _DTYPE_FMT:
+        raise SectionError("unknown dtype %r for section %r" % (dtype, name))
+
+    if hasattr(array_like, "astype") and hasattr(array_like, "tobytes"):
+        return array_like.astype(_NP_DTYPE[dtype], copy=False).reshape(-1).tobytes()
+
+    flat = array_like
+    if hasattr(flat, "reshape"):
+        flat = flat.reshape(-1)
+    values = flat.tolist() if hasattr(flat, "tolist") else list(flat)
+    char, _ = _DTYPE_FMT[dtype]
+    return struct.pack("<%d%s" % (len(values), char), *values)
 
 
 def unpack_section(name, dtype, raw):
     """Decode one section's bytes into a tuple of numbers."""
-    if dtype == "f32":
-        return struct.unpack("<%df" % (len(raw) // 4), raw)
-    if dtype == "u32":
-        return struct.unpack("<%dI" % (len(raw) // 4), raw)
-    if dtype == "u8":
-        return struct.unpack("%dB" % len(raw), raw)
-    raise SectionError("unknown dtype %r for section %r" % (dtype, name))
+    if dtype not in _DTYPE_FMT:
+        raise SectionError("unknown dtype %r for section %r" % (dtype, name))
+    char, size = _DTYPE_FMT[dtype]
+    if len(raw) % size != 0:
+        raise SectionError("section %r length %d is not a multiple of %d" % (name, len(raw), size))
+    return struct.unpack("<%d%s" % (len(raw) // size, char), raw)
 
 
 def check_version(header, expect=PROTOCOL_VERSION):
@@ -103,7 +138,7 @@ def encode_frame(header, sections=None):
     for name, dtype, array_like in (sections or []):
         raw = section_bytes(name, dtype, array_like)
         section_list.append(
-            {"name": name, "dtype": dtype, "shape": [len(array_like)], "bytes": len(raw)}
+            {"name": name, "dtype": dtype, "shape": [element_count(array_like)], "bytes": len(raw)}
         )
         body += raw
 

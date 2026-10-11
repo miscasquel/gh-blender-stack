@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Layer B: Blender headless tests.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+LOG="$(mktemp)"
+set +e
+blender -b --factory-startup --python-exit-code 1 \
+  --python blender/tests/headless/run.py >"$LOG" 2>&1
+CODE=$?
+set -e
+
+grep -vE '^Blender [0-9]|^Read prefs|^$' "$LOG" || true
+rm -f "$LOG"
+exit "$CODE"
