@@ -257,12 +257,11 @@ namespace GhStack
             p.AddTextParameter("Choices", "C", "Choice labels, one per line", GH_ParamAccess.item);
             p.AddTextParameter("Group", "G", "Group label", GH_ParamAccess.item);
             for (int i = 1; i < 9; i++) p[i].Optional = true;
-            // Sensible defaults so an unconnected Param is already useful.
-            ((Grasshopper.Kernel.Parameters.Param_String)p[1]).PersistentData.Append(new GH_String("Scale"));
+            // A neutral default so an unconnected Param is already useful. Min and
+            // Max stay empty: a parameter has no range until one is given.
+            ((Grasshopper.Kernel.Parameters.Param_String)p[1]).PersistentData.Append(new GH_String("parameter"));
             ((Grasshopper.Kernel.Parameters.Param_Integer)p[2]).PersistentData.Append(new GH_Integer(0));
             ((Grasshopper.Kernel.Parameters.Param_String)p[3]).PersistentData.Append(new GH_String("1.0"));
-            ((Grasshopper.Kernel.Parameters.Param_Number)p[4]).PersistentData.Append(new GH_Number(0.1));
-            ((Grasshopper.Kernel.Parameters.Param_Number)p[5]).PersistentData.Append(new GH_Number(10.0));
             ((Grasshopper.Kernel.Parameters.Param_Number)p[6]).PersistentData.Append(new GH_Number(0.1));
         }
 
@@ -274,18 +273,18 @@ namespace GhStack
         protected override void SolveInstance(IGH_DataAccess da)
         {
             string key = "";
-            string label = "Param";
+            string label = "parameter";
             int typeIndex = 0;
             string defaultText = "";
-            double min = 0.0, max = 1.0, step = 0.01;
+            double min = 0.0, max = 0.0, step = 0.01;
             string choices = "";
             string group = "";
             da.GetData("Key", ref key);
             da.GetData("Label", ref label);
             da.GetData("Type", ref typeIndex);
             da.GetData("Default", ref defaultText);
-            da.GetData("Min", ref min);
-            da.GetData("Max", ref max);
+            bool hasMin = da.GetData("Min", ref min);
+            bool hasMax = da.GetData("Max", ref max);
             da.GetData("Step", ref step);
             da.GetData("Choices", ref choices);
             da.GetData("Group", ref group);
@@ -309,8 +308,10 @@ namespace GhStack
             declaration["label"] = label;
             declaration["type"] = type;
             declaration["default"] = ParamValues.JsonValue(value);
-            declaration["min"] = min;
-            declaration["max"] = max;
+            // No range unless one is given: Blender then leaves the property
+            // unconstrained instead of inventing 0..1.
+            declaration["min"] = hasMin ? (object)min : null;
+            declaration["max"] = hasMax ? (object)max : null;
             declaration["step"] = step;
             var choiceList = new List<object>();
             foreach (string c in choices.Split('\n'))

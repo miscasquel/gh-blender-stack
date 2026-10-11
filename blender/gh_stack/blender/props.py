@@ -151,6 +151,15 @@ def _set_ui(obj, name, entry):
             else:
                 kwargs["min"] = float(entry.min)
                 kwargs["max"] = float(entry.max)
+        else:
+            # No range declared: clear any range a previous schema set.
+            # update(min=None) does not clear it; the type's extremes do.
+            if entry.type in ("int", "choice"):
+                kwargs["min"] = -(2 ** 31)
+                kwargs["max"] = 2 ** 31 - 1
+            elif entry.type in ("float", "vector3", "color"):
+                kwargs["min"] = -3.4e38
+                kwargs["max"] = 3.4e38
         if entry.type in ("float", "vector3", "color"):
             kwargs["step"] = float(entry.step or 0.01)
         if entry.type == "color":

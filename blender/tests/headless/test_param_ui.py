@@ -78,6 +78,9 @@ class ParamUiTests(unittest.TestCase):
         self.assertEqual(ui.as_dict()["max"], 10.0)
         self.assertEqual(obj.id_properties_ui(self.name("c1")).as_dict()["subtype"], "COLOR")
         self.assertEqual(obj.id_properties_ui(self.name("v1")).as_dict()["subtype"], "XYZ")
+        # A parameter with no declared range must not be constrained.
+        self.assertLess(obj.id_properties_ui(self.name("v1")).as_dict()["min"], -1e30)
+        self.assertGreater(obj.id_properties_ui(self.name("v1")).as_dict()["max"], 1e30)
 
     # -------------------------------------------------------------- keyframes
 

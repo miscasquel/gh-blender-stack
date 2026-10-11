@@ -53,9 +53,9 @@ starts with the add-on on port 9130 (add-on preferences).
    - `Param.Value` → `Scale.Factor`
 
    Put a **Panel** on the canvas containing the stage key text, and connect that
-   Panel to `Stage In.Key`, `Stage Out.Key` and `Param.Key`. Set
-   `Param.Label` to `Scale`, leave the type at 0 (float), default 1.0, min 0.1,
-   max 10.
+   Panel to `Stage In.Key`, `Stage Out.Key` and `Param.Key`. The Param defaults
+   are fine as they are: label `parameter`, type 0 (float), default 1.0, and no
+   min/max until you give one.
 
 3. **Watch Blender.** Within a tick the stage goes to `ok`, the object shows the
    scaled mesh, and the panel gains a **Scale** slider. Drag it: the mesh follows.
