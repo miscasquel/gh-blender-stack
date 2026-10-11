@@ -222,6 +222,13 @@ namespace GhStack
             p.AddTextParameter("Choices", "C", "Choice labels, one per line", GH_ParamAccess.item);
             p.AddTextParameter("Group", "G", "Group label", GH_ParamAccess.item);
             for (int i = 1; i < 9; i++) p[i].Optional = true;
+            // Sensible defaults so an unconnected Param is already useful.
+            ((Grasshopper.Kernel.Parameters.Param_String)p[1]).PersistentData.Append(new GH_String("Scale"));
+            ((Grasshopper.Kernel.Parameters.Param_Integer)p[2]).PersistentData.Append(new GH_Integer(0));
+            ((Grasshopper.Kernel.Parameters.Param_String)p[3]).PersistentData.Append(new GH_String("1.0"));
+            ((Grasshopper.Kernel.Parameters.Param_Number)p[4]).PersistentData.Append(new GH_Number(0.1));
+            ((Grasshopper.Kernel.Parameters.Param_Number)p[5]).PersistentData.Append(new GH_Number(10.0));
+            ((Grasshopper.Kernel.Parameters.Param_Number)p[6]).PersistentData.Append(new GH_Number(0.1));
         }
 
         protected override void RegisterOutputParams(GH_OutputParamManager p)

@@ -169,6 +169,9 @@ namespace GhStack
                     _publishedThisConnection = false;
                     backoffMs = 500;
                     Note("connected to " + Endpoint);
+                    // Publish from this thread: waiting for the next solve would
+                    // delay hello until the user touches the canvas.
+                    SendPublication();
                     var stopSend = new ManualResetEvent(false);
                     var sender = new Thread(delegate() { SendLoop(client, stopSend); });
                     sender.IsBackground = true;
@@ -329,6 +332,16 @@ namespace GhStack
         /// when nothing changed.</summary>
         public static void Publish(GH_Document doc)
         {
+            if (doc != null && !string.IsNullOrEmpty(doc.FilePath)) _lastDocName = doc.FilePath;
+            SendPublication();
+        }
+
+        private static volatile string _lastDocName = "(unsaved)";
+
+        /// <summary>Builds and enqueues hello/schema from the published state.
+        /// Safe from either thread: it only touches the registries and the outbox.</summary>
+        private static void SendPublication()
+        {
             if (!_connected) return;
             Dictionary<string, bool> stages;
             Dictionary<string, List<Dictionary<string, object>>> paramsByStage;
@@ -339,8 +352,7 @@ namespace GhStack
                 foreach (var kv in StageParams) paramsByStage[kv.Key] = new List<Dictionary<string, object>>(kv.Value);
             }
 
-            bool needHello = !_publishedThisConnection;
-            if (!needHello && !stagesChanged) return;
+            bool needHello = !_publishedThisConnection || stagesChanged;
 
             if (needHello)
             {
@@ -355,11 +367,12 @@ namespace GhStack
                 var hello = new Dictionary<string, object>();
                 hello["type"] = "hello";
                 hello["client"] = "GhStack 0.1.0";
-                hello["doc"] = DocName(doc);
+                hello["doc"] = _lastDocName;
                 hello["doc_units"] = UnitsName();
                 hello["stages"] = list;
                 Enqueue(FrameCodec.Encode(hello, null));
                 _publishedThisConnection = true;
+                lock (Gate) { _lastStages = new Dictionary<string, bool>(stages); }
             }
 
             foreach (var kv in paramsByStage)
@@ -372,7 +385,6 @@ namespace GhStack
                 schema["params"] = list;
                 Enqueue(FrameCodec.Encode(schema, null));
             }
-            lock (Gate) { _lastStages = new Dictionary<string, bool>(stages); }
         }
 
         private static Dictionary<string, bool> _lastStages = new Dictionary<string, bool>();
@@ -397,16 +409,6 @@ namespace GhStack
         public static void Republish()
         {
             _publishedThisConnection = false;
-        }
-
-        private static string DocName(GH_Document doc)
-        {
-            try
-            {
-                if (doc != null && !string.IsNullOrEmpty(doc.FilePath)) return doc.FilePath;
-            }
-            catch (Exception) { }
-            return "(unsaved)";
         }
 
         private static string UnitsName()

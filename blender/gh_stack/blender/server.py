@@ -132,8 +132,13 @@ class GhServer(object):
                 if header.get("type") == "hello":
                     bridge.set_connected(header.get("doc", ""))
                 bridge.post_incoming(header, sections)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Never swallow silently: a handler bug closes the connection, and
+            # that is exactly the kind of thing that is invisible from the UI.
+            import traceback
+
+            bridge.state["error"] = "handler error: %r" % (exc,)
+            print("[gh-stack] handler error: %r\n%s" % (exc, traceback.format_exc()), flush=True)
         finally:
             try:
                 self._clients.remove(ws)

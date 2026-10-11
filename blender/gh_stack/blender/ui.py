@@ -71,7 +71,9 @@ class GHSTACK_PT_panel(bpy.types.Panel):
         if entry.type == "choice" and entry.choices:
             row.label(text="(choice list: %s)" % entry.choices.replace("\n", ", "))
         else:
-            row.prop(obj, name, text="")
+            # Custom properties are addressed with the bracket syntax in the UI;
+            # a bare name (or a slash path) does not resolve.
+            row.prop(obj, '["%s"]' % name, text="")
 
 
 def _state_text(stage):
