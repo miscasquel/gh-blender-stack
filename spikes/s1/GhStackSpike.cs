@@ -51,7 +51,16 @@ namespace GhStack.Spike.S1
         private static readonly object Gate = new object();
         private static readonly List<SpikeComponent> Components = new List<SpikeComponent>();
 
+        // Socket thread -> UI thread handoff. Nothing touches GH objects off the
+        // UI thread (plan §3, principle 7), so notes and replies are queued and
+        // drained from SolveInstance.
+        private static readonly Queue<KeyValuePair<bool, string>> UiNotes =
+            new Queue<KeyValuePair<bool, string>>();
+        private static readonly Queue<byte[]> Outbox = new Queue<byte[]>();
+        private static readonly AutoResetEvent _outboxSignal = new AutoResetEvent(false);
+
         private static Thread _thread;
+        private static Thread _watchdog;
         private static volatile bool _running;
         private static volatile bool _connected;
         private static volatile int _reconnects;
@@ -87,6 +96,16 @@ namespace GhStack.Spike.S1
                 _thread.IsBackground = true;
                 _thread.Name = "GhStack-S1-socket";
                 _thread.Start();
+
+                // Watches for requests the solution never answered, so the peer is
+                // never left waiting (it stops sending until it gets a reply).
+                if (_watchdog == null || !_watchdog.IsAlive)
+                {
+                    _watchdog = new Thread(WatchdogLoop);
+                    _watchdog.IsBackground = true;
+                    _watchdog.Name = "GhStack-S1-watchdog";
+                    _watchdog.Start();
+                }
             }
         }
 
@@ -111,7 +130,12 @@ namespace GhStack.Spike.S1
                     backoffMs = 500;
                     _reconnects++;
                     if (!wasConnected) Broadcast("connected to " + Endpoint);
+                    var sender = new Thread(delegate() { SendLoop(client); });
+                    sender.IsBackground = true;
+                    sender.Name = "GhStack-S1-sender";
+                    sender.Start();
                     ReceiveLoop(client);
+                    Note("read loop ended; reconnecting");
                 }
                 catch (Exception ex)
                 {
@@ -140,9 +164,95 @@ namespace GhStack.Spike.S1
             while (_running)
             {
                 byte[] frame = client.ReceiveBinary();
-                if (frame == null) return;
+                if (frame == null)
+                {
+                    Note("socket read returned null (peer closed or reset); stopping read loop");
+                    return;
+                }
                 Handle(frame);
-                Reply(client);
+            }
+        }
+
+        /// <summary>Waits for the UI thread to queue a reply and sends it.</summary>
+        private static void SendLoop(MiniWsClient client)
+        {
+            // Sending from its own loop (not gated on the next receive) is what
+            // avoids a deadlock: the Blender peer waits for the reply before it
+            // sends the next request, so a reply queued during SolveInstance has
+            // to go out without waiting for another inbound frame.
+            // (plan §10: "Stage Out queues its response at the end of the solve,
+            // and the socket thread sends it.")
+            while (_running)
+            {
+                try
+                {
+                    if (_outboxSignal.WaitOne(250)) SendQueued(client);
+                }
+                catch (Exception ex)
+                {
+                    Note("send loop failed: " + FirstLine(ex));
+                    return;
+                }
+            }
+        }
+
+        /// <summary>Safety net for the case where the solve never runs (component
+        /// disabled, GH busy): without it the peer would wait for a reply that
+        /// never comes. Cleared once the solution has answered for itself.</summary>
+        private static void WatchdogLoop()
+        {
+            while (_running)
+            {
+                Thread.Sleep(1000);
+                int nonce;
+                string json;
+                lock (Gate)
+                {
+                    nonce = _lastNonce;
+                    if (nonce < 0) continue;          // nothing to answer yet
+                    if (nonce == _respondedNonce) continue;  // the solution answered
+                    json = _lastMessage;
+                }
+                // The solution did not answer within 1 s: queue it ourselves so the
+                // request is never left unanswered.
+                Reply reply = new Reply();
+                reply.type = "response";
+                reply.n = nonce;
+                reply.solves = _solves;
+                reply.msg = json;
+                byte[] frame = Wire.Encode(Encode(reply));
+                lock (Gate)
+                {
+                    if (_lastNonce == _respondedNonce) continue;
+                    _respondedNonce = _lastNonce;
+                    Outbox.Enqueue(frame);
+                }
+                _outboxSignal.Set();
+                Note("watchdog replied to n=" + nonce + "; the solution did not answer in 1 s");
+            }
+        }
+
+        /// <summary>Sends anything the solution queued. Runs on the socket thread,
+        /// so a reply is only ever sent after SolveInstance has actually run.</summary>
+        private static void SendQueued(MiniWsClient client)
+        {
+            while (true)
+            {
+                byte[] frame;
+                lock (Gate)
+                {
+                    if (Outbox.Count == 0) return;
+                    frame = Outbox.Dequeue();
+                }
+                try
+                {
+                    client.SendBinary(frame);
+                }
+                catch (Exception ex)
+                {
+                    Note("send failed: " + FirstLine(ex));
+                    return;
+                }
             }
         }
 
@@ -224,13 +334,18 @@ namespace GhStack.Spike.S1
             }
         }
 
-        /// <summary>Replies to the message that is currently held in the slot.</summary>
-        private static void Reply(MiniWsClient client)
+        /// <summary>Called from SolveInstance (UI thread): replies once per new
+        /// message, after the solution has actually produced its output.</summary>
+        public static void NoteSolved()
         {
-            byte[] frame;
+            byte[] frame = null;
             lock (Gate)
             {
+                // -1 means no message has arrived yet. A solve that runs before the
+                // first message must not consume the nonce, or it answers with the
+                // placeholder and the real message then never gets a reply.
                 int nonce = _lastNonce;
+                if (nonce < 0) return;
                 if (nonce == _respondedNonce) return;
                 _respondedNonce = nonce;
                 Reply reply = new Reply();
@@ -238,17 +353,10 @@ namespace GhStack.Spike.S1
                 reply.n = nonce;
                 reply.solves = _solves;
                 reply.msg = _lastMessage;
-                string json = Encode(reply);
-                frame = Frame(json);
+                frame = Wire.Encode(Encode(reply));
+                Outbox.Enqueue(frame);
             }
-            try
-            {
-                client.SendBinary(frame);
-            }
-            catch (Exception ex)
-            {
-                Note("send failed: " + FirstLine(ex));
-            }
+            _outboxSignal.Set();
         }
 
         public static void IncSolves()
@@ -256,12 +364,28 @@ namespace GhStack.Spike.S1
             Interlocked.Increment(ref _solves);
         }
 
+        /// <summary>Drains the note queue on the UI thread. Returns the lines shown
+        /// since the last call.</summary>
+        public static string[] PumpNotes()
+        {
+            lock (Gate)
+            {
+                if (UiNotes.Count == 0) return new string[0];
+                var lines = new List<string>();
+                while (UiNotes.Count > 0)
+                {
+                    KeyValuePair<bool, string> kv = UiNotes.Dequeue();
+                    lines.Add((kv.Key ? "[S1] " : "[S1] ") + kv.Value);
+                }
+                return lines.ToArray();
+            }
+        }
+
         public static void Broadcast(string text)
         {
             lock (Gate)
             {
-                foreach (SpikeComponent c in Components)
-                    c.AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, "[S1] " + text);
+                UiNotes.Enqueue(new KeyValuePair<bool, string>(true, text));
             }
         }
 
@@ -269,19 +393,8 @@ namespace GhStack.Spike.S1
         {
             lock (Gate)
             {
-                foreach (SpikeComponent c in Components)
-                    c.AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "[S1] " + text);
+                UiNotes.Enqueue(new KeyValuePair<bool, string>(false, text));
             }
-        }
-
-        public static byte[] Frame(string json)
-        {
-            byte[] body = Encoding.UTF8.GetBytes(json);
-            var ms = new MemoryStream(4 + body.Length);
-            byte[] head = BitConverter.GetBytes(body.Length);
-            ms.Write(head, 0, 4);
-            ms.Write(body, 0, body.Length);
-            return ms.ToArray();
         }
 
         public static T Decode<T>(string json)
@@ -336,23 +449,42 @@ namespace GhStack.Spike.S1
 
         protected override void RegisterOutputParams(GH_OutputParamManager p)
         {
+            // Names and nicknames differ, and IGH_DataAccess matches on the NAME.
+            // Keep both obvious so SetData("solves") is not mistaken for the "s"
+            // nickname (that was the "Output parameter index [-1]" breakpoint).
             p.AddIntegerParameter("n", "n", "Nonce of the last message from the server", GH_ParamAccess.item);
             p.AddTextParameter("msg", "msg", "Last message JSON, verbatim", GH_ParamAccess.item);
-            p.AddIntegerParameter("solves", "s", "SolveInstance calls since assembly load", GH_ParamAccess.item);
+            p.AddIntegerParameter("solves", "solves", "SolveInstance calls since assembly load", GH_ParamAccess.item);
         }
 
         protected override void SolveInstance(IGH_DataAccess da)
         {
             bool on = true;
-            da.GetData("On", ref on);
+            // Note: GetData matches by parameter NAME, not nickname. "On" is the
+            // nickname, so this has to be "Enabled" (or index 0).
+            da.GetData("Enabled", ref on);
             if (on) SpikeLink.Register(this);
             else SpikeLink.Unregister(this);
 
+            string[] notes = SpikeLink.PumpNotes();
+            foreach (string n in notes)
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, n);
+
             SpikeLink.IncSolves();
-            da.SetData("n", SpikeLink.LastNonce);
-            da.SetData("msg", SpikeLink.LastMessage);
-            da.SetData("s", SpikeLink.Solves);
-            Message = SpikeLink.Connected ? "connected" : "connecting...";
+            int solves = SpikeLink.Solves;
+            int nonce = SpikeLink.LastNonce;
+            string msg = SpikeLink.LastMessage;
+
+            // SetData matches by parameter NAME too ("solves", not the "s" nickname),
+            // same as GetData above.
+            da.SetData("n", nonce);
+            da.SetData("msg", msg);
+            da.SetData("solves", solves);
+            Message = SpikeLink.Connected ? ("connected, s=" + solves) : "connecting...";
+
+            // Reply only now, so a reply proves the solution really ran (plan §10:
+            // Stage Out queues its response at the end of the solve).
+            SpikeLink.NoteSolved();
         }
 
         public override void AddedToDocument(GH_Document document)

@@ -28,6 +28,26 @@ One component, "S1 Spike", on tab "GH Stack S1", GUID `9c2f0a1e-…`:
 - `SolveInstance` reads the slot and queues a reply that the socket thread sends;
 - failures are runtime messages only — no dialogs.
 
+## Live-run log (2026-10-11)
+
+Three rounds of debugging, all on the component side; the transport itself worked
+from the first attempt.
+
+| Run | Symptom | Cause | Fix |
+|---|---|---|---|
+| 1 | "Input parameter index [-1] too low for Component S1 Spike"; no outputs | `da.GetData("On")` — the nickname. `IGH_DataAccess` matches the parameter **name**, which is "Enabled" | `GetData("Enabled", …)` |
+| 2 | Outputs `n` and `msg` populated, `solves` `<null>`, same index error | `da.SetData("s")` — the nickname of "solves". Same class of bug, on the output side | `SetData("solves", …)`; output nickname set to "solves" to match the name |
+| 3 | Rounds 2 and 3 stalled 30 s and connections dropped with keepalive ping timeouts | `NoteSolved()` queued the reply during `SolveInstance`, but `SendQueued` only ran after `ReceiveBinary()` returned, and the peer waits for the reply before sending the next request — a deadlock by design | replies go out from a dedicated sender thread driven by an `AutoResetEvent` |
+
+Findings worth carrying into M4: `GetData`/`SetData` match on parameter name, not
+nickname; and the reply path must be able to send while the read loop is blocked,
+per plan §10 ("Stage Out queues its response at the end of the solve, and the
+socket thread sends it").
+
+Confirmed working by run 2: the component connected under wine, `ScheduleSolution`
+from the background thread really did run `SolveInstance` on the UI thread (the
+`solves` count climbed 1 → 4 → 7 → 12), and the slot value reached the outputs.
+
 ## The live run
 
 Three steps, in order. The server must run first, because Grasshopper only scans

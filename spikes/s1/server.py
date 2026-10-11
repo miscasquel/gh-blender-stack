@@ -34,11 +34,13 @@ import websockets  # noqa: E402
 
 RESULTS = os.path.join(REPO_ROOT, "spikes", "results")
 TRANSCRIPT = []
+T0 = time.perf_counter()
 
 
 def log(msg):
-    print(f"[s1] {msg}", flush=True)
-    TRANSCRIPT.append(msg)
+    line = f"[s1 {time.perf_counter() - T0:8.3f}] {msg}"
+    print(line, flush=True)
+    TRANSCRIPT.append(line)
 
 
 def frame(obj):
