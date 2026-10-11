@@ -51,6 +51,8 @@ namespace GhStack.Tests.Console
                 CheckFixture(Path.GetFileName(dir), framePath, expectPath);
             }
 
+            CheckParamValues();
+
             System.Console.WriteLine();
             if (_failures == 0)
             {
@@ -150,6 +152,53 @@ namespace GhStack.Tests.Console
                 if (c.Length != 2 || c[0] != 2 || c[1] != 3)
                     System.Console.WriteLine("  WARN crv.counts typed access looks wrong");
             }
+        }
+
+        /// <summary>Parameter value conversion, the pure half of the Param
+        /// component. A vector arrives from Json.Parse as List<object>, not
+        /// double[]; treating only double[] silently produced (0,0,0) live.</summary>
+        private static void CheckParamValues()
+        {
+            var problems = new List<string>();
+
+            object parsed = Json.Parse("[2.0, 2.0, 2.0]");
+            double[] doubles = ParamValues.AsDoubles(parsed);
+            if (doubles == null || doubles.Length != 3 || doubles[0] != 2.0)
+                problems.Add("AsDoubles did not accept the parsed JSON array");
+            if (ParamValues.AsDoubles(1.04) != null)
+                problems.Add("AsDoubles accepted a scalar");
+
+            object cast = ParamValues.Cast("vector3", parsed);
+            var castArray = cast as double[];
+            if (castArray == null || castArray[2] != 2.0)
+                problems.Add("Cast(vector3) lost the parsed array");
+            object fallback = ParamValues.Cast("vector3", 1.04);
+            var fallbackArray = fallback as double[];
+            if (fallbackArray == null || fallbackArray[0] != 0.0)
+                problems.Add("Cast(vector3) did not fall back to zeros");
+
+            object def = ParamValues.ParseDefault("vector3", "1, 2.5, 3");
+            var defArray = def as double[];
+            if (defArray == null || defArray[1] != 2.5)
+                problems.Add("ParseDefault(vector3) failed");
+            if ((string)ParamValues.ParseDefault("text", null) != "")
+                problems.Add("ParseDefault(text, null) failed");
+            if (!(bool)ParamValues.ParseDefault("bool", "true"))
+                problems.Add("ParseDefault(bool) failed");
+
+            object json = ParamValues.JsonValue(new double[] { 1.0, 2.0, 3.0 });
+            var jsonList = json as List<object>;
+            if (jsonList == null || jsonList.Count != 3)
+                problems.Add("JsonValue(double[]) failed");
+
+            if (problems.Count == 0)
+            {
+                System.Console.WriteLine("PASS param-values");
+                return;
+            }
+            _failures += problems.Count;
+            System.Console.WriteLine("FAIL param-values");
+            foreach (string p in problems) System.Console.WriteLine("     " + p);
         }
 
         private static void Report(string name, List<string> problems)

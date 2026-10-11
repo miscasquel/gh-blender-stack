@@ -302,13 +302,13 @@ namespace GhStack
             object value = null;
             if (slot.Params.ContainsKey(_paramId.ToString()))
                 value = slot.Params[_paramId.ToString()];
-            if (value == null) value = ParseDefault(type, defaultText);
+            if (value == null) value = ParamValues.ParseDefault(type, defaultText);
 
             var declaration = new Dictionary<string, object>();
             declaration["id"] = _paramId.ToString();
             declaration["label"] = label;
             declaration["type"] = type;
-            declaration["default"] = JsonValue(type, value);
+            declaration["default"] = ParamValues.JsonValue(value);
             declaration["min"] = min;
             declaration["max"] = max;
             declaration["step"] = step;
@@ -369,51 +369,26 @@ namespace GhStack
             }
         }
 
-        private static object ParseDefault(string type, string text)
-        {
-            double number;
-            if (type == "float") return double.TryParse(text, out number) ? number : 0.0;
-            if (type == "int" || type == "choice") return double.TryParse(text, out number) ? (long)number : 0L;
-            if (type == "bool") return text != null && text.Trim().ToLower() == "true";
-            if (type == "vector3" || type == "color")
-            {
-                string[] parts = (text ?? "").Split(',');
-                if (parts.Length == 3)
-                {
-                    double a, b, c;
-                    if (double.TryParse(parts[0], out a) && double.TryParse(parts[1], out b) && double.TryParse(parts[2], out c))
-                        return new double[] { a, b, c };
-                }
-                return new double[] { 0.0, 0.0, 0.0 };
-            }
-            return text ?? "";
-        }
-
-        private static object JsonValue(string type, object value)
-        {
-            if (value is double || value is long || value is bool || value is string) return value;
-            var arr = value as double[];
-            if (arr != null)
-            {
-                var list = new List<object>();
-                foreach (double d in arr) list.Add(d);
-                return list;
-            }
-            return value == null ? null : value.ToString();
-        }
-
+        /// <summary>The component's typed output. The conversion itself lives in
+        /// the core (ParamValues), where the console tests can check it.</summary>
         private static object OutputValue(string type, object value)
         {
-            if (type == "float") return Convert.ToDouble(value);
-            if (type == "int" || type == "choice") return (int)Convert.ToInt64(value);
-            if (type == "bool") return Convert.ToBoolean(value);
-            if (type == "vector3" || type == "color")
+            object cast = ParamValues.Cast(type, value);
+            if (type == "vector3")
             {
-                var arr = value as double[];
-                if (arr != null && arr.Length == 3) return new Point3d(arr[0], arr[1], arr[2]);
-                return new Point3d(0, 0, 0);
+                double[] v = (double[])cast;
+                return new Point3d(v[0], v[1], v[2]);
             }
-            return value == null ? "" : value.ToString();
+            if (type == "color")
+            {
+                double[] c = (double[])cast;
+                return System.Drawing.Color.FromArgb(
+                    255,
+                    (int)Math.Round(Math.Min(1.0, Math.Max(0.0, c[0])) * 255.0),
+                    (int)Math.Round(Math.Min(1.0, Math.Max(0.0, c[1])) * 255.0),
+                    (int)Math.Round(Math.Min(1.0, Math.Max(0.0, c[2])) * 255.0));
+            }
+            return cast;
         }
     }
 }

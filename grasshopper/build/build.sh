@@ -33,6 +33,7 @@ WINEPREFIX="$PREFIX" "$WINE" "$CSC" \
   /out:"$(win_path "$OUT")" \
   "$(win_path "$REPO/grasshopper/src/core/Json.cs")" \
   "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
+  "$(win_path "$REPO/grasshopper/src/core/ParamValues.cs")" \
   "$(win_path "$REPO/grasshopper/tests/console/Program.cs")" \
   2>&1 | grep -vE 'fixme:|MESA-EGL|pci id|^$' || true
 
