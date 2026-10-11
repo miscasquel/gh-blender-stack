@@ -1,11 +1,11 @@
 listening on ws://127.0.0.1:9131/s1 (websockets 17.2)
 waiting for the GH spike to connect; drop the components if nothing happens
-connection from ('127.0.0.1', 59772)
+connection from ('127.0.0.1', 55524)
 S1 path check: section-less request
-  reply in 31.4 ms: {"msg": "{\"n\":42,\"text\":\"s3 driver s1 check\",\"type\":\"request\",\"v\":2}", "n": 42, "solves": 2, "type": "response", "v": 2}
+  reply in 41.1 ms: {"msg": "{\"n\":42,\"text\":\"s3 driver s1 check\",\"type\":\"request\",\"v\":2}", "n": 42, "solves": 2, "type": "response", "v": 2}
   S1 path PASS
 1k: 968 tris, 529 verts, request frame 0.02 MB
-  reply 6.0 ms rtt; C# in 2.1 ms, out 1.6 ms; 529 verts, 484 faces; reply 0.02 MB; scale=None
+  reply 5.8 ms rtt; C# in 2.0 ms, out 1.7 ms; 529 verts, 484 faces; reply 0.02 MB; scale=1.0
   PASS: geometry matches
 10k: 10082 tris, 5184 verts, request frame 0.18 MB
-session failed: ConnectionClosedError(None, None, None)
+session failed: ConnectionClosedError(None, Close(code=<CloseCode.MESSAGE_TOO_BIG: 1009>, reason='frame with 791412148981705 bytes exceeds limit of 268435456 bytes'), None)

@@ -86,7 +86,11 @@ namespace GhStack.Spike.S1
             else
             {
                 ms.WriteByte((byte)(0x80 | 127));
-                for (int i = 7; i >= 0; i--) ms.WriteByte((byte)((len >> (8 * i)) & 0xFF));
+                // Shift a long, not an int: C# masks int shift counts to 5 bits,
+                // so (len >> 32) on an int would silently be (len >> 0) and the
+                // 8-byte length would repeat its low half.
+                long l = len;
+                for (int i = 7; i >= 0; i--) ms.WriteByte((byte)((l >> (8 * i)) & 0xFF));
             }
             byte[] mask = new byte[4];
             new Random().NextBytes(mask);

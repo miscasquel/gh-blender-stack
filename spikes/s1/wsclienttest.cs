@@ -37,8 +37,13 @@ namespace GhStack.Spike.S1
                     return 1;
                 }
                 Console.WriteLine("received big message: " + msg.Length + " bytes");
-                client.SendBinary(Wire.Encode(reply));
-                Console.WriteLine("sent big reply");
+                // Reply with a big frame too: this exercises the 127 send path,
+                // where an int shift bug had repeated the low four length bytes.
+                byte[] bigReply = Wire.Encode(reply);
+                byte[] padded = new byte[200000];
+                Array.Copy(bigReply, padded, bigReply.Length);
+                client.SendBinary(padded);
+                Console.WriteLine("sent big reply: " + padded.Length + " bytes");
                 client.Dispose();
                 Console.WriteLine("RESULT: WsTest PASS");
                 return 0;
