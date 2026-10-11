@@ -1,6 +1,6 @@
 # GH Stack — Project Plan (rev 2)
 
-**Status:** rev 2 approved. M0 done (2026-10-10): repository skeleton, this plan, protocol draft (`docs/protocol.md`), decision records (`docs/decisions/`), spike scripts (`spikes/`). **S2 passed 2026-10-11** (transport on a background thread, `spikes/results/s2-gui.txt`, `s2-background.txt`): `websockets` 17.2 runs on a plain thread in Blender 5.2, queue handoff works, and a 4 ms `bpy.app.timers` drain holds ~5 ms median under a 2 MB load. Next: S1.
+**Status:** rev 2 approved. M0 done (2026-10-10): repository skeleton, this plan, protocol draft (`docs/protocol.md`), decision records (`docs/decisions/`), spike scripts (`spikes/`). **S2 passed 2026-10-11** (transport on a background thread, `spikes/results/s2-gui.txt`, `s2-background.txt`): `websockets` 17.2 runs on a plain thread in Blender 5.2, queue handoff works, and a 4 ms `bpy.app.timers` drain holds ~5 ms median under a 2 MB load. **S1 passed 2026-10-11** (the transport gate, `spikes/results/s1.txt`): a C# `.gha` under wine connects, a background message triggers `SolveInstance` on the UI thread through `ScheduleSolution`, replies come back in 20–65 ms, and save/reopen reconnects with no dialog. The plan's `ClientWebSocket` choice was replaced by a TcpClient client (see §19); **M2 core done** (layer A, 43 tests). Next: S3.
 **Authoritative copy:** `docs/plan.md` in `~/workspace/gh-blender-stack`. The a shared network folder copy is a mirror.
 **Date:** 2026-10-10.
 **Replaces:** `handoff-1-grasshopper-3dm-plugin.md` and `handoff-2-blender-3dm-addon.md` (deleted; their useful facts are in §19).
@@ -478,7 +478,7 @@ GH solve time will dominate real definitions. The transport is not the bottlenec
 
 | Spike | Question | Gate |
 |---|---|---|
-| **S1** | Does a C# `GhStack.gha` under wine connect with `ClientWebSocket`, trigger a solve from a background message via `ScheduleSolution`, send a response to Blender, and save and reopen the document with no dialog? | Yes: continue. No: fall back to Portal's transport (its WebSocket components exist upstream), and the engine stays the same. |
+| **S1** | Does a C# `GhStack.gha` under wine connect with `ClientWebSocket`, trigger a solve from a background message via `ScheduleSolution`, send a response to Blender, and save and reopen the document with no dialog? | Yes: continue. No: fall back to Portal's transport (its WebSocket components exist upstream), and the engine stays the same. **Passed 2026-10-11 with a TcpClient client instead of `ClientWebSocket`** (Mono cannot reference it; see §19). Connect, background-message solve, reply in 20–65 ms, and save/reopen reconnected with no dialog: `spikes/results/s1.txt` |
 | **S2** | Does `websockets` run in a Blender 5.2 background thread, with queue handoff and no UI stalls? | Yes: continue. |
 | **S3** | Geometry round trip with the C# side at 10k and 100k triangles. | Budgets in §13 met or revised with data. |
 | **S4** | SubD: can `SubDEdge.Tag` be set? Does `SubD.CreateFromMesh` produce a usable SubD from a cage? Are the curve approximation paths behaving? | Setter exists: tags round-trip. No setter: tags are dropped on Blender → GH with a warning (D2). |
@@ -492,7 +492,7 @@ GH solve time will dominate real definitions. The transport is not the bottlenec
 | | What | Exit criteria |
 |---|---|---|
 | M0 | Create `~/workspace/gh-blender-stack`. Move this plan into `docs/plan.md`. Write `docs/protocol.md` draft and ADRs for D1–D5. Copy the probe scripts from `/tmp/opencode` into `spikes/`. | Repo exists. Pure-core tests run (empty) |
-| M1 | Spikes S1–S8 | All gates passed, or the fallback is chosen and recorded. **S2 passed** |
+| M1 | Spikes S1–S8 | All gates passed, or the fallback is chosen and recorded. **S1 and S2 passed** |
 | M2 | Protocol v2 core, golden frames, rules | Layer A green. **Core done 2026-10-11**: codec, hashing, params, rules, cache, 43 tests green. Golden frames outstanding |
 | M3 | Engine against `tools/fake_gh` | Layer B green, including bake, undo, save and reload |
 | M4 | GH plugin: Stage In, Stage Out, Param | Layer C green: live round trip, parameter change, save and reopen, GH closed and reopened |
@@ -570,6 +570,7 @@ Facts this plan relies on, and how each was checked. Scratch scripts live in `/t
 - Blender ships Python 3.14.7 with numpy.
 - **S2 (2026-10-11):** `websockets` 17.2 runs on a plain background thread in Blender 5.2, with queue handoff; a 4 ms `bpy.app.timers` request holds ~5 ms median under a 2 MB stream load (max 73 ms). Two bounds: timers only fire once a script returns to the event loop, and `bpy.app.timers` is inert under `blender -b`, so layer B tests call the drain directly instead.
 - **S1 build (2026-10-11):** the wine `csc.exe` is **Mono's mcs**, not Microsoft's compiler. `ClientWebSocket` exists in Mono's real `System.dll`, but referencing it makes mcs import two `System.dll`s and fail on ambiguous types, and `/nostdlib` is not honoured by this build. The spike therefore uses a hand-rolled client over `TcpClient` (`spikes/s1/miniws.cs`), which compiles with `/sdk:4.5` and runs. `DataContractJsonSerializer` works via `/r:System.ServiceModel.Web.dll` + `/r:System.Runtime.Serialization.dll`. M4 must revisit the client choice before the transport is settled.
+- **S1 live (2026-10-11):** under wine-mono, a background thread's message triggers a UI-thread solve via `OnPingDocument().ScheduleSolution(delay, delegate)` + `ExpireSolution`, and `SolveInstance` runs for every message. Three behaviours to carry into the engine: `ScheduleSolution(0, …)` coalesces and silently drops the delegate (10 ms is reliable); the reply must be sent from a thread that is not blocked on the next receive, or the peer's request/response cycle deadlocks; and `IGH_DataAccess.GetData`/`SetData` match the parameter **name**, not the nickname. Evidence: `spikes/results/s1.txt`.
 
 **Rhino 8 under wine (RhinoCommon and Grasshopper XML docs in the wine prefix, this machine)**
 - `GH_DocumentObject.OnPingDocument`, `GH_Document.ScheduleSolution(int, GH_ScheduleDelegate)`, `IGH_DocumentObject.ExpireSolution`, `GH_ActiveObject.AddRuntimeMessage`.

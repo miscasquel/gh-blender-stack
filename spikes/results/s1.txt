@@ -1,8 +1,62 @@
-selftest: starting the peer with a loopback client
-selftest listening on ws://127.0.0.1:9131/s1
-connection from ('127.0.0.1', 39376)
-  round 1: reply in 0.4 ms: {"msg": "selftest echo of 9\u0000\u0000\u0000{\"type\": \"request\", \"n\": 1, \"text\": \"hello from Blender\"}", "n": 1, "solves": 1, "type": "response"}
-  round 2: reply in 0.1 ms: {"msg": "selftest echo of 9\u0000\u0000\u0000{\"type\": \"request\", \"n\": 2, \"text\": \"hello from Blender\"}", "n": 2, "solves": 2, "type": "response"}
-  round 3: reply in 0.1 ms: {"msg": "selftest echo of 9\u0000\u0000\u0000{\"type\": \"request\", \"n\": 3, \"text\": \"hello from Blender\"}", "n": 3, "solves": 3, "type": "response"}
-selftest: 3 round trips in 216.0 ms
-RESULT: selftest PASS
+# S1 live run — 2026-10-11
+
+Server: `spikes/s1/server.py --rounds 5` (vendored websockets 17.2)
+Client: `GhStackSpike.gha` under wine-mono, hand-rolled WebSocket client (`miniws.cs`)
+Blender side never involved; only the transport gate.
+
+## The pass (single connection, every round answered by the solution)
+
+```
+[s1  877.096] connection from ('127.0.0.1', 34964)
+[s1  877.159]   round 1: reply in 63.5 ms: {"n": 1, "solves": 1, "msg": "{\"type\": \"request\", \"n\": 1, ...}"}
+[s1  877.181]   round 2: reply in 21.5 ms: {"n": 2, "solves": 2, ...}
+[s1  877.215]   round 3: reply in 33.6 ms: {"n": 3, "solves": 3, ...}
+[s1  877.248]   round 4: reply in 33.6 ms: {"n": 4, "solves": 4, ...}
+[s1  877.282]   round 5: reply in 34.1 ms: {"n": 5, "solves": 5, ...}
+```
+
+`solves` climbing one per round is the part that matters: `SolveInstance` really
+ran for each message, triggered from the background socket thread through
+`OnPingDocument().ScheduleSolution(10, ...)` and `ExpireSolution(true)`. Replies
+came back in 20–65 ms. This block was the **save-and-reopen** document: the
+component had been saved to a `.gh` file, the editor closed, and the file
+reopened, which is why `solves` restarts at 1.
+
+An earlier identical pass (also five rounds, solves 2..6) is at 284.961 of the
+raw log.
+
+## Lifecycle, from the canvas (spikes/results/s1-gui.png)
+
+```
+1. [S1] socket read returned null (peer closed or reset); stopping read loop
+2. [S1] read loop ended; reconnecting
+3. [S1] connection closed; retrying
+4. [S1] connected to ws://127.0.0.1:9131/s1
+5. [S1] socket got message n=1 (nonce slot updated)
+6. [S1] UI thread: expiring 1 component(s)
+```
+
+The component detected the server going away, backed off, reconnected on its own,
+and resumed solving. No dialog at any point; everything surfaced as runtime
+messages and the component's own bubble (`connected, s=6, n=1`).
+
+## What the four fixes were
+
+1. `GetData("On")` → `"Enabled"`: `IGH_DataAccess` matches the parameter **name**,
+   not the nickname.
+2. `SetData("s")` → `"solves"`: the same trap on the output side.
+3. The reply was queued during `SolveInstance` but only sent after the read loop
+   received another frame — a deadlock. A dedicated sender thread
+   (`AutoResetEvent` + `WaitHandle`) now sends replies independently, and each
+   connection's sender is retired before its socket is disposed, so a stale
+   sender cannot dequeue and drop a reply.
+4. `ScheduleSolution(0, …)` coalesced and the delegate was silently dropped, so
+   only the first message ever solved. A 10 ms delay is reliable. The spike's
+   nonce counter is also reset per connection, or a reconnect's round 1 looks
+   "already answered" and never gets a reply.
+
+## Not covered here
+
+- Geometry round trips (that is S3) — this spike carries JSON only.
+- The GH-side codec (M2's C# half) — the frame here is the header shape only.
+- The real `Stage In`/`Stage Out`/`Param` components (M4).

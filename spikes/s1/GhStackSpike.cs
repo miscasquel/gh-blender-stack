@@ -129,12 +129,27 @@ namespace GhStack.Spike.S1
                     _connected = true;
                     backoffMs = 500;
                     _reconnects++;
+                    // The spike's nonce counter is per connection: the peer restarts
+                    // its own numbering at 1 each time. Without this reset, the second
+                    // connection's round 1 looked "already answered" and never got a
+                    // reply (the real protocol uses request IDs, which never repeat).
+                    lock (Gate)
+                    {
+                        _respondedNonce = int.MinValue;
+                        _lastNonce = -1;
+                    }
                     if (!wasConnected) Broadcast("connected to " + Endpoint);
-                    var sender = new Thread(delegate() { SendLoop(client); });
+                    var stopSend = new ManualResetEvent(false);
+                    var sender = new Thread(delegate() { SendLoop(client, stopSend); });
                     sender.IsBackground = true;
                     sender.Name = "GhStack-S1-sender";
                     sender.Start();
                     ReceiveLoop(client);
+                    // Retire this connection's sender before the client is disposed:
+                    // two live senders sharing one queue would each dequeue frames,
+                    // and the stale one would fail its send and drop the reply.
+                    stopSend.Set();
+                    sender.Join(500);
                     Note("read loop ended; reconnecting");
                 }
                 catch (Exception ex)
@@ -174,7 +189,7 @@ namespace GhStack.Spike.S1
         }
 
         /// <summary>Waits for the UI thread to queue a reply and sends it.</summary>
-        private static void SendLoop(MiniWsClient client)
+        private static void SendLoop(MiniWsClient client, ManualResetEvent stop)
         {
             // Sending from its own loop (not gated on the next receive) is what
             // avoids a deadlock: the Blender peer waits for the reply before it
@@ -182,11 +197,14 @@ namespace GhStack.Spike.S1
             // to go out without waiting for another inbound frame.
             // (plan §10: "Stage Out queues its response at the end of the solve,
             // and the socket thread sends it.")
+            var handles = new WaitHandle[] { _outboxSignal, stop };
             while (_running)
             {
                 try
                 {
-                    if (_outboxSignal.WaitOne(250)) SendQueued(client);
+                    int fired = WaitHandle.WaitAny(handles, 250);
+                    if (fired == 1) return;  // stop: this connection is over
+                    if (fired == 0) SendQueued(client);
                 }
                 catch (Exception ex)
                 {
@@ -198,12 +216,17 @@ namespace GhStack.Spike.S1
 
         /// <summary>Safety net for the case where the solve never runs (component
         /// disabled, GH busy): without it the peer would wait for a reply that
-        /// never comes. Cleared once the solution has answered for itself.</summary>
+        /// never comes.
+
+        /// The wait is deliberately long (10 s) so the solution wins the race in
+        /// normal operation: a short interval here would answer every request
+        /// before the solution could, so the reply would stop proving that the
+        /// solve ran. The peer's own timeout is 30 s, so this stays a fallback.</summary>
         private static void WatchdogLoop()
         {
             while (_running)
             {
-                Thread.Sleep(1000);
+                Thread.Sleep(10000);
                 int nonce;
                 string json;
                 lock (Gate)
@@ -228,12 +251,12 @@ namespace GhStack.Spike.S1
                     Outbox.Enqueue(frame);
                 }
                 _outboxSignal.Set();
-                Note("watchdog replied to n=" + nonce + "; the solution did not answer in 1 s");
+                Note("watchdog replied to n=" + nonce + "; the solution did not answer in 10 s");
             }
         }
 
-        /// <summary>Sends anything the solution queued. Runs on the socket thread,
-        /// so a reply is only ever sent after SolveInstance has actually run.</summary>
+        /// <summary>Sends anything the solution queued. The frame stays queued when a
+        /// send fails, so a stale sender cannot swallow a reply.</summary>
         private static void SendQueued(MiniWsClient client)
         {
             while (true)
@@ -242,7 +265,7 @@ namespace GhStack.Spike.S1
                 lock (Gate)
                 {
                     if (Outbox.Count == 0) return;
-                    frame = Outbox.Dequeue();
+                    frame = Outbox.Peek();
                 }
                 try
                 {
@@ -251,7 +274,11 @@ namespace GhStack.Spike.S1
                 catch (Exception ex)
                 {
                     Note("send failed: " + FirstLine(ex));
-                    return;
+                    return;  // leave it queued for the next attempt
+                }
+                lock (Gate)
+                {
+                    if (Outbox.Count > 0) Outbox.Dequeue();
                 }
             }
         }
@@ -279,6 +306,7 @@ namespace GhStack.Spike.S1
                 _lastMessage = json;
                 _lastNonce = trigger.n;
             }
+            Note("socket got message n=" + trigger.n + " (nonce slot updated)");
             SpikeComponent origin;
             lock (Gate) { origin = Components.Count > 0 ? Components[0] : null; }
             RequestSolve(origin);
@@ -300,14 +328,18 @@ namespace GhStack.Spike.S1
             {
                 // No document yet (Rhino without a GH window open): the message stays in
                 // the slot and the next solution picks it up. Runtime message only.
-                Note("no active GH document; message held in the slot");
+                Note("RequestSolve: no active GH document; message held in the slot");
                 return;
             }
 
             try
             {
-                doc.ScheduleSolution(0, delegate(GH_Document d)
+                // A non-zero delay is deliberate: 0 appears to coalesce with the
+                // solution that is already scheduled and the delegate never runs,
+                // so only the first message ever triggered a solve.
+                doc.ScheduleSolution(10, delegate(GH_Document d)
                 {
+                    Note("UI thread: expiring " + Components.Count + " component(s)");
                     lock (Gate)
                     {
                         foreach (SpikeComponent c in Components) c.ExpireSolution(true);
@@ -480,7 +512,9 @@ namespace GhStack.Spike.S1
             da.SetData("n", nonce);
             da.SetData("msg", msg);
             da.SetData("solves", solves);
-            Message = SpikeLink.Connected ? ("connected, s=" + solves) : "connecting...";
+            Message = SpikeLink.Connected
+                ? ("connected, s=" + solves + ", n=" + nonce)
+                : "connecting...";
 
             // Reply only now, so a reply proves the solution really ran (plan §10:
             // Stage Out queues its response at the end of the solve).
