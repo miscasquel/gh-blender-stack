@@ -254,7 +254,7 @@ namespace GhStack
             p.AddNumberParameter("Min", "m", "Minimum", GH_ParamAccess.item);
             p.AddNumberParameter("Max", "M", "Maximum", GH_ParamAccess.item);
             p.AddNumberParameter("Step", "s", "Step", GH_ParamAccess.item);
-            p.AddTextParameter("Values", "Vals", "Value list entries: a list of strings, or one per line in a Panel", GH_ParamAccess.list);
+            p.AddTextParameter("Values", "V", "Value list entries: a list of strings, or one per line in a Panel", GH_ParamAccess.list);
             p.AddTextParameter("Group", "G", "Group label", GH_ParamAccess.item);
             for (int i = 1; i < 9; i++) p[i].Optional = true;
             // A neutral default so an unconnected Param is already useful. Min and
