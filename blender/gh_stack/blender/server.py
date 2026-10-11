@@ -55,7 +55,11 @@ class GhServer(object):
         self._stop.set()
         loop = self._loop
         if loop is not None:
-            loop.call_soon_threadsafe(loop.stop)
+            try:
+                if not loop.is_closed():
+                    loop.call_soon_threadsafe(loop.stop)
+            except RuntimeError:
+                pass  # the loop went away between the check and the call
         if self._thread is not None:
             self._thread.join(timeout=3.0)
         self._thread = None

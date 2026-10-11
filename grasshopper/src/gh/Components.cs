@@ -165,6 +165,7 @@ namespace GhStack
                     GhLink.Enqueue(FrameCodec.Encode(header, sections));
                     sent = true;
                     status = "ok";
+                    slot.Status = "ok";
                 }
                 catch (Exception ex)
                 {

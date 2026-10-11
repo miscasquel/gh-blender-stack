@@ -164,6 +164,25 @@ class EngineDemoTests(unittest.TestCase):
         # Through the modifier stack, the cube is scaled by the parameter.
         self.assertAlmostEqual(float(abs(co).max()), 2.5, places=4)
 
+    def test_06_geometry_edit_updates_without_a_push(self):
+        """Editing the base mesh must flow through without pressing Push."""
+        mesh = self.obj.data
+        before = self.helper_coords().copy()
+        mesh.vertices[0].co.x += 1.0
+        mesh.update()
+        # The GUI gets this from the depsgraph when an edit ends; headless has to
+        # ask for it explicitly.
+        bpy.context.view_layer.update()
+
+        def updated():
+            coords = self.helper_coords()
+            return abs(float(coords[0][0] - before[0][0])) > 0.5
+
+        self.assertTrue(pump(until=updated), "geometry edit did not reach the helper")
+        # The edit was scaled by the current parameter (2.5 from test_03).
+        coords = self.helper_coords()
+        self.assertAlmostEqual(float(coords[0][0] - before[0][0]), 2.5, places=3)
+
     def test_05_disable_hides_the_modifier(self):
         self.stage.enabled = False
         self.engine._timer()

@@ -30,6 +30,8 @@ namespace GhStack
         public List<Section> Sections;
         public string Status = "waiting";
         public string Message = "";
+        public DateTime RequestedAt = DateTime.UtcNow;
+        public int ResolveAttempts = 0;
     }
 
     public static class GhLink
@@ -247,6 +249,8 @@ namespace GhStack
                 slot.Rid = rid;
                 slot.Status = "waiting";
                 slot.Message = "";
+                slot.RequestedAt = DateTime.UtcNow;
+                slot.ResolveAttempts = 0;
                 slot.Params = new Dictionary<string, object>();
                 var paramsObj = Json.Get(header, "params") as Dictionary<string, object>;
                 if (paramsObj != null)
@@ -296,26 +300,53 @@ namespace GhStack
             {
                 int fired = WaitHandle.WaitAny(handles, 250);
                 if (fired == 1) return;
-                if (fired != 0) continue;
-                while (true)
+                if (fired == 0) SendFrames(client);
+                RetryStaleSolves();
+            }
+        }
+
+        /// <summary>Re-asks for a solve when a request has been waiting a while.
+        /// ScheduleSolution calls coalesce: rapid edits can leave a request with no
+        /// solve, and without this the stage would sit `waiting` until a Push.</summary>
+        private static void RetryStaleSolves()
+        {
+            bool retry = false;
+            lock (Gate)
+            {
+                foreach (var kv in Slots)
                 {
-                    byte[] frame;
-                    lock (Gate)
-                    {
-                        if (Outbox.Count == 0) break;
-                        frame = Outbox.Peek();
-                    }
-                    try
-                    {
-                        client.SendBinary(frame);
-                    }
-                    catch (Exception ex)
-                    {
-                        Note("send failed: " + FirstLine(ex));
-                        return;
-                    }
-                    lock (Gate) { if (Outbox.Count > 0) Outbox.Dequeue(); }
+                    StageSlot slot = kv.Value;
+                    if (slot.Status != "waiting") continue;
+                    if ((DateTime.UtcNow - slot.RequestedAt).TotalMilliseconds < 250) continue;
+                    if (slot.ResolveAttempts >= 8) continue;
+                    slot.ResolveAttempts++;
+                    slot.RequestedAt = DateTime.UtcNow;
+                    retry = true;
                 }
+            }
+            if (retry) RequestSolve();
+        }
+
+        private static void SendFrames(MiniWsClient client)
+        {
+            while (true)
+            {
+                byte[] frame;
+                lock (Gate)
+                {
+                    if (Outbox.Count == 0) break;
+                    frame = Outbox.Peek();
+                }
+                try
+                {
+                    client.SendBinary(frame);
+                }
+                catch (Exception ex)
+                {
+                    Note("send failed: " + FirstLine(ex));
+                    return;
+                }
+                lock (Gate) { if (Outbox.Count > 0) Outbox.Dequeue(); }
             }
         }
 
