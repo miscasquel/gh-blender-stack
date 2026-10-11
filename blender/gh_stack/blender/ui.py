@@ -1,22 +1,14 @@
 """The N-panel: connection status, stages, parameters (plan §11, demo v0/S5).
 
 Icons are Blender's own icon names, the same glyphs the Grasshopper components
-carry (see grasshopper/src/gh/icons).
+carry (see grasshopper/src/gh/icons). Value rows follow Blender's own layout:
+a split label/widget column, no icons on the values themselves, and the standard
+property decorators.
 """
 
 import bpy
 
 from . import bridge, engine, stack as stack_mod
-
-TYPE_ICONS = {
-    "float": "NONE",
-    "int": "NONE",
-    "bool": "NONE",
-    "vector3": "ORIENTATION_GLOBAL",
-    "color": "COLOR",
-    "choice": "DISCLOSURE_TRI_DOWN",
-    "text": "SORTALPHA",
-}
 
 
 class GHSTACK_PT_panel(bpy.types.Panel):
@@ -81,20 +73,22 @@ class GHSTACK_PT_panel(bpy.types.Panel):
         name = stack_mod.param_prop_name(stage.key, entry.param_id)
         if name not in obj:
             return
-        icon = TYPE_ICONS.get(entry.type, "NONE")
-        row = layout.row(align=True)
-        row.label(text=entry.label or entry.param_id, icon=icon)
+        # Blender's own layout: a label column and a widget column, aligned, with
+        # the property decorators (keyframe diamond, driver badge) on the widget.
+        col = layout.column()
+        col.use_property_split = True
+        col.use_property_decorate = True
         if entry.type == "choice" and entry.choices:
             # A dropdown over the custom property, which stays the real value
             # (keyframable, and what the engine sends).
             current = str(int(obj[name]))
             if entry.choice_value != current:
                 entry.choice_value = current
-            row.prop(entry, "choice_value", text="")
+            col.prop(entry, "choice_value", text=entry.label or entry.param_id)
         else:
             # Custom properties are addressed with the bracket syntax in the UI;
             # a bare name (or a slash path) does not resolve.
-            row.prop(obj, '["%s"]' % name, text="")
+            col.prop(obj, '["%s"]' % name, text=entry.label or entry.param_id)
 
 
 def _state_text(stage):
