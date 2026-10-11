@@ -36,13 +36,7 @@ for f in "$GH_DLL" "$GHIO_DLL" "$RC_DLL"; do
   [ -f "$f" ] || { echo "missing $f" >&2; exit 1; }
 done
 
-RS_DLL="$(find /usr/share/wine/mono -maxdepth 9 \
-  -path '*/lib/mono/gac/System.Runtime.Serialization*/System.Runtime.Serialization.dll' | head -1)"
-SCW_DLL="$(find /usr/share/wine/mono -maxdepth 9 \
-  -path '*/lib/mono/gac/System.ServiceModel.Web/*/System.ServiceModel.Web.dll' | head -1)"
-[ -f "$RS_DLL" ] || { echo "missing System.Runtime.Serialization.dll" >&2; exit 1; }
-[ -f "$SCW_DLL" ] || { echo "missing System.ServiceModel.Web.dll" >&2; exit 1; }
-
+CORE="$REPO/grasshopper/src/core"
 SRC_W="$(win_path "$HERE/GhStackSpike.cs")"
 OUT_W="$(win_path "$OUT")"
 rm -f "$OUT"
@@ -51,8 +45,9 @@ WINEPREFIX="$PREFIX" "$WINE" "$CSC" \
   /nologo /target:library \
   /out:"$OUT_W" \
   /r:"$(win_path "$GH_DLL")" /r:"$(win_path "$GHIO_DLL")" /r:"$(win_path "$RC_DLL")" \
-  /r:"$(win_path "$RS_DLL")" /r:"$(win_path "$SCW_DLL")" \
-  "$(win_path "$HERE/miniws.cs")" "$(win_path "$HERE/GhStackSpike.cs")" \
+  /r:System.Drawing.dll \
+  "$(win_path "$CORE/Json.cs")" "$(win_path "$CORE/Frame.cs")" "$(win_path "$CORE/Conversion.cs")" \
+  "$(win_path "$HERE/miniws.cs")" "$SRC_W" \
   2>&1 | grep -vE 'fixme:|MESA-EGL|pci id|^$' || true
 
 if [ ! -f "$OUT" ]; then
