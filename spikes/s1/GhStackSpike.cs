@@ -631,6 +631,11 @@ namespace GhStack.Spike.S1
             get { return new Guid("3e7a41d0-6c9b-4f2a-8b1e-2d5c8a9f0e33"); }
         }
 
+        protected override System.Drawing.Bitmap Icon
+        {
+            get { return GhStack.Icons.Get("geometry_nodes"); }
+        }
+
         protected override void RegisterInputParams(GH_InputParamManager p)
         {
             p.AddBooleanParameter("Enabled", "On", "Connect when true", GH_ParamAccess.item);

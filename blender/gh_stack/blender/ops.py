@@ -67,6 +67,24 @@ class GHSTACK_OT_push(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class GHSTACK_OT_copy_key(bpy.types.Operator):
+    bl_idname = "gh_stack.copy_key"
+    bl_label = "Copy stage key"
+    bl_description = "Copy this stage's key, to paste into the Grasshopper components"
+
+    index: IntProperty(name="Index", default=-1)
+
+    def execute(self, context):
+        obj = context.object
+        record = stack_mod.stack_of(obj) if obj is not None else None
+        if record is None or not (0 <= self.index < len(record.stages)):
+            return {"CANCELLED"}
+        key = record.stages[self.index].key
+        context.window_manager.clipboard = key
+        self.report({"INFO"}, "Copied %s" % key)
+        return {"FINISHED"}
+
+
 class GHSTACK_OT_start_server(bpy.types.Operator):
     bl_idname = "gh_stack.start_server"
     bl_label = "Start server"
@@ -79,10 +97,22 @@ class GHSTACK_OT_start_server(bpy.types.Operator):
 
 
 def register():
-    for cls in (GHSTACK_OT_add_stage, GHSTACK_OT_remove_stage, GHSTACK_OT_push, GHSTACK_OT_start_server):
+    for cls in (
+        GHSTACK_OT_add_stage,
+        GHSTACK_OT_remove_stage,
+        GHSTACK_OT_push,
+        GHSTACK_OT_copy_key,
+        GHSTACK_OT_start_server,
+    ):
         bpy.utils.register_class(cls)
 
 
 def unregister():
-    for cls in (GHSTACK_OT_start_server, GHSTACK_OT_push, GHSTACK_OT_remove_stage, GHSTACK_OT_add_stage):
+    for cls in (
+        GHSTACK_OT_start_server,
+        GHSTACK_OT_copy_key,
+        GHSTACK_OT_push,
+        GHSTACK_OT_remove_stage,
+        GHSTACK_OT_add_stage,
+    ):
         bpy.utils.unregister_class(cls)

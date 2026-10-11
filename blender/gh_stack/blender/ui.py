@@ -1,8 +1,22 @@
-"""The N-panel: connection status, stages, parameters (plan §11, demo v0)."""
+"""The N-panel: connection status, stages, parameters (plan §11, demo v0/S5).
+
+Icons are Blender's own icon names, the same glyphs the Grasshopper components
+carry (see grasshopper/src/gh/icons).
+"""
 
 import bpy
 
 from . import bridge, engine, stack as stack_mod
+
+TYPE_ICONS = {
+    "float": "NONE",
+    "int": "NONE",
+    "bool": "NONE",
+    "vector3": "ORIENTATION_GLOBAL",
+    "color": "COLOR",
+    "choice": "DISCLOSURE_TRI_DOWN",
+    "text": "SORTALPHA",
+}
 
 
 class GHSTACK_PT_panel(bpy.types.Panel):
@@ -37,7 +51,7 @@ class GHSTACK_PT_panel(bpy.types.Panel):
 
         row = layout.row()
         row.operator("gh_stack.add_stage", icon="ADD")
-        row.operator("gh_stack.push", icon="PLAY")
+        row.operator("gh_stack.push", icon="FILE_REFRESH")
 
         for index, stage in enumerate(record.stages):
             self.draw_stage(layout, obj, record, stage, index)
@@ -46,9 +60,10 @@ class GHSTACK_PT_panel(bpy.types.Panel):
         box = layout.box()
         row = box.row()
         row.prop(stage, "enabled", text="")
-        row.label(text=stage.label or stage.key)
+        row.label(text=stage.label or stage.key, icon="GEOMETRY_NODES")
         row.label(text=_state_text(stage), icon=_state_icon(stage))
-        row.operator("gh_stack.remove_stage", text="", icon="X").index = index
+        row.operator("gh_stack.copy_key", text="", icon="COPYDOWN").index = index
+        row.operator("gh_stack.remove_stage", text="", icon="TRASH").index = index
 
         row = box.row()
         row.label(text="Key")
@@ -58,7 +73,7 @@ class GHSTACK_PT_panel(bpy.types.Panel):
 
         if stage.params:
             params_box = box.box()
-            params_box.label(text="Parameters")
+            params_box.label(text="Parameters", icon="DRIVER")
             for entry in stage.params:
                 self.draw_param(params_box, obj, stage, entry)
 
@@ -66,10 +81,16 @@ class GHSTACK_PT_panel(bpy.types.Panel):
         name = stack_mod.param_prop_name(stage.key, entry.param_id)
         if name not in obj:
             return
-        row = layout.row()
-        row.label(text=entry.label or entry.param_id)
+        icon = TYPE_ICONS.get(entry.type, "NONE")
+        row = layout.row(align=True)
+        row.label(text=entry.label or entry.param_id, icon=icon)
         if entry.type == "choice" and entry.choices:
-            row.label(text="(choice list: %s)" % entry.choices.replace("\n", ", "))
+            # A dropdown over the custom property, which stays the real value
+            # (keyframable, and what the engine sends).
+            current = str(int(obj[name]))
+            if entry.choice_value != current:
+                entry.choice_value = current
+            row.prop(entry, "choice_value", text="")
         else:
             # Custom properties are addressed with the bracket syntax in the UI;
             # a bare name (or a slash path) does not resolve.

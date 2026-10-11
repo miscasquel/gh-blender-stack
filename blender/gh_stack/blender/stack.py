@@ -13,6 +13,7 @@ import bpy
 from bpy.props import (
     BoolProperty,
     CollectionProperty,
+    EnumProperty,
     FloatProperty,
     IntProperty,
     StringProperty,
@@ -34,10 +35,30 @@ def new_stage_key(label="stage"):
     return "%s-%s" % (slug, "".join(secrets.choice("0123456789abcdef") for _ in range(STAGE_KEY_LENGTH)))
 
 
+def _choice_items(self, context):
+    """Dropdown entries for a choice parameter, from its schema list."""
+    labels = [c for c in (self.choices or "").split("\n") if c]
+    if not labels:
+        return [("0", "(no choices)", "")]
+    return [(str(i), label, "") for i, label in enumerate(labels)]
+
+
+def _choice_changed(self, context):
+    """Write the picked index to the parameter's custom property, which is the
+    value the engine sends and the one keyframes live on."""
+    obj = self.id_data  # the owning object, not context: works headless too
+    if obj is None or not self.stage_key or not self.param_id:
+        return
+    name = param_prop_name(self.stage_key, self.param_id)
+    if name in obj:
+        obj[name] = int(self.choice_value)
+
+
 class GhParam(bpy.types.PropertyGroup):
     """One parameter declaration, from the GH schema message (plan §7)."""
 
     param_id: StringProperty(name="ID", default="")
+    stage_key: StringProperty(name="Stage", default="")
     label: StringProperty(name="Label", default="")
     type: StringProperty(name="Type", default="float")
     group: StringProperty(name="Group", default="")
@@ -47,6 +68,8 @@ class GhParam(bpy.types.PropertyGroup):
     has_range: BoolProperty(name="Has range", default=False)
     step: FloatProperty(name="Step", default=0.01)
     choices: StringProperty(name="Choices", default="")  # newline separated
+    # A view of the custom property, so the panel can draw a dropdown (plan §7).
+    choice_value: EnumProperty(name="Choice", items=_choice_items, update=_choice_changed)
 
 
 class GhStage(bpy.types.PropertyGroup):

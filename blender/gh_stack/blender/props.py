@@ -72,6 +72,7 @@ def apply_schema(obj, stage, params):
     for param in params:
         entry = stage.params.add()
         entry.param_id = param.get("id", "")
+        entry.stage_key = stage.key
         entry.label = param.get("label") or entry.param_id
         entry.type = param.get("type", "float")
         entry.group = param.get("group") or ""

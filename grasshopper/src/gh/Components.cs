@@ -8,6 +8,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using GH_IO.Serialization;
 using Grasshopper.Kernel;
 using Grasshopper.Kernel.Types;
@@ -30,6 +31,11 @@ namespace GhStack
         public override Guid ComponentGuid
         {
             get { return new Guid("a1f0c2d4-1b2e-4c3a-9d4f-5e6a7b8c9d01"); }
+        }
+
+        protected override Bitmap Icon
+        {
+            get { return Icons.Get("import"); }
         }
 
         protected override void RegisterInputParams(GH_InputParamManager p)
@@ -116,6 +122,11 @@ namespace GhStack
         public override Guid ComponentGuid
         {
             get { return new Guid("b2e1d3c5-2c3f-4d4b-8e5a-6f7b8c9d0e12"); }
+        }
+
+        protected override Bitmap Icon
+        {
+            get { return Icons.Get("export"); }
         }
 
         protected override void RegisterInputParams(GH_InputParamManager p)
@@ -225,6 +236,11 @@ namespace GhStack
         public override Guid ComponentGuid
         {
             get { return new Guid("c3f2e4d6-3d4a-4e5c-9f6b-7a8b9c0d1e23"); }
+        }
+
+        protected override Bitmap Icon
+        {
+            get { return Icons.Get("driver"); }
         }
 
         private Guid _paramId = Guid.NewGuid();

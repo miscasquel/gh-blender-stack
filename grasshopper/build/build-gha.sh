@@ -34,12 +34,19 @@ for f in "$REPO"/grasshopper/src/core/*.cs "$REPO"/grasshopper/src/gh/*.cs; do
   SOURCES+=("$(win_path "$f")")
 done
 
+# Component icons: the official Blender glyphs, embedded so the .gha is one file.
+RESOURCES=()
+for png in "$REPO"/grasshopper/src/gh/icons/*.png; do
+  name="$(basename "$png" .png)"
+  RESOURCES+=("/resource:$(win_path "$png"),GhStack.icons.$name.png")
+done
+
 WINEPREFIX="$PREFIX" "$WINE" "$CSC" \
   /nologo /target:library \
   /out:"$(win_path "$OUT")" \
   /r:"$(win_path "$GH_DLL")" /r:"$(win_path "$GHIO_DLL")" /r:"$(win_path "$RC_DLL")" \
   /r:System.Drawing.dll \
-  "${SOURCES[@]}" 2>&1 | grep -vE 'fixme:|MESA-EGL|pci id|^$' || true
+  "${SOURCES[@]}" "${RESOURCES[@]}" 2>&1 | grep -vE 'fixme:|MESA-EGL|pci id|^$' || true
 
 [ -f "$OUT" ] || { echo "build failed: $OUT not produced" >&2; exit 1; }
 echo "built $OUT ($(stat -c%s "$OUT") bytes)"
