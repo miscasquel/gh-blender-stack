@@ -106,11 +106,23 @@ namespace GhStack.Spike.S1
             if (b1 < 0) return null;
             int opcode = b0 & 0x0F;
             bool masked = (b1 & 0x80) != 0;
-            int len = b1 & 0x7F;
+            long len = b1 & 0x7F;
             if (len == 126)
+            {
                 len = (_stream.ReadByte() << 8) | _stream.ReadByte();
+            }
             else if (len == 127)
-                throw new NotSupportedException("spike client: 64-bit lengths not handled");
+            {
+                // 64-bit length, big-endian. Python's websockets uses this for any
+                // payload over 64 KiB, which the 10k+ geometry frames exceed.
+                len = 0;
+                for (int i = 0; i < 8; i++)
+                {
+                    int b = _stream.ReadByte();
+                    if (b < 0) return null;
+                    len = (len << 8) | (byte)b;
+                }
+            }
             byte[] mask = new byte[4];
             if (masked)
                 for (int i = 0; i < 4; i++) mask[i] = (byte)_stream.ReadByte();
@@ -118,7 +130,7 @@ namespace GhStack.Spike.S1
             int read = 0;
             while (read < len)
             {
-                int n = _stream.Read(body, read, len - read);
+                int n = _stream.Read(body, read, (int)(len - read));
                 if (n == 0) return null;
                 read += n;
             }

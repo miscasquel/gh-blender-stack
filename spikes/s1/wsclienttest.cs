@@ -28,6 +28,17 @@ namespace GhStack.Spike.S1
                 string reply = "{\"type\":\"response\",\"n\":1,\"solves\":1,\"msg\":\"from C#\"}";
                 client.SendBinary(Wire.Encode(reply));
                 Console.WriteLine("sent reply: " + reply);
+
+                // Second message: over 64 KiB, so websockets uses a 64-bit length.
+                msg = client.ReceiveBinary();
+                if (msg == null)
+                {
+                    Console.WriteLine("FAIL: no big message received");
+                    return 1;
+                }
+                Console.WriteLine("received big message: " + msg.Length + " bytes");
+                client.SendBinary(Wire.Encode(reply));
+                Console.WriteLine("sent big reply");
                 client.Dispose();
                 Console.WriteLine("RESULT: WsTest PASS");
                 return 0;

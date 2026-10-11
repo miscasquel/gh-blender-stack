@@ -1,18 +1,11 @@
 listening on ws://127.0.0.1:9131/s1 (websockets 17.2)
 waiting for the GH spike to connect; drop the components if nothing happens
-connection from ('127.0.0.1', 43472)
+connection from ('127.0.0.1', 59772)
 S1 path check: section-less request
-connection from ('127.0.0.1', 52184)
-S1 path check: section-less request
-  reply in 0.3 ms: {"msg": "fake-gh", "n": 42, "solves": 7, "type": "response", "v": 2}
+  reply in 31.4 ms: {"msg": "{\"n\":42,\"text\":\"s3 driver s1 check\",\"type\":\"request\",\"v\":2}", "n": 42, "solves": 2, "type": "response", "v": 2}
   S1 path PASS
 1k: 968 tris, 529 verts, request frame 0.02 MB
-  reply 1.0 ms rtt; C# in 1.5 ms, out 2.5 ms; 529 verts, 484 faces; reply 0.02 MB; scale=1.0
+  reply 6.0 ms rtt; C# in 2.1 ms, out 1.6 ms; 529 verts, 484 faces; reply 0.02 MB; scale=None
   PASS: geometry matches
 10k: 10082 tris, 5184 verts, request frame 0.18 MB
-  reply 5.6 ms rtt; C# in 1.5 ms, out 2.5 ms; 5184 verts, 5041 faces; reply 0.18 MB; scale=1.0
-  PASS: geometry matches
-100k: 100352 tris, 50625 verts, request frame 1.61 MB
-  reply 47.1 ms rtt; C# in 1.5 ms, out 2.5 ms; 50625 verts, 50176 faces; reply 1.61 MB; scale=1.0
-  PASS: geometry matches
-RESULT: PASS
+session failed: ConnectionClosedError(None, None, None)
