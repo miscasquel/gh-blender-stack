@@ -43,6 +43,26 @@ def _choice_items(self, context):
     return [(str(i), label, "") for i, label in enumerate(labels)]
 
 
+# The engine registers a hook so a UI-driven write can mark the object dirty.
+# A raw ID-property write from Python does not tag the depsgraph, so without this
+# a dropdown pick would sit unnoticed until something else triggered a tick.
+_param_changed = None
+
+
+def set_param_changed_hook(hook):
+    global _param_changed
+    _param_changed = hook
+
+
+def notify_param_changed(obj):
+    try:
+        obj.update_tag()
+    except (AttributeError, ReferenceError):
+        pass
+    if _param_changed is not None:
+        _param_changed(obj)
+
+
 def _choice_changed(self, context):
     """Write the picked index to the parameter's custom property, which is the
     value the engine sends and the one keyframes live on."""
@@ -52,6 +72,7 @@ def _choice_changed(self, context):
     name = param_prop_name(self.stage_key, self.param_id)
     if name in obj:
         obj[name] = int(self.choice_value)
+        notify_param_changed(obj)
 
 
 class GhParam(bpy.types.PropertyGroup):

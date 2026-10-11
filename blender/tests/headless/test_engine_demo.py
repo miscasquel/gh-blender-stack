@@ -126,13 +126,33 @@ class EngineDemoTests(unittest.TestCase):
 
     def test_01_schema_created_the_param(self):
         self.assertIn(self.param_name, self.obj)
-        self.assertEqual(len(self.stage.params), 2)
+        self.assertEqual(len(self.stage.params), 3)
         self.assertEqual(self.stage.params[0].label, "Scale")
         # The vector parameter arrives through the same path and becomes a 3-array.
         vector_name = "gh/%s/%s" % (self.stage.key, "00000000-0000-4000-8000-0000000000bb")
         self.assertIn(vector_name, self.obj)
         self.assertEqual(len(self.obj[vector_name]), 3)
         self.assertAlmostEqual(self.obj[vector_name][2], 2.0, places=5)
+
+    def test_01b_choice_param_and_dropdown(self):
+        """A choice parameter arrives with its labels, and picking from the
+        dropdown writes the custom property and marks the object dirty (a raw
+        Python write does not tag the depsgraph)."""
+        choice_name = "gh/%s/%s" % (self.stage.key, "00000000-0000-4000-8000-0000000000cc")
+        self.assertIn(choice_name, self.obj)
+        entry = None
+        for e in self.stage.params:
+            if e.param_id == "00000000-0000-4000-8000-0000000000cc":
+                entry = e
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry.type, "choice")
+        self.assertEqual(entry.choices, "Ribbon\nPanel\nGrid")
+        self.assertEqual(entry.group, "Shape")
+
+        self.engine._dirty.discard(self.obj.name)
+        entry.choice_value = "2"
+        self.assertEqual(self.obj[choice_name], 2)
+        self.assertIn(self.obj.name, self.engine._dirty, "dropdown pick did not mark the object dirty")
 
     def test_02_first_response_applied(self):
         self.assertEqual(self.stage.state, "ok", self.stage.error)

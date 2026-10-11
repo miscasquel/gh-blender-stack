@@ -300,10 +300,16 @@ def push(obj=None):
     _dirty.add(obj.name)
 
 
+def _mark_object_dirty(obj):
+    _dirty.add(obj.name)
+
+
 def register():
     global _registered
     if _registered:
         return
+    # A UI-driven parameter write (the choice dropdown) must reach the engine.
+    stack_mod.set_param_changed_hook(_mark_object_dirty)
     bpy.app.timers.register(_timer, first_interval=IDLE_INTERVAL)
     bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph)
     bpy.app.handlers.frame_change_post.append(_on_frame_change)
@@ -315,6 +321,7 @@ def unregister():
     global _registered
     if not _registered:
         return
+    stack_mod.set_param_changed_hook(None)
     if bpy.app.timers.is_registered(_timer):
         bpy.app.timers.unregister(_timer)
     for handler_list, handler in (
