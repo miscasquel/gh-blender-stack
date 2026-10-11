@@ -36,6 +36,7 @@ namespace GhStack
         {
             p.AddTextParameter("Key", "K", "Stage key, copied from the GH Stack panel in Blender", GH_ParamAccess.item);
             p.AddBooleanParameter("Enabled", "On", "Report this stage to Blender", GH_ParamAccess.item);
+            p[0].Optional = true;
             ((Grasshopper.Kernel.Parameters.Param_Boolean)p[1]).PersistentData.Append(new GH_Boolean(true));
         }
 
@@ -54,10 +55,19 @@ namespace GhStack
             da.GetData("Key", ref key);
             da.GetData("Enabled", ref enabled);
             GhLink.Register(this);
-            GhLink.PublishStage(key, enabled);
-
             foreach (string note in GhLink.TakeNotes())
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, note);
+            if (string.IsNullOrEmpty(key))
+            {
+                // Unconfigured components stay quiet: no key, nothing to do.
+                Message = "no key";
+                da.SetData("Geometry", null);
+                da.SetData("Request ID", "");
+                da.SetData("Status", "no key");
+                da.SetData("Message", "connect the stage key from Blender's GH Stack panel");
+                return;
+            }
+            GhLink.PublishStage(key, enabled);
 
             StageSlot slot = GhLink.Slot(key);
             Mesh mesh = null;
@@ -113,6 +123,7 @@ namespace GhStack
             p.AddTextParameter("Key", "K", "Stage key, copied from the GH Stack panel in Blender", GH_ParamAccess.item);
             p.AddMeshParameter("Geometry", "G", "The graph's result for this stage", GH_ParamAccess.item);
             p.AddBooleanParameter("Enabled", "On", "Send results to Blender", GH_ParamAccess.item);
+            p[0].Optional = true;
             ((Grasshopper.Kernel.Parameters.Param_Boolean)p[2]).PersistentData.Append(new GH_Boolean(true));
             p[1].Optional = true;
         }
@@ -133,10 +144,17 @@ namespace GhStack
             da.GetData("Enabled", ref enabled);
             da.GetData("Geometry", ref mesh);
             GhLink.Register(this);
-            GhLink.PublishStage(key, enabled);
-
             foreach (string note in GhLink.TakeNotes())
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, note);
+            if (string.IsNullOrEmpty(key))
+            {
+                Message = "no key";
+                da.SetData("Sent", false);
+                da.SetData("Output hash", "");
+                da.SetData("Status", "no key");
+                return;
+            }
+            GhLink.PublishStage(key, enabled);
 
             StageSlot slot = GhLink.Slot(key);
             bool sent = false;
@@ -257,6 +275,12 @@ namespace GhStack
             da.GetData("Group", ref group);
             GhLink.Register(this);
 
+            if (string.IsNullOrEmpty(key))
+            {
+                Message = "no key";
+                da.SetData("Value", null);
+                return;
+            }
             string type = TypeName(typeIndex);
             StageSlot slot = GhLink.Slot(key);
             object value = null;

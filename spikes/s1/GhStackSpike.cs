@@ -561,7 +561,7 @@ namespace GhStack.Spike.S1
         public SpikeComponent()
             : base("S1 Spike", "S1Spike",
                    "Spike S1: websocket client, ScheduleSolution trigger, reply. Not product code.",
-                   "GH Stack Spikes", "Spike")
+                   "GH Stack", "Spikes")
         {
         }
 
@@ -622,7 +622,7 @@ namespace GhStack.Spike.S1
         public GeometryComponent()
             : base("S3 Geometry", "S3Geom",
                    "Spike S3: convert incoming geometry frames through a Rhino Mesh and reply. Not product code.",
-                   "GH Stack Spikes", "Spike")
+                   "GH Stack", "Spikes")
         {
         }
 

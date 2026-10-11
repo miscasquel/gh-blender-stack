@@ -1,6 +1,6 @@
 # GH Stack — Project Plan (rev 2)
 
-**Status:** rev 2 approved. M0 done (2026-10-10): repository skeleton, this plan, protocol draft (`docs/protocol.md`), decision records (`docs/decisions/`), spike scripts (`spikes/`). **S2 passed 2026-10-11** (transport on a background thread, `spikes/results/s2-gui.txt`, `s2-background.txt`): `websockets` 17.2 runs on a plain thread in Blender 5.2, queue handoff works, and a 4 ms `bpy.app.timers` drain holds ~5 ms median under a 2 MB load. **S1 passed 2026-10-11** (the transport gate, `spikes/results/s1.txt`): a C# `.gha` under wine connects, a background message triggers `SolveInstance` on the UI thread through `ScheduleSolution`, replies come back in 20–65 ms, and save/reopen reconnects with no dialog. The plan's `ClientWebSocket` choice was replaced by a TcpClient client (see §19). **M2 done 2026-10-11**: protocol core, ten golden fixtures verified by both codecs. **S3 passed 2026-10-11** (`spikes/results/s3.txt`): mesh round trips match exactly at 1k/10k/100k; 100k costs 30.3 ms end to end, inside the §13 budget. Next: S4.
+**Status:** rev 2 approved. M0 done (2026-10-10): repository skeleton, this plan, protocol draft (`docs/protocol.md`), decision records (`docs/decisions/`), spike scripts (`spikes/`). **S2 passed 2026-10-11** (transport on a background thread, `spikes/results/s2-gui.txt`, `s2-background.txt`): `websockets` 17.2 runs on a plain thread in Blender 5.2, queue handoff works, and a 4 ms `bpy.app.timers` drain holds ~5 ms median under a 2 MB load. **S1 passed 2026-10-11** (the transport gate, `spikes/results/s1.txt`): a C# `.gha` under wine connects, a background message triggers `SolveInstance` on the UI thread through `ScheduleSolution`, replies come back in 20–65 ms, and save/reopen reconnects with no dialog. The plan's `ClientWebSocket` choice was replaced by a TcpClient client (see §19). **M2 done 2026-10-11**: protocol core, ten golden fixtures verified by both codecs. **S3 passed 2026-10-11** (`spikes/results/s3.txt`): mesh round trips match exactly at 1k/10k/100k; 100k costs 30.3 ms end to end, inside the §13 budget. **S4 passed 2026-10-11** (`spikes/results/s4.txt`): the SubD tag setter works, cage SubDs are valid, curve conversion is lossless except when weights are dropped. **Demo v0 works** (`DEMO.md`): a mesh in Blender driven through Stage In/Out and a Param in Grasshopper. Next: S5.
 **Authoritative copy:** `docs/plan.md` in `~/workspace/gh-blender-stack`. The a shared network folder copy is a mirror.
 **Date:** 2026-10-10.
 **Replaces:** `handoff-1-grasshopper-3dm-plugin.md` and `handoff-2-blender-3dm-addon.md` (deleted; their useful facts are in §19).
@@ -135,13 +135,13 @@ Blender reads geometry components through `Object.evaluated_geometry()`, which r
 **SubD crease rules (D2)**
 - *GH → Blender:* an edge with tag `Crease` gets `crease_edge = 1.0`. Tags `Smooth`, `SmoothX`, and `Unset` get `0.0`. Vertex sharpness is not transferred.
 - *Blender → GH:* edges with `crease_edge >= 0.5` get the `Crease` tag. Others get `Smooth`. Fractional values are rounded to the nearest tag, and a warning reports how many edges were affected.
-- *Setter risk:* RhinoCommon's public XML shows `SubDEdge.Tag` as a property but does not show a setter. Spike S4 confirms the setter. If none exists, Blender → GH builds the SubD without creases and warns.
+- *Setter risk:* resolved by S4 — `SubDEdge.Tag` has a working setter. Note that boundary edges of a cage read `Crease` by default, so the transfer compares tags instead of assuming `Smooth`.
 - *Warning text:* every stage with SubD output reports "creases transferred as tags; semi-sharp and vertex creases are not available from RhinoCommon".
 
 **Curve approximation policy (D3)**
 - A curve is transferred exactly whenever Blender's knot modes can express it.
-- Otherwise it is converted to Bezier spans (Rhino's `MakePiecewiseBezier`). Rational spans become non-rational approximations.
-- The engine samples the deviation between the original and the approximation.
+- Otherwise it is converted to Bezier spans (Rhino's `MakePiecewiseBezier`). S4 measured this conversion to be **lossless** (knot insertion), including interior non-uniform knots. The lossy step is making a **rational** curve non-rational: at radius 5, dropping the weights distorted the curve by 0.73 units. Warn on that, not on interior knots.
+- The engine samples the deviation between the original and the approximation (the S4 checks carry the recipe).
 - A warning is emitted when the maximum deviation exceeds the threshold (default 0.1 mm). Every approximated curve is counted in the stage status regardless of deviation.
 - Approximation never blocks the transfer. The warning is the signal.
 
@@ -481,7 +481,7 @@ GH solve time will dominate real definitions. The transport is not the bottlenec
 | **S1** | Does a C# `GhStack.gha` under wine connect with `ClientWebSocket`, trigger a solve from a background message via `ScheduleSolution`, send a response to Blender, and save and reopen the document with no dialog? | Yes: continue. No: fall back to Portal's transport (its WebSocket components exist upstream), and the engine stays the same. **Passed 2026-10-11 with a TcpClient client instead of `ClientWebSocket`** (Mono cannot reference it; see §19). Connect, background-message solve, reply in 20–65 ms, and save/reopen reconnected with no dialog: `spikes/results/s1.txt` |
 | **S2** | Does `websockets` run in a Blender 5.2 background thread, with queue handoff and no UI stalls? | Yes: continue. |
 | **S3** | Geometry round trip with the C# side at 10k and 100k triangles. | Budgets in §13 met or revised with data. **Passed 2026-10-11**: geometry matches at 1k/10k/100k; the 100k round trip is 30.3 ms (C# 10.0 + 5.1 ms, 1.61 MB each way). `spikes/results/s3.txt` |
-| **S4** | SubD: can `SubDEdge.Tag` be set? Does `SubD.CreateFromMesh` produce a usable SubD from a cage? Are the curve approximation paths behaving? | Setter exists: tags round-trip. No setter: tags are dropped on Blender → GH with a warning (D2). |
+| **S4** | SubD: can `SubDEdge.Tag` be set? Does `SubD.CreateFromMesh` produce a usable SubD from a cage? Are the curve approximation paths behaving? | Setter exists: tags round-trip. No setter: tags are dropped on Blender → GH with a warning (D2). **Passed 2026-10-11**: setter works, cage SubD is valid, `MakePiecewiseBezier` is lossless; the loss is dropping weights (0.73 units at radius 5). `spikes/results/s4.txt` |
 | **S5** | Parameter UI in the GUI: keyframe and driver decorators on custom props, vector and color arrays per component, choice dropdown. | Decorators and arrays work, or the UI is adjusted. |
 | **S6** | Mixed output (mesh plus curves) through a stage on a mesh stack: display, native modifiers, and what `evaluated_geometry()` returns downstream. | Behaves as §6 says, or the mixed-output rules are revised. |
 | **S7** | Helpers in the GUI: Object Info in Original space for mesh, curve, and point helpers. Duplicate and reload ownership. | Works in the GUI. |
@@ -492,7 +492,7 @@ GH solve time will dominate real definitions. The transport is not the bottlenec
 | | What | Exit criteria |
 |---|---|---|
 | M0 | Create `~/workspace/gh-blender-stack`. Move this plan into `docs/plan.md`. Write `docs/protocol.md` draft and ADRs for D1–D5. Copy the probe scripts from `/tmp/opencode` into `spikes/`. | Repo exists. Pure-core tests run (empty) |
-| M1 | Spikes S1–S8 | All gates passed, or the fallback is chosen and recorded. **S1, S2 and S3 passed** |
+| M1 | Spikes S1–S8 | All gates passed, or the fallback is chosen and recorded. **S1, S2, S3 and S4 passed** |
 | M2 | Protocol v2 core, golden frames, rules | Layer A green. **Done 2026-10-11**: codec, hashing, params, rules, cache (43 tests), ten golden fixtures verified by both the Python codec (`scripts/test-core`, 50 tests) and the C# codec under wine (`scripts/test-gha`) |
 | M3 | Engine against `tools/fake_gh` | Layer B green, including bake, undo, save and reload |
 | M4 | GH plugin: Stage In, Stage Out, Param | Layer C green: live round trip, parameter change, save and reopen, GH closed and reopened |
@@ -581,7 +581,8 @@ Facts this plan relies on, and how each was checked. Scratch scripts live in `/t
 - `NurbsCurve.MakePiecewiseBezier`, `NurbsCurve.ConvertSpanToBezier`, `Curve.ToNurbsCurve`.
 - `SubD`, `SubD.CreateFromMesh`, `SubD.ToBrep`, `SubDEdge.Tag` with `SubDEdgeTag` values `Crease`, `Smooth`, `SmoothX`, `Unset`.
 - No public semi-sharp edge value or vertex crease property was found.
-- The `SubDEdge.Tag` setter is not confirmed (S4).
+- `SubDEdge.Tag` **has a working setter** (confirmed live by S4); `SubD.CreateFromMesh` yields a valid cage SubD; boundary edges read `Crease` by default.
+- `NurbsCurve.MakePiecewiseBezier` is lossless (knot insertion). `ConvertSpanToBezier` returns a `BezierCurve` (no `Domain`; a span is 0..1). Dropping weights on a rational circle (radius 5) distorts it by 0.73 units — the D3 warning case.
 
 **Portal (upstream and local copies)**
 - Upstream source is public under Apache-2.0: `Portal.Core` (including a WebSocket manager) and `Portal.Gh` (components `Remote` with WebSocket client and server, `Local`, `Serialization`, `Utils`).

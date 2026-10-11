@@ -73,11 +73,11 @@ async def main():
     async with websockets.serve(handler, "127.0.0.1", 9131, max_size=None):
         log("listening on ws://127.0.0.1:9131/s1 (the spike's endpoint)")
         log("waiting for the spike .gha; drop any spike component on the canvas")
-        deadline = time.time() + 300
+        deadline = time.time() + 900
         while not outcome["done"] and time.time() < deadline:
             await asyncio.sleep(0.2)
         if not outcome["done"]:
-            log("RESULT: FAIL (no connection within 5 minutes)")
+            log("RESULT: FAIL (no connection within 15 minutes)")
 
     log("RESULT: " + ("PASS" if outcome["ok"] else "FAIL"))
     os.makedirs(RESULTS, exist_ok=True)

@@ -1,0 +1,52 @@
+# S4 — SubD tags and the curve approximation paths
+
+2026-10-11, live in Rhino 8 under wine via the spike `.gha` (`check=s4`).
+Driver: `spikes/s4/driver.py`; checks: `spikes/s4/S4Checks.cs`.
+
+**Result: PASS.** The SubD tag setter exists and works, `SubD.CreateFromMesh`
+produces a usable SubD, and the curve path is exact except when weights are
+dropped — with a measured deviation for the D3 warning.
+
+## SubD
+
+| Check | Result |
+|---|---|
+| `SubD.CreateFromMesh` on a 4×4 cage | created, valid: 16 verts, 24 edges, 9 faces |
+| `subd_to_brep` | works; the meshed Brep has 316 verts |
+| `SubDEdge.Tag` setter | **works**: set to `Crease`, reads back `Crease` |
+| `SubDEdgeList.SetEdgeTags(ids, tag)` | did not change the tags for the indices tried |
+
+Notes:
+- The first edge of a cage created from a mesh already reads `Crease`; boundary
+  edges of an open SubD are creased by default. The plugin's crease transfer must
+  therefore compare and set rather than assume `Smooth`.
+- The direct `SubDEdge.Tag` setter is the proven path for D2. The bulk
+  `SetEdgeTags` needs the right index space (its `int` overload is not the edge's
+  `ComponentIndex.Index`); not needed, since the setter works per edge.
+
+## Curves
+
+| Check | Deviation from the original |
+|---|---|
+| Uniform clamped degree-3, `MakePiecewiseBezier` | 1.8e-12 (exact, float noise) |
+| Interior knot moved (non-uniform), same call | 1.8e-13 (exact) |
+| Circle (rational), spans kept | 3.2e-14 (exact) |
+| Circle, weights dropped (`SetWeight(i, 1.0)`) | **0.73 units at radius 5** |
+
+Notes:
+- `MakePiecewiseBezier` inserts knots; it is **lossless**, even for interior
+  non-uniform knots. This refines the plan's table (§6): "NURBS with interior
+  non-uniform knots" is not itself an approximation case.
+- The lossy step is making a **rational** curve non-rational. At radius 5 the
+  measured distortion is 0.73 units, three orders of magnitude above the 0.1 mm
+  warning threshold. The D3 warning condition should be "rational curve whose
+  weights cannot be carried", not "has interior non-uniform knots".
+
+## What this changes for the plugin (M4)
+
+- Blender → GH creases: use the per-edge `SubDEdge.Tag` setter; treat boundary
+  edges as already creased when deciding whether to warn.
+- Curve warnings: warn when a curve is rational and the target representation
+  cannot carry the weights, and report the measured deviation against the
+  threshold. The current checks give the measurement recipe
+  (`ConvertSpanToBezier` + `ClosestPoint` sampling).

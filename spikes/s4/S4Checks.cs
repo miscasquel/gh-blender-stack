@@ -50,13 +50,22 @@ namespace GhStack.Spike.S4
                 // (a) the setter. The assembly exposes set_Tag, so the gate is
                 // about behaviour: does the value stick, and does the bulk
                 // SetEdgeTags path work (what the plugin will use)?
-                SubDEdge edge = subd.Edges.Find(0);
+                SubDEdge edge = null;
+                foreach (SubDEdge e in subd.Edges) { edge = e; break; }
+                if (edge == null)
+                {
+                    r["tag_setter"] = false;
+                    r["tag_error"] = "no edge returned by the enumerator";
+                    return;
+                }
                 r["tag_before"] = edge.Tag.ToString();
                 try
                 {
                     edge.Tag = SubDEdgeTag.Crease;
                     r["tag_setter"] = true;
-                    r["tag_after"] = subd.Edges.Find(0).Tag.ToString();
+                    SubDEdge again = null;
+                    foreach (SubDEdge e in subd.Edges) { again = e; break; }
+                    r["tag_after"] = again == null ? "(none)" : again.Tag.ToString();
                 }
                 catch (Exception ex)
                 {
@@ -66,15 +75,36 @@ namespace GhStack.Spike.S4
 
                 try
                 {
+                    // SetEdgeTags takes edge component indices. Walk the enumerator
+                    // to learn the first few, rather than assuming they start at 0.
                     var ids = new List<int>();
-                    for (int i = 0; i < Math.Min(3, subd.Edges.Count); i++) ids.Add(i);
+                    foreach (SubDEdge e in subd.Edges)
+                    {
+                        ids.Add(e.ComponentIndex().Index);
+                        if (ids.Count == 3) break;
+                    }
                     subd.Edges.SetEdgeTags(ids, SubDEdgeTag.Smooth);
                     var tags = new List<object>();
-                    foreach (int i in ids) tags.Add(subd.Edges.Find(i).Tag.ToString());
-                    r["bulk_tags"] = tags;
-                    // Restore the first edge so the readback below is meaningful.
+                    foreach (SubDEdge e in subd.Edges)
+                    {
+                        if (ids.Contains(e.ComponentIndex().Index))
+                        {
+                            tags.Add(e.ComponentIndex().Index + "=" + e.Tag);
+                            if (tags.Count == ids.Count) break;
+                        }
+                    }
+                    r["bulk_smooth_tags"] = tags;
                     subd.Edges.SetEdgeTags(ids, SubDEdgeTag.Crease);
-                    r["bulk_after_crease"] = subd.Edges.Find(0).Tag.ToString();
+                    var creaseTags = new List<object>();
+                    foreach (SubDEdge e in subd.Edges)
+                    {
+                        if (ids.Contains(e.ComponentIndex().Index))
+                        {
+                            creaseTags.Add(e.ComponentIndex().Index + "=" + e.Tag);
+                            if (creaseTags.Count == ids.Count) break;
+                        }
+                    }
+                    r["bulk_crease_tags"] = creaseTags;
                 }
                 catch (Exception ex)
                 {
@@ -156,6 +186,28 @@ namespace GhStack.Spike.S4
                 if (converted)
                 {
                     r["bezier_max_deviation"] = SpanDeviation(curve, piecewise, 24);
+                }
+
+                // The genuinely lossy case (D3): a rational curve made
+                // non-rational. A circle is rational; its Bezier spans keep the
+                // shape exactly until the weights are dropped.
+                var circle = new Circle(Point3d.Origin, 5.0);
+                NurbsCurve circleNurbs = circle.ToNurbsCurve();
+                r["circle_rational"] = circleNurbs.IsRational;
+                NurbsCurve circleSpans = circleNurbs.DuplicateCurve() as NurbsCurve;
+                bool circleConverted = circleSpans != null && circleSpans.MakePiecewiseBezier(true);
+                r["circle_converted"] = circleConverted;
+                if (circleConverted)
+                {
+                    r["circle_kept_deviation"] = SpanDeviation(circleNurbs, circleSpans, 24);
+                    NurbsCurve nonRational = circleSpans.DuplicateCurve() as NurbsCurve;
+                    if (nonRational != null)
+                    {
+                        // Drop the weights: this is the lossy step D3 warns about.
+                        for (int i = 0; i < nonRational.Points.Count; i++)
+                            nonRational.Points.SetWeight(i, 1.0);
+                        r["circle_dropped_deviation"] = SpanDeviation(circleNurbs, nonRational, 24);
+                    }
                 }
 
                 // The exact-representable case: a uniform clamped curve must
