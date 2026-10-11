@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Install the add-on into the Blender user addons directory as a symlink, so the
+# working tree is what Blender loads (demo v0; S8 will package it properly).
+#
+#     scripts/install-addon
+#
+# Then enable "GH Stack" in Blender's Preferences > Add-ons (search for gh_stack).
+set -euo pipefail
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+VERSION="$(blender --version | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)"
+ADDONS="${BLENDER_USER_SCRIPTS:-$HOME/.config/blender/$VERSION/scripts}/addons"
+
+mkdir -p "$ADDONS"
+LINK="$ADDONS/gh_stack"
+if [ -L "$LINK" ] || [ -e "$LINK" ]; then
+  rm -rf "$LINK"
+fi
+ln -s "$REPO/blender/gh_stack" "$LINK"
+echo "linked $LINK -> $REPO/blender/gh_stack"
+echo "enable it in Blender: Preferences > Add-ons > search 'GH Stack'"
+echo "port and timeout are in the add-on preferences; the panel is in the 3D viewport sidebar (N)"
