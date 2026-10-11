@@ -1,11 +1,71 @@
-listening on ws://127.0.0.1:9131/s1 (websockets 17.2)
-waiting for the GH spike to connect; drop the components if nothing happens
-connection from ('127.0.0.1', 55524)
-S1 path check: section-less request
-  reply in 41.1 ms: {"msg": "{\"n\":42,\"text\":\"s3 driver s1 check\",\"type\":\"request\",\"v\":2}", "n": 42, "solves": 2, "type": "response", "v": 2}
-  S1 path PASS
-1k: 968 tris, 529 verts, request frame 0.02 MB
-  reply 5.8 ms rtt; C# in 2.0 ms, out 1.7 ms; 529 verts, 484 faces; reply 0.02 MB; scale=1.0
-  PASS: geometry matches
-10k: 10082 tris, 5184 verts, request frame 0.18 MB
-session failed: ConnectionClosedError(None, Close(code=<CloseCode.MESSAGE_TOO_BIG: 1009>, reason='frame with 791412148981705 bytes exceeds limit of 268435456 bytes'), None)
+# S3 — geometry round trip at 1k, 10k and 100k triangles
+
+2026-10-11. Blender 5.2.2 (extraction and apply, headless), C# under wine
+(Rhino Mesh conversion, live GH session), transport over the spike WebSocket.
+
+**Result: PASS.** Geometry matches exactly in both directions at every size
+(verts, face counts, face indices, colours), and the 100k round trip is well
+inside the plan's ~100 ms budget.
+
+## Live run (the C# side and the transport)
+
+From the driver's session with the spike `.gha` in a live Rhino session:
+
+| Case | Triangles | Frame | RTT | C# sections→Mesh | C# Mesh→sections |
+|---|---|---|---|---|---|
+| 1k | 968 | 0.02 MB | 5.6 ms | 2.0 ms | 1.7 ms |
+| 10k | 10,082 | 0.18 MB | 4.1 ms | 1.1 ms | 0.7 ms |
+| 100k | 100,352 | 1.61 MB | 30.3 ms | 10.0 ms | 5.1 ms |
+
+RTT covers the request, both conversions, and the reply. The 1k case is slower
+than the 10k case: it runs first and pays JIT warmup. The S1 path was rechecked
+in the same session (PASS, 33.9 ms) because the spike `.gha` now speaks the real
+frame codec.
+
+```
+1k:   reply 5.6 ms rtt; C# in 2.0 ms, out 1.7 ms;  529 verts,   484 faces
+10k:  reply 4.1 ms rtt; C# in 1.1 ms, out 0.7 ms; 5184 verts,  5041 faces
+100k: reply 30.3 ms rtt; C# in 10.0 ms, out 5.1 ms; 50625 verts, 50176 faces
+```
+
+## Blender side (headless, from scripts/test-blender)
+
+| Case | Extract + hash | Encode | Decode | Apply (rebuild) | Apply (in-place) |
+|---|---|---|---|---|---|
+| 10k | 0.9 ms | 0.1 ms | 0.7 ms | 8.1 ms | covered by the tests |
+| 100k | 7.4 ms | 0.3 ms | 6.6 ms | 99.9 ms | covered by the tests |
+
+The apply figure is the worst case: `clear_geometry` + `from_pydata`, used when
+the topology changed. When only positions move, `foreach_set` updates in place,
+which is the engine's normal path (bench_geo measured 22 ms at 100k).
+
+## Budget
+
+Plan §13 says "geometry hop at 100k triangles: about 100 ms of transport and
+conversion on top of the GH solve". Measured: **30.3 ms** for the whole round
+trip (both conversions and both directions of transport, 1.61 MB each way).
+Blender's own read+encode at 100k adds 7.7 ms, and the in-place apply is ~22 ms.
+The budget holds with room to spare; no revision needed.
+
+## Notes and defects found on the way
+
+- WebSocket frames over 64 KiB use a 64-bit length. The spike client rejected
+  them on receive (fixed: big-endian 64-bit read) and then encoded them wrongly
+  on send (fixed: shifting an `int` by 32 wraps to 0 in C#, so the length's high
+  half repeated its low half). The WsTest pre-flight now moves a 200,000 byte
+  frame in both directions.
+- RhinoCommon's `Mesh.Vertices.AddVertices` cannot be referenced with the Mono
+  profile mcs compiles against (`IReadOnlyList` missing), so the conversion adds
+  vertices one at a time; the 10 ms at 100k includes that.
+- The conversion runs on the socket thread here to measure it cleanly; M4 will
+  convert during `SolveInstance` instead (plan §10).
+
+## Reproduce
+
+```
+# Blender side (no Rhino):
+scripts/test-blender
+
+# Live: start the driver, then the GH spike .gha in Rhino
+PYTHONPATH=blender/gh_stack/vendor python3 spikes/s3/driver.py --check-s1 --cases 1k,10k,100k
+```

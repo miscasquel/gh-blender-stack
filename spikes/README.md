@@ -32,6 +32,7 @@ Several scripts write scratch files to `/tmp/opencode/probe/`. Create that folde
 | `s2_server_thread.py` | S2: `websockets` 17.2 server on a background thread, queue handoff, `bpy.app.timers` drain, 2 MB load. `blender -b --factory-startup --python-exit-code 1 --python spikes/s2_server_thread.py`, and again without `-b` for the timer path | §9.4 |
 | `s2_timer_cadence.py` | S2b: timer cadence under a 2 MB stream load | §9.4, §13 |
 | `s1/` | S1: the C# spike `.gha`, its Python peer, and the build/deploy scripts. See `s1/README.md`; run `server.py --selftest` before any live session | §10, §15 |
+| `s3/` | S3: the geometry driver and a fake-GH stand-in for pre-flighting it. `driver.py` is the server side; the spike `.gha` does the conversion | §6, §15 |
 
 Do not run `probe_gn.py` or `probe_hang*.py` without a timeout. They are the cases that hang.
 
@@ -41,4 +42,5 @@ Do not run `probe_gn.py` or `probe_hang*.py` without a timeout. They are the cas
 |---|---|---|
 | S1 | passed 2026-10-11 | `results/s1.txt`, `results/s1-gui.png`; a TcpClient client replaces `ClientWebSocket`, see plan §19 |
 | S2 | passed 2026-10-11 | `results/s2-background.txt`, `results/s2-gui.txt`, `results/s2_timer.txt` |
-| S3–S8 | open | |
+| S3 | passed 2026-10-11 | `results/s3.txt`; exact round trips at 1k/10k/100k, 100k in 30.3 ms end to end |
+| S4–S8 | open | |

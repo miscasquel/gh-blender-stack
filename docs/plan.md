@@ -1,6 +1,6 @@
 # GH Stack — Project Plan (rev 2)
 
-**Status:** rev 2 approved. M0 done (2026-10-10): repository skeleton, this plan, protocol draft (`docs/protocol.md`), decision records (`docs/decisions/`), spike scripts (`spikes/`). **S2 passed 2026-10-11** (transport on a background thread, `spikes/results/s2-gui.txt`, `s2-background.txt`): `websockets` 17.2 runs on a plain thread in Blender 5.2, queue handoff works, and a 4 ms `bpy.app.timers` drain holds ~5 ms median under a 2 MB load. **S1 passed 2026-10-11** (the transport gate, `spikes/results/s1.txt`): a C# `.gha` under wine connects, a background message triggers `SolveInstance` on the UI thread through `ScheduleSolution`, replies come back in 20–65 ms, and save/reopen reconnects with no dialog. The plan's `ClientWebSocket` choice was replaced by a TcpClient client (see §19). **M2 done 2026-10-11**: protocol core, ten golden fixtures verified by both codecs. Next: S3.
+**Status:** rev 2 approved. M0 done (2026-10-10): repository skeleton, this plan, protocol draft (`docs/protocol.md`), decision records (`docs/decisions/`), spike scripts (`spikes/`). **S2 passed 2026-10-11** (transport on a background thread, `spikes/results/s2-gui.txt`, `s2-background.txt`): `websockets` 17.2 runs on a plain thread in Blender 5.2, queue handoff works, and a 4 ms `bpy.app.timers` drain holds ~5 ms median under a 2 MB load. **S1 passed 2026-10-11** (the transport gate, `spikes/results/s1.txt`): a C# `.gha` under wine connects, a background message triggers `SolveInstance` on the UI thread through `ScheduleSolution`, replies come back in 20–65 ms, and save/reopen reconnects with no dialog. The plan's `ClientWebSocket` choice was replaced by a TcpClient client (see §19). **M2 done 2026-10-11**: protocol core, ten golden fixtures verified by both codecs. **S3 passed 2026-10-11** (`spikes/results/s3.txt`): mesh round trips match exactly at 1k/10k/100k; 100k costs 30.3 ms end to end, inside the §13 budget. Next: S4.
 **Authoritative copy:** `docs/plan.md` in `~/workspace/gh-blender-stack`. The a shared network folder copy is a mirror.
 **Date:** 2026-10-10.
 **Replaces:** `handoff-1-grasshopper-3dm-plugin.md` and `handoff-2-blender-3dm-addon.md` (deleted; their useful facts are in §19).
@@ -451,9 +451,9 @@ gh-blender-stack/
 | `websockets` server on a Blender background thread, queue handoff (S2) | 401 messages, max enqueue-to-apply 2.1 ms |
 | 4 ms `bpy.app.timers` drain under a 2 MB stream load (S2) | 5.07 ms median gap, max 76 ms |
 
-**Budgets to validate in S3 (targets, not guarantees)**
+**Budgets to validate in S3 (targets, not guarantees)** — **validated 2026-10-11**, see `spikes/results/s3.txt`:
 - Parameter change to viewport, light definitions: GH solve plus about 1 ms of transport.
-- Geometry hop at 100k triangles: about 100 ms of transport and conversion on top of the GH solve. The C# conversion cost is measured in S3.
+- Geometry hop at 100k triangles: about 100 ms of transport and conversion on top of the GH solve. **Measured 30.3 ms** for the full round trip (1.61 MB each way; C# 10.0 ms in, 5.1 ms out; Blender read+encode 7.7 ms, in-place apply ~22 ms).
 - Cached playback: at least 24 fps for 10k-triangle outputs. 100k triangles is expected to be borderline.
 - No UI tick above 16 ms during steady updates, except one large apply.
 
@@ -480,7 +480,7 @@ GH solve time will dominate real definitions. The transport is not the bottlenec
 |---|---|---|
 | **S1** | Does a C# `GhStack.gha` under wine connect with `ClientWebSocket`, trigger a solve from a background message via `ScheduleSolution`, send a response to Blender, and save and reopen the document with no dialog? | Yes: continue. No: fall back to Portal's transport (its WebSocket components exist upstream), and the engine stays the same. **Passed 2026-10-11 with a TcpClient client instead of `ClientWebSocket`** (Mono cannot reference it; see §19). Connect, background-message solve, reply in 20–65 ms, and save/reopen reconnected with no dialog: `spikes/results/s1.txt` |
 | **S2** | Does `websockets` run in a Blender 5.2 background thread, with queue handoff and no UI stalls? | Yes: continue. |
-| **S3** | Geometry round trip with the C# side at 10k and 100k triangles. | Budgets in §13 met or revised with data. |
+| **S3** | Geometry round trip with the C# side at 10k and 100k triangles. | Budgets in §13 met or revised with data. **Passed 2026-10-11**: geometry matches at 1k/10k/100k; the 100k round trip is 30.3 ms (C# 10.0 + 5.1 ms, 1.61 MB each way). `spikes/results/s3.txt` |
 | **S4** | SubD: can `SubDEdge.Tag` be set? Does `SubD.CreateFromMesh` produce a usable SubD from a cage? Are the curve approximation paths behaving? | Setter exists: tags round-trip. No setter: tags are dropped on Blender → GH with a warning (D2). |
 | **S5** | Parameter UI in the GUI: keyframe and driver decorators on custom props, vector and color arrays per component, choice dropdown. | Decorators and arrays work, or the UI is adjusted. |
 | **S6** | Mixed output (mesh plus curves) through a stage on a mesh stack: display, native modifiers, and what `evaluated_geometry()` returns downstream. | Behaves as §6 says, or the mixed-output rules are revised. |
@@ -492,7 +492,7 @@ GH solve time will dominate real definitions. The transport is not the bottlenec
 | | What | Exit criteria |
 |---|---|---|
 | M0 | Create `~/workspace/gh-blender-stack`. Move this plan into `docs/plan.md`. Write `docs/protocol.md` draft and ADRs for D1–D5. Copy the probe scripts from `/tmp/opencode` into `spikes/`. | Repo exists. Pure-core tests run (empty) |
-| M1 | Spikes S1–S8 | All gates passed, or the fallback is chosen and recorded. **S1 and S2 passed** |
+| M1 | Spikes S1–S8 | All gates passed, or the fallback is chosen and recorded. **S1, S2 and S3 passed** |
 | M2 | Protocol v2 core, golden frames, rules | Layer A green. **Done 2026-10-11**: codec, hashing, params, rules, cache (43 tests), ten golden fixtures verified by both the Python codec (`scripts/test-core`, 50 tests) and the C# codec under wine (`scripts/test-gha`) |
 | M3 | Engine against `tools/fake_gh` | Layer B green, including bake, undo, save and reload |
 | M4 | GH plugin: Stage In, Stage Out, Param | Layer C green: live round trip, parameter change, save and reopen, GH closed and reopened |
@@ -571,6 +571,7 @@ Facts this plan relies on, and how each was checked. Scratch scripts live in `/t
 - **S2 (2026-10-11):** `websockets` 17.2 runs on a plain background thread in Blender 5.2, with queue handoff; a 4 ms `bpy.app.timers` request holds ~5 ms median under a 2 MB stream load (max 73 ms). Two bounds: timers only fire once a script returns to the event loop, and `bpy.app.timers` is inert under `blender -b`, so layer B tests call the drain directly instead.
 - **S1 build (2026-10-11):** the wine `csc.exe` is **Mono's mcs**, not Microsoft's compiler. `ClientWebSocket` exists in Mono's real `System.dll`, but referencing it makes mcs import two `System.dll`s and fail on ambiguous types, and `/nostdlib` is not honoured by this build. The spike therefore uses a hand-rolled client over `TcpClient` (`spikes/s1/miniws.cs`), which compiles with `/sdk:4.5` and runs. `DataContractJsonSerializer` works via `/r:System.ServiceModel.Web.dll` + `/r:System.Runtime.Serialization.dll`. M4 must revisit the client choice before the transport is settled.
 - **S1 live (2026-10-11):** under wine-mono, a background thread's message triggers a UI-thread solve via `OnPingDocument().ScheduleSolution(delay, delegate)` + `ExpireSolution`, and `SolveInstance` runs for every message. Three behaviours to carry into the engine: `ScheduleSolution(0, …)` coalesces and silently drops the delegate (10 ms is reliable); the reply must be sent from a thread that is not blocked on the next receive, or the peer's request/response cycle deadlocks; and `IGH_DataAccess.GetData`/`SetData` match the parameter **name**, not the nickname. Evidence: `spikes/results/s1.txt`.
+- **S3 (2026-10-11):** a mesh round trip at 1k/10k/100k triangles matches exactly and costs 30.3 ms at 100k end to end (both conversions, both directions, 1.61 MB frames). The C# conversion adds vertices one at a time because RhinoCommon's `AddVertices` cannot be referenced with the profile mcs compiles against. WebSocket frames over 64 KiB need the 64-bit length path in both directions; on send, shift a `long` — C# masks `int` shift counts to five bits. Evidence: `spikes/results/s3.txt`.
 
 **Rhino 8 under wine (RhinoCommon and Grasshopper XML docs in the wine prefix, this machine)**
 - `GH_DocumentObject.OnPingDocument`, `GH_Document.ScheduleSolution(int, GH_ScheduleDelegate)`, `IGH_DocumentObject.ExpireSolution`, `GH_ActiveObject.AddRuntimeMessage`.
