@@ -254,7 +254,7 @@ namespace GhStack
             p.AddNumberParameter("Min", "m", "Minimum", GH_ParamAccess.item);
             p.AddNumberParameter("Max", "M", "Maximum", GH_ParamAccess.item);
             p.AddNumberParameter("Step", "s", "Step", GH_ParamAccess.item);
-            p.AddTextParameter("Choices", "C", "Choice labels, one per line", GH_ParamAccess.item);
+            p.AddTextParameter("Choices", "C", "Choice labels: a list of strings, or one per line in a Panel", GH_ParamAccess.list);
             p.AddTextParameter("Group", "G", "Group label", GH_ParamAccess.item);
             for (int i = 1; i < 9; i++) p[i].Optional = true;
             // A neutral default so an unconnected Param is already useful. Min and
@@ -277,7 +277,7 @@ namespace GhStack
             int typeIndex = 0;
             string defaultText = "";
             double min = 0.0, max = 0.0, step = 0.01;
-            string choices = "";
+            var choiceStrings = new List<string>();
             string group = "";
             da.GetData("Key", ref key);
             da.GetData("Label", ref label);
@@ -286,7 +286,7 @@ namespace GhStack
             bool hasMin = da.GetData("Min", ref min);
             bool hasMax = da.GetData("Max", ref max);
             da.GetData("Step", ref step);
-            da.GetData("Choices", ref choices);
+            da.GetDataList("Choices", choiceStrings);
             da.GetData("Group", ref group);
             GhLink.Register(this);
 
@@ -314,8 +314,13 @@ namespace GhStack
             declaration["max"] = hasMax ? (object)max : null;
             declaration["step"] = step;
             var choiceList = new List<object>();
-            foreach (string c in choices.Split('\n'))
-                if (c.Trim().Length > 0) choiceList.Add(c.Trim());
+            foreach (string item in choiceStrings)
+            {
+                // A Panel arrives as one string with newlines; a List arrives as
+                // one string per item. Both work.
+                foreach (string c in (item ?? "").Split('\n'))
+                    if (c.Trim().Length > 0) choiceList.Add(c.Trim());
+            }
             declaration["choices"] = choiceList;
             declaration["group"] = group;
             GhLink.PublishParam(key, declaration);

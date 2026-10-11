@@ -66,8 +66,24 @@ class GHSTACK_PT_panel(bpy.types.Panel):
         if stage.params:
             params_box = box.box()
             params_box.label(text="Parameters", icon="DRIVER")
+            # Group labels come from the Param component's Group input; parameters
+            # with no group sit directly under the header, in schema order.
+            groups = []
             for entry in stage.params:
-                self.draw_param(params_box, obj, stage, entry)
+                group = entry.group or ""
+                if group not in groups:
+                    groups.append(group)
+            for group in groups:
+                if group:
+                    group_box = params_box.box()
+                    group_box.label(text=group)
+                    for entry in stage.params:
+                        if (entry.group or "") == group:
+                            self.draw_param(group_box, obj, stage, entry)
+                else:
+                    for entry in stage.params:
+                        if not entry.group:
+                            self.draw_param(params_box, obj, stage, entry)
 
     def draw_param(self, layout, obj, stage, entry):
         name = stack_mod.param_prop_name(stage.key, entry.param_id)
