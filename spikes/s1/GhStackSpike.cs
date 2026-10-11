@@ -288,7 +288,13 @@ namespace GhStack.Spike.S1
             string type = Json.GetString(header, "type");
             var geom = Json.Get(header, "geom") as Dictionary<string, object>;
             string mode = geom == null ? null : Json.GetString(geom, "mode");
+            string check = Json.GetString(header, "check");
 
+            if (type == "request" && check == "s4")
+            {
+                HandleS4Check(header);
+                return;
+            }
             if (type == "request" && geom != null && mode == "full")
             {
                 HandleGeometry(decoded);
@@ -316,6 +322,27 @@ namespace GhStack.Spike.S1
             SpikeComponent origin;
             lock (Gate) { origin = Components.Count > 0 ? Components[0] : null; }
             RequestSolve(origin);
+        }
+
+        /// <summary>S4: run the SubD and curve checks and reply with the results.</summary>
+        private static void HandleS4Check(Dictionary<string, object> header)
+        {
+            var reply = new Dictionary<string, object>();
+            reply["type"] = "response";
+            reply["check"] = "s4";
+            reply["stage"] = Json.GetString(header, "stage");
+            try
+            {
+                reply["results"] = GhStack.Spike.S4.S4Checks.Run();
+                reply["status"] = "ok";
+            }
+            catch (Exception ex)
+            {
+                reply["status"] = "error";
+                reply["error"] = ex.GetType().Name + ": " + FirstLine(ex);
+            }
+            Enqueue(FrameCodec.Encode(reply, null));
+            Note("S4 checks ran");
         }
 
         /// <summary>S3: convert the frame's geometry through a Rhino Mesh and reply

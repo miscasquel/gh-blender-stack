@@ -47,6 +47,7 @@ WINEPREFIX="$PREFIX" "$WINE" "$CSC" \
   /r:"$(win_path "$GH_DLL")" /r:"$(win_path "$GHIO_DLL")" /r:"$(win_path "$RC_DLL")" \
   /r:System.Drawing.dll \
   "$(win_path "$CORE/Json.cs")" "$(win_path "$CORE/Frame.cs")" "$(win_path "$CORE/Conversion.cs")" \
+  "$(win_path "$HERE/../s4/S4Checks.cs")" \
   "$(win_path "$HERE/miniws.cs")" "$SRC_W" \
   2>&1 | grep -vE 'fixme:|MESA-EGL|pci id|^$' || true
 
