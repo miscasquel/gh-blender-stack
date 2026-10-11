@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
-# Build the S1 spike .gha with the wine csc.exe (C# 5, plan §10).
+# Build the S1 spike .gha with Mono's csc.exe under wine (plan §10).
 #
 # Findings that shape this script:
-# - The wine csc.exe is Mono's mcs, not Microsoft's csc.
-# - wine's .NET 4.0 System.dll has no WebSockets: ClientWebSocket lives in Mono's
-#   real System.dll (gac/System/4.0.0.0__b77a5c561934e089). Referencing it with
-#   /sdk:4.5 compiles and runs (verified 2026-10-11).
-# - /nostdlib and /noconfig are not accepted by this mcs build; use /sdk:4.5.
+# - wine's Framework csc.exe wrapper compiles against the 4.0-api profile; Mono's
+#   real csc.exe (lib/mono/4.5/csc.exe) is used instead, because the 4.0 profile
+#   cannot resolve RhinoCommon's mesh types (IReadOnlyList is missing). See
+#   grasshopper/build/build-core.sh.
+# - DataContractJsonSerializer needs /r:System.ServiceModel.Web.dll plus
+#   /r:System.Runtime.Serialization.dll from the GAC.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 PREFIX="${WINEPREFIX:-$HOME/.local/share/wineprefixes/rhino8}"
 WINE="${WINE:-$HOME/.local/share/wine-rhino/bin/wine}"
-CSC='C:\windows\Microsoft.NET\Framework\v4.0.30319\csc.exe'
+CSC_PATH="$(find /usr/share/wine/mono -maxdepth 6 -path '*/lib/mono/4.5/csc.exe' | head -1)"
+[ -f "$CSC_PATH" ] || { echo "mono csc.exe not found" >&2; exit 1; }
+CSC="$(WINEPREFIX="$PREFIX" "$WINE" winepath -w "$CSC_PATH")"
 OUT="$HERE/GhStackSpike.gha"
 
 win_path() { WINEPREFIX="$PREFIX" "$WINE" winepath -w "$1"; }
@@ -45,7 +48,7 @@ OUT_W="$(win_path "$OUT")"
 rm -f "$OUT"
 
 WINEPREFIX="$PREFIX" "$WINE" "$CSC" \
-  /nologo /sdk:4.5 /target:library \
+  /nologo /target:library \
   /out:"$OUT_W" \
   /r:"$(win_path "$GH_DLL")" /r:"$(win_path "$GHIO_DLL")" /r:"$(win_path "$RC_DLL")" \
   /r:"$(win_path "$RS_DLL")" /r:"$(win_path "$SCW_DLL")" \

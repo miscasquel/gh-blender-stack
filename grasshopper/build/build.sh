@@ -8,16 +8,18 @@
 #
 #     WINEPREFIX=... wine grasshopper/build/out/GhStackCoreTests.exe protocol/fixtures
 #
-# This is the same wine csc.exe recipe as the S1 spike (see spikes/s1/build.sh):
-# the csc under wine is Mono's mcs, and /sdk:4.5 is how its reference set is
-# selected consistently.
+# Mono's real csc.exe is used, not wine's Framework wrapper: the wrapper
+# compiles against a 4.0 profile that cannot resolve RhinoCommon types (see
+# build-core.sh).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 PREFIX="${WINEPREFIX:-$HOME/.local/share/wineprefixes/rhino8}"
 WINE="${WINE:-$HOME/.local/share/wine-rhino/bin/wine}"
-CSC='C:\windows\Microsoft.NET\Framework\v4.0.30319\csc.exe'
+CSC_PATH="$(find /usr/share/wine/mono -maxdepth 6 -path '*/lib/mono/4.5/csc.exe' | head -1)"
+[ -f "$CSC_PATH" ] || { echo "mono csc.exe not found" >&2; exit 1; }
+CSC="$(WINEPREFIX="$PREFIX" "$WINE" winepath -w "$CSC_PATH")"
 OUT_DIR="$HERE/out"
 OUT="$OUT_DIR/GhStackCoreTests.exe"
 
@@ -27,7 +29,7 @@ mkdir -p "$OUT_DIR"
 rm -f "$OUT"
 
 WINEPREFIX="$PREFIX" "$WINE" "$CSC" \
-  /nologo /sdk:4.5 /target:exe \
+  /nologo /target:exe \
   /out:"$(win_path "$OUT")" \
   "$(win_path "$REPO/grasshopper/src/core/Json.cs")" \
   "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
