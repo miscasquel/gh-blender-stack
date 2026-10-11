@@ -1,0 +1,22 @@
+{
+  "frame_bytes": 183,
+  "frame_sha256": "sha256:338d2e56212f5267a249bb8b42f6ca1a4080b03a604ed25fa5eed7eda86cd24c",
+  "header": {
+    "client": "GhStack 0.1.0",
+    "doc": "Panels.gh",
+    "doc_units": "Millimeters",
+    "stages": [
+      {
+        "enabled": true,
+        "key": "panelize-3f9a"
+      },
+      {
+        "enabled": false,
+        "key": "offset-0b7e"
+      }
+    ],
+    "type": "hello",
+    "v": 2
+  },
+  "sections": {}
+}

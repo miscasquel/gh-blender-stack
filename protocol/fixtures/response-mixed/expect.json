@@ -1,0 +1,223 @@
+{
+  "frame_bytes": 1317,
+  "frame_sha256": "sha256:a82cf036fb1683c9412771e737768502f3ab96afda3b0b870284475eff8bfe9e",
+  "header": {
+    "counts": {
+      "approximated_curves": 1,
+      "curves": 2,
+      "meshes": 1,
+      "points": 1,
+      "subd": 0
+    },
+    "error": null,
+    "out_hash": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+    "rid": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+    "sections": [
+      {
+        "bytes": 36,
+        "dtype": "f32",
+        "name": "mesh.verts",
+        "shape": [
+          9
+        ]
+      },
+      {
+        "bytes": 4,
+        "dtype": "u32",
+        "name": "mesh.face_counts",
+        "shape": [
+          1
+        ]
+      },
+      {
+        "bytes": 12,
+        "dtype": "u32",
+        "name": "mesh.face_indices",
+        "shape": [
+          3
+        ]
+      },
+      {
+        "bytes": 80,
+        "dtype": "f32",
+        "name": "crv.points",
+        "shape": [
+          20
+        ]
+      },
+      {
+        "bytes": 8,
+        "dtype": "u32",
+        "name": "crv.counts",
+        "shape": [
+          2
+        ]
+      },
+      {
+        "bytes": 2,
+        "dtype": "u8",
+        "name": "crv.types",
+        "shape": [
+          2
+        ]
+      },
+      {
+        "bytes": 2,
+        "dtype": "u8",
+        "name": "crv.orders",
+        "shape": [
+          2
+        ]
+      },
+      {
+        "bytes": 2,
+        "dtype": "u8",
+        "name": "crv.knots_mode",
+        "shape": [
+          2
+        ]
+      },
+      {
+        "bytes": 2,
+        "dtype": "u8",
+        "name": "crv.cyclic",
+        "shape": [
+          2
+        ]
+      },
+      {
+        "bytes": 12,
+        "dtype": "f32",
+        "name": "pts.positions",
+        "shape": [
+          3
+        ]
+      },
+      {
+        "bytes": 4,
+        "dtype": "f32",
+        "name": "pts.radii",
+        "shape": [
+          1
+        ]
+      },
+      {
+        "bytes": 4,
+        "dtype": "u8",
+        "name": "pts.colors",
+        "shape": [
+          4
+        ]
+      }
+    ],
+    "stage": "panelize-3f9a",
+    "status": "ok",
+    "type": "response",
+    "v": 2,
+    "warnings": [
+      {
+        "code": "curve_approximated",
+        "message": "1 curve approximated (max deviation 0.02 mm)"
+      }
+    ]
+  },
+  "sections": {
+    "crv.counts": {
+      "bytes": 8,
+      "dtype": "u32",
+      "sha256": "sha256:0c40fc912bea3d01b4dbad07de4c8cf177ac0c424bc11d622d2239c0e5988986",
+      "shape": [
+        2
+      ]
+    },
+    "crv.cyclic": {
+      "bytes": 2,
+      "dtype": "u8",
+      "sha256": "sha256:96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7",
+      "shape": [
+        2
+      ]
+    },
+    "crv.knots_mode": {
+      "bytes": 2,
+      "dtype": "u8",
+      "sha256": "sha256:b413f47d13ee2fe6c845b2ee141af81de858df4ec549a58b7970bb96645bc8d2",
+      "shape": [
+        2
+      ]
+    },
+    "crv.orders": {
+      "bytes": 2,
+      "dtype": "u8",
+      "sha256": "sha256:583c7dfb7b3055d99465544032a571e10a134b1b6f769422bbb71fd7fa167a5d",
+      "shape": [
+        2
+      ]
+    },
+    "crv.points": {
+      "bytes": 80,
+      "dtype": "f32",
+      "sha256": "sha256:5670789033af0f9aab27aef1a389455bb97da5859e40302e4f6a1b604881e769",
+      "shape": [
+        20
+      ]
+    },
+    "crv.types": {
+      "bytes": 2,
+      "dtype": "u8",
+      "sha256": "sha256:fcf0a6c700dd13e274b6fba8deea8dd9b26e4eedde3495717cac8408c9c5177f",
+      "shape": [
+        2
+      ]
+    },
+    "mesh.face_counts": {
+      "bytes": 4,
+      "dtype": "u32",
+      "sha256": "sha256:9d9f290527a6be626a8f5985b26e19b237b44872b03631811df4416fc1713178",
+      "shape": [
+        1
+      ]
+    },
+    "mesh.face_indices": {
+      "bytes": 12,
+      "dtype": "u32",
+      "sha256": "sha256:ad5dc1478de06a4c2728ea528bd9361a4b945e92a414bf4d180cedaaeaa5f4cc",
+      "shape": [
+        3
+      ]
+    },
+    "mesh.verts": {
+      "bytes": 36,
+      "dtype": "f32",
+      "sha256": "sha256:d8b87038ed2ace74ed183166f6b0a541eab77f7184d50e65edc4bca5ccb5445a",
+      "shape": [
+        9
+      ]
+    },
+    "pts.colors": {
+      "bytes": 4,
+      "dtype": "u8",
+      "sha256": "sha256:85b0134ceffc9fbba06039e7645b449c566f4379bd4a1770e1beefeb919e9e8d",
+      "shape": [
+        4
+      ]
+    },
+    "pts.positions": {
+      "bytes": 12,
+      "dtype": "f32",
+      "sha256": "sha256:ad08e7318cbbba82db0d84bc040fcb6c89af352c75f4a5f0d09f599facf01b4c",
+      "shape": [
+        3
+      ]
+    },
+    "pts.radii": {
+      "bytes": 4,
+      "dtype": "f32",
+      "sha256": "sha256:d99e58435243d9fef9c88273b8d553b4fba4d0baf8009d29eae74fa99e0d9f57",
+      "shape": [
+        1
+      ]
+    }
+  },
+  "sections_hash": "sha256:a7c372eb48cb351cdad744e41a9fb9b9fce6f6ceaaea3c84ade8b503afdd23e2"
+}

@@ -1,0 +1,104 @@
+{
+  "frame_bytes": 718,
+  "frame_sha256": "sha256:e982e7e4fe2ef650b706c090c13103b762204bc220d18e7c468e012d8cf0ff2d",
+  "header": {
+    "geom": {
+      "hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+      "mode": "full",
+      "subd": true
+    },
+    "nonce": 9,
+    "params": {},
+    "rid": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    "sections": [
+      {
+        "bytes": 48,
+        "dtype": "f32",
+        "name": "subd.verts",
+        "shape": [
+          12
+        ]
+      },
+      {
+        "bytes": 4,
+        "dtype": "u32",
+        "name": "subd.face_counts",
+        "shape": [
+          1
+        ]
+      },
+      {
+        "bytes": 16,
+        "dtype": "u32",
+        "name": "subd.face_indices",
+        "shape": [
+          4
+        ]
+      },
+      {
+        "bytes": 8,
+        "dtype": "u32",
+        "name": "subd.crease_edges",
+        "shape": [
+          2
+        ]
+      },
+      {
+        "bytes": 4,
+        "dtype": "f32",
+        "name": "subd.crease_values",
+        "shape": [
+          1
+        ]
+      }
+    ],
+    "space": "stack-local",
+    "stage": "panelize-3f9a",
+    "type": "request",
+    "units": "m",
+    "v": 2
+  },
+  "sections": {
+    "subd.crease_edges": {
+      "bytes": 8,
+      "dtype": "u32",
+      "sha256": "sha256:01acecb507abfe1a354aa8064f4af5d3f1acd019e37db3c11c97523b71c76e9d",
+      "shape": [
+        2
+      ]
+    },
+    "subd.crease_values": {
+      "bytes": 4,
+      "dtype": "f32",
+      "sha256": "sha256:e00e5eb9444182f352323374ef4e08ebcb784725fdd4fd612d7730540b3e0c8c",
+      "shape": [
+        1
+      ]
+    },
+    "subd.face_counts": {
+      "bytes": 4,
+      "dtype": "u32",
+      "sha256": "sha256:fb5e512425fc9449316ec95969ebe71e2d576dbab833d61e2a5b9330fd70ee02",
+      "shape": [
+        1
+      ]
+    },
+    "subd.face_indices": {
+      "bytes": 16,
+      "dtype": "u32",
+      "sha256": "sha256:baed642339816affb3fe8719792d0e4ce82f12db72b7373d244eaa65445800fe",
+      "shape": [
+        4
+      ]
+    },
+    "subd.verts": {
+      "bytes": 48,
+      "dtype": "f32",
+      "sha256": "sha256:38312f51e206e6fbdf6e650b42ce605c35dff6644cc8fefab3c204d69cd762b9",
+      "shape": [
+        12
+      ]
+    }
+  },
+  "sections_hash": "sha256:a5d243e2450ee3bfc7ad8af2bf6aa1e9fab5e020e5816fdb04ed43dcb0dc6b1b"
+}

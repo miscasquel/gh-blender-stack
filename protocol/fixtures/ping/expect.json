@@ -1,0 +1,10 @@
+{
+  "frame_bytes": 36,
+  "frame_sha256": "sha256:e93a281ef02417c61e046319aa4bac12802d7fd4c9c560ebacf5dc4aaafb640a",
+  "header": {
+    "t": 1234.5,
+    "type": "ping",
+    "v": 2
+  },
+  "sections": {}
+}

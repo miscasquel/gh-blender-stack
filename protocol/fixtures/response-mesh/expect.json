@@ -1,0 +1,74 @@
+{
+  "frame_bytes": 619,
+  "frame_sha256": "sha256:6d3d40a44144dad1166dc3e4f528b3b9ade29b5afe0a32965a3721073d5808db",
+  "header": {
+    "counts": {
+      "approximated_curves": 0,
+      "curves": 0,
+      "meshes": 1,
+      "points": 0,
+      "subd": 0
+    },
+    "error": null,
+    "out_hash": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+    "rid": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+    "sections": [
+      {
+        "bytes": 48,
+        "dtype": "f32",
+        "name": "mesh.verts",
+        "shape": [
+          12
+        ]
+      },
+      {
+        "bytes": 8,
+        "dtype": "u32",
+        "name": "mesh.face_counts",
+        "shape": [
+          2
+        ]
+      },
+      {
+        "bytes": 24,
+        "dtype": "u32",
+        "name": "mesh.face_indices",
+        "shape": [
+          6
+        ]
+      }
+    ],
+    "stage": "panelize-3f9a",
+    "status": "ok",
+    "type": "response",
+    "v": 2,
+    "warnings": []
+  },
+  "sections": {
+    "mesh.face_counts": {
+      "bytes": 8,
+      "dtype": "u32",
+      "sha256": "sha256:f9815db16d8d228cca743c75d4cb4ddffd3a6d7cd6518658c9d3bd0e4fe27c82",
+      "shape": [
+        2
+      ]
+    },
+    "mesh.face_indices": {
+      "bytes": 24,
+      "dtype": "u32",
+      "sha256": "sha256:18689a54c1ff754be58500b2ed77a6c75b025be96f6d01fef89c42da1c953f34",
+      "shape": [
+        6
+      ]
+    },
+    "mesh.verts": {
+      "bytes": 48,
+      "dtype": "f32",
+      "sha256": "sha256:71962900a0336bdb4cb4c79912655ab05a82da81373d431bc2bf41879e9b9d3e",
+      "shape": [
+        12
+      ]
+    }
+  },
+  "sections_hash": "sha256:98a565c87bd32e6f85a9d95a999db2c8209bf7325bbdfb3467801715d053e999"
+}

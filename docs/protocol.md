@@ -226,9 +226,15 @@ SHA-256 over the response sections, in header order: name (UTF-8), 0x00, raw byt
 
 `protocol/fixtures/<name>/` holds:
 - `frame.bin`: the encoded frame.
-- `expect.json`: the decoded header and the expected section sizes and checksums.
+- `expect.json`: the decoded header, per-section metadata (`dtype`, `shape`, `bytes`, `sha256` of the raw section bytes), the frame `sha256`, and `sections_hash` when the fixture has sections.
 
-Both the Python and C# codecs must decode every fixture to the same values, and encode the expected values back to the same bytes (canonical header, §3). Fixtures are created in M2.
+Both the Python and C# codecs must decode every fixture to the same values, and encode the expected values back to the same bytes (canonical header, §3). Created 2026-10-11:
+
+- Python: `scripts/test-core`, via `blender/tests/core/test_fixtures.py`.
+- C# under wine: `scripts/test-gha`, via `grasshopper/tests/console/GhStackCoreTests.exe`.
+- Regenerate with `python3 scripts/make-fixtures`.
+
+Ten fixtures, covering `ping`, `hello`, `schema`, a `ref` request, a mesh request, a SubD request, a mesh response, a mixed mesh/curve/point response, an error response, and the `error` message. Floats in fixtures are exactly representable in f32, so both codecs agree byte for byte without a tolerance.
 
 ## 10. Changes from plan rev 2
 
@@ -242,3 +248,7 @@ Both the Python and C# codecs must decode every fixture to the same values, and 
 ## 11. Changelog
 
 - 2026-10-10: draft created for M0.
+- 2026-10-11: fixtures created and verified by both codecs (M2); the `sha256:`
+  prefix convention for fixture hashes is fixed; the C# header writer is
+  hand-rolled canonical JSON instead of `DataContractJsonSerializer`, which cannot
+  sort keys (§10's no-third-party rule still holds).

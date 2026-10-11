@@ -1,0 +1,25 @@
+{
+  "frame_bytes": 336,
+  "frame_sha256": "sha256:073fd58467d5cf48e5719146768074ec683717a18bdca53f2920c80700c91def",
+  "header": {
+    "counts": {
+      "approximated_curves": 0,
+      "curves": 0,
+      "meshes": 0,
+      "points": 0,
+      "subd": 0
+    },
+    "error": {
+      "code": "gh_solve_failed",
+      "message": "Component 'Loft' failed: no input"
+    },
+    "out_hash": "",
+    "rid": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "stage": "panelize-3f9a",
+    "status": "error",
+    "type": "response",
+    "v": 2,
+    "warnings": []
+  },
+  "sections": {}
+}

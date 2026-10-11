@@ -1,0 +1,13 @@
+{
+  "frame_bytes": 184,
+  "frame_sha256": "sha256:a023b2e9710b97b57531d35a45794b85fe6b042881b6ed252c50883528b55fcf",
+  "header": {
+    "code": "unknown_ref",
+    "message": "no geometry for hash",
+    "rid": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "stage": "panelize-3f9a",
+    "type": "error",
+    "v": 2
+  },
+  "sections": {}
+}

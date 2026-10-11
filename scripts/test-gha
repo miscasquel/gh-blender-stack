@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Layer C, codec half: build the C# core and check it against the golden
+# fixtures under wine. No Rhino needed: the codec is pure managed code.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+PREFIX="${WINEPREFIX:-$HOME/.local/share/wineprefixes/rhino8}"
+WINE="${WINE:-$HOME/.local/share/wine-rhino/bin/wine}"
+
+win_path() { WINEPREFIX="$PREFIX" "$WINE" winepath -w "$1"; }
+
+grasshopper/build/build.sh
+
+LOG="$(mktemp)"
+set +e
+WINEPREFIX="$PREFIX" "$WINE" \
+  "$(win_path "$PWD/grasshopper/build/out/GhStackCoreTests.exe")" \
+  "$(win_path "$PWD/protocol/fixtures")" >"$LOG" 2>&1
+CODE=$?
+set -e
+
+grep -vE 'fixme:|MESA-EGL|pci id|^$' "$LOG" || true
+rm -f "$LOG"
+exit "$CODE"
