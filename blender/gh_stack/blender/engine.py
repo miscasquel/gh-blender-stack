@@ -46,18 +46,36 @@ def _on_frame_change(scene, depsgraph=None):
 
 
 def _timer():
-    """bpy.app.timers callback. Returns the next interval."""
-    _handle_incoming()
-    busy = False
-    for name in list(_dirty):
-        obj = bpy.data.objects.get(name)
-        if obj is None:
+    """bpy.app.timers callback. Returns the next interval.
+
+    A timer that raises is unregistered by Blender, which would silently stop the
+    engine; every part of the pass is therefore guarded, and failures land in the
+    panel state instead.
+    """
+    try:
+        _handle_incoming()
+        busy = False
+        for name in list(_dirty):
+            obj = bpy.data.objects.get(name)
+            if obj is None:
+                _dirty.discard(name)
+                continue
+            try:
+                if _process_object(obj):
+                    busy = True
+            except Exception as exc:
+                bridge.state["error"] = "engine error on %s: %r" % (name, exc)
+                import traceback
+
+                print("[gh-stack] engine error:\n%s" % traceback.format_exc(), flush=True)
             _dirty.discard(name)
-            continue
-        if _process_object(obj):
-            busy = True
-        _dirty.discard(name)
-    return WAIT_INTERVAL if busy else IDLE_INTERVAL
+        return WAIT_INTERVAL if busy else IDLE_INTERVAL
+    except Exception as exc:
+        bridge.state["error"] = "engine error: %r" % (exc,)
+        import traceback
+
+        print("[gh-stack] engine error:\n%s" % traceback.format_exc(), flush=True)
+        return IDLE_INTERVAL
 
 
 def _handle_incoming():
@@ -74,15 +92,29 @@ def _handle_incoming():
 def _handle_schema(header):
     key = header.get("stage")
     params = header.get("params") or []
+    matched = False
     for obj in bpy.data.objects:
         record = stack_mod.stack_of(obj)
         if record is None:
             continue
         stage = stack_mod.stage_of(obj, key)
         if stage is not None:
-            props.apply_schema(obj, stage, params)
+            matched = True
+            try:
+                props.apply_schema(obj, stage, params)
+            except Exception as exc:
+                # One bad schema must not take the engine down.
+                bridge.state["error"] = "schema for %s failed: %r" % (key, exc)
+                import traceback
+
+                print("[gh-stack] schema error:\n%s" % traceback.format_exc(), flush=True)
+                continue
             _dirty.add(obj.name)
             obj.update_tag()
+    if not matched:
+        # A schema for a stage no object has: usually a key pasted into GH that
+        # does not belong to any stack, or a stage removed in Blender.
+        print("[gh-stack] schema for unknown stage %r ignored" % (key,), flush=True)
 
 
 def _handle_response(header, sections):

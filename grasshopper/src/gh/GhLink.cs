@@ -302,6 +302,14 @@ namespace GhStack
                 if (fired == 1) return;
                 if (fired == 0) SendFrames(client);
                 RetryStaleSolves();
+                // Re-publish on a slow heartbeat: a component added while the link
+                // was down (or a schema sent before a reconnect) is picked up
+                // without the user having to touch the canvas.
+                if (_connected && (DateTime.UtcNow - _lastPublishAt).TotalSeconds >= 2.0)
+                {
+                    _lastPublishAt = DateTime.UtcNow;
+                    SendPublication();
+                }
             }
         }
 
@@ -368,11 +376,13 @@ namespace GhStack
         }
 
         private static volatile string _lastDocName = "(unsaved)";
+        private static DateTime _lastPublishAt = DateTime.MinValue;
 
         /// <summary>Builds and enqueues hello/schema from the published state.
         /// Safe from either thread: it only touches the registries and the outbox.</summary>
         private static void SendPublication()
         {
+            _lastPublishAt = DateTime.UtcNow;
             if (!_connected) return;
             Dictionary<string, bool> stages;
             Dictionary<string, List<Dictionary<string, object>>> paramsByStage;

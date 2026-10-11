@@ -126,8 +126,13 @@ class EngineDemoTests(unittest.TestCase):
 
     def test_01_schema_created_the_param(self):
         self.assertIn(self.param_name, self.obj)
-        self.assertEqual(len(self.stage.params), 1)
+        self.assertEqual(len(self.stage.params), 2)
         self.assertEqual(self.stage.params[0].label, "Scale")
+        # The vector parameter arrives through the same path and becomes a 3-array.
+        vector_name = "gh/%s/%s" % (self.stage.key, "00000000-0000-4000-8000-0000000000bb")
+        self.assertIn(vector_name, self.obj)
+        self.assertEqual(len(self.obj[vector_name]), 3)
+        self.assertAlmostEqual(self.obj[vector_name][2], 2.0, places=5)
 
     def test_02_first_response_applied(self):
         self.assertEqual(self.stage.state, "ok", self.stage.error)
