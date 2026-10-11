@@ -302,6 +302,11 @@ namespace GhStack
             if (slot.Params.ContainsKey(_paramId.ToString()))
                 value = slot.Params[_paramId.ToString()];
             if (value == null) value = ParamValues.ParseDefault(type, defaultText);
+            // Coerce once to the declared type: the value may be left over from a
+            // previous type, and the default must never be published untyped (a
+            // text default of "[0.0, 0.0, 0.0]" is how a float parameter used to
+            // blow up on the next solve).
+            value = ParamValues.Cast(type, value);
 
             var declaration = new Dictionary<string, object>();
             declaration["id"] = _paramId.ToString();

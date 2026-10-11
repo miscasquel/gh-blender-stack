@@ -8,7 +8,7 @@ keyframed and driven. Ranges go through ``id_properties_ui``. The schema itself
 import bpy
 
 from ..core import params as core_params
-from . import stack as stack_mod
+from . import bridge, stack as stack_mod
 
 TYPE_DEFAULTS = {
     "float": 0.0,
@@ -132,14 +132,17 @@ def apply_schema(obj, stage, params):
 
         name = stack_mod.param_prop_name(stage.key, entry.param_id)
         if name in obj and not _matches_type(obj[name], entry.type):
-            # The GH side changed the parameter's type; the old value cannot be
-            # reinterpreted (a float is not a vector), so start from the default.
+            # The GH side changed the parameter's type. The old value cannot be
+            # reinterpreted (a float is not a vector), and neither can its
+            # keyframes or drivers, so they are removed with the property and the
+            # user is told. A rename does not do this: the GUID keeps the keys.
+            keys = _remove_animation(obj, name)
             del obj[name]
-            print(
-                "[gh-stack] %s changed type to %s; its value was reset"
-                % (name, entry.type),
-                flush=True,
-            )
+            notice = "%s changed type to %s; its value was reset" % (entry.label, entry.type)
+            if keys:
+                notice += " and %d keyframe(s)/driver(s) were removed" % keys
+            bridge.state["notice"] = notice
+            print("[gh-stack] " + notice, flush=True)
         if name not in obj:
             obj[name] = _initial_value(entry)
         elif entry.type == "choice":
@@ -151,6 +154,27 @@ def apply_schema(obj, stage, params):
                 if index < 0 or index >= len(labels):
                     obj[name] = max(0, min(index, len(labels) - 1))
         _set_ui(obj, name, entry)
+
+
+def _remove_animation(obj, name):
+    """Drop the keyframes and drivers of one custom property. Returns how many
+    fcurves were removed."""
+    path = '["%s"]' % name
+    removed = 0
+    animation = getattr(obj, "animation_data", None)
+    if animation is not None and animation.action is not None:
+        for layer in list(animation.action.layers):
+            for strip in list(layer.strips):
+                for bag in list(strip.channelbags):
+                    for fcurve in list(bag.fcurves):
+                        if fcurve.data_path == path:
+                            bag.fcurves.remove(fcurve)
+                            removed += 1
+    try:
+        obj.driver_remove(path)
+    except (TypeError, RuntimeError):
+        pass
+    return removed
 
 
 def _matches_type(value, param_type):
@@ -178,7 +202,12 @@ def _default_text(param):
     if value is None:
         return ""
     if isinstance(value, (list, tuple)):
-        return json.dumps(list(value))
+        # Only a vector or colour parameter carries an array default; for any
+        # other type a list is a leftover and must not become a string like
+        # "[0.0, 0.0, 0.0]" that later fails to parse.
+        if param.get("type") in ("vector3", "color"):
+            return json.dumps(list(value))
+        return ""
     return str(value)
 
 

@@ -78,19 +78,49 @@ namespace GhStack.Core
             return value.ToString();
         }
 
-        /// <summary>The value cast to its schema type: what the component outputs.</summary>
+        /// <summary>The value cast to its schema type: what the component outputs.
+        ///
+        /// Total by design: a schema change can race an in-flight request, so the
+        /// value may belong to the previous type (a vector string arriving at a
+        /// float parameter, say). Any conversion failure returns the type's
+        /// neutral value instead of throwing into SolveInstance.</summary>
         public static object Cast(string type, object value)
         {
-            if (type == "float") return Convert.ToDouble(value, CultureInfo.InvariantCulture);
-            if (type == "int" || type == "choice") return (int)Convert.ToInt64(value, CultureInfo.InvariantCulture);
-            if (type == "bool") return Convert.ToBoolean(value, CultureInfo.InvariantCulture);
-            if (type == "vector3" || type == "color")
+            try
             {
-                double[] array = AsDoubles(value);
-                if (array != null && array.Length == 3) return array;
-                return new double[] { 0.0, 0.0, 0.0 };
+                if (type == "float") return Convert.ToDouble(value, CultureInfo.InvariantCulture);
+                if (type == "int" || type == "choice") return (int)Convert.ToInt64(value, CultureInfo.InvariantCulture);
+                if (type == "bool") return Convert.ToBoolean(value, CultureInfo.InvariantCulture);
+                if (type == "vector3" || type == "color")
+                {
+                    double[] array = AsDoubles(value);
+                    if (array != null && array.Length == 3) return array;
+                    return new double[] { 0.0, 0.0, 0.0 };
+                }
+                if (type == "text")
+                {
+                    if (value == null) return "";
+                    if (value is string) return value;
+                    if (value is double || value is long || value is int || value is bool)
+                        return Convert.ToString(value, CultureInfo.InvariantCulture);
+                    return "";  // a vector or a list is not text
+                }
             }
-            return value == null ? "" : value.ToString();
+            catch (Exception)
+            {
+                // fall through to the neutral value
+            }
+            return Neutral(type);
+        }
+
+        /// <summary>The value a parameter has when nothing usable was given.</summary>
+        public static object Neutral(string type)
+        {
+            if (type == "float") return 0.0;
+            if (type == "int" || type == "choice") return 0;
+            if (type == "bool") return false;
+            if (type == "vector3" || type == "color") return new double[] { 0.0, 0.0, 0.0 };
+            return "";
         }
     }
 }

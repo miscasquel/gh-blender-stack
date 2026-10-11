@@ -186,6 +186,22 @@ namespace GhStack.Tests.Console
             if (!(bool)ParamValues.ParseDefault("bool", "true"))
                 problems.Add("ParseDefault(bool) failed");
 
+            // Cast must be total: a value left from another type (or a racing
+            // request) never throws into SolveInstance.
+            if (!(ParamValues.Cast("float", "[0.0, 0.0, 0.0]") is double))
+                problems.Add("Cast(float, vector string) did not fall back to a double");
+            if ((double)ParamValues.Cast("float", "[0.0, 0.0, 0.0]") != 0.0)
+                problems.Add("Cast(float, vector string) was not neutral");
+            if ((string)ParamValues.Cast("text", parsed) != "")
+                problems.Add("Cast(text, list) was not empty");
+            var junk = ParamValues.Cast("vector3", "junk") as double[];
+            if (junk == null || junk[0] != 0.0)
+                problems.Add("Cast(vector3, junk) was not neutral");
+            if ((int)ParamValues.Cast("choice", "nonsense") != 0)
+                problems.Add("Cast(choice, nonsense) was not neutral");
+            if ((bool)ParamValues.Cast("bool", "not a bool") != false)
+                problems.Add("Cast(bool, string) was not neutral");
+
             object json = ParamValues.JsonValue(new double[] { 1.0, 2.0, 3.0 });
             var jsonList = json as List<object>;
             if (jsonList == null || jsonList.Count != 3)

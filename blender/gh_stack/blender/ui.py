@@ -60,6 +60,8 @@ class GHSTACK_PT_panel(bpy.types.Panel):
         row = box.row()
         row.label(text="Key")
         row.label(text=stage.key)
+        if bridge.state.get("notice"):
+            box.label(text=bridge.state["notice"], icon="INFO")
         if stage.error:
             box.label(text=stage.error, icon="ERROR")
 

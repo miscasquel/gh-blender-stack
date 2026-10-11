@@ -264,13 +264,35 @@ class ParamUiTests(unittest.TestCase):
         values = props.cast_values(obj, stage)
         self.assertEqual(values["f1"], (1.0, 2.0, 3.0))
 
+        # The old keys and drivers cannot drive the new type: they are removed,
+        # and the panel is told.
+        import gh_stack.blender.bridge as bridge
+
+        self.assertIn("changed type to vector3", bridge.state.get("notice", ""))
+
         # Put it back for the later tests.
+        obj[name] = 3.0
+        obj.keyframe_insert(data_path=param_path(name), frame=1)
+        props.apply_schema(
+            obj,
+            stage,
+            [{"id": "f1", "label": "Float", "type": "vector3", "default": [0.0, 0.0, 0.0]}],
+        )
         props.apply_schema(
             obj,
             stage,
             [{"id": "f1", "label": "Float", "type": "float", "default": 1.0, "min": 0.0, "max": 10.0}],
         )
         self.assertIsInstance(obj[name], float)
+        # The keyframe from before the change is gone with the old property.
+        paths = []
+        if obj.animation_data is not None and obj.animation_data.action is not None:
+            for layer in obj.animation_data.action.layers:
+                for strip in layer.strips:
+                    for bag in strip.channelbags:
+                        for fcurve in bag.fcurves:
+                            paths.append(fcurve.data_path)
+        self.assertFalse(any(name in p for p in paths), paths)
 
     def test_10_text_property_round_trips(self):
         obj = self.obj
