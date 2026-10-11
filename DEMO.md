@@ -22,7 +22,8 @@ Blender                                     Rhino / Grasshopper (wine)
 - Undo is not specially handled; the stack records are ordinary properties.
 - The `Param` component takes a **Key** input (a demo deviation from the plan's
   signature; the plan assumes one stage per document).
-- Choice and text parameters exist on the wire but have only basic widgets.
+- Text parameters have a plain field (not animatable, by design). A value-list
+  parameter (Type 5) draws a dropdown; its output is the selected index.
 
 ## Setup
 

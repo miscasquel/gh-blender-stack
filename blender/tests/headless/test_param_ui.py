@@ -57,7 +57,7 @@ class ParamUiTests(unittest.TestCase):
                 {"id": "b1", "label": "Bool", "type": "bool", "default": False},
                 {"id": "v1", "label": "Vector", "type": "vector3", "default": [0.0, 1.0, 2.0]},
                 {"id": "c1", "label": "Colour", "type": "color", "default": [1.0, 0.5, 0.0]},
-                {"id": "ch1", "label": "Mode", "type": "choice", "default": 1, "choices": ["Ribbon", "Panel", "Grid"]},
+                {"id": "ch1", "label": "Mode", "type": "value_list", "default": 1, "values": ["Ribbon", "Panel", "Grid"]},
                 {"id": "t1", "label": "Note", "type": "text", "default": "hello"},
             ],
         )
@@ -199,7 +199,7 @@ class ParamUiTests(unittest.TestCase):
 
     # ----------------------------------------------------------------- choice
 
-    def test_08_choice_dropdown_proxy(self):
+    def test_08_value_list_dropdown_proxy(self):
         stage = self.stage
         entry = None
         for e in stage.params:
@@ -208,14 +208,14 @@ class ParamUiTests(unittest.TestCase):
         self.assertIsNotNone(entry)
         # Dynamic enum items come from the callback; bl_rna does not evaluate it
         # without a UI context, so call it the way Blender would.
-        items = self.stack_mod._choice_items(entry, None)
+        items = self.stack_mod._value_items(entry, None)
         self.assertEqual([i[1] for i in items], ["Ribbon", "Panel", "Grid"])
 
-        entry.choice_value = "2"
+        entry.value_index = "2"
         # The update callback writes the custom property, which is the real value.
         self.assertEqual(self.obj[self.name("ch1")], 2)
 
-    def test_08b_out_of_range_choice_is_clamped(self):
+    def test_08b_out_of_range_value_list_index_is_clamped(self):
         stage = self.stage
         entry = None
         for e in stage.params:
@@ -226,8 +226,8 @@ class ParamUiTests(unittest.TestCase):
         self.props.apply_schema(
             self.obj,
             stage,
-            [{"id": "ch1", "label": "Mode", "type": "choice", "default": 1,
-              "choices": ["Ribbon", "Panel", "Grid"]}],
+            [{"id": "ch1", "label": "Mode", "type": "value_list", "default": 1,
+              "values": ["Ribbon", "Panel", "Grid"]}],
         )
         self.assertEqual(self.obj[name], 2)  # clamped to the last valid index
         # The entry survives the refresh (reconciled, not rebuilt) and the
@@ -236,9 +236,9 @@ class ParamUiTests(unittest.TestCase):
         for e in stage.params:
             if e.param_id == "ch1":
                 entry = e
-        self.assertEqual(entry.choices, "Ribbon\nPanel\nGrid")
-        entry.choice_value = str(int(self.obj[name]))
-        self.assertEqual(entry.choice_value, "2")
+        self.assertEqual(entry.values, "Ribbon\nPanel\nGrid")
+        entry.value_index = str(int(self.obj[name]))
+        self.assertEqual(entry.value_index, "2")
 
     def test_09_type_change_migrates_the_property(self):
         """A parameter whose GH type changed must not break the engine: the

@@ -162,7 +162,7 @@ class ParamsTests(unittest.TestCase):
             {"id": "bbb", "label": "Count", "type": "int", "default": 3},
             {"id": "ccc", "label": "On", "type": "bool", "default": False},
             {"id": "ddd", "label": "Pos", "type": "vector3"},
-            {"id": "eee", "label": "Which", "type": "choice", "choices": ["a", "b"], "default": 1},
+            {"id": "eee", "label": "Which", "type": "value_list", "values": ["a", "b"], "default": 1},
             {"id": "fff", "label": "Note", "type": "text", "default": "hi"},
         ]
 
@@ -172,7 +172,7 @@ class ParamsTests(unittest.TestCase):
         self.assertIs(params.cast("bool", 0), False)
         self.assertIs(params.cast("bool", 1), True)
         self.assertEqual(params.cast("vector3", [1, 2, 3]), (1.0, 2.0, 3.0))
-        self.assertEqual(params.cast("choice", 2), 2)
+        self.assertEqual(params.cast("value_list", 2), 2)
         self.assertEqual(params.cast("text", 5), "5")
 
     def test_cast_rejects_short_vectors(self):

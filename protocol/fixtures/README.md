@@ -30,7 +30,7 @@ python3 scripts/make-fixtures
 |---|---|
 | `ping` | a message with no sections and a float field |
 | `hello` | the stage list, including a disabled stage |
-| `schema` | float and choice parameters, with ranges and choices |
+| `schema` | float and value-list parameters, with ranges and values |
 | `request-ref` | a parameter-only request (`geom.mode = "ref"`, no sections) |
 | `request-mesh` | `mesh.*` sections including colours and crease edges |
 | `request-subd` | `subd.*` sections with a crease |

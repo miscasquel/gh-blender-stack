@@ -2,8 +2,8 @@
 // console tests can check it under wine (grasshopper/tests/console).
 //
 // The wire rules are protocol §4.3: floats as JSON numbers, ints as integers,
-// bools as true/false, vectors and colours as arrays of three numbers, choices
-// as integers, text as strings. The values arrive from Json.Parse, which produces
+// bools as true/false, vectors and colours as arrays of three numbers, value
+// lists as integers (the index), text as strings. The values arrive from Json.Parse, which produces
 // List<object> for arrays — not double[] — which is exactly the mistake this
 // module exists to avoid repeating.
 
@@ -41,7 +41,7 @@ namespace GhStack.Core
             double number;
             if (type == "float")
                 return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out number) ? number : 0.0;
-            if (type == "int" || type == "choice")
+            if (type == "int" || type == "value_list")
                 return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out number) ? (long)number : 0L;
             if (type == "bool")
                 return text != null && text.Trim().ToLowerInvariant() == "true";
@@ -89,7 +89,7 @@ namespace GhStack.Core
             try
             {
                 if (type == "float") return Convert.ToDouble(value, CultureInfo.InvariantCulture);
-                if (type == "int" || type == "choice") return (int)Convert.ToInt64(value, CultureInfo.InvariantCulture);
+                if (type == "int" || type == "value_list") return (int)Convert.ToInt64(value, CultureInfo.InvariantCulture);
                 if (type == "bool") return Convert.ToBoolean(value, CultureInfo.InvariantCulture);
                 if (type == "vector3" || type == "color")
                 {
@@ -117,7 +117,7 @@ namespace GhStack.Core
         public static object Neutral(string type)
         {
             if (type == "float") return 0.0;
-            if (type == "int" || type == "choice") return 0;
+            if (type == "int" || type == "value_list") return 0;
             if (type == "bool") return false;
             if (type == "vector3" || type == "color") return new double[] { 0.0, 0.0, 0.0 };
             return "";

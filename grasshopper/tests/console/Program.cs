@@ -197,8 +197,8 @@ namespace GhStack.Tests.Console
             var junk = ParamValues.Cast("vector3", "junk") as double[];
             if (junk == null || junk[0] != 0.0)
                 problems.Add("Cast(vector3, junk) was not neutral");
-            if ((int)ParamValues.Cast("choice", "nonsense") != 0)
-                problems.Add("Cast(choice, nonsense) was not neutral");
+            if ((int)ParamValues.Cast("value_list", "nonsense") != 0)
+                problems.Add("Cast(value_list, nonsense) was not neutral");
             if ((bool)ParamValues.Cast("bool", "not a bool") != false)
                 problems.Add("Cast(bool, string) was not neutral");
 

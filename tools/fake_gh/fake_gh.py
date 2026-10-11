@@ -103,16 +103,16 @@ async def session(ws, args, state):
                 "choices": [],
                 "group": "Shape",
             },
-            # A choice parameter, so the dropdown path is exercised end to end.
+            # A value list parameter, so the dropdown path is exercised end to end.
             {
                 "id": "00000000-0000-4000-8000-0000000000cc",
                 "label": "Mode",
-                "type": "choice",
+                "type": "value_list",
                 "default": 1,
                 "min": None,
                 "max": None,
                 "step": None,
-                "choices": ["Ribbon", "Panel", "Grid"],
+                "values": ["Ribbon", "Panel", "Grid"],
                 "group": "Shape",
             },
             # A second parameter, of a different type, so the schema path is

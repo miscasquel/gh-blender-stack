@@ -249,12 +249,12 @@ namespace GhStack
         {
             p.AddTextParameter("Key", "K", "Stage key this parameter belongs to", GH_ParamAccess.item);
             p.AddTextParameter("Label", "L", "Display label", GH_ParamAccess.item);
-            p.AddIntegerParameter("Type", "T", "0 float, 1 int, 2 bool, 3 vector3, 4 color, 5 choice, 6 text", GH_ParamAccess.item);
+            p.AddIntegerParameter("Type", "T", "0 float, 1 int, 2 bool, 3 vector3, 4 color, 5 value list, 6 text", GH_ParamAccess.item);
             p.AddTextParameter("Default", "D", "Default value as text", GH_ParamAccess.item);
             p.AddNumberParameter("Min", "m", "Minimum", GH_ParamAccess.item);
             p.AddNumberParameter("Max", "M", "Maximum", GH_ParamAccess.item);
             p.AddNumberParameter("Step", "s", "Step", GH_ParamAccess.item);
-            p.AddTextParameter("Choices", "C", "Choice labels: a list of strings, or one per line in a Panel", GH_ParamAccess.list);
+            p.AddTextParameter("Values", "Vals", "Value list entries: a list of strings, or one per line in a Panel", GH_ParamAccess.list);
             p.AddTextParameter("Group", "G", "Group label", GH_ParamAccess.item);
             for (int i = 1; i < 9; i++) p[i].Optional = true;
             // A neutral default so an unconnected Param is already useful. Min and
@@ -277,7 +277,7 @@ namespace GhStack
             int typeIndex = 0;
             string defaultText = "";
             double min = 0.0, max = 0.0, step = 0.01;
-            var choiceStrings = new List<string>();
+            var valueStrings = new List<string>();
             string group = "";
             da.GetData("Key", ref key);
             da.GetData("Label", ref label);
@@ -286,7 +286,7 @@ namespace GhStack
             bool hasMin = da.GetData("Min", ref min);
             bool hasMax = da.GetData("Max", ref max);
             da.GetData("Step", ref step);
-            da.GetDataList("Choices", choiceStrings);
+            da.GetDataList("Values", valueStrings);
             da.GetData("Group", ref group);
             GhLink.Register(this);
 
@@ -318,15 +318,15 @@ namespace GhStack
             declaration["min"] = hasMin ? (object)min : null;
             declaration["max"] = hasMax ? (object)max : null;
             declaration["step"] = step;
-            var choiceList = new List<object>();
-            foreach (string item in choiceStrings)
+            var valueList = new List<object>();
+            foreach (string item in valueStrings)
             {
                 // A Panel arrives as one string with newlines; a List arrives as
                 // one string per item. Both work.
-                foreach (string c in (item ?? "").Split('\n'))
-                    if (c.Trim().Length > 0) choiceList.Add(c.Trim());
+                foreach (string v in (item ?? "").Split('\n'))
+                    if (v.Trim().Length > 0) valueList.Add(v.Trim());
             }
-            declaration["choices"] = choiceList;
+            declaration["values"] = valueList;
             declaration["group"] = group;
             GhLink.PublishParam(key, declaration);
 
@@ -374,7 +374,7 @@ namespace GhStack
                 case 2: return "bool";
                 case 3: return "vector3";
                 case 4: return "color";
-                case 5: return "choice";
+                case 5: return "value_list";
                 case 6: return "text";
                 default: return "float";
             }

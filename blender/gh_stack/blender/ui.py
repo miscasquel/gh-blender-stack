@@ -96,22 +96,22 @@ class GHSTACK_PT_panel(bpy.types.Panel):
         col = layout.column()
         col.use_property_split = True
         col.use_property_decorate = True
-        if entry.type == "choice" and entry.choices:
+        if entry.type == "value_list" and entry.values:
             # A dropdown over the custom property, which stays the real value
             # (keyframable, and what the engine sends). The index is clamped:
             # assigning an out-of-range identifier raises inside the draw.
-            labels = [c for c in entry.choices.split("\n") if c]
+            labels = [c for c in entry.values.split("\n") if c]
             index = int(obj[name])
             if index < 0 or index >= len(labels):
                 index = 0
                 obj[name] = 0
             current = str(index)
-            if entry.choice_value != current:
+            if entry.value_index != current:
                 try:
-                    entry.choice_value = current
+                    entry.value_index = current
                 except TypeError:
                     pass
-            col.prop(entry, "choice_value", text=entry.label or entry.param_id)
+            col.prop(entry, "value_index", text=entry.label or entry.param_id)
         else:
             # Custom properties are addressed with the bracket syntax in the UI;
             # a bare name (or a slash path) does not resolve.
@@ -151,8 +151,8 @@ class GHSTACK_PT_diagnostics(bpy.types.Panel):
                 box.label(text=stage.error, icon="ERROR")
             for entry in stage.params:
                 detail = entry.type
-                if entry.type == "choice":
-                    detail += " (%d choices)" % len([c for c in entry.choices.split("\n") if c])
+                if entry.type == "value_list":
+                    detail += " (%d values)" % len([c for c in entry.values.split("\n") if c])
                 box.label(text="%s: %s" % (entry.label or entry.param_id, detail))
 
 

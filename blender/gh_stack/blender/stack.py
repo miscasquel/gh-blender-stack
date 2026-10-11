@@ -35,11 +35,11 @@ def new_stage_key(label="stage"):
     return "%s-%s" % (slug, "".join(secrets.choice("0123456789abcdef") for _ in range(STAGE_KEY_LENGTH)))
 
 
-def _choice_items(self, context):
-    """Dropdown entries for a choice parameter, from its schema list."""
-    labels = [c for c in (self.choices or "").split("\n") if c]
+def _value_items(self, context):
+    """Dropdown entries for a value list parameter, from its schema values."""
+    labels = [c for c in (self.values or "").split("\n") if c]
     if not labels:
-        return [("0", "(no choices)", "")]
+        return [("0", "(no values)", "")]
     return [(str(i), label, "") for i, label in enumerate(labels)]
 
 
@@ -63,7 +63,7 @@ def notify_param_changed(obj):
         _param_changed(obj)
 
 
-def _choice_changed(self, context):
+def _value_changed(self, context):
     """Write the picked index to the parameter's custom property, which is the
     value the engine sends and the one keyframes live on."""
     obj = self.id_data  # the owning object, not context: works headless too
@@ -71,7 +71,7 @@ def _choice_changed(self, context):
         return
     name = param_prop_name(self.stage_key, self.param_id)
     if name in obj:
-        obj[name] = int(self.choice_value)
+        obj[name] = int(self.value_index)
         notify_param_changed(obj)
 
 
@@ -88,9 +88,9 @@ class GhParam(bpy.types.PropertyGroup):
     max: FloatProperty(name="Max", default=1.0)
     has_range: BoolProperty(name="Has range", default=False)
     step: FloatProperty(name="Step", default=0.01)
-    choices: StringProperty(name="Choices", default="")  # newline separated
+    values: StringProperty(name="Values", default="")  # newline separated
     # A view of the custom property, so the panel can draw a dropdown (plan §7).
-    choice_value: EnumProperty(name="Choice", items=_choice_items, update=_choice_changed)
+    value_index: EnumProperty(name="Value", items=_value_items, update=_value_changed)
 
 
 class GhStage(bpy.types.PropertyGroup):

@@ -59,11 +59,11 @@ Sent after `hello`, and again whenever a Param component's declaration changes.
 ```json
 {"type":"schema","v":2,"stage":"panelize-3f9a","params":[
   {"id":"6f1c…guid…","label":"Radius","type":"float",
-   "default":2.0,"min":0.0,"max":10.0,"step":0.01,"choices":[],"group":"Shape"}]}
+   "default":2.0,"min":0.0,"max":10.0,"step":0.01,"values":[],"group":"Shape"}]}
 ```
 
-- `type` is one of: `float`, `int`, `bool`, `vector3`, `color`, `choice`, `text`.
-- `choices` is used only for `choice` (a list of strings; the parameter value is the index).
+- `type` is one of: `float`, `int`, `bool`, `vector3`, `color`, `value_list`, `text`.
+- `values` is used only for `value_list`: the entries offered as a dropdown in Blender (a list of strings). The parameter value is the index into that list, so the wire value is an integer.
 - `id` is a GUID generated once per Param component. It never changes, so keyframes survive renames.
 - Removed parameters are omitted from later `schema` messages. Blender moves their keys to the orphan list. It does not delete them.
 
@@ -78,7 +78,7 @@ Sent after `hello`, and again whenever a Param component's declaration changes.
  "sections":[ … ]}
 ```
 
-- `params` maps parameter `id` to a value cast to the schema type before encoding: floats as JSON numbers, ints as integers, bools as `true`/`false`, vectors and colors as arrays of three numbers, choices as integers, text as strings.
+- `params` maps parameter `id` to a value cast to the schema type before encoding: floats as JSON numbers, ints as integers, bools as `true`/`false`, vectors and colors as arrays of three numbers, value lists as integers (the index), text as strings.
 - `geom.mode` is `full` or `ref`.
   - `full`: `sections` carries the geometry (§5). `hash` is the geometry hash.
   - `ref`: `sections` is empty. `hash` names geometry GH already holds for this stage. If GH does not hold it, GH answers `unknown_ref` and Blender resends `full`.
@@ -252,3 +252,6 @@ Ten fixtures, covering `ping`, `hello`, `schema`, a `ref` request, a mesh reques
   prefix convention for fixture hashes is fixed; the C# header writer is
   hand-rolled canonical JSON instead of `DataContractJsonSerializer`, which cannot
   sort keys (§10's no-third-party rule still holds).
+- 2026-10-12: the `choice` parameter type is renamed `value_list` and its schema
+  field `choices` to `values`, because "value list" is the Grasshopper term for
+  it. The fixture generator was re-run; no other change.

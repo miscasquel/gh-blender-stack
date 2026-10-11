@@ -2,7 +2,7 @@
 
 Values live as custom properties named ``gh/<stage>/<param>`` so they can be
 keyframed and driven. Ranges go through ``id_properties_ui``. The schema itself
-(types, labels, choices) is kept in the stage's parameter collection for the UI.
+(types, labels, value lists) is kept in the stage's parameter collection for the UI.
 """
 
 import bpy
@@ -16,7 +16,7 @@ TYPE_DEFAULTS = {
     "bool": False,
     "vector3": (0.0, 0.0, 0.0),
     "color": (0.0, 0.0, 0.0),
-    "choice": 0,
+    "value_list": 0,
     "text": "",
 }
 
@@ -35,7 +35,7 @@ def schema_of(stage):
                 "min": entry.min if entry.has_range else None,
                 "max": entry.max if entry.has_range else None,
                 "step": entry.step,
-                "choices": [c for c in entry.choices.split("\n") if c] if entry.choices else [],
+                "values": [c for c in entry.values.split("\n") if c] if entry.values else [],
             }
         )
     return out
@@ -50,7 +50,7 @@ def _typed_default(entry):
             return json.loads(raw) if raw else (0.0, 0.0, 0.0)
         except ValueError:
             return (0.0, 0.0, 0.0)
-    if entry.type == "int" or entry.type == "choice":
+    if entry.type in ("int", "value_list"):
         try:
             return int(float(raw)) if raw else 0
         except ValueError:
@@ -69,7 +69,7 @@ def schema_signature(stage):
     """What the stage currently holds, for comparison with an incoming schema."""
     return [
         (e.param_id, e.label, e.type, e.group, e.default, e.has_range,
-         round(e.min, 6), round(e.max, 6), round(e.step, 6), e.choices)
+         round(e.min, 6), round(e.max, 6), round(e.step, 6), e.values)
         for e in stage.params
     ]
 
@@ -78,7 +78,7 @@ def incoming_signature(params):
     """The same shape, built from a schema message."""
     out = []
     for param in params:
-        choices = param.get("choices") or []
+        values = param.get("values") or []
         out.append(
             (
                 param.get("id", ""),
@@ -90,7 +90,7 @@ def incoming_signature(params):
                 round(float(param.get("min") or 0.0), 6),
                 round(float(param.get("max") or 1.0), 6),
                 round(float(param.get("step") or 0.01), 6),
-                "\n".join(str(c) for c in choices),
+                "\n".join(str(c) for c in values),
             )
         )
     return out
@@ -127,8 +127,8 @@ def apply_schema(obj, stage, params):
         entry.min = float(param.get("min") or 0.0)
         entry.max = float(param.get("max") or 1.0)
         entry.step = float(param.get("step") or 0.01)
-        choices = param.get("choices") or []
-        entry.choices = "\n".join(str(c) for c in choices)
+        values = param.get("values") or []
+        entry.values = "\n".join(str(c) for c in values)
 
         name = stack_mod.param_prop_name(stage.key, entry.param_id)
         if name in obj and not _matches_type(obj[name], entry.type):
@@ -145,10 +145,10 @@ def apply_schema(obj, stage, params):
             print("[gh-stack] " + notice, flush=True)
         if name not in obj:
             obj[name] = _initial_value(entry)
-        elif entry.type == "choice":
-            # A stale index (from a changed choice list) would break the dropdown
+        elif entry.type == "value_list":
+            # A stale index (from a changed value list) would break the dropdown
             # and send an index GH cannot use; clamp it.
-            labels = [c for c in entry.choices.split("\n") if c]
+            labels = [c for c in entry.values.split("\n") if c]
             if labels:
                 index = int(obj[name])
                 if index < 0 or index >= len(labels):
@@ -188,7 +188,7 @@ def _matches_type(value, param_type):
         return isinstance(value, str)
     if param_type == "bool":
         return isinstance(value, bool)
-    if param_type in ("int", "choice"):
+    if param_type in ("int", "value_list"):
         return isinstance(value, int) and not isinstance(value, bool)
     if param_type == "float":
         return isinstance(value, (int, float)) and not isinstance(value, bool)
@@ -235,7 +235,7 @@ def _set_ui(obj, name, entry):
         else:
             # No range declared: clear any range a previous schema set.
             # update(min=None) does not clear it; the type's extremes do.
-            if entry.type in ("int", "choice"):
+            if entry.type in ("int", "value_list"):
                 kwargs["min"] = -(2 ** 31)
                 kwargs["max"] = 2 ** 31 - 1
             elif entry.type in ("float", "vector3", "color"):

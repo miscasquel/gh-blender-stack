@@ -1,6 +1,6 @@
 {
-  "frame_bytes": 391,
-  "frame_sha256": "sha256:6fd512905655882c51f8f82c8db7b6ddcc66c9097d3e9b44a8eed4e2c13558e6",
+  "frame_bytes": 394,
+  "frame_sha256": "sha256:990598d2bcdc4de49d95982dc0029a595e87f966aed6936557776ffa1ee38eb5",
   "header": {
     "params": [
       {
@@ -15,11 +15,6 @@
         "type": "float"
       },
       {
-        "choices": [
-          "Ribbon",
-          "Panel",
-          "Grid"
-        ],
         "default": 1,
         "group": "Shape",
         "id": "6f1c2a44-0000-4000-8000-000000000002",
@@ -27,7 +22,12 @@
         "max": null,
         "min": null,
         "step": null,
-        "type": "choice"
+        "type": "value_list",
+        "values": [
+          "Ribbon",
+          "Panel",
+          "Grid"
+        ]
       }
     ],
     "stage": "panelize-3f9a",

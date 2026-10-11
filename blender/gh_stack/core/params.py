@@ -11,7 +11,7 @@ PARAM_INT = "int"
 PARAM_BOOL = "bool"
 PARAM_VECTOR3 = "vector3"
 PARAM_COLOR = "color"
-PARAM_CHOICE = "choice"
+PARAM_VALUE_LIST = "value_list"
 PARAM_TEXT = "text"
 
 PARAM_TYPES = (
@@ -20,13 +20,13 @@ PARAM_TYPES = (
     PARAM_BOOL,
     PARAM_VECTOR3,
     PARAM_COLOR,
-    PARAM_CHOICE,
+    PARAM_VALUE_LIST,
     PARAM_TEXT,
 )
 
 # Which of them may be keyframed (plan §7). Text is documented as not animatable.
 ANIMATABLE = frozenset(
-    (PARAM_FLOAT, PARAM_INT, PARAM_BOOL, PARAM_VECTOR3, PARAM_COLOR, PARAM_CHOICE)
+    (PARAM_FLOAT, PARAM_INT, PARAM_BOOL, PARAM_VECTOR3, PARAM_COLOR, PARAM_VALUE_LIST)
 )
 
 
@@ -44,7 +44,7 @@ def default_for(param_type):
         return False
     if param_type in (PARAM_VECTOR3, PARAM_COLOR):
         return (0.0, 0.0, 0.0)
-    if param_type == PARAM_CHOICE:
+    if param_type == PARAM_VALUE_LIST:
         return 0
     if param_type == PARAM_TEXT:
         return ""
@@ -55,8 +55,8 @@ def cast(param_type, value):
     """Cast ``value`` to the schema type before it goes on the wire.
 
     The wire rules are protocol §4.3: floats as JSON numbers, ints as integers,
-    bools as ``true``/``false``, vectors and colours as three numbers, choices as
-    integers, text as strings.
+    bools as ``true``/``false``, vectors and colours as three numbers, value
+    lists as integers (the index), text as strings.
     """
     if param_type == PARAM_FLOAT:
         return float(value)
@@ -66,7 +66,7 @@ def cast(param_type, value):
         if isinstance(value, str):
             return value.strip().lower() in ("1", "true", "yes", "on")
         return bool(value)
-    if param_type == PARAM_CHOICE:
+    if param_type == PARAM_VALUE_LIST:
         return int(value)
     if param_type in (PARAM_VECTOR3, PARAM_COLOR):
         parts = list(value)

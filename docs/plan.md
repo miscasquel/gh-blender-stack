@@ -39,7 +39,7 @@ Drive Grasshopper definitions from Blender as stackable modifiers, alongside nat
 - Curves: poly, Bezier, and NURBS, with approximation and warnings where needed (D3).
 - Points.
 - Brep, converted to mesh on the GH side (lossy by nature; warned).
-- Parameters: float, int, bool, vector3, color, choice. Text parameters are supported but not animatable.
+- Parameters: float, int, bool, vector3, color, value list. Text parameters are supported but not animatable.
 - Mid-stack GH stages (`GH → GN → GH`), enable/disable, reorder, freeze, preview.
 - Keyframes, drivers, bake, and playback from the bake cache.
 - Undo and redo, save and reload.
@@ -154,7 +154,7 @@ Blender reads geometry components through `Object.evaluated_geometry()`, which r
 ## 7. Parameters and animation
 
 **GH side.** A `Param` component declares a parameter:
-- A GUID, a label, and a type: float, int, bool, vector3, color, choice, or text.
+- A GUID, a label, and a type: float, int, bool, vector3, color, value list, or text.
 - A default, a range, and a step.
 - A group label.
 
@@ -169,7 +169,7 @@ It outputs the value Blender sends when connected, or the default otherwise.
 | Bool | 0/1 property | Yes, constant interpolation | |
 | Vector3 | Float array of 3, subtype XYZ | Yes, per component | |
 | Color | Float array of 3, subtype COLOR | Yes, per component | |
-| Choice | Int index plus a stored choice list | Yes, constant interpolation | Dropdown drawn in the add-on panel. |
+| Value list | Int index plus a stored list of entries | Yes, constant interpolation | Dropdown drawn in the add-on panel; the index is what travels. |
 | Text | String property | No | Documented limitation. |
 
 **Verified:**
@@ -205,7 +205,7 @@ The header lists each section's name, dtype, shape, and byte length. Anything no
 | `type` | Direction | Header fields |
 |---|---|---|
 | `hello` | GH → Blender | `proto` (2), `client`, `doc`, `doc_units`, `stages` (keys present and their enabled flags) |
-| `schema` | GH → Blender | `stage`, `params`: list of `{id, label, type, default, min, max, step, choices, group}` |
+| `schema` | GH → Blender | `stage`, `params`: list of `{id, label, type, default, min, max, step, values, group}` |
 | `request` | Blender → GH | `stage`, `rid`, `params` (id → value), `geom` (`{mode: "full"\|"ref", hash, subd}`), `units` ("m"), `space` ("stack-local") |
 | `response` | GH → Blender | `stage`, `rid`, `out_hash`, `status` ("ok"\|"error"), `error`, `warnings`, counts |
 | `ping` / `pong` | both | `t` |
@@ -482,7 +482,7 @@ GH solve time will dominate real definitions. The transport is not the bottlenec
 | **S2** | Does `websockets` run in a Blender 5.2 background thread, with queue handoff and no UI stalls? | Yes: continue. |
 | **S3** | Geometry round trip with the C# side at 10k and 100k triangles. | Budgets in §13 met or revised with data. **Passed 2026-10-11**: geometry matches at 1k/10k/100k; the 100k round trip is 30.3 ms (C# 10.0 + 5.1 ms, 1.61 MB each way). `spikes/results/s3.txt` |
 | **S4** | SubD: can `SubDEdge.Tag` be set? Does `SubD.CreateFromMesh` produce a usable SubD from a cage? Are the curve approximation paths behaving? | Setter exists: tags round-trip. No setter: tags are dropped on Blender → GH with a warning (D2). **Passed 2026-10-11**: setter works, cage SubD is valid, `MakePiecewiseBezier` is lossless; the loss is dropping weights (0.73 units at radius 5). `spikes/results/s4.txt` |
-| **S5** | Parameter UI in the GUI: keyframe and driver decorators on custom props, vector and color arrays per component, choice dropdown. | Decorators and arrays work, or the UI is adjusted. |
+| **S5** | Parameter UI in the GUI: keyframe and driver decorators on custom props, vector and color arrays per component, value-list dropdown. | Decorators and arrays work, or the UI is adjusted. |
 | **S6** | Mixed output (mesh plus curves) through a stage on a mesh stack: display, native modifiers, and what `evaluated_geometry()` returns downstream. | Behaves as §6 says, or the mixed-output rules are revised. |
 | **S7** | Helpers in the GUI: Object Info in Original space for mesh, curve, and point helpers. Duplicate and reload ownership. | Works in the GUI. |
 | **S8** | Extension install on 5.2 with the vendored `websockets` wheel. | Installs. Fallback is `vendor/`. |
@@ -531,7 +531,7 @@ GH solve time will dominate real definitions. The transport is not the bottlenec
 | Curves need approximation | Approximate, count, and warn (D3) |
 | Parameter renames and schema changes orphan keyframes | Keys use GUIDs. Orphan list and purge |
 | Playback outruns GH | Latest-wins, cache-served playback, bake for exact frames |
-| Int, bool, and choice keyframes interpolate between values | Constant interpolation. GH casts the value |
+| Int, bool, and value-list keyframes interpolate between values | Constant interpolation. GH casts the value |
 | Two GH documents claim one stage key | Conflict detection and error state |
 | Port clash with Portal's server | Separate default port, configurable |
 | Shared node groups after duplicate | Ownership check each tick. Covered by A10 |

@@ -134,7 +134,7 @@ class EngineDemoTests(unittest.TestCase):
         self.assertEqual(len(self.obj[vector_name]), 3)
         self.assertAlmostEqual(self.obj[vector_name][2], 2.0, places=5)
 
-    def test_01b_choice_param_and_dropdown(self):
+    def test_01b_value_list_param_and_dropdown(self):
         """A choice parameter arrives with its labels, and picking from the
         dropdown writes the custom property and marks the object dirty (a raw
         Python write does not tag the depsgraph)."""
@@ -145,12 +145,12 @@ class EngineDemoTests(unittest.TestCase):
             if e.param_id == "00000000-0000-4000-8000-0000000000cc":
                 entry = e
         self.assertIsNotNone(entry)
-        self.assertEqual(entry.type, "choice")
-        self.assertEqual(entry.choices, "Ribbon\nPanel\nGrid")
+        self.assertEqual(entry.type, "value_list")
+        self.assertEqual(entry.values, "Ribbon\nPanel\nGrid")
         self.assertEqual(entry.group, "Shape")
 
         self.engine._dirty.discard(self.obj.name)
-        entry.choice_value = "2"
+        entry.value_index = "2"
         self.assertEqual(self.obj[choice_name], 2)
         self.assertIn(self.obj.name, self.engine._dirty, "dropdown pick did not mark the object dirty")
 
