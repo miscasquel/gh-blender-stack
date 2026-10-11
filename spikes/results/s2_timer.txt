@@ -1,0 +1,6 @@
+background load running: loopback client streaming 2 MB frames on port 33811
+measuring timer cadence for 3 s
+registered; returning to Blender's event loop
+timer@4ms: 565 ticks over 2.98 s, median 5.07 ms, p95 5.22 ms, max 75.52 ms, gaps > 100 ms after registration: 0 (requested 4.0 ms)
+timer@50ms: 59 ticks over 2.98 s, median 50.71 ms, p95 54.95 ms, max 75.52 ms, gaps > 100 ms after registration: 0 (requested 50.0 ms)
+background load: 101 2 MB round trips during the measurement

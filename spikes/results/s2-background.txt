@@ -1,0 +1,10 @@
+mode: background (-b); Blender 5.2.2 LTS; websockets 17.2
+server thread started; queue.Queue created
+bpy.app.timers inert under -b; draining from the main thread directly
+FINDING: layer B tests call drain_inbox() directly instead of waiting on timers
+small-frame RTT ms: median 0.05, mean 0.06, p95 0.09, max 0.19 (n=200)
+2 MB frame + 200 small back-to-back: 39.8 ms wall
+queue handoff: 401 messages drained, max enqueue-to-apply 2.12 ms
+timer cadence not measurable under -b; covered by the GUI run of this spike
+server thread stopped cleanly; Blender can exit
+RESULT: S2 PASS

@@ -13,6 +13,11 @@ venv/
 *.pdb
 grasshopper/build/out/
 
+# Spike scratch
+spikes/s1/WsTest.exe
+spikes/s1/GhStackSpike.gha
+spikes/s1/MkDoc.exe
+
 # Packaging
 *.zip
 

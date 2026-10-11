@@ -1,6 +1,6 @@
 # GH Stack — Project Plan (rev 2)
 
-**Status:** rev 2 approved. M0 done (2026-10-10): repository skeleton, this plan, protocol draft (`docs/protocol.md`), decision records (`docs/decisions/`), spike scripts (`spikes/`). Next: S1.
+**Status:** rev 2 approved. M0 done (2026-10-10): repository skeleton, this plan, protocol draft (`docs/protocol.md`), decision records (`docs/decisions/`), spike scripts (`spikes/`). **S2 passed 2026-10-11** (transport on a background thread, `spikes/results/s2-gui.txt`, `s2-background.txt`): `websockets` 17.2 runs on a plain thread in Blender 5.2, queue handoff works, and a 4 ms `bpy.app.timers` drain holds ~5 ms median under a 2 MB load. Next: S1.
 **Authoritative copy:** `docs/plan.md` in `~/workspace/gh-blender-stack`. The a shared network folder copy is a mirror.
 **Date:** 2026-10-10.
 **Replaces:** `handoff-1-grasshopper-3dm-plugin.md` and `handoff-2-blender-3dm-addon.md` (deleted; their useful facts are in §19).
@@ -276,7 +276,7 @@ A stage's prefix never includes its own parameters, so a parameter change cannot
 ### 9.4 Triggers
 - Depsgraph updates, coalesced to one pass per tick.
 - Frame change, which also reaches parameters through the animation system.
-- Incoming messages, drained from a queue by a main-thread timer: every 5 ms while any stage is waiting, every 50 ms otherwise.
+- Incoming messages, drained from a queue by a main-thread timer: every 5 ms while any stage is waiting, every 50 ms otherwise. **Verified in S2:** a 4 ms timer request holds ~5 ms median in the GUI, including under a 2 MB load, so the 5 ms target is reachable. Two findings bound the design: timers only fire after a script returns to the event loop (they are inert during a blocking main-thread script), and `bpy.app.timers` does not tick at all in `blender -b`. Layer B tests therefore call the same drain function directly instead of waiting on timers.
 - Operators.
 
 ### 9.5 Timeouts and failures
@@ -448,6 +448,8 @@ gh-blender-stack/
 | Binary blob for the same mesh | 1.8 MB |
 | Small-message WebSocket round trip | 0.05 ms median |
 | 2 MB binary echo round trip, both directions, pure Python | 57 ms |
+| `websockets` server on a Blender background thread, queue handoff (S2) | 401 messages, max enqueue-to-apply 2.1 ms |
+| 4 ms `bpy.app.timers` drain under a 2 MB stream load (S2) | 5.07 ms median gap, max 76 ms |
 
 **Budgets to validate in S3 (targets, not guarantees)**
 - Parameter change to viewport, light definitions: GH solve plus about 1 ms of transport.
@@ -462,7 +464,7 @@ GH solve time will dominate real definitions. The transport is not the bottlenec
 ## 14. Testing
 
 - **Layer A, pure core.** Codec round trips, hashing, request-ID stability, rule decisions, latest-wins, stale responses, cache behavior. Standard-library `unittest`.
-- **Layer B, Blender headless.** `blender -b --factory-startup --python-exit-code 1`. Templates and ownership, in-place updates, prefix evaluation, parameters through keyframes and drivers, undo and redo, save and reload, disconnect and reconnect, bake. Runs against `tools/fake_gh`.
+- **Layer B, Blender headless.** `blender -b --factory-startup --python-exit-code 1`. Templates and ownership, in-place updates, prefix evaluation, parameters through keyframes and drivers, undo and redo, save and reload, disconnect and reconnect, bake. Runs against `tools/fake_gh`. Note: `bpy.app.timers` is inert under `-b` (S2), so layer B drives the queue drain directly rather than through the timer the GUI uses.
 - **Layer C, GH.** Codec and conversion tests under wine. Live tests: one round trip, parameter changes, save and reopen, GH closed and reopened.
 - **Layer D, end-to-end and bench.** Real definitions and a GN chain. Timings at 1k, 10k, and 100k triangles per hop.
 - **Golden frames** in `protocol/fixtures/`. Both sides must encode and decode them identically.
@@ -490,7 +492,7 @@ GH solve time will dominate real definitions. The transport is not the bottlenec
 | | What | Exit criteria |
 |---|---|---|
 | M0 | Create `~/workspace/gh-blender-stack`. Move this plan into `docs/plan.md`. Write `docs/protocol.md` draft and ADRs for D1–D5. Copy the probe scripts from `/tmp/opencode` into `spikes/`. | Repo exists. Pure-core tests run (empty) |
-| M1 | Spikes S1–S8 | All gates passed, or the fallback is chosen and recorded |
+| M1 | Spikes S1–S8 | All gates passed, or the fallback is chosen and recorded. **S2 passed** |
 | M2 | Protocol v2 core, golden frames, rules | Layer A green |
 | M3 | Engine against `tools/fake_gh` | Layer B green, including bake, undo, save and reload |
 | M4 | GH plugin: Stage In, Stage Out, Param | Layer C green: live round trip, parameter change, save and reopen, GH closed and reopened |
@@ -566,6 +568,8 @@ Facts this plan relies on, and how each was checked. Scratch scripts live in `/t
 - GN PLY import caches by path. Rewriting the same path leaves stale geometry.
 - Setting an object-typed modifier input from Python hung headless evaluation.
 - Blender ships Python 3.14.7 with numpy.
+- **S2 (2026-10-11):** `websockets` 17.2 runs on a plain background thread in Blender 5.2, with queue handoff; a 4 ms `bpy.app.timers` request holds ~5 ms median under a 2 MB stream load (max 73 ms). Two bounds: timers only fire once a script returns to the event loop, and `bpy.app.timers` is inert under `blender -b`, so layer B tests call the drain directly instead.
+- **S1 build (2026-10-11):** the wine `csc.exe` is **Mono's mcs**, not Microsoft's compiler. `ClientWebSocket` exists in Mono's real `System.dll`, but referencing it makes mcs import two `System.dll`s and fail on ambiguous types, and `/nostdlib` is not honoured by this build. The spike therefore uses a hand-rolled client over `TcpClient` (`spikes/s1/miniws.cs`), which compiles with `/sdk:4.5` and runs. `DataContractJsonSerializer` works via `/r:System.ServiceModel.Web.dll` + `/r:System.Runtime.Serialization.dll`. M4 must revisit the client choice before the transport is settled.
 
 **Rhino 8 under wine (RhinoCommon and Grasshopper XML docs in the wine prefix, this machine)**
 - `GH_DocumentObject.OnPingDocument`, `GH_Document.ScheduleSolution(int, GH_ScheduleDelegate)`, `IGH_DocumentObject.ExpireSolution`, `GH_ActiveObject.AddRuntimeMessage`.

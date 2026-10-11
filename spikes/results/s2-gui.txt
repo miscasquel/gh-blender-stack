@@ -1,0 +1,10 @@
+mode: GUI; Blender 5.2.2 LTS; websockets 17.2
+server thread started; queue.Queue created
+registering bpy.app.timers drain (4 ms); returning to Blender's event loop
+small-frame RTT ms: median 0.05, mean 0.06, p95 0.09, max 0.20 (n=200)
+2 MB frame + 200 small back-to-back: 47.4 ms wall
+queue handoff: 401 messages drained, max enqueue-to-apply 75.46 ms
+bpy.app.timers cadence (4 ms requested): 184 ticks, median gap 5.07 ms, p95 5.09 ms, max 76.60 ms
+timer max gap during 2 MB stress: 0.00 ms (before stress: 0.00 ms)
+server thread stopped cleanly; Blender can exit
+RESULT: S2 PASS

@@ -29,5 +29,15 @@ Several scripts write scratch files to `/tmp/opencode/probe/`. Create that folde
 | `probe_nurbs.py` | GN keeps NURBS weight, order, and knots mode | §6, ADR 0003 |
 | `bench_geo.py` | Array read and write timings, JSON size, at about 100k triangles | §13 |
 | `ws_rtt.py` | `websockets` round-trip timings. Needs a venv: `uv venv venv --python 3.14 && uv pip install --python venv/bin/python websockets==17.2` | §13 |
+| `s2_server_thread.py` | S2: `websockets` 17.2 server on a background thread, queue handoff, `bpy.app.timers` drain, 2 MB load. `blender -b --factory-startup --python-exit-code 1 --python spikes/s2_server_thread.py`, and again without `-b` for the timer path | §9.4 |
+| `s2_timer_cadence.py` | S2b: timer cadence under a 2 MB stream load | §9.4, §13 |
 
 Do not run `probe_gn.py` or `probe_hang*.py` without a timeout. They are the cases that hang.
+
+## Spike status
+
+| Spike | State | Result |
+|---|---|---|
+| S2 | passed 2026-10-11 | `results/s2-background.txt`, `results/s2-gui.txt`, `results/s2_timer.txt` |
+| S1 | next | the transport gate; needs a live Rhino session |
+| S3–S8 | open | |

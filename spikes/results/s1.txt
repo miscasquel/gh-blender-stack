@@ -1,0 +1,8 @@
+selftest: starting the peer with a loopback client
+selftest listening on ws://127.0.0.1:9131/s1
+connection from ('127.0.0.1', 39376)
+  round 1: reply in 0.4 ms: {"msg": "selftest echo of 9\u0000\u0000\u0000{\"type\": \"request\", \"n\": 1, \"text\": \"hello from Blender\"}", "n": 1, "solves": 1, "type": "response"}
+  round 2: reply in 0.1 ms: {"msg": "selftest echo of 9\u0000\u0000\u0000{\"type\": \"request\", \"n\": 2, \"text\": \"hello from Blender\"}", "n": 2, "solves": 2, "type": "response"}
+  round 3: reply in 0.1 ms: {"msg": "selftest echo of 9\u0000\u0000\u0000{\"type\": \"request\", \"n\": 3, \"text\": \"hello from Blender\"}", "n": 3, "solves": 3, "type": "response"}
+selftest: 3 round trips in 216.0 ms
+RESULT: selftest PASS
