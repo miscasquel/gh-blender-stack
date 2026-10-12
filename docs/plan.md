@@ -1,14 +1,14 @@
 # GH Stack — Project Plan (rev 2)
 
-**Status:** rev 2 approved. M0 done (2026-10-10): repository skeleton, this plan, protocol draft (`docs/protocol.md`), decision records (`docs/decisions/`), spike scripts (`spikes/`). **S2 passed 2026-10-11** (transport on a background thread, `spikes/results/s2-gui.txt`, `s2-background.txt`): `websockets` 17.2 runs on a plain thread in Blender 5.2, queue handoff works, and a 4 ms `bpy.app.timers` drain holds ~5 ms median under a 2 MB load. **S1 passed 2026-10-11** (the transport gate, `spikes/results/s1.txt`): a C# `.gha` under wine connects, a background message triggers `SolveInstance` on the UI thread through `ScheduleSolution`, replies come back in 20–65 ms, and save/reopen reconnects with no dialog. The plan's `ClientWebSocket` choice was replaced by a TcpClient client (see §19). **M2 done 2026-10-11**: protocol core, ten golden fixtures verified by both codecs. **S3 passed 2026-10-11** (`spikes/results/s3.txt`): mesh round trips match exactly at 1k/10k/100k; 100k costs 30.3 ms end to end, inside the §13 budget. **S4 passed 2026-10-11** (`spikes/results/s4.txt`): the SubD tag setter works, cage SubDs are valid, curve conversion is lossless except when weights are dropped. **Demo v0 works** (`DEMO.md`): a mesh in Blender driven through Stage In/Out and a Param in Grasshopper. **S5 passed 2026-10-12**: the parameter UI (keyframes, decorators, arrays, value-list dropdown) is confirmed in the GUI. Next: S6.
-**Authoritative copy:** `docs/plan.md` in `~/workspace/gh-blender-stack`. The a shared network folder copy is a mirror.
+**Status:** rev 2 approved. M0 done (2026-10-10): repository skeleton, this plan, protocol draft (`docs/protocol.md`), decision records (`docs/decisions/`), spike scripts (`spikes/`). **S2 passed 2026-10-11** (transport on a background thread, `spikes/results/s2-gui.txt`, `s2-background.txt`): `websockets` 17.2 runs on a plain thread in Blender 5.2, queue handoff works, and a 4 ms `bpy.app.timers` drain holds ~5 ms median under a 2 MB load. **S1 passed 2026-10-11** (the transport gate, `spikes/results/s1.txt`): a C# `.gha` under wine connects, a background message triggers `SolveInstance` on the UI thread through `ScheduleSolution`, replies come back in 20–65 ms, and save/reopen reconnects with no dialog. The plan's `ClientWebSocket` choice was replaced by a TcpClient client (see §19). **M2 done 2026-10-11**: protocol core, ten golden fixtures verified by both codecs. **S3 passed 2026-10-11** (`spikes/results/s3.txt`): mesh round trips match exactly at 1k/10k/100k; 100k costs 30.3 ms end to end, inside the §13 budget. **S4 passed 2026-10-11** (`spikes/results/s4.txt`): the SubD tag setter works, cage SubDs are valid, curve conversion is lossless except when weights are dropped. **Demo v0 works** (`DEMO.md`): a mesh in Blender driven through Stage In/Out and a Param in Grasshopper. **S5 passed 2026-10-12**: the parameter UI (keyframes, decorators, arrays, value-list dropdown) is confirmed in the GUI. **v0.1.0 published on GitHub 2026-10-12** (ADR 0007). Next: S6.
+**Authoritative copy:** `docs/plan.md` in the repository.
 **Date:** 2026-10-10.
 **Replaces:** `handoff-1-grasshopper-3dm-plugin.md` and `handoff-2-blender-3dm-addon.md` (deleted; their useful facts are in §19).
 **Rev 2 change:** the repository lives on the local machine (D5). No cross-machine working.
 
 **Machines (working model)**
-- **This machine (`the dev machine`)** — everything in the build loop: code, git, Blender 5.2.2 (Python 3.14.7), the Rhino 8 wine prefix, `csc.exe`, GH plugin builds, tests, benches.
-- **`a home server`** — the a shared network folder host and the old `an earlier link project` git repo with Portal. Not involved in day-to-day work. The project's a shared network folder folder remains the coordination surface, and its `PLAN.md` is superseded by this revision once the repo exists.
+- **One Linux machine** runs everything in the build loop: code, git, Blender 5.2.2 (Python 3.14.7), the Rhino 8 wine prefix, `csc.exe`, GH plugin builds, tests, benches.
+- Rhino and Grasshopper run under wine on the same machine. No other machine is involved.
 
 ---
 
@@ -391,7 +391,7 @@ blender/tests/
 
 ## 12. Repository and environments
 
-**Repository:** `~/workspace/gh-blender-stack` on this machine, GPL-3.0. Created in M0. This plan moves into its `docs/` at that point, and the a shared network folder folder becomes a documentation archive that stays approximately current. Optional later: add `a home server` or another host as a git remote for backup.
+**Repository:** `gh-blender-stack`, GPL-3.0. Created in M0; published on GitHub 2026-10-12 (ADR 0007).
 
 ```
 gh-blender-stack/
@@ -419,8 +419,6 @@ gh-blender-stack/
 - `cache/<stack_id>/<stage_key>/<request_id>.bin`
 - `logs/`
 - In wine, `Z:\home\<user>\.local\share\gh-stack\`
-
-**Left untouched:** the `~/workspace/an earlier link project` runtime mirror (Portal examples and smoke test) and the `an earlier link project` repo on `a home server`.
 
 ---
 
@@ -592,7 +590,7 @@ Facts this plan relies on, and how each was checked. Scratch scripts live in `/t
 
 **Benchmarks and transport** (§13)
 
-**The a shared network folder folder is a CIFS mount** (`a shared folder`). It is not local storage. That is why the repository lives on local disk (D5).
+**A shared network folder was measured to be a CIFS mount**, not local storage. That is why the repository lives on local disk (D5).
 
 **Earlier findings superseded by this plan**
 - rhino3dm: no longer used, since all Rhino work happens on the GH side. Its binary does contain SubD sharpness symbols, which remains a possible fallback, but D2 rules it out.
@@ -602,4 +600,4 @@ Facts this plan relies on, and how each was checked. Scratch scripts live in `/t
 
 ## 20. Next step
 
-M0 is done. Next: S1, the gate for the whole transport decision. S1 needs a live Grasshopper session under wine: its save-and-reopen check is a GUI step the operator confirms.
+v0.1.0 is published (ADR 0007). Next: S6, the mixed-output spike (mesh plus curves through a stage), then S7 (helpers and ownership in the GUI) and S8 (extension packaging), followed by milestones M3–M7 and acceptance A1–A10.

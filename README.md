@@ -1,55 +1,109 @@
 # GH Stack
 
-Drive Grasshopper definitions from Blender as stackable modifiers, next to native Geometry Nodes modifiers, in one visible object per stack. Geometry and parameters both flow through the stack, so parameters can be keyframed, driven, and baked.
+Drive Grasshopper definitions from Blender as stackable modifiers, next to
+native Geometry Nodes modifiers, in one visible object per stack. Geometry and
+parameters both flow through the stack, so parameters can be keyframed, driven,
+and baked.
 
-**Status:** M2 done (2026-10-11). The pure protocol core exists in Python and C# and both pass the same golden fixtures. Spikes S1 (transport) and S2 (Blender background thread) have passed; S3 (geometry round trip) is next. No runnable add-on or plugin yet.
+That is the v1 goal. **v0.1.0 is a working demo**: a mesh in Blender driven by a
+real Grasshopper definition, with parameters you can edit and keyframe in
+Blender. [DEMO.md](DEMO.md) walks through the loop.
 
-## How it fits together
+```
+Blender                                          Rhino / Grasshopper (wine)
+┌───────────────────────────┐      WebSocket     ┌────────────────────────────────┐
+│ Cube                      │◄──────────────────►│ Stage In ──► Scale ──► Stage Out│
+│   GH · Demo (stage)       │        9130        │                 ▲              │
+│   Bevel (native, optional)│                    │               Param            │
+└───────────────────────────┘                    └────────────────────────────────┘
+```
 
-- **Blender 5.2** runs the add-on (`blender/`): a WebSocket server, the stack engine, and the parameter properties.
-- **Grasshopper / Rhino 8** runs under wine. The plugin (`grasshopper/`, `GhStack.gha`) is a WebSocket client with Stage In, Stage Out, and Param components.
-- Both sides speak the protocol in `docs/protocol.md`.
-- The project runs entirely on one machine. Portal (`Portal.Gh` and the patched Portal.blender) stays installed for ad-hoc work and shares nothing with this project.
+## What works today
+
+- **The loop.** A mesh goes to Grasshopper, a definition runs, the result comes
+  back and shows through a modifier in the stack. Base-mesh edits flow on the
+  next tick; no buttons.
+- **Parameters.** `Param` components declare float, int, bool, vector3, colour,
+  value list, and text parameters. Blender draws them in the N-panel with
+  ranges, a value-list dropdown, keyframe decorators, and drivers.
+- **Protocol v2.** Binary frames with a canonical JSON header; geometry and
+  parameters in the same stream. The Python and C# codecs are checked against
+  ten shared golden fixtures.
+- **Lifecycle.** States (`waiting`, `ok`, `error`, `disconnected`, `disabled`),
+  timeouts, latest-wins requests, an in-memory cache, and reconnect with backoff.
+- **Tests.** `scripts/test-core` (50 tests, standard library only),
+  `scripts/test-blender` (27 headless tests), `scripts/test-gha` (the C# codec
+  against the golden fixtures, under wine).
+
+## What is deliberately not here yet
+
+- Meshes only. Curves, points, and SubD are next: the conversion primitives are
+  verified (spikes S4), the wiring is not done.
+- One stage per object, and a stage always reads the stack's base mesh.
+  Mid-stack composition (`GH → GN → GH`) is not evaluated as a prefix yet.
+- The cache is in memory. No bake, freeze, preview, or orphan list yet.
+- The add-on installs as a symlink (`scripts/install-addon`); packaging it as a
+  Blender extension is planned (S8).
+- Undo is not special-cased; stage records are ordinary properties, so undo
+  works as Blender's own property undo.
+
+The authoritative roadmap and scope are in [docs/plan.md](docs/plan.md).
+
+## Requirements
+
+- Blender 5.2 (Python 3.14) on Linux.
+- Rhino 8 with Grasshopper, running under wine, on the same machine. The build
+  scripts assume `~/.local/share/wine-rhino` and a `rhino8` wine prefix; both
+  are overridable with the `WINE` and `WINEPREFIX` environment variables.
+  Native Windows Rhino is designed for but untested.
+- Mono's `csc.exe` (ships with wine) to build the plugin.
+
+## Install
+
+```
+scripts/install-addon            # symlink the add-on into Blender's user scripts
+grasshopper/build/build-gha.sh   # build GhStack.gha (needs wine + Rhino 8)
+grasshopper/deploy/deploy.sh     # copy it into the Grasshopper Libraries
+```
+
+Then enable **GH Stack** in Blender's Preferences > Add-ons and follow
+[DEMO.md](DEMO.md). The server listens on port 9130 (configurable in the
+add-on preferences).
+
+## Working on it
+
+```
+scripts/test-core      # layer A: pure Python core, no Blender needed
+scripts/test-blender   # layer B: Blender headless, against tools/fake_gh
+scripts/test-gha       # layer C: the C# codec under wine, the same golden fixtures
+
+python3 scripts/make-fixtures   # regenerate protocol/fixtures after a protocol change
+```
+
+CI runs the pure-core layer only; the Blender and wine layers need this
+machine's environment.
 
 ## Layout
 
 ```
-blender/            Blender add-on (extension) and its tests
-  gh_stack/core/    pure Python: codec, hashing, rules, cache (no bpy)
+blender/            Blender add-on (extension support) and its tests
+  gh_stack/core/    pure Python: codec, hashing, rules, cache, params (no bpy)
+  gh_stack/blender/ the bpy layer: server, engine, stack, geometry, UI
   tests/core/       layer A tests
+  tests/headless/   layer B tests
 grasshopper/        Grasshopper plugin (C#, built with wine csc.exe)
+  src/core/         codec, hashing, conversion (RhinoCommon only)
+  src/gh/           Stage In, Stage Out, Param components
 protocol/fixtures/  golden frames shared by both codecs
 tools/fake_gh/      Python stand-in for the GH side, used in Blender tests
-spikes/             feasibility scripts and results behind the plan
+spikes/             feasibility scripts and their results behind the plan
 scripts/            test and build entry points
 docs/
-  plan.md           the project plan (authoritative)
-  protocol.md       protocol v2 draft
+  plan.md           the project plan (authoritative, roadmap)
+  protocol.md       protocol v2 specification
   decisions/        decision records
 ```
 
-## Working
-
-Run the pure-core tests (Python, no Blender):
-
-```
-scripts/test-core
-```
-
-Check the C# core against the same golden fixtures, under wine:
-
-```
-scripts/test-gha
-```
-
-Regenerate the fixtures after a protocol change, and commit the diff:
-
-```
-python3 scripts/make-fixtures
-```
-
-Plans and decisions: `docs/plan.md`, `docs/decisions/`.
-
 ## Licence
 
-GPL-3.0. See `LICENSE`.
+GPL-3.0. See [LICENSE](LICENSE).

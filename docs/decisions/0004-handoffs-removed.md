@@ -4,15 +4,20 @@
 
 ## Context
 
-Two handoff documents specified the earlier native track: a `.3dm` file-based Grasshopper plugin and a Blender addon with a file protocol. The track was re-planned, and the handoffs became inaccurate. They were rough and not verified against the environment.
+Two handoff documents specified an earlier file-based track: a `.3dm`-based
+Grasshopper plugin and a Blender add-on that exchanged files. The track was
+re-planned and the handoffs became inaccurate. They were rough and not
+verified against the environment.
 
 ## Decision
 
-- Both handoffs were deleted from the project folder and from `a home server`'s `docs/` (commit `4121236` in that repository).
-- `a home server`'s README and the retired track's notes were repointed at the new plan. The notes remain the failure-mode record.
-- `docs/plan.md` in this repository is the authoritative plan.
+- Both handoffs were deleted. `docs/plan.md` in this repository is the
+  authoritative plan.
+- Facts from the handoffs that still hold were carried into the plan's
+  evidence log.
 
 ## Consequences
 
-- The handoffs remain in git history on `a home server` (commit `6af0f21`) if ever needed.
-- Facts from the handoffs that still hold were carried into the plan's evidence log.
+- The retired track survives only as history; new work follows the plan.
+- There is one document describing scope, milestones, and evidence, so nothing
+  can silently diverge from it.

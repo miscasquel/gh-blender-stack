@@ -26,4 +26,4 @@ The add-on ships as a Blender extension (`blender_manifest.toml`). `websockets` 
 
 ## Data root
 
-Logs and the bake cache live under `~/.local/share/gh-stack/`. In wine the same folder is `Z:\home\miquel\.local\share\gh-stack\`.
+Logs and the bake cache live under `~/.local/share/gh-stack/`. In wine the same folder is `Z:\home\<user>\.local\share\gh-stack\`.

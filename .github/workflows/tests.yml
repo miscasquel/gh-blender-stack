@@ -1,0 +1,22 @@
+# Layer A only: the pure Python core needs no Blender, no wine, and no
+# third-party packages. Layer B (Blender headless) and layer C (C# under wine
+# with Rhino installed) cannot run on GitHub runners; run those with
+# scripts/test-blender and scripts/test-gha on a machine set up for them.
+name: core tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  core:
+    name: pure-core (layer A)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Run the core tests
+        run: scripts/test-core
