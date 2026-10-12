@@ -288,6 +288,159 @@ def read_point_colors(cloud):
     return np.clip(np.rint(floats.reshape(-1, 4) * 255.0), 0.0, 255.0).astype(np.uint8)
 
 
+# ------------------------------------------------- evaluated geometry (prefixes)
+
+
+# Blender's CurvesType enum, as stored in the curve_type attribute.
+CURVE_TYPE_CATMULL_ROM = 0
+CURVE_TYPE_POLY = 1
+CURVE_TYPE_BEZIER = 2
+CURVE_TYPE_NURBS = 3
+
+
+def geometry_set_to_sections(geometry, as_subd=False):
+    """Protocol sections for an evaluated ``GeometrySet`` (a stage's prefix).
+
+    A stage's prefix is everything before its own modifier in the stack, so it
+    can hold a mesh, curves, and points at once. The geometry set must stay
+    referenced while the components are read: its datablocks die with it.
+    """
+    sections = []
+    mesh = geometry.mesh
+    if mesh is not None and len(mesh.vertices):
+        sections += mesh_to_sections(mesh, as_subd=as_subd)
+    curves = geometry.curves
+    if curves is not None and len(curves.points):
+        sections += curves_component_to_sections(curves)
+    cloud = geometry.pointcloud
+    if cloud is not None and len(cloud.points):
+        sections += points_to_sections(cloud)
+    return sections
+
+
+def curves_component_to_sections(curves):
+    """Read a GeometrySet's curve component into ``crv.*`` sections.
+
+    The component is the new Curves type: per-curve attributes carry the kind
+    (``curve_type``), the NURBS order and knots mode, and the cyclic flag;
+    per-point attributes carry the position, the NURBS weight, and the Bezier
+    handles. NURBS and Bezier curves map to the same wire forms the legacy
+    datablock reader produces, so a prefix curve is as exact as a base one.
+
+    Catmull-Rom components have no wire representation (our protocol has poly,
+    Bezier, and NURBS); they are skipped with a log line. They can only come
+    from hand-built Geometry Nodes graphs, never from the helpers.
+    """
+    attrs = curves.attributes
+    positions = attrs["position"].data
+    weights = attrs.get("nurbs_weight")
+    cyclic_attr = attrs.get("cyclic")
+    type_attr = attrs.get("curve_type")
+    order_attr = attrs.get("nurbs_order")
+    knots_attr = attrs.get("knots_mode")
+    handle_left = attrs.get("handle_left")
+    handle_right = attrs.get("handle_right")
+
+    points = []
+    counts = []
+    types = []
+    orders = []
+    modes = []
+    cyclic = []
+
+    for curve in curves.curves:
+        first = curve.first_point_index
+        length = curve.points_length
+        if length < 2:
+            continue
+        index = curve.index
+        ctype = int(type_attr.data[index].value) if type_attr is not None else CURVE_TYPE_POLY
+        is_cyclic = bool(cyclic_attr.data[index].value) if cyclic_attr is not None else False
+
+        if ctype == CURVE_TYPE_CATMULL_ROM:
+            print(
+                "[gh-stack] Catmull-Rom curve component skipped: no wire representation",
+                flush=True,
+            )
+            continue
+
+        if ctype == CURVE_TYPE_BEZIER:
+            net = _component_bezier_net(positions, handle_left, handle_right, first, length, is_cyclic)
+            if net is None:
+                continue
+            points.extend(net)
+            counts.append(len(net))
+            types.append(CURVE_NURBS)
+            orders.append(4)
+            modes.append(KNOTS_BEZIER)
+            cyclic.append(0)
+            continue
+
+        chunk = []
+        for i in range(first, first + length):
+            p = positions[i].vector
+            w = float(weights.data[i].value) if weights is not None else 1.0
+            chunk.append((p[0], p[1], p[2], w))
+
+        if ctype == CURVE_TYPE_NURBS:
+            order = int(order_attr.data[index].value) if order_attr is not None else 4
+            mode = int(knots_attr.data[index].value) if knots_attr is not None else KNOTS_NORMAL
+            points.extend(chunk)
+            counts.append(length)
+            types.append(CURVE_NURBS)
+            orders.append(order)
+            modes.append(mode)
+            cyclic.append(1 if is_cyclic else 0)
+        else:  # CURVE_TYPE_POLY
+            points.extend(chunk)
+            counts.append(length)
+            types.append(CURVE_POLY)
+            orders.append(0)
+            modes.append(0)
+            cyclic.append(1 if is_cyclic else 0)
+
+    if not counts:
+        return []
+    flat = np.asarray(points, dtype=np.float32).reshape(-1, 4)
+    return [
+        ("crv.points", "f32", flat),
+        ("crv.counts", "u32", np.asarray(counts, dtype=np.uint32)),
+        ("crv.types", "u8", np.asarray(types, dtype=np.uint8)),
+        ("crv.orders", "u8", np.asarray(orders, dtype=np.uint8)),
+        ("crv.knots_mode", "u8", np.asarray(modes, dtype=np.uint8)),
+        ("crv.cyclic", "u8", np.asarray(cyclic, dtype=np.uint8)),
+    ]
+
+
+def _component_bezier_net(positions, handle_left, handle_right, first, length, is_cyclic):
+    """The degree-3 Bezier net of a component's Bezier curve, or None."""
+    if handle_left is None or handle_right is None:
+        return None
+
+    def pos(i):
+        v = positions[i].vector
+        return (v[0], v[1], v[2], 1.0)
+
+    def left(i):
+        v = handle_left.data[i].vector
+        return (v[0], v[1], v[2], 1.0)
+
+    def right(i):
+        v = handle_right.data[i].vector
+        return (v[0], v[1], v[2], 1.0)
+
+    net = [pos(first)]
+    for i in range(length - 1):
+        net.append(right(first + i))
+        net.append(left(first + i + 1))
+        net.append(pos(first + i + 1))
+    if is_cyclic:
+        net.append(right(first + length - 1))
+        net.append(left(first))
+        net.append(pos(first))
+    return net
+
+
 # -------------------------------------------------------------------- write
 
 

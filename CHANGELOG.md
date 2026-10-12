@@ -4,6 +4,23 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Mid-stack composition: a stage's input is the stack prefix before its own
+  modifier, evaluated on a clone, so native modifiers and earlier GH stages
+  compose in either order (`GH → GN → GH`). A waiting stage pauses the ones
+  after it, so no stage runs on a stale prefix. Layer B covers a two-stage chain
+  with modifiers between, curve and point-cloud prefixes, and the quiet steady
+  state (54 headless tests; prefix evaluation 4.3 ms at 10k triangles, 50.9 ms
+  at 100k).
+- Reconnect resends: a GH client that says `hello` makes Blender re-send the
+  current request for every waiting stage (a request sent while the client was
+  away is lost), and an `unknown_ref` answer makes Blender resend the geometry
+  in full (protocol §8.8 and §4.3). Error responses are no longer cached as
+  results.
+
 ## [0.1.1] — 2026-10-12
 
 Second release: all geometry kinds, exact curves, and a real Blender extension.

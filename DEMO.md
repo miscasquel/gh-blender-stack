@@ -15,8 +15,6 @@ Blender                                     Rhino / Grasshopper (wine)
 
 ## What is deliberately not here yet
 
-- One mesh stack object, one GH stage; mid-stack composition (`GH → GN → GH`) is
-  not evaluated as a prefix yet (the stage always reads the base geometry).
 - A Rhino Brep or surface is meshed on the way out (warned); Blender has no
   B-rep. A Blender surface object is meshed on the way in, the same loss in the
   other direction.

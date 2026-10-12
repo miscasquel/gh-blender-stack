@@ -38,6 +38,37 @@ class StageState(object):
         self.full = 0
         self.ref = 0
         self.responses = 0
+        self.received_verts = 0
+        self.received_faces = 0
+        self.received_max = 0.0
+        self.received_curve_points = 0
+        self.received_first = None
+
+
+def _summarise(state):
+    """What the last full request carried, for tests that assert on a prefix."""
+    verts = state.sections.get("mesh.verts") if state.sections else None
+    if verts is None and state.sections:
+        verts = state.sections.get("subd.verts")
+    faces = state.sections.get("mesh.face_counts") if state.sections else None
+    state.received_verts = int(len(verts)) if verts is not None else 0
+    state.received_faces = int(len(faces)) if faces is not None else 0
+    if verts is not None and len(verts):
+        state.received_max = float(np.abs(np.asarray(verts, dtype=np.float32)).max())
+    else:
+        state.received_max = 0.0
+
+    counts = state.sections.get("crv.counts") if state.sections else None
+    state.received_curve_points = int(np.asarray(counts, dtype=np.uint32).sum()) if counts is not None else 0
+
+    first = None
+    if verts is not None and len(verts):
+        first = np.asarray(verts, dtype=np.float32).reshape(-1, 3)[0]
+    elif state.sections and state.sections.get("crv.points") is not None:
+        first = np.asarray(state.sections["crv.points"], dtype=np.float32).reshape(-1, 4)[0][:3]
+    elif state.sections and state.sections.get("pts.positions") is not None:
+        first = np.asarray(state.sections["pts.positions"], dtype=np.float32).reshape(-1, 3)[0]
+    state.received_first = [float(v) for v in first] if first is not None else None
 
 
 async def main():
@@ -49,6 +80,8 @@ async def main():
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--extras", action="store_true",
                     help="also answer with a polyline and points built from the mesh")
+    ap.add_argument("--delay-ms", type=int, default=0,
+                    help="wait this long before answering, to test waiting stages")
     args = ap.parse_args()
 
     state = StageState()
@@ -85,6 +118,11 @@ def _write_report(args, state):
                 "ref": state.ref,
                 "responses": state.responses,
                 "sections": sorted(state.sections.keys()) if state.sections else [],
+                "received_verts": state.received_verts,
+                "received_faces": state.received_faces,
+                "received_max": state.received_max,
+                "received_curve_points": state.received_curve_points,
+                "received_first": state.received_first,
             },
             f,
             indent=2,
@@ -157,6 +195,7 @@ async def session(ws, args, state):
             state.sections = {
                 name: np.asarray(values, dtype=_np_dtype(name)) for name, values in sections.items()
             }
+            _summarise(state)
         else:
             state.ref += 1
         if state.sections is None:
@@ -173,6 +212,8 @@ async def session(ws, args, state):
             continue
 
         scale = float((header.get("params") or {}).get(args.scale_param, 1.0))
+        if args.delay_ms:
+            await asyncio.sleep(args.delay_ms / 1000.0)
         out_sections = _scaled_sections(state.sections, scale)
         counts = {"meshes": 1, "subd": 0, "curves": 0, "points": 0, "approximated_curves": 0}
         if args.extras:

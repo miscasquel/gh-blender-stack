@@ -484,6 +484,11 @@ class MixedEngineTests(unittest.TestCase):
             return False
 
         self.assertTrue(self._pump(until=updated), "fake never saw subd sections")
+        # Wait for the response to be applied too: the next test reads the
+        # evaluated components, which the subd response repopulates.
+        self.assertTrue(
+            self._pump(until=lambda: self.stage.state == "ok"), "subd response never applied"
+        )
         self.obj.gh_stack.subd = False
 
     def test_05_evaluated_geometry_carries_all_components(self):

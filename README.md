@@ -24,6 +24,9 @@ Blender                                          Rhino / Grasshopper (wine)
 - **The loop.** Geometry goes to Grasshopper, a definition runs, the result comes
   back and shows through a modifier in the stack. Base-geometry edits flow on the
   next tick; no buttons.
+- **Stacks.** Native modifiers and GH stages compose in either order: a stage
+  sees everything before its own modifier in the stack, so `GH → GN → GH` chains
+  evaluate as a prefix, and a waiting stage pauses the ones after it.
 - **Geometry kinds.** Meshes (n-gons and vertex colours), curves (poly, Bezier,
   NURBS, circles, ellipses, arcs — all exact), points, SubD control cages with
   edge-crease tags, and Breps/surfaces (meshed on the way out, warned). Stage In
@@ -38,18 +41,15 @@ Blender                                          Rhino / Grasshopper (wine)
 - **Lifecycle.** States (`waiting`, `ok`, `error`, `disconnected`, `disabled`),
   timeouts, latest-wins requests, an in-memory cache, and reconnect with backoff.
 - **Tests.** `scripts/test-core` (50 tests, standard library only),
-  `scripts/test-blender` (39 headless tests), `scripts/test-gha` (the C# codec
-  against the golden fixtures, under wine).
+  `scripts/test-blender` (52 headless tests), `scripts/test-gha` (the C# codec
+  against the golden fixtures, under wine), `scripts/test-extension` (installed
+  extension round trip).
 
 ## What is deliberately not here yet
 
-- One stage per object, and a stage always reads the stack's base geometry.
-  Mid-stack composition (`GH → GN → GH`) is not evaluated as a prefix yet.
 - Breps and surfaces arrive as meshes (lossy, warned); Blender surface objects
   are meshed on the way in. There is no B-rep on the wire.
 - The cache is in memory. No bake, freeze, preview, or orphan list yet.
-- The add-on installs as a symlink (`scripts/install-addon`); packaging it as a
-  Blender extension is planned (S8).
 - Undo is not special-cased; stage records are ordinary properties, so undo
   works as Blender's own property undo.
 
