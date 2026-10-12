@@ -463,7 +463,7 @@ GH solve time will dominate real definitions. The transport is not the bottlenec
 
 - **Layer A, pure core.** Codec round trips, hashing, request-ID stability, rule decisions, latest-wins, stale responses, cache behavior. Standard-library `unittest`.
 - **Layer B, Blender headless.** `blender -b --factory-startup --python-exit-code 1`. Templates and ownership, in-place updates, prefix evaluation, parameters through keyframes and drivers, undo and redo, save and reload, disconnect and reconnect, bake. Runs against `tools/fake_gh`. Note: `bpy.app.timers` is inert under `-b` (S2), so layer B drives the queue drain directly rather than through the timer the GUI uses.
-- **Layer C, GH.** Codec and conversion tests under wine. Live tests: one round trip, parameter changes, save and reopen, GH closed and reopened.
+- **Layer C, GH.** Codec and conversion tests under wine on Linux. Live tests: one round trip, parameter changes, save and reopen, GH closed and reopened.
 - **Layer D, end-to-end and bench.** Real definitions and a GN chain. Timings at 1k, 10k, and 100k triangles per hop.
 - **Golden frames** in `protocol/fixtures/`. Both sides must encode and decode them identically.
 - **Acceptance** (§16) is the release gate.

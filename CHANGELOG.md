@@ -27,7 +27,7 @@ First public release: a working demo of the Blender ↔ Grasshopper loop.
 - Demo v0, documented in `DEMO.md`: Cube → Stage In → Scale → Stage Out, with
   a Param on the factor.
 - Test suites: layer A (pure core), layer B (Blender headless against
-  `tools/fake_gh`), layer C (C# codec and conversions under wine).
+  `tools/fake_gh`), layer C (C# codec and conversions under wine on Linux).
 - CI running the pure-core tests on every push.
 
 ### Known limitations

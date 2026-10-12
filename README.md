@@ -51,11 +51,14 @@ The authoritative roadmap and scope are in [docs/plan.md](docs/plan.md).
 
 ## Requirements
 
-- Blender 5.2 (Python 3.14) on Linux.
-- Rhino 8 with Grasshopper, running under wine, on the same machine. The build
-  scripts assume `~/.local/share/wine-rhino` and a `rhino8` wine prefix; both
-  are overridable with the `WINE` and `WINEPREFIX` environment variables.
-  Native Windows Rhino is designed for but untested.
+Development and testing happen on one Linux machine; Rhino 8 and Grasshopper
+run under wine there.
+
+- Blender 5.2 (Python 3.14).
+- Rhino 8 with Grasshopper under wine. The build scripts assume
+  `~/.local/share/wine-rhino` and a `rhino8` wine prefix; both are overridable
+  with the `WINE` and `WINEPREFIX` environment variables. Native Windows Rhino
+  is designed for but untested.
 - Mono's `csc.exe` (ships with wine) to build the plugin.
 
 ## Install
@@ -80,8 +83,9 @@ scripts/test-gha       # layer C: the C# codec under wine, the same golden fixtu
 python3 scripts/make-fixtures   # regenerate protocol/fixtures after a protocol change
 ```
 
-CI runs the pure-core layer only; the Blender and wine layers need this
-machine's environment.
+CI runs the pure-core layer only. Layers B and C run on the development
+machine, which is Linux: Blender 5.2 headless for layer B, and a wine prefix
+with Rhino 8 installed for layer C (`scripts/test-gha`).
 
 ## Layout
 
