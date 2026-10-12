@@ -3,7 +3,7 @@
 Drive Grasshopper definitions from Blender as stackable modifiers, next to
 native Geometry Nodes modifiers, in one visible object per stack. Geometry and
 parameters both flow through the stack, so parameters can be keyframed, driven,
-and baked.
+and played back.
 
 That is the v1 goal. **v0.1.1 is a working demo**: geometry (meshes, curves,
 points, SubD cages) driven by a real Grasshopper definition, with parameters you
@@ -39,9 +39,13 @@ Blender                                          Rhino / Grasshopper (wine)
   parameters in the same stream. The Python and C# codecs are checked against
   ten shared golden fixtures.
 - **Lifecycle.** States (`waiting`, `ok`, `error`, `disconnected`, `disabled`),
-  timeouts, latest-wins requests, an in-memory cache, and reconnect with backoff.
-- **Tests.** `scripts/test-core` (50 tests, standard library only),
-  `scripts/test-blender` (52 headless tests), `scripts/test-gha` (the C# codec
+  timeouts, latest-wins requests, and reconnect with backoff.
+- **Frame cache.** The cache behaves like a simulation cache: it fills as you
+  play and scrub, stores frames on disk (content-addressed, bounded, resettable
+  per stage), replays with Grasshopper closed, and leaves an idle scene alone so
+  Cycles keeps accumulating samples. No bake operator and no frame range.
+- **Tests.** `scripts/test-core` (60 tests, standard library only),
+  `scripts/test-blender` (69 headless tests), `scripts/test-gha` (the C# codec
   against the golden fixtures, under wine), `scripts/test-extension` (installed
   extension round trip).
 
@@ -49,7 +53,8 @@ Blender                                          Rhino / Grasshopper (wine)
 
 - Breps and surfaces arrive as meshes (lossy, warned); Blender surface objects
   are meshed on the way in. There is no B-rep on the wire.
-- The cache is in memory. No bake, freeze, preview, or orphan list yet.
+- Freeze, preview, and the orphan list are not here yet. The frame cache's disk
+  format is private and has no stability promise.
 - Undo is not special-cased; stage records are ordinary properties, so undo
   works as Blender's own property undo.
 

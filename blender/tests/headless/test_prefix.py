@@ -87,6 +87,13 @@ def report_of(path):
         return {}
 
 
+def isolate_data_root():
+    """Point the frame cache at a temp dir so tests never write into the real
+    ``~/.local/share/gh-stack``."""
+    prefs = bpy.context.preferences.addons["gh_stack"].preferences
+    prefs.data_root = tempfile.mkdtemp(prefix="gh-stack-test-")
+
+
 class PrefixChainTests(unittest.TestCase):
     """PreBevel -> A -> MidBevel -> B on one cube."""
 
@@ -94,6 +101,7 @@ class PrefixChainTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="gh_stack")
+        isolate_data_root()
         import gh_stack.blender.engine as engine
 
         cls.engine = engine
@@ -199,6 +207,7 @@ class WaitingPrefixTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="gh_stack")
+        isolate_data_root()
         import gh_stack.blender.engine as engine
 
         cls.engine = engine
@@ -272,6 +281,7 @@ class ComponentPrefixTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="gh_stack")
+        isolate_data_root()
         import gh_stack.blender.engine as engine
 
         cls.engine = engine
@@ -416,6 +426,7 @@ class LateClientTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="gh_stack")
+        isolate_data_root()
         import gh_stack.blender.engine as engine
 
         cls.engine = engine
@@ -472,6 +483,7 @@ class PrefixCostTests(unittest.TestCase):
     def setUp(self):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="gh_stack")
+        isolate_data_root()
 
     def _grid(self, nx, ny):
         mesh = bpy.data.meshes.new("grid")

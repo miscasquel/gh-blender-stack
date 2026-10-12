@@ -31,7 +31,7 @@ class GHSTACK_OT_add_stage(bpy.types.Operator):
         helpers.ensure_helpers(obj, stage.key)
         nodes.ensure_modifier(obj, stage)
         obj.update_tag()
-        engine.push(obj)
+        engine.request_again(obj, stage)
         self.report({"INFO"}, "Added stage %s" % stage.key)
         return {"FINISHED"}
 

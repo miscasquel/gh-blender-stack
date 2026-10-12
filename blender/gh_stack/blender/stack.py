@@ -102,6 +102,11 @@ class GhStage(bpy.types.PropertyGroup):
     state: StringProperty(name="State", default=STATE_IDLE)
     rid: StringProperty(name="Request ID", default="")
     nonce: IntProperty(name="Nonce", default=0)
+    # Bumped whenever Grasshopper sends something that makes previously cached
+    # frames describe the wrong definition (a slider upstream of Stage Out, a
+    # schema change, a reconnected document, a manual Push). Cached frames carry
+    # the generation they were stored under; older ones never replay.
+    generation: IntProperty(name="Cache generation", default=0)
     geom_hash: StringProperty(name="Geometry hash", default="")
     applied_out_hash: StringProperty(name="Applied output hash", default="")
     error: StringProperty(name="Last error", default="")

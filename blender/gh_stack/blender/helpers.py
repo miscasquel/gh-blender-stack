@@ -41,9 +41,14 @@ def ensure_helper(stack_obj, stage_key, kind="mesh"):
     if helper is None:
         helper = bpy.data.objects.new(name, _new_data(name, kind))
         collection().objects.link(helper)
-    helper.hide_viewport = True
-    helper.hide_render = True
-    helper.display_type = "WIRE"
+    # Only write on change, like every engine-side write: an unchanged write
+    # tags the depsgraph and restarts Cycles accumulation for nothing.
+    if not helper.hide_viewport:
+        helper.hide_viewport = True
+    if not helper.hide_render:
+        helper.hide_render = True
+    if helper.display_type != "WIRE":
+        helper.display_type = "WIRE"
     return helper
 
 

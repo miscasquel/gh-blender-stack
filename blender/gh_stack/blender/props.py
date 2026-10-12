@@ -7,7 +7,7 @@ keyframed and driven. Ranges go through ``id_properties_ui``. The schema itself
 
 import bpy
 
-from ..core import params as core_params
+from ..core import codec, params as core_params
 from . import bridge, stack as stack_mod
 
 TYPE_DEFAULTS = {
@@ -94,6 +94,20 @@ def incoming_signature(params):
             )
         )
     return out
+
+
+def definition_fingerprint(stage):
+    """What a cached frame was produced from, as far as Blender can know it: the
+    protocol version and the stage's schema signature.
+
+    The document name is *not* in here: it is only known while a client is
+    connected, and a fingerprint that changes when Grasshopper is closed would
+    defeat offline replay. A reconnected document is handled by the generation
+    bump instead (the stack records which document it is bound to)."""
+    import hashlib
+
+    payload = repr((codec.PROTOCOL_VERSION, schema_signature(stage))).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
 def apply_schema(obj, stage, params):

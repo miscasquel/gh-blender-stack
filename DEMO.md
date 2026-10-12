@@ -18,7 +18,9 @@ Blender                                     Rhino / Grasshopper (wine)
 - A Rhino Brep or surface is meshed on the way out (warned); Blender has no
   B-rep. A Blender surface object is meshed on the way in, the same loss in the
   other direction.
-- No bake, freeze, preview, orphan list, or disk cache (the cache is in memory).
+- No freeze, preview, or orphan list yet. The frame cache writes to disk
+  (`~/.local/share/gh-stack/`) and fills as you play and scrub; there is no bake
+  operator.
 - Undo is not specially handled; the stack records are ordinary properties.
 - The `Param` component takes a **Key** input (a demo deviation from the plan's
   signature; the plan assumes one stage per document).

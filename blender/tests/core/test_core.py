@@ -316,5 +316,121 @@ class CacheTests(unittest.TestCase):
         self.assertNotIn("sha256:a", idx)
 
 
+class ResponseStoreTests(unittest.TestCase):
+    """The disk half of the cache: raw frames plus generation/fingerprint sidecars."""
+
+    def setUp(self):
+        import tempfile
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def _store(self, base=None, **kwargs):
+        from blender.gh_stack.core.cache import ResponseStore
+
+        return ResponseStore(base or self.tmp.name, "stack1", "panelize-3f9a", **kwargs)
+
+    def test_store_and_load_round_trip(self):
+        store = self._store()
+        store.store("sha256:aa", b"frame-bytes", generation=3, definition="def-1", out_hash="sha256:o1")
+        self.assertEqual(store.load("sha256:aa"), b"frame-bytes")
+        entry = store.index.get("sha256:aa")
+        self.assertEqual(entry.generation, 3)
+        self.assertEqual(entry.definition, "def-1")
+        self.assertEqual(entry.out_hash, "sha256:o1")
+
+    def test_scan_rebuilds_the_index(self):
+        store = self._store()
+        store.store("sha256:aa", b"a" * 10, generation=1, definition="d", out_hash="o")
+        store.store("sha256:bb", b"b" * 20, generation=1, definition="d", out_hash="p")
+        other = self._store()
+        other.scan()
+        self.assertIn("sha256:aa", other.index)
+        self.assertIn("sha256:bb", other.index)
+        self.assertEqual(other.index.total_size(), 30)
+
+    def test_missing_sidecar_drops_the_frame(self):
+        import os
+
+        store = self._store()
+        store.store("sha256:aa", b"a", generation=0, definition="d")
+        os.remove(store.index.meta_path_for("sha256:aa"))
+        other = self._store()
+        other.scan()
+        self.assertNotIn("sha256:aa", other.index)
+        self.assertFalse(os.path.exists(store.index.path_for("sha256:aa")))
+
+    def test_valid_checks_generation_and_definition(self):
+        store = self._store()
+        store.store("sha256:aa", b"a", generation=2, definition="def")
+        self.assertIsNotNone(store.valid("sha256:aa", generation=2, definition="def"))
+        # A mismatch is invalid and pruned on the spot, so it can never replay.
+        self.assertIsNone(store.valid("sha256:aa", generation=3, definition="def"))
+        self.assertNotIn("sha256:aa", store.index)
+        store.store("sha256:aa", b"a", generation=2, definition="def")
+        self.assertIsNone(store.valid("sha256:aa", generation=2, definition="other"))
+        self.assertNotIn("sha256:aa", store.index)
+
+    def test_prune_removes_by_generation(self):
+        import os
+
+        store = self._store()
+        store.store("sha256:aa", b"a", generation=1, definition="d")
+        store.store("sha256:bb", b"b", generation=1, definition="d")
+        store.store("sha256:cc", b"c", generation=2, definition="d")
+        removed = store.prune(generation=2)
+        self.assertEqual(sorted(removed), ["sha256:aa", "sha256:bb"])
+        self.assertEqual(store.rids(), ["sha256:cc"])
+        self.assertFalse(os.path.exists(store.index.path_for("sha256:aa")))
+        self.assertFalse(os.path.exists(store.index.meta_path_for("sha256:aa")))
+
+    def test_prune_removes_by_definition(self):
+        store = self._store()
+        store.store("sha256:aa", b"a", generation=0, definition="old")
+        store.store("sha256:bb", b"b", generation=0, definition="new")
+        self.assertEqual(store.prune(definition="new"), ["sha256:aa"])
+        self.assertEqual(store.rids(), ["sha256:bb"])
+
+    def test_eviction_deletes_files(self):
+        import os
+
+        store = self._store(size_limit=100)
+        store.store("sha256:aa", b"a" * 60)
+        store.store("sha256:bb", b"b" * 60)
+        self.assertNotIn("sha256:aa", store.index)
+        self.assertIn("sha256:bb", store.index)
+        self.assertFalse(os.path.exists(store.index.path_for("sha256:aa")))
+        self.assertFalse(os.path.exists(store.index.meta_path_for("sha256:aa")))
+
+    def test_touch_survives_eviction(self):
+        store = self._store(size_limit=150)
+        store.store("sha256:aa", b"a" * 60)
+        store.store("sha256:bb", b"b" * 60)
+        store.load("sha256:aa")
+        store.store("sha256:cc", b"c" * 60)
+        self.assertIn("sha256:aa", store.index)
+        self.assertNotIn("sha256:bb", store.index)
+
+    def test_remove_deletes_files(self):
+        import os
+
+        store = self._store()
+        store.store("sha256:aa", b"a")
+        store.remove("sha256:aa")
+        self.assertNotIn("sha256:aa", store.index)
+        self.assertFalse(os.path.exists(store.index.path_for("sha256:aa")))
+
+    def test_stale_temp_files_are_cleaned(self):
+        import os
+
+        store = self._store()
+        os.makedirs(store.index.stage_dir, exist_ok=True)
+        tmp = os.path.join(store.index.stage_dir, "sha256_zz.bin.tmp")
+        with open(tmp, "wb") as handle:
+            handle.write(b"half")
+        store.scan()
+        self.assertFalse(os.path.exists(tmp))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -8,6 +8,38 @@ Notable changes to this project, following
 
 ### Added
 
+- Simulation-style frame cache (ADR 0008, supersedes the planned bake operator):
+  - Frames are stored on disk under the data root (`~/.local/share/gh-stack/`,
+    configurable) as the raw protocol frame plus a sidecar, keyed by request ID.
+    Because a keyframed parameter produces a different request ID per frame,
+    the content-addressed response store *is* the frame cache: frames fill as
+    you play and scrub, replay in any order, and need no bake setup or frame
+    range.
+  - A per-stage generation resets the stage's frames when Grasshopper sends
+    something that invalidates them: the same request answered with a different
+    output hash, a changed schema, a reconnect with a different document, or
+    Push. A re-opened session reuses frames whose generation and definition
+    fingerprint still match.
+  - Cached frames replay with Grasshopper closed (renders use the cache).
+    Uncached frames keep the last good output; an answer for a frame the
+    scene has moved past is cached, never displayed.
+  - The memory cache is bounded by the same cache size limit (256 MB default)
+    and falls back to the disk store.
+  - Preferences: data root and cache size limit.
+- Idle stability: engine writes are change-gated (modifier visibility, stage
+  state/warnings, helper flags), a no-op response neither applies nor tags, and
+  the evaluated prefix is memoized against a revision (base geometry, modifier
+  settings, referenced objects, upstream outputs, shape keys) so an unchanged
+  pass never re-clones the object. Cycles can accumulate viewport samples while
+  the scene is idle. Measured prefix evaluation: 1.1 ms memo hit vs 5.3 ms clone
+  at 10k triangles, 8.3 ms vs 56.1 ms at 100k.
+- Layer B coverage for the cache: progressive fill, replay with Grasshopper
+  closed, GH-side and schema resets, document-change resets, quiet no-op and
+  idle behavior, eviction, and uncached-frame behavior (15 tests). `fake_gh`
+  gained `--gh-edit-after`, `--schema-after`, `--echo-after`, and `--doc`.
+- Layer A coverage for the disk store: write/load round trip, scan, stale
+  sidecar cleanup, generation/fingerprint validity, prune, and file deletion on
+  eviction (10 tests).
 - Mid-stack composition: a stage's input is the stack prefix before its own
   modifier, evaluated on a clone, so native modifiers and earlier GH stages
   compose in either order (`GH → GN → GH`). A waiting stage pauses the ones
@@ -20,6 +52,13 @@ Notable changes to this project, following
   away is lost), and an `unknown_ref` answer makes Blender resend the geometry
   in full (protocol §8.8 and §4.3). Error responses are no longer cached as
   results.
+
+### Changed
+
+- The planned Bake operator is dropped (ADR 0008): the frame cache fills as you
+  play and scrub, and Push now also resets the stage's cached frames.
+- A cached frame that is already applied is a complete no-op: no scene writes,
+  no depsgraph tag.
 
 ## [0.1.1] — 2026-10-12
 

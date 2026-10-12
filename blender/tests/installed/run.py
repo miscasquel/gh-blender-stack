@@ -37,6 +37,14 @@ def main():
     server = importlib.import_module(MODULE + ".blender.server")
     engine = importlib.import_module(MODULE + ".blender.engine")
 
+    # Keep the frame cache out of the real ~/.local/share/gh-stack.
+    try:
+        bpy.context.preferences.addons[MODULE].preferences.data_root = tempfile.mkdtemp(
+            prefix="gh-stack-installed-test-"
+        )
+    except KeyError:
+        pass
+
     check("extension module imported", server is not None)
     check("panel class registered", hasattr(bpy.types, "GHSTACK_PT_panel"))
 

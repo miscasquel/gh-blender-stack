@@ -373,6 +373,9 @@ class MixedEngineTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="gh_stack")
+        bpy.context.preferences.addons["gh_stack"].preferences.data_root = tempfile.mkdtemp(
+            prefix="gh-stack-test-"
+        )
         import gh_stack.blender.engine as engine
         import gh_stack.blender.stack as stack_mod
 

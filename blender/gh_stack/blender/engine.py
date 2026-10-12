@@ -1,9 +1,19 @@
-"""The engine: one tick per timer pass, per stack object (plan §9).
+"""The engine: one tick per timer pass, per stack object (plan §9, §7 frame cache).
 
-Demo v0 scope: the prefix geometry of a stage is the stack object's base mesh
-(mid-stack composition and clone-based prefix evaluation come later). Requests,
-responses, the in-memory cache, states and timeouts follow the protocol's apply
-rules.
+One pass per stage: compute the prefix geometry, hash it, build the request id,
+then serve the frame from the memory cache, the disk store, or Grasshopper. The
+response store *is* the frame cache: keyframed parameters produce a different rid
+per frame, so frames cached under their rids replay in any order, with no bake
+operator and no frame range (the handoff, 2026-10-12).
+
+A per-stage generation resets the cache when Grasshopper sends something that
+makes old frames describe the wrong definition: a changed schema, a response that
+contradicts the stored one for the same rid, a reconnect with a different
+document, or a manual Push.
+
+Cached frames replay with Grasshopper closed (renders use the cache). A frame
+that is not cached keeps the last good output; a pass that changes nothing writes
+nothing and tags nothing, so Cycles can accumulate samples while idle.
 
 Nothing here touches the socket directly: it posts frames through the bridge and
 drains what the server thread decoded.
@@ -14,13 +24,16 @@ import time
 import bpy
 import numpy as np
 
-from ..core import codec, hashing, rules
-from . import bridge, geometry_io, helpers, nodes, props, server, stack as stack_mod
+from ..core import cache as frame_cache
+from ..core import codec, hashing
+from . import bridge, geometry_io, helpers, nodes, prefs, props, server, stack as stack_mod
 
 WAIT_INTERVAL = 0.005
 IDLE_INTERVAL = 0.05
 
-_cache = {}  # (stack_id, stage_key) -> {rid: (header, sections)}
+_cache = {}  # (stack_id, stage_key) -> {rid: (header, sections)}; the hot path
+_stores = {}  # (stack_id, stage_key) -> ResponseStore; the backing store
+_prefix_memo = {}  # (object name, stage key) -> {"revision": tuple, "sections": list}
 _waiting_since = {}  # (stack_id, stage_key) -> monotonic seconds
 _dirty = set()  # object names that need a pass
 _registered = False
@@ -28,6 +41,16 @@ _registered = False
 # clone tags the depsgraph; without the guard every pass would re-mark every
 # stack dirty and the engine would never idle.
 _evaluating = False
+# Counters for tests and diagnostics: what the engine actually did, so a quiet
+# idle can be asserted without guessing at Blender internals.
+stats = {
+    "passes": 0,
+    "prefix_clones": 0,  # prefix evaluations that needed a clone
+    "prefix_memo_hits": 0,  # prefix evaluations served from the revision memo
+    "applies": 0,  # responses written into helper objects
+    "tags": 0,  # obj.update_tag() calls
+    "sends": 0,  # requests actually sent
+}
 
 
 # --------------------------------------------------------------------- triggers
@@ -60,6 +83,7 @@ def _timer():
     panel state instead.
     """
     try:
+        stats["passes"] += 1
         _handle_incoming()
         busy = False
         for name in list(_dirty):
@@ -93,24 +117,39 @@ def _handle_incoming():
         elif mtype == "response":
             _handle_response(header, sections)
         elif mtype == "hello":
-            _on_client_hello()
+            _on_client_hello(header)
 
 
-def _on_client_hello():
+def _on_client_hello(header):
     """A GH client connected (or reconnected).
 
     A request sent while no client was connected is lost, and a stage left
     waiting on it would sit until its timeout. Reset waiting stages and mark
     every stack dirty so the current request goes out again (protocol §8.8).
+    A reconnect with a *different* document resets the stages it claims: frames
+    cached against the old document must not replay (handoff reset rules).
     """
+    doc = (header or {}).get("doc") or ""
+    claimed = set()
+    for entry in (header or {}).get("stages") or []:
+        key = entry.get("key") if isinstance(entry, dict) else None
+        if key:
+            claimed.add(key)
     for obj in bpy.data.objects:
         record = stack_mod.stack_of(obj)
-        if record is None:
+        if record is None or not record.stages:
             continue
+        if doc and claimed and any(stage.key in claimed for stage in record.stages):
+            if record.connected_doc and record.connected_doc != doc:
+                for stage in record.stages:
+                    if stage.key in claimed:
+                        _bump_generation(record, stage, "document changed")
+            if record.connected_doc != doc:
+                record.connected_doc = doc
         for stage in record.stages:
             if stage.state == stack_mod.STATE_WAITING:
                 _waiting_since.pop((record.stack_id, stage.key), None)
-                stage.state = stack_mod.STATE_IDLE
+                _set(stage, "state", stack_mod.STATE_IDLE)
         _dirty.add(obj.name)
 
 
@@ -125,6 +164,8 @@ def _handle_schema(header):
         stage = stack_mod.stage_of(obj, key)
         if stage is not None:
             matched = True
+            if not record.stack_id:
+                record.stack_id = stack_mod.ensure_stack(obj).stack_id
             try:
                 # The plugin re-publishes on a heartbeat; only touch the UI when
                 # the schema actually changed.
@@ -138,6 +179,9 @@ def _handle_schema(header):
 
                 print("[gh-stack] schema error:\n%s" % traceback.format_exc(), flush=True)
                 continue
+            # A changed schema is a changed definition: frames cached against
+            # the old one must not replay.
+            _bump_generation(record, stage, "schema changed")
             _dirty.add(obj.name)
             obj.update_tag()
     if not matched:
@@ -151,53 +195,81 @@ def _handle_response(header, sections):
     rid = header.get("rid")
     for obj in bpy.data.objects:
         record = stack_mod.stack_of(obj)
-        if record is None:
+        if record is None or not record.stages:
             continue
         stage = stack_mod.stage_of(obj, key)
         if stage is None:
             continue
+        if not record.stack_id:
+            record.stack_id = stack_mod.ensure_stack(obj).stack_id
+        waiting_key = (record.stack_id, key)
 
         if header.get("status") == "error":
             error = header.get("error") or {}
             code = error.get("code") if isinstance(error, dict) else None
-            _waiting_since.pop((record.stack_id, key), None)
+            _waiting_since.pop(waiting_key, None)
             if code == "unknown_ref":
                 # GH lost the geometry a ref named (reconnect, restarted
                 # document): send it again in full (protocol §4.3). The error is
                 # not a result and must not be cached.
-                stage.geom_hash = ""
-                stage.state = stack_mod.STATE_IDLE
-                stage.error = ""
+                if stage.geom_hash:
+                    stage.geom_hash = ""
+                _set(stage, "state", stack_mod.STATE_IDLE)
+                if stage.error:
+                    stage.error = ""
                 _dirty.add(obj.name)
                 return
-            stage.state = stack_mod.STATE_ERROR
-            stage.error = error.get("message") if isinstance(error, dict) else str(error)
+            _set(stage, "state", stack_mod.STATE_ERROR)
+            _set(stage, "error", error.get("message") if isinstance(error, dict) else str(error))
             _dirty.add(obj.name)
-            obj.update_tag()
             return
 
-        cache = _cache.setdefault((record.stack_id, key), {})
-        cache[rid] = (header, sections)
-
-        if rid != stage.rid:
-            # Stale response: cached under its own rid, not applied (protocol §6.4).
-            return
         out_hash = header.get("out_hash") or ""
-        stage.warnings = _warnings_text(header)
-        if out_hash == stage.applied_out_hash:
-            stage.state = stack_mod.STATE_OK
-            stage.error = ""
-            _waiting_since.pop((record.stack_id, key), None)
+        stored_out = None
+        memory = _cache.get((record.stack_id, key))
+        if memory is not None and rid in memory:
+            stored_out = memory[rid][0].get("out_hash") or ""
+        else:
+            try:
+                entry = _store_for(record, stage).scan().index.get(rid)
+            except OSError:
+                entry = None
+            if entry is not None:
+                stored_out = entry.out_hash or ""
+        if stored_out is not None and stored_out != out_hash:
+            # The same request was answered differently: Grasshopper's
+            # definition changed (a slider upstream of Stage Out, a graph edit
+            # that does not touch Blender's inputs). Everything cached for this
+            # stage is suspect.
+            _bump_generation(record, stage, "Grasshopper's answer changed")
+        _remember(record, stage, rid, header, sections)
+        _store_frame(record, stage, rid, header, sections)
+
+        was_waiting = _waiting_since.pop(waiting_key, None) is not None
+        applied = False
+        if rid == stage.rid and out_hash != stage.applied_out_hash:
+            _apply(obj, stage, sections)
+            stats["applies"] += 1
+            _set(stage, "applied_out_hash", out_hash)
+            applied = True
+        if not applied and not was_waiting:
+            # A response for a request the scene has moved past: cached under
+            # its own rid, nothing else changes (protocol §6.4).
             return
-        _apply(obj, stage, sections)
-        stage.applied_out_hash = out_hash
-        stage.state = stack_mod.STATE_OK
-        stage.error = ""
-        _waiting_since.pop((record.stack_id, key), None)
-        # A response changes the prefix of every later stage; make sure the
-        # stack is passed again even if the depsgraph handler is suppressed.
-        _dirty.add(obj.name)
-        obj.update_tag()
+        _set(stage, "warnings", _warnings_text(header))
+        if was_waiting and not applied:
+            # The stage's in-flight answer arrived, but the wanted frame moved
+            # on: keep the last good output and let the next pass fetch (or
+            # replay) the frame the scene is actually on.
+            _set(stage, "state", stack_mod.STATE_IDLE)
+        else:
+            _set(stage, "state", stack_mod.STATE_OK)
+        _set(stage, "error", "")
+        if applied:
+            stats["tags"] += 1
+            obj.update_tag()
+        if applied or was_waiting:
+            _dirty.add(obj.name)
         return
 
 
@@ -239,8 +311,9 @@ def _apply_mesh(obj, stage, entries):
     helper = helpers.ensure_helper(obj, stage.key, "mesh")
     mesh = helper.data
     if not entries:
-        mesh.clear_geometry()
-        helper.update_tag()
+        if len(mesh.vertices) or len(mesh.polygons):
+            mesh.clear_geometry()
+            helper.update_tag()
         return
     prepared = []
     for name, values in entries:
@@ -259,8 +332,9 @@ def _apply_mesh(obj, stage, entries):
 def _apply_curves(obj, stage, entries):
     helper = helpers.ensure_helper(obj, stage.key, "curves")
     if not entries:
-        helper.data.splines.clear()
-        helper.update_tag()
+        if len(helper.data.splines):
+            helper.data.splines.clear()
+            helper.update_tag()
         return
     prepared = []
     for name, values in entries:
@@ -275,8 +349,9 @@ def _apply_curves(obj, stage, entries):
 def _apply_points(obj, stage, entries):
     helper = helpers.ensure_helper(obj, stage.key, "points")
     if not entries:
-        helper.data.resize(0)
-        helper.update_tag()
+        if len(helper.data.points):
+            helper.data.resize(0)
+            helper.update_tag()
         return
     prepared = []
     for name, values in entries:
@@ -304,6 +379,135 @@ def _dtype_of(name):
     return "u32"
 
 
+# ------------------------------------------------------------------- cache/store
+
+
+def _set(stage, field, value):
+    """Assign a stage field only when it changes. An unchanged write would tag
+    the depsgraph and restart Cycles accumulation for nothing."""
+    if getattr(stage, field) != value:
+        setattr(stage, field, value)
+        return True
+    return False
+
+
+def _store_for(record, stage):
+    key = (record.stack_id, stage.key)
+    root = prefs.data_root()
+    store = _stores.get(key)
+    limit = prefs.cache_size_bytes()
+    if store is None or store.index.base_dir != root:
+        store = frame_cache.ResponseStore(root, record.stack_id, stage.key, limit)
+        _stores[key] = store
+    else:
+        store.index.size_limit = limit
+    return store
+
+
+def _definition(stage):
+    return props.definition_fingerprint(stage)
+
+
+def _bump_generation(record, stage, reason=""):
+    """A reset: old frames describe the wrong definition and are deleted."""
+    stage.generation += 1
+    _cache.pop((record.stack_id, stage.key), None)
+    try:
+        removed = _store_for(record, stage).prune(generation=stage.generation)
+    except OSError as exc:
+        removed = []
+        print("[gh-stack] cache reset failed for %s: %r" % (stage.key, exc), flush=True)
+    if removed:
+        print(
+            "[gh-stack] %s: cache reset (%s), %d frame(s) dropped"
+            % (stage.key, reason or "definition changed", len(removed)),
+            flush=True,
+        )
+
+
+def _store_frame(record, stage, rid, header, sections):
+    """Persist a response as the raw protocol frame plus a metadata sidecar."""
+    if header.get("status") != "ok":
+        return
+    entries = []
+    for entry in header.get("sections") or []:
+        name = entry.get("name")
+        if name in sections:
+            entries.append((name, entry.get("dtype"), sections[name]))
+    try:
+        raw = codec.encode_frame(header, entries)
+    except (codec.CodecError, KeyError, TypeError) as exc:
+        print("[gh-stack] could not store a frame for %s: %r" % (stage.key, exc), flush=True)
+        return
+    try:
+        _store_for(record, stage).store(
+            rid,
+            raw,
+            generation=stage.generation,
+            definition=_definition(stage),
+            out_hash=header.get("out_hash") or "",
+        )
+    except OSError as exc:
+        print("[gh-stack] cache write failed for %s: %r" % (stage.key, exc), flush=True)
+
+
+def _remember(record, stage, rid, header, sections):
+    """Put a decoded response in the hot memory cache, bounded by the same byte
+    budget as the disk store (FIFO over insertion order; the disk is the
+    backing store, so an evicted frame just loads again)."""
+    cache = _cache.setdefault((record.stack_id, stage.key), {})
+    cache[rid] = (header, sections)
+    limit = prefs.cache_size_bytes()
+    while len(cache) > 1 and _memory_usage(cache) > limit:
+        oldest = next(iter(cache))
+        if oldest == rid:
+            break
+        del cache[oldest]
+
+
+def _memory_usage(cache):
+    total = 0
+    for _header, sections in cache.values():
+        for name, values in sections.items():
+            try:
+                total += len(values) * (1 if _dtype_of(name) == "u8" else 4)
+            except TypeError:
+                continue
+    return total
+
+
+def _cached_response(record, stage, rid):
+    """A stored response for this rid: memory first, then disk. Entries that do
+    not match the current generation or definition are dropped on the way."""
+    memory = _cache.get((record.stack_id, stage.key))
+    if memory is not None:
+        hit = memory.get(rid)
+        if hit is not None:
+            return hit
+    try:
+        store = _store_for(record, stage)
+        entry = store.valid(rid, generation=stage.generation, definition=_definition(stage))
+        if entry is None:
+            return None
+        raw = store.load(rid)
+    except OSError as exc:
+        print("[gh-stack] cache read failed for %s: %r" % (stage.key, exc), flush=True)
+        return None
+    if raw is None:
+        return None
+    try:
+        header, sections = codec.decode_frame(raw)
+    except codec.CodecError as exc:
+        print("[gh-stack] dropping a corrupt cached frame for %s: %r" % (stage.key, exc), flush=True)
+        store.remove(rid)
+        return None
+    if header.get("status") != "ok" or header.get("stage") != stage.key:
+        store.remove(rid)
+        return None
+    _remember(record, stage, rid, header, sections)
+    return header, sections
+
+
 # --------------------------------------------------------------------- process
 
 
@@ -329,45 +533,48 @@ def _process_stage(obj, record, stage):
     """One stage's pass. Returns "waiting" (request in flight; stop the stack),
     "busy" (work happened; keep the fast timer), or "idle"."""
     if not stage.enabled:
-        stage.state = "disabled"
+        _set(stage, "state", "disabled")
         nodes.set_modifier_visible(obj, stage.key, False)
         return "idle"
     nodes.set_modifier_visible(obj, stage.key, True)
-
-    if not bridge.state["connected"]:
-        stage.state = stack_mod.STATE_DISCONNECTED
-        return "idle"
 
     sections = _prefix_sections(obj, record, stage)
     raw = {name: codec.section_bytes(name, dtype, values) for name, dtype, values in sections}
     geom_hash = hashing.geometry_hash(raw)
     params_json = props.canonical_json(obj, stage)
     rid = hashing.request_id(stage.key, params_json, geom_hash, "m", "stack-local", stage.nonce)
+    _set(stage, "rid", rid)
 
-    cache = _cache.setdefault((record.stack_id, stage.key), {})
-    if rid in cache:
-        header, cached_sections = cache[rid]
-        if header.get("status") != "ok":
-            # Defensive: error responses are never cached as results, but a
-            # stale entry must not be applied as one.
-            cache.pop(rid, None)
-        else:
-            applied = False
-            if (header.get("out_hash") or "") != stage.applied_out_hash:
-                _apply(obj, stage, cached_sections)
-                stage.applied_out_hash = header.get("out_hash") or ""
-                applied = True
-            stage.rid = rid
-            stage.state = stack_mod.STATE_OK
-            return "busy" if applied else "idle"
+    cached = _cached_response(record, stage, rid)
+    if cached is not None:
+        header, cached_sections = cached
+        out_hash = header.get("out_hash") or ""
+        if out_hash != stage.applied_out_hash:
+            _apply(obj, stage, cached_sections)
+            stats["applies"] += 1
+            _set(stage, "applied_out_hash", out_hash)
+            _set(stage, "warnings", _warnings_text(header))
+            _set(stage, "state", stack_mod.STATE_OK)
+            _set(stage, "error", "")
+            _waiting_since.pop((record.stack_id, stage.key), None)
+            return "busy"
+        _set(stage, "state", stack_mod.STATE_OK)
+        return "idle"
+
+    if not bridge.state["connected"]:
+        # A miss with Grasshopper away keeps the last good output; only cached
+        # frames replay (renders use the cache).
+        _set(stage, "state", stack_mod.STATE_DISCONNECTED)
+        return "idle"
 
     waiting_key = (record.stack_id, stage.key)
     since = _waiting_since.get(waiting_key)
     if stage.state == stack_mod.STATE_WAITING and since is not None:
         timeout = _timeout()
         if time.monotonic() - since > timeout:
-            stage.state = stack_mod.STATE_ERROR
-            stage.error = "timed out after %.0f s" % timeout
+            _waiting_since.pop(waiting_key, None)
+            _set(stage, "state", stack_mod.STATE_ERROR)
+            _set(stage, "error", "timed out after %.0f s" % timeout)
             return "idle"  # the helper keeps its last output; downstream may run
         return "waiting"  # still waiting; keep the fast timer
 
@@ -384,13 +591,16 @@ def _process_stage(obj, record, stage):
     }
     frame = codec.encode_frame(header, sections if mode == "full" else [])
     server.SERVER.send(frame)
+    stats["sends"] += 1
 
-    stage.rid = rid
-    stage.geom_hash = geom_hash
-    stage.state = stack_mod.STATE_WAITING
-    stage.error = ""
+    _set(stage, "geom_hash", geom_hash)
+    _set(stage, "state", stack_mod.STATE_WAITING)
+    _set(stage, "error", "")
     _waiting_since[waiting_key] = time.monotonic()
     return "waiting"
+
+
+# ------------------------------------------------------------------ prefix cache
 
 
 def _prefix_sections(obj, record, stage):
@@ -399,14 +609,21 @@ def _prefix_sections(obj, record, stage):
     part of the input.
 
     With nothing before the stage, the base datablocks are read directly: exact,
-    and no clone evaluation. Otherwise a copy of the object is evaluated with
-    the stage's modifier and every later one removed (probe S-arch: the copy
-    keeps the modifier list, shares the node groups, and evaluates a prefix).
+    and no clone evaluation. Otherwise the evaluated prefix is memoized against
+    a revision of everything it depends on; when the revision is unchanged the
+    clone (which would tag the depsgraph and wake every idle stack) is skipped.
     """
     modifier = nodes.modifier_for(obj, stage.key)
     index = _modifier_index(obj, modifier)
     if index <= 0:
         return geometry_io.object_to_sections(obj, as_subd=bool(record.subd))
+
+    revision = _prefix_revision(obj, record, stage, index)
+    memo_key = (obj.name, stage.key)
+    memo = _prefix_memo.get(memo_key)
+    if revision is not None and memo is not None and memo["revision"] == revision:
+        stats["prefix_memo_hits"] += 1
+        return memo["sections"]
 
     global _evaluating
     clone = obj.copy()
@@ -417,10 +634,170 @@ def _prefix_sections(obj, record, stage):
             clone.modifiers.remove(later)
         depsgraph = bpy.context.evaluated_depsgraph_get()
         geometry = clone.evaluated_get(depsgraph).evaluated_geometry()
-        return geometry_io.geometry_set_to_sections(geometry, as_subd=bool(record.subd))
+        sections = geometry_io.geometry_set_to_sections(geometry, as_subd=bool(record.subd))
     finally:
         _evaluating = False
         bpy.data.objects.remove(clone, do_unlink=True)
+    stats["prefix_clones"] += 1
+    if revision is not None:
+        _prefix_memo[memo_key] = {"revision": revision, "sections": sections}
+    return sections
+
+
+def _prefix_revision(obj, record, stage, index):
+    """Everything the evaluated prefix depends on, cheaply comparable. None
+    means "do not memoize" (surfaces are meshed on the fly and rarely used)."""
+    if obj.type == "SURFACE":
+        return None
+    base = geometry_io.object_to_sections(obj, as_subd=False)
+    raw = {name: codec.section_bytes(name, dtype, values) for name, dtype, values in base}
+    return (
+        hashing.geometry_hash(raw),
+        _modifier_descriptor(obj, index),
+        _upstream_hashes(obj, record, stage, index),
+        bool(record.subd),
+        _shapekey_state(obj),
+    )
+
+
+def _modifier_descriptor(obj, index):
+    """Settings of every modifier before the stage, plus the objects they
+    reference. Any edit that matters changes this tuple; UI-only state is left
+    out so selecting a modifier does not invalidate the memo."""
+    items = []
+    for modifier in list(obj.modifiers)[:index]:
+        props_state = []
+        for prop in modifier.bl_rna.properties:
+            identifier = prop.identifier
+            if prop.is_readonly or identifier in _SKIP_MODIFIER_PROPS:
+                continue
+            try:
+                value = getattr(modifier, identifier)
+            except (AttributeError, TypeError, RuntimeError):
+                continue
+            if prop.type == "POINTER":
+                props_state.append((identifier, _pointer_state(value)))
+            elif prop.type == "COLLECTION":
+                continue
+            else:
+                props_state.append((identifier, _freeze(value)))
+        if modifier.type == "NODES" and modifier.node_group is not None:
+            props_state.append(("node_tree", _node_tree_signature(modifier.node_group)))
+        items.append((modifier.name, modifier.type, tuple(props_state)))
+    return tuple(items)
+
+
+def _pointer_state(value):
+    if value is None:
+        return None
+    if getattr(value, "bl_rna", None) is not None and value.bl_rna.identifier == "Object":
+        return ("object", value.name, tuple(value.matrix_world), _object_geometry_hash(value))
+    return ("id", getattr(value, "name", None))
+
+
+def _object_geometry_hash(obj):
+    try:
+        sections = geometry_io.object_to_sections(obj, as_subd=False)
+    except Exception:
+        return ""
+    raw = {name: codec.section_bytes(name, dtype, values) for name, dtype, values in sections}
+    return hashing.geometry_hash(raw)
+
+
+def _node_tree_signature(tree):
+    """Node names, wiring, and every socket default in one node group, so an
+    edit inside a prefix modifier's graph invalidates the memo. Nested groups
+    are not walked."""
+    nodes_state = []
+    for node in tree.nodes:
+        sockets = []
+        for socket in node.inputs:
+            try:
+                value = socket.default_value
+            except (AttributeError, RuntimeError):
+                continue
+            if value is None:
+                continue
+            sockets.append((socket.identifier, _freeze(value)))
+        nodes_state.append((node.bl_idname, node.name, tuple(sockets)))
+    links = []
+    for link in tree.links:
+        try:
+            links.append(
+                (link.from_node.name, link.from_socket.identifier, link.to_node.name, link.to_socket.identifier)
+            )
+        except AttributeError:
+            continue
+    links.sort()
+    interface = []
+    try:
+        for item in tree.interface.items_tree:
+            if getattr(item, "item_type", "") != "SOCKET":
+                continue
+            try:
+                value = item.default_value
+            except AttributeError:
+                continue
+            if value is None:
+                continue
+            interface.append((item.identifier, _freeze(value)))
+    except (AttributeError, RuntimeError):
+        pass
+    return (tree.name, tuple(nodes_state), tuple(links), tuple(interface))
+
+
+def _freeze(value):
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    try:
+        if hasattr(value, "__len__") and hasattr(value, "__getitem__"):
+            return tuple(_freeze(value[i]) for i in range(len(value)))
+    except (TypeError, IndexError, RuntimeError):
+        pass
+    name = getattr(value, "name", None)
+    if name is not None:
+        return ("#", str(name))
+    return repr(value)
+
+
+_SKIP_MODIFIER_PROPS = frozenset(
+    (
+        "rna_type",
+        "name",
+        "show_expanded",
+        "is_active",
+        "is_override_data",
+        "use_pin_to_last",
+        "execution_time",
+        "persistent_uid",
+    )
+)
+
+
+def _upstream_hashes(obj, record, stage, index):
+    """The applied outputs of GH stages whose modifiers precede this stage, in
+    stack order: their helpers are what the clone evaluation reads, so a new
+    upstream output invalidates the memo."""
+    by_group = {}
+    for other in record.stages:
+        if other.key != stage.key:
+            by_group[nodes.group_name(other.key)] = other
+    hashes = []
+    for modifier in list(obj.modifiers)[:index]:
+        if modifier.type != "NODES" or modifier.node_group is None:
+            continue
+        other = by_group.get(modifier.node_group.name)
+        if other is not None:
+            hashes.append((other.key, other.applied_out_hash))
+    return tuple(hashes)
+
+
+def _shapekey_state(obj):
+    keys = getattr(obj.data, "shape_keys", None)
+    blocks = getattr(keys, "key_blocks", None) if keys is not None else None
+    if blocks is None:
+        return ()
+    return tuple((block.name, float(block.value)) for block in blocks)
 
 
 def _modifier_index(obj, modifier):
@@ -433,11 +810,7 @@ def _modifier_index(obj, modifier):
 
 
 def _timeout():
-    try:
-        prefs = bpy.context.preferences.addons[__package__.split(".")[0]].preferences
-        return float(prefs.timeout)
-    except (KeyError, AttributeError):
-        return 30.0
+    return float(prefs._pref("timeout", 30.0))
 
 
 # ------------------------------------------------------------------- lifecycle
@@ -445,27 +818,41 @@ def _timeout():
 
 def start_server(port=None):
     if port is None:
-        try:
-            prefs = bpy.context.preferences.addons[__package__.split(".")[0]].preferences
-            port = int(prefs.port)
-        except (KeyError, AttributeError):
-            port = 9130
+        port = int(prefs._pref("port", 9130))
     return server.SERVER.start(port)
 
 
+def request_again(obj, stage=None):
+    """Force a fresh request without touching the frame cache: the nonce changes
+    so the request id cannot collide with a cached one. Used when a stage is
+    created or its identity changes."""
+    record = stack_mod.stack_of(obj)
+    if record is None:
+        return
+    if not record.stack_id:
+        record.stack_id = stack_mod.ensure_stack(obj).stack_id
+    stages = [stage] if stage is not None else list(record.stages)
+    for item in stages:
+        item.nonce += 1
+        _waiting_since.pop((record.stack_id, item.key), None)
+        _set(item, "state", stack_mod.STATE_IDLE)
+    _dirty.add(obj.name)
+
+
 def push(obj=None):
-    """Force a new request for every stage of a stack (increments the nonce)."""
+    """Force a fresh request for every stage of a stack (increments the nonce)
+    and reset its frame cache: Push exists to get past anything cached."""
     obj = obj or bpy.context.object
     if obj is None:
         return
     record = stack_mod.stack_of(obj)
     if record is None:
         return
+    if not record.stack_id:
+        record.stack_id = stack_mod.ensure_stack(obj).stack_id
     for stage in record.stages:
-        stage.nonce += 1
-        _waiting_since.pop((record.stack_id, stage.key), None)
-        stage.state = stack_mod.STATE_IDLE
-    _dirty.add(obj.name)
+        _bump_generation(record, stage, "Push")
+    request_again(obj)
 
 
 def _mark_object_dirty(obj):
@@ -476,6 +863,7 @@ def register():
     global _registered
     if _registered:
         return
+    _stores.clear()
     # A UI-driven parameter write (the choice dropdown) must reach the engine.
     stack_mod.set_param_changed_hook(_mark_object_dirty)
     bpy.app.timers.register(_timer, first_interval=IDLE_INTERVAL)

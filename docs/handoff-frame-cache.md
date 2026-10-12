@@ -1,8 +1,12 @@
 # Handoff — simulation-style frame cache (W2, redefined)
 
-**Status:** proposed, not implemented. Supersedes the plan's explicit bake operator
-(`docs/plan.md` §7 "Bake", §9.8 "Bake range", §13). Written 2026-10-12 after the
-W1 prefix-evaluation work landed (`40f68bc`).
+**Status:** implemented 2026-10-12 (W2). Supersedes the plan's explicit bake
+operator (`docs/plan.md` §7 "Bake", §9.8 "Bake range", §13). Written 2026-10-12
+after the W1 prefix-evaluation work landed (`40f68bc`); the decisions it left
+open are settled in ADR 0008 and the deviations are recorded there: no UI cache
+readout, the document is handled by the generation bump rather than the
+fingerprint, the memory cache is bounded by the same budget, and the prefix is
+memoized against a content revision instead of a scratch object.
 
 **Owner's requirements (from the 2026-10-12 review):**
 

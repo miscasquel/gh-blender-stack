@@ -43,6 +43,9 @@ class StageState(object):
         self.received_max = 0.0
         self.received_curve_points = 0
         self.received_first = None
+        self.echoes = 0  # identical responses re-sent
+        self.edits = 0  # same-rid responses with a changed output (GH-side edit)
+        self.schema_updates = 0  # changed schemas re-sent
 
 
 def _summarise(state):
@@ -78,10 +81,18 @@ async def main():
     ap.add_argument("--scale-param", default=PARAM_ID)
     ap.add_argument("--report", default="")
     ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--doc", default="fake.gh",
+                    help="document name reported in hello, to test document resets")
     ap.add_argument("--extras", action="store_true",
                     help="also answer with a polyline and points built from the mesh")
     ap.add_argument("--delay-ms", type=int, default=0,
                     help="wait this long before answering, to test waiting stages")
+    ap.add_argument("--echo-after", type=int, default=0,
+                    help="after this many responses, re-send the identical frame")
+    ap.add_argument("--gh-edit-after", type=int, default=0,
+                    help="after this many responses, send a same-rid response with a changed output")
+    ap.add_argument("--schema-after", type=int, default=0,
+                    help="after this many responses, send a changed schema")
     args = ap.parse_args()
 
     state = StageState()
@@ -117,6 +128,9 @@ def _write_report(args, state):
                 "full": state.full,
                 "ref": state.ref,
                 "responses": state.responses,
+                "echoes": state.echoes,
+                "edits": state.edits,
+                "schema_updates": state.schema_updates,
                 "sections": sorted(state.sections.keys()) if state.sections else [],
                 "received_verts": state.received_verts,
                 "received_faces": state.received_faces,
@@ -129,23 +143,14 @@ def _write_report(args, state):
         )
 
 
-async def session(ws, args, state):
-    print("[fake-gh] connected to blender", flush=True)
-    hello = {
-        "type": "hello",
-        "client": "fake-gh 0.1",
-        "doc": "fake.gh",
-        "doc_units": "Meters",
-        "stages": [{"key": args.stage, "enabled": True}],
-    }
-    await ws.send(codec.encode_frame(hello))
-    schema = {
+def _schema_message(stage, scale_param, suffix=""):
+    return {
         "type": "schema",
-        "stage": args.stage,
+        "stage": stage,
         "params": [
             {
-                "id": args.scale_param,
-                "label": "Scale",
+                "id": scale_param,
+                "label": "Scale" + suffix,
                 "type": "float",
                 "default": 1.0,
                 "min": 0.1,
@@ -181,7 +186,19 @@ async def session(ws, args, state):
             },
         ],
     }
-    await ws.send(codec.encode_frame(schema))
+
+
+async def session(ws, args, state):
+    print("[fake-gh] connected to blender", flush=True)
+    hello = {
+        "type": "hello",
+        "client": "fake-gh 0.1",
+        "doc": args.doc,
+        "doc_units": "Meters",
+        "stages": [{"key": args.stage, "enabled": True}],
+    }
+    await ws.send(codec.encode_frame(hello))
+    await ws.send(codec.encode_frame(_schema_message(args.stage, args.scale_param)))
 
     async for message in ws:
         header, sections = codec.decode_frame(message)
@@ -233,9 +250,42 @@ async def session(ws, args, state):
             "counts": counts,
         }
         state.responses += 1
-        await ws.send(codec.encode_frame(reply, out_sections))
+        frame = codec.encode_frame(reply, out_sections)
+        await ws.send(frame)
         _write_report(args, state)
         print("[fake-gh] response %d (scale %.3f, %s)" % (state.responses, scale, mode), flush=True)
+
+        # Optional scripted events, one response count each, for the frame-cache
+        # tests (they drive the engine's reset and quiet rules deterministically).
+        if args.echo_after and state.responses == args.echo_after:
+            await ws.send(frame)  # byte-for-byte identical
+            state.echoes += 1
+            _write_report(args, state)
+        if args.gh_edit_after and state.responses == args.gh_edit_after:
+            # A GH-side definition change: same request, different answer.
+            edited_sections = _scaled_sections(state.sections, 42.0)
+            edited_hash = hashing.output_hash(
+                [(name, codec.section_bytes(name, _proto_dtype(name), values)) for name, dtype, values in edited_sections]
+            )
+            edited_reply = {
+                "type": "response",
+                "stage": args.stage,
+                "rid": header.get("rid"),
+                "out_hash": edited_hash,
+                "status": "ok",
+                "error": None,
+                "warnings": [],
+                "counts": counts,
+            }
+            await ws.send(codec.encode_frame(edited_reply, edited_sections))
+            state.edits += 1
+            _write_report(args, state)
+            print("[fake-gh] gh-edit response for rid %s" % (header.get("rid"),), flush=True)
+        if args.schema_after and state.responses == args.schema_after:
+            await ws.send(codec.encode_frame(_schema_message(args.stage, args.scale_param, suffix=" v2")))
+            state.schema_updates += 1
+            _write_report(args, state)
+            print("[fake-gh] schema v2 sent", flush=True)
 
 
 def _is_u8(name):

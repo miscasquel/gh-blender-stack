@@ -118,8 +118,13 @@ def remove_modifier(stack_obj, stage_key):
 
 def set_modifier_visible(stack_obj, stage_key, visible):
     modifier = modifier_for(stack_obj, stage_key)
-    if modifier is not None:
+    if modifier is None:
+        return
+    # Only write on change: an unchanged write tags the depsgraph and restarts
+    # Cycles accumulation for nothing.
+    if modifier.show_viewport != visible:
         modifier.show_viewport = visible
+    if modifier.show_render != visible:
         modifier.show_render = visible
 
 

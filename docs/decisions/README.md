@@ -11,3 +11,4 @@ Short records of decisions that shape the project. Format: context, decision, co
 | [0005](0005-local-repository.md) | Repository on the local machine | Accepted |
 | [0006](0006-carried-decisions.md) | Carried decisions: no file protocol, no rhino3dm, no GhPython, GPL-3.0, extension packaging | Accepted |
 | [0007](0007-github-publication.md) | Published on GitHub (public, GPL-3.0, history scrubbed) | Accepted |
+| [0008](0008-simulation-style-frame-cache.md) | Simulation-style frame cache; no bake operator | Accepted |
