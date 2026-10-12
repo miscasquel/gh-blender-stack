@@ -379,13 +379,20 @@ Also: `P8-2` was resolved by deleting the superseded frame-cache handoff and
 updating ADR 0008; `P0-9` pieces 1 and 2 landed (check-deployed, `--coalesce`);
 piece 3 (units) stays backlog along with the plugin-contract test.
 
-Still open from this batch:
+### Live session, 2026-10-12 (build `c9001aca…`, Rhino restarted twice)
 
-- **The two plugin halves — P3-2's outbox and P1-1's error response — are compiled
-  and deployed but not exercised by any suite.** They need a Rhino restart and a
-  live session: a failing `Stage Out` should answer immediately (not after 30 s),
-  and a failed send should not jam later frames. `scripts/check-deployed` confirms
-  the deployed `.gha` is current (`c9001aca…`).
-- The live session is also where P2-1..P2-3's runtime effect is seen (a malformed
-  frame no longer drops the link).
+- The demo round trip is green with the restarted plugin: the stage reaches `ok`
+  and parameter/timeline changes update, so the decoder changes and
+  `SetSlotStatus` are exercised in the live product, not only by the suites. A
+  client restart in the middle reconnected cleanly to the running Blender
+  (plugin backoff → fresh `hello` → resend to `ok`).
+- **P1-1's plugin half has no practical live trigger**, found while preparing the
+  session: the outgoing conversion warns rather than throws (in `Conversion.cs`
+  only the two incoming paths throw), `GooDispatch` is defensive, and the
+  remaining exception sources are Rhino API failures, OOM, or a frame over the
+  512 MB cap. The branch is inspection-plus-deployment, with Blender's half
+  pinned by `SolveFailureTests`. If a real failure occurs, the stage must show
+  `error` immediately, not after the timeout.
+- P3-2's outbox needs a failed send mid-stream, which a session cannot produce;
+  it stays regression protection.
 - Open questions 1–4 above remain open as written.

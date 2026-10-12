@@ -414,7 +414,9 @@ lost connection.
 > `slot.Status`/`Message` under `Gate` through the new `GhLink.SetSlotStatus`, which
 > also settles `RetryStaleSolves`. `fake_gh --fail-after` plus `SolveFailureTests`
 > pin the fast error from the Blender side; the `Components.cs` half is compiled and
-> deployed but has no automated reach, so it awaits a live session. The new test also
+> deployed, and the 2026-10-12 live pass found no practical way to trigger the catch
+> (the outgoing conversion warns, it does not throw), so it stands as inspection plus
+> deployment. The new test also
 > surfaced a second bug: the engine's generic error branch marked the object dirty,
 > re-sending on the same tick — with a solve that just failed, a request loop. It now
 > follows protocol §7 and retries on the next change instead.
@@ -558,7 +560,8 @@ socket outlive the call by an unbounded time.
 > oversized frame can still go out); `Loop`'s `finally` clears the queue on
 > disconnect. Deliberately no priority queue: frames are redundant by design. The
 > plugin has no automated suite, so verification is inspection plus the deployed
-> build and a live session.
+> build (the 2026-10-12 live pass confirmed the healthy path and the reconnect; a
+> mid-send failure is not producible in a session).
 
 **Where:** `grasshopper/src/gh/GhLink.cs:45`, `:361-365`, `:191-196`, `:338-359`.
 **Why it matters:** two distinct problems.
