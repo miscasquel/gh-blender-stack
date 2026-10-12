@@ -116,7 +116,11 @@ namespace GhStack.Core
                     case 't': sb.Append('\t'); break;
                     case 'u':
                         if (pos + 4 > s.Length) throw new JsonException("bad unicode escape");
-                        sb.Append((char)Convert.ToInt32(s.Substring(pos, 4), 16));
+                        int code;
+                        if (!int.TryParse(s.Substring(pos, 4), NumberStyles.HexNumber,
+                                          CultureInfo.InvariantCulture, out code))
+                            throw new JsonException("bad unicode escape at index " + pos);
+                        sb.Append((char)code);
                         pos += 4;
                         break;
                     default:
@@ -145,13 +149,24 @@ namespace GhStack.Core
             string token = s.Substring(start, pos - start);
             if (token.Length == 0) throw new JsonException("empty number at index " + start);
             if (isFloat)
-                return double.Parse(token, CultureInfo.InvariantCulture);
+                return ParseDouble(token, start);
             long l;
             if (long.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out l))
                 return l;
             // Too big for long: the protocol never uses such integers in headers,
             // but do not lose the value.
-            return double.Parse(token, CultureInfo.InvariantCulture);
+            return ParseDouble(token, start);
+        }
+
+        /// <summary>Every malformed numeric path raises JsonException: the
+        /// callers catch exactly that, and a raw FormatException or
+        /// OverflowException would tear a healthy connection down (P2-1).</summary>
+        private static double ParseDouble(string token, int index)
+        {
+            double value;
+            if (!double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+                throw new JsonException("bad number '" + token + "' at index " + index);
+            return value;
         }
 
         private static void Expect(string s, ref int pos, string word)

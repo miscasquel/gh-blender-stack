@@ -192,9 +192,15 @@ namespace GhStack.Core
                 throw new FrameException("bad_frame", "header is not a JSON object");
 
             object v = Json.Get(header, "v");
-            if (v == null || Convert.ToInt64(v, CultureInfo.InvariantCulture) != ProtocolVersion)
+            // A number compares like Python's `v != expect`, so 2.0 == 2 holds
+            // and a string "2" does not (P5-2). A non-number must land here as a
+            // proto_mismatch, not as a converter exception (P2-2): the caller
+            // would otherwise tear down a healthy connection over one bad frame.
+            bool versionOk = Json.IsNumber(v)
+                             && Convert.ToDouble(v, CultureInfo.InvariantCulture) == ProtocolVersion;
+            if (!versionOk)
                 throw new FrameException("proto_mismatch",
-                    "header v=" + Json.FormatDouble(Convert.ToDouble(v == null ? 0 : v, CultureInfo.InvariantCulture))
+                    "header v=" + (v == null ? "(missing)" : Convert.ToString(v, CultureInfo.InvariantCulture))
                     + ", expected " + ProtocolVersion);
 
             var sections = new List<Section>();
@@ -208,8 +214,16 @@ namespace GhStack.Core
                     var entry = entryObj as Dictionary<string, object>;
                     if (entry == null)
                         throw new FrameException("bad_frame", "section entry is not an object");
+                    // Validate before the values are used: a missing name makes
+                    // the section unmatchable (`Find` compares names), and an
+                    // unknown dtype is a frame Python rejects (codec.py:88).
                     string name = Json.GetString(entry, "name");
+                    if (string.IsNullOrEmpty(name))
+                        throw new FrameException("bad_frame", "section entry without a name");
                     string dtype = Json.GetString(entry, "dtype");
+                    if (dtype != "f32" && dtype != "u32" && dtype != "u8")
+                        throw new FrameException("bad_frame",
+                            "section " + name + " has unknown dtype " + (dtype ?? "(missing)"));
                     long nbytes = Json.GetLong(entry, "bytes");
                     if (offset + nbytes > frame.Length)
                         throw new FrameException("bad_frame", "section " + name + " runs past the payload");

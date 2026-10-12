@@ -828,6 +828,80 @@ class UnknownRefResponseTests(UnknownRefTests):
         pump(seconds=10.0, until=lambda: cls.stage.state == "ok")
 
 
+class SolveFailureTests(FrameCacheTestCase):
+    """A failed solve answers immediately, and is not immediately re-asked.
+
+    P1-1's Blender half: when a Stage Out fails, the plugin answers with an
+    error response (protocol §4.4); the stage must land on `error` without
+    waiting out the 30 s timeout. The engine must then wait for a change — a
+    component that just failed fails again, so an instant retry is a request
+    loop against the client (protocol §7: retry on the next change or Push).
+    The plugin's own half cannot be reached by any suite that drives the fake.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.obj, cls.stage = cls.add_cube("Fails")
+        keyframe_scale(cls.obj, cls.stage, [1.0, 2.0, 3.0])
+        cls.report = cls.report_path("solve_failure")
+        # The second response fails; the first (frame 1) settles the class, and
+        # the third is the recovery after the next change.
+        cls.fake = start_fake(cls.stage.key, cls.report, "--fail-after", "2")
+        cls.await_client()
+        scrub(cls.obj, 1)
+        pump(seconds=10.0, until=lambda: cls.stage.state == "ok")
+
+    @classmethod
+    def tearDownClass(cls):
+        stop_fake(getattr(cls, "fake", None))
+        super().tearDownClass()
+
+    def test_01_error_arrives_without_the_timeout(self):
+        self.assertEqual(self.stage.state, "ok", self.stage.error)
+        timeouts_before = self.engine.stats["timeouts"]
+        started = time.time()
+        scrub(self.obj, 2)
+        self.assertTrue(
+            pump(seconds=10.0, until=lambda: self.stage.state == "error"),
+            "the stage never reached error",
+        )
+        elapsed = time.time() - started
+        self.assertLess(
+            elapsed,
+            5.0,
+            "the error took %.1f s: it arrived through the timeout, not as an answer" % elapsed,
+        )
+        self.assertEqual(
+            self.engine.stats["timeouts"], timeouts_before, "the error went through a timeout"
+        )
+        self.assertIn("fake solve failure", self.stage.error)
+
+    def test_02_a_failed_stage_is_not_immediately_retried(self):
+        # The error must stick until something changes: an instant retry asks a
+        # component that just failed to solve again, in a loop.
+        responses = report_of(self.report).get("responses", 0)
+        pump(seconds=1.0)
+        self.assertEqual(self.stage.state, "error")
+        self.assertEqual(
+            report_of(self.report).get("responses", 0),
+            responses,
+            "the engine re-asked after the error without a change",
+        )
+
+    def test_03_the_next_change_retries_and_clears_the_error(self):
+        scrub(self.obj, 3)
+        self.assertTrue(
+            pump(seconds=10.0, until=lambda: self.stage.state == "ok"),
+            "the stage never recovered (state=%s, error=%s)" % (self.stage.state, self.stage.error),
+        )
+        self.assertEqual(self.stage.error, "")
+        self.assertTrue(
+            pump(seconds=10.0, until=lambda: abs(helper_max(self.obj, self.stage.key) - 3.0) < 0.01),
+            "the recovered frame never applied",
+        )
+
+
 class TimeDrivenPrefixTests(FrameCacheTestCase):
     """A native modifier before the stage reads scene time, so the geometry fed to
     Grasshopper moves with the timeline — the case that made the frame cache inert.

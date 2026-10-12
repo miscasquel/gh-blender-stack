@@ -101,6 +101,9 @@ async def main():
                     help="how to refuse an unservable ref: the standalone error "
                          "message of protocol 4.6 (what the plugin sends), or an "
                          "error-status response (protocol 4.4)")
+    ap.add_argument("--fail-after", type=int, default=0,
+                    help="answer response N with a gh_solve_failed error instead of "
+                         "geometry (once; later requests succeed)")
     args = ap.parse_args()
 
     state = StageState()
@@ -262,6 +265,25 @@ async def session(ws, args, state):
         scale = float((header.get("params") or {}).get(args.scale_param, 1.0))
         if args.delay_ms:
             await asyncio.sleep(args.delay_ms / 1000.0)
+        state.responses += 1
+        if args.fail_after and state.responses == args.fail_after:
+            # One solve fails: the error response a broken plugin stage has to
+            # send (protocol 4.4). Blender must land on `error` immediately,
+            # not after its timeout, and must not immediately re-ask.
+            failure = {
+                "type": "response",
+                "stage": args.stage,
+                "rid": header.get("rid"),
+                "out_hash": "",
+                "status": "error",
+                "error": {"code": "gh_solve_failed", "message": "fake solve failure"},
+                "warnings": [],
+                "counts": {"meshes": 0, "subd": 0, "curves": 0, "points": 0, "approximated_curves": 0},
+            }
+            await ws.send(codec.encode_frame(failure))
+            _write_report(args, state)
+            print("[fake-gh] response %d (gh_solve_failed, %s)" % (state.responses, mode), flush=True)
+            continue
         out_sections = _scaled_sections(state.sections, scale)
         counts = {"meshes": 1, "subd": 0, "curves": 0, "points": 0, "approximated_curves": 0}
         if args.extras:
@@ -280,7 +302,6 @@ async def session(ws, args, state):
             "warnings": [],
             "counts": counts,
         }
-        state.responses += 1
         frame = codec.encode_frame(reply, out_sections)
         await ws.send(frame)
         _write_report(args, state)

@@ -155,6 +155,18 @@ namespace GhStack
             }
         }
 
+        /// <summary>The solve verdict for a stage, written under the same lock
+        /// every reader takes (RetryStaleSolves, Handle). Only the UI thread
+        /// writes it.</summary>
+        public static void SetSlotStatus(StageSlot slot, string status, string message)
+        {
+            lock (Gate)
+            {
+                slot.Status = status;
+                slot.Message = message ?? "";
+            }
+        }
+
         // -------------------------------------------------------------- socket
 
         public static void Start()
@@ -252,6 +264,15 @@ namespace GhStack
                 catch (JsonException ex)
                 {
                     Note("bad frame json: " + ex.Message);
+                    continue;
+                }
+                catch (Exception ex)
+                {
+                    // Last resort (P2-1): no single frame may tear down a
+                    // healthy connection — Loop's outer catch would dispose the
+                    // client and reconnect. Anything reaching here is a decoder
+                    // gap; note it and keep reading.
+                    Note("bad frame (" + ex.GetType().Name + "): " + FirstLine(ex));
                     continue;
                 }
                 Handle(decoded);

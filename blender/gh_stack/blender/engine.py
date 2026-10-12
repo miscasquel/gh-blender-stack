@@ -282,7 +282,12 @@ def _handle_response(header, sections):
             _forget(record.stack_id, stage.key)
             _set(stage, "state", stack_mod.STATE_ERROR)
             _set(stage, "error", error.get("message") if isinstance(error, dict) else str(error))
-            _dirty.add(obj.name)
+            # Deliberately no retry here: a solve that just failed would fail
+            # again the moment it was asked, turning one broken component into
+            # a request loop against the client. Protocol §7: an errored stage
+            # retries on the next change or Push; `_set` above has already
+            # surfaced the state, and the change that fixes the graph marks the
+            # object dirty like any other.
             continue
 
         out_hash = header.get("out_hash") or ""

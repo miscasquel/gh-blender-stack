@@ -53,6 +53,8 @@ namespace GhStack.Tests.Console
 
             CheckParamValues();
 
+            CheckDecoderBoundary();
+
             System.Console.WriteLine();
             if (_failures == 0)
             {
@@ -215,6 +217,109 @@ namespace GhStack.Tests.Console
             _failures += problems.Count;
             System.Console.WriteLine("FAIL param-values");
             foreach (string p in problems) System.Console.WriteLine("     " + p);
+        }
+
+        /// <summary>Decoder boundary: malformed input must fail as a classified
+        /// exception, never as a raw one a caller cannot catch (P2-1/2/3).</summary>
+        private static void CheckDecoderBoundary()
+        {
+            var problems = new List<string>();
+
+            // P2-1: the parser's contract is JsonException.
+            CheckThrows<JsonException>(problems, "\\uZZZZ escape",
+                delegate { Json.Parse("\"\\uZZZZ\""); });
+            CheckThrows<JsonException>(problems, "1.2.3",
+                delegate { Json.Parse("1.2.3"); });
+            CheckThrows<JsonException>(problems, "1e",
+                delegate { Json.Parse("1e"); });
+
+            // A header that is not valid JSON decodes as a bad_frame.
+            CheckFrameProblem(problems, "truncated header json",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2"), "bad_frame");
+
+            // P2-2: a non-numeric version is a proto_mismatch, not a crash.
+            var versionHeader = new Dictionary<string, object>();
+            versionHeader["type"] = "ping";
+            versionHeader["v"] = "x";
+            CheckFrameProblem(problems, "string version",
+                FrameCodec.Encode(versionHeader, null), "proto_mismatch");
+
+            // P2-3: unknown dtype and a missing name are bad_frames.
+            CheckFrameProblem(problems, "unknown dtype",
+                FrameCodec.Encode(PingHeader(),
+                    new List<Section> { new Section("mesh.verts", "f64", new byte[4]) }),
+                "bad_frame");
+            CheckFrameProblem(problems, "missing name",
+                FrameCodec.Encode(PingHeader(),
+                    new List<Section> { new Section("", "f32", new byte[4]) }),
+                "bad_frame");
+
+            if (problems.Count == 0)
+            {
+                System.Console.WriteLine("PASS decoder-boundary");
+                return;
+            }
+            _failures += problems.Count;
+            System.Console.WriteLine("FAIL decoder-boundary");
+            foreach (string p in problems) System.Console.WriteLine("     " + p);
+        }
+
+        private static Dictionary<string, object> PingHeader()
+        {
+            var header = new Dictionary<string, object>();
+            header["type"] = "ping";
+            return header;
+        }
+
+        /// <summary>A frame around raw header text, so a case can hand Decode
+        /// something the encoder would not produce.</summary>
+        private static byte[] FrameWithHeader(string text)
+        {
+            byte[] head = Encoding.UTF8.GetBytes(text);
+            var frame = new byte[4 + head.Length];
+            frame[0] = (byte)(head.Length & 0xFF);
+            frame[1] = (byte)((head.Length >> 8) & 0xFF);
+            frame[2] = (byte)((head.Length >> 16) & 0xFF);
+            frame[3] = (byte)((head.Length >> 24) & 0xFF);
+            Buffer.BlockCopy(head, 0, frame, 4, head.Length);
+            return frame;
+        }
+
+        private static void CheckThrows<T>(List<string> problems, string what, Action action)
+            where T : Exception
+        {
+            try
+            {
+                action();
+                problems.Add(what + ": no exception");
+            }
+            catch (T)
+            {
+                // expected
+            }
+            catch (Exception ex)
+            {
+                problems.Add(what + ": threw " + ex.GetType().Name
+                    + " instead of " + typeof(T).Name);
+            }
+        }
+
+        private static void CheckFrameProblem(List<string> problems, string what, byte[] frame, string code)
+        {
+            try
+            {
+                FrameCodec.Decode(frame);
+                problems.Add(what + ": decoded without error");
+            }
+            catch (FrameException ex)
+            {
+                if (ex.Code != code)
+                    problems.Add(what + ": code " + ex.Code + " != " + code);
+            }
+            catch (Exception ex)
+            {
+                problems.Add(what + ": threw " + ex.GetType().Name + ": " + ex.Message);
+            }
         }
 
         private static void Report(string name, List<string> problems)

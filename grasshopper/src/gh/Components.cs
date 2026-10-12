@@ -237,13 +237,42 @@ namespace GhStack
                     GhLink.Enqueue(FrameCodec.Encode(header, sections));
                     sent = true;
                     status = "ok";
-                    slot.Status = "ok";
+                    GhLink.SetSlotStatus(slot, "ok", "");
                     foreach (string w in warnings)
                         AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, w);
                 }
                 catch (Exception ex)
                 {
                     status = "error";
+                    // Answer the request instead of letting Blender sit out the
+                    // full timeout: the protocol has an error response for
+                    // exactly this (4.4), and the Blender side turns it into the
+                    // stage's `error` state and keeps the last good output.
+                    // Only when nothing was sent — an exception after the ok
+                    // frame went out must not answer the same request twice.
+                    if (!sent)
+                    {
+                        var error = new Dictionary<string, object>();
+                        error["code"] = "gh_solve_failed";
+                        error["message"] = ex.Message;
+                        var errorCounts = new Dictionary<string, object>();
+                        errorCounts["meshes"] = 0;
+                        errorCounts["subd"] = 0;
+                        errorCounts["curves"] = 0;
+                        errorCounts["points"] = 0;
+                        errorCounts["approximated_curves"] = 0;
+                        var errorHeader = new Dictionary<string, object>();
+                        errorHeader["type"] = "response";
+                        errorHeader["stage"] = key;
+                        errorHeader["rid"] = slot.Rid;
+                        errorHeader["out_hash"] = "";
+                        errorHeader["status"] = "error";
+                        errorHeader["error"] = error;
+                        errorHeader["warnings"] = new List<object>();
+                        errorHeader["counts"] = errorCounts;
+                        GhLink.SetSlotStatus(slot, "error", ex.Message);
+                        GhLink.Enqueue(FrameCodec.Encode(errorHeader, null));
+                    }
                     AddRuntimeMessage(GH_RuntimeMessageLevel.Error, "Stage Out: " + ex.Message);
                 }
             }
