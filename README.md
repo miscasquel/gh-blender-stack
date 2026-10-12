@@ -85,6 +85,11 @@ grasshopper/build/build-gha.sh   # build GhStack.gha (needs wine + Rhino 8)
 grasshopper/deploy/deploy.sh     # copy it into the Grasshopper Libraries
 ```
 
+`scripts/check-deployed` says whether the copy Grasshopper will load is the one
+you last built. A `.gha` is scanned only when Rhino starts, so a build is not
+live until the copy *and* the restart have both happened; `scripts/test-gha`
+prints the same warning when the deployed plugin is stale.
+
 Development path: `scripts/install-addon` symlinks the working tree into
 Blender's user scripts (no wheel; the vendored copy under `vendor/` is used).
 Both installs appear as **GH Stack** in Preferences > Add-ons.

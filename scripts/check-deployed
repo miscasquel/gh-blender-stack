@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Is the .gha Rhino will load the one we last built?
+#
+#     scripts/check-deployed
+#
+# Compares grasshopper/build/out/GhStack.gha with every copy under the wine
+# prefix's Grasshopper Libraries folder (the place Grasshopper scans on load).
+# A C# fix is invisible until the .gha is copied *and* Rhino restarts;
+# grasshopper/deploy/deploy.sh reminds you but nothing enforces it.
+#
+# Exit 0 when the deployed plugin is current, or when there is nothing to
+# compare (no build yet, no deployment yet). Exit 1 on a mismatch.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+PREFIX="${WINEPREFIX:-$HOME/.local/share/wineprefixes/rhino8}"
+
+BUILT="grasshopper/build/out/GhStack.gha"
+if [ ! -f "$BUILT" ]; then
+  echo "check-deployed: no $BUILT yet; build it with grasshopper/build/build-gha.sh"
+  exit 0
+fi
+BUILT_SHA="$(sha256sum "$BUILT" | cut -d' ' -f1)"
+
+DEPLOYED=()
+while IFS= read -r -d '' f; do DEPLOYED+=("$f"); done < <(
+  find "$PREFIX/drive_c/users" -type f -name 'GhStack.gha' \
+    -path '*/AppData/Roaming/Grasshopper/Libraries/*' -print0 2>/dev/null || true
+)
+
+if [ "${#DEPLOYED[@]}" -eq 0 ]; then
+  echo "check-deployed: no deployed GhStack.gha under $PREFIX; nothing to compare"
+  exit 0
+fi
+
+STALE=0
+for f in "${DEPLOYED[@]}"; do
+  sha="$(sha256sum "$f" | cut -d' ' -f1)"
+  if [ "$sha" = "$BUILT_SHA" ]; then
+    echo "check-deployed: current $f"
+  else
+    echo "check-deployed: STALE   $f"
+    STALE=1
+  fi
+done
+
+if [ "$STALE" -ne 0 ]; then
+  echo "check-deployed: Rhino's copy is older than the build. Copy it with"
+  echo "grasshopper/deploy/deploy.sh, then restart Rhino: Grasshopper scans"
+  echo "Libraries only on load."
+  exit 1
+fi
+echo "check-deployed: deployed plugin matches the build ($BUILT_SHA)"

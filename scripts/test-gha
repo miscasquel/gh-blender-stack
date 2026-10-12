@@ -11,6 +11,10 @@ win_path() { WINEPREFIX="$PREFIX" "$WINE" winepath -w "$1"; }
 
 grasshopper/build/build.sh
 
+# The deployed .gha is invisible to this suite, but a stale one is a live-session
+# hazard. Warn without failing: a mismatch is not a codec regression.
+scripts/check-deployed || true
+
 LOG="$(mktemp)"
 set +e
 WINEPREFIX="$PREFIX" "$WINE" \
