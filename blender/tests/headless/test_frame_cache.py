@@ -68,6 +68,22 @@ def scrub(obj, frame):
     engine._mark_object_dirty(obj)
 
 
+def pump_dirty(obj, seconds=8.0, until=None):
+    """Like pump, but keeps the object dirty. The request timeout is only
+    noticed on a pass, so a test waiting for a retry has to ask for passes (a
+    scene change would do the same in a session)."""
+    import gh_stack.blender.engine as engine
+
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        engine._mark_object_dirty(obj)
+        engine._timer()
+        if until is not None and until():
+            return True
+        time.sleep(0.01)
+    return until is None
+
+
 def start_fake(stage_key, report, *extra):
     return subprocess.Popen(
         [
@@ -371,7 +387,15 @@ class GhEditResetTests(FrameCacheTestCase):
 
 
 class SchemaResetTests(FrameCacheTestCase):
-    """A schema change is a definition change: cached frames must not replay."""
+    """A schema change is a definition change: cached frames must not replay.
+
+    The script visits both frames before the change, so the bump has two
+    old-definition frames to prune: frame 2 is re-evaluated immediately (the
+    playhead is there), and frame 1 must be re-requested on the way back. That
+    ordering matters: were frame 1 the current frame when the schema landed,
+    the engine would re-evaluate it right away and it would be cached under the
+    *new* generation by the time a test asked for it, which made the old
+    "requested again" assertion a race it only won by unlucky bookkeeping."""
 
     @classmethod
     def setUpClass(cls):
@@ -379,12 +403,20 @@ class SchemaResetTests(FrameCacheTestCase):
         cls.obj, cls.stage = cls.add_cube("Schema")
         keyframe_scale(cls.obj, cls.stage, [1.0, 2.0])
         cls.report = cls.report_path("schema")
-        cls.fake = start_fake(cls.stage.key, cls.report, "--schema-after", "1")
+        cls.fake = start_fake(cls.stage.key, cls.report, "--schema-after", "2")
         cls.await_client()
         scrub(cls.obj, 1)
-        pump(until=lambda: memory_count(cls.obj, cls.stage) >= 1 and cls.stage.params[0].label.endswith("v2"))
+        pump(until=lambda: memory_count(cls.obj, cls.stage) >= 1)
         scrub(cls.obj, 2)
-        pump(until=lambda: memory_count(cls.obj, cls.stage) == 1 and cls.stage.rid)
+        pump(until=lambda: report_of(cls.report).get("responses", 0) >= 2)
+
+        # The schema arrives after response 2: both old frames are pruned, the
+        # playhead's frame is re-evaluated, and only then is the request budget
+        # recorded — so the next request is genuinely frame 1's.
+        def bumped():
+            return cls.stage.params[0].label.endswith("v2") and cls.stage.state == "ok"
+
+        pump(until=bumped)
         cls.generation = cls.stage.generation
         cls.requests = requests_of(cls.report)
 
@@ -900,6 +932,68 @@ class SolveFailureTests(FrameCacheTestCase):
             pump(seconds=10.0, until=lambda: abs(helper_max(self.obj, self.stage.key) - 3.0) < 0.01),
             "the recovered frame never applied",
         )
+
+
+class CoalescedAnswerTests(FrameCacheTestCase):
+    """A client that coalesces a burst of requests — the plugin collapses
+    ScheduleSolution calls and answers only the newest — must not strand the
+    stage.
+
+    The class of bug this guards (P0-4): an early gate opening sent a second
+    request while the first was outstanding; the client answered the newest and
+    dropped the first; the engine waited on the dropped rid and the stage looked
+    stuck until a Push. Here the burst is forced deterministically: the timeout
+    retry carries a changed parameter, so the dropped request and the answered
+    one have different rids, and the engine's apply rule has to take the newest.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        prefs = bpy.context.preferences.addons["gh_stack"].preferences
+        cls.timeout_before = prefs.timeout
+        prefs.timeout = 1.0
+        cls.obj, cls.stage = cls.add_cube("Coalesce")
+        cls.report = cls.report_path("coalesce")
+        cls.fake = start_fake(cls.stage.key, cls.report, "--coalesce", "--delay-ms", "1800")
+        cls.await_client()
+
+    @classmethod
+    def tearDownClass(cls):
+        bpy.context.preferences.addons["gh_stack"].preferences.timeout = cls.timeout_before
+        stop_fake(getattr(cls, "fake", None))
+        super().tearDownClass()
+
+    def test_01_a_dropped_request_is_recovered_by_the_retry(self):
+        timeouts_before = self.engine.stats["timeouts"]
+        self.engine._mark_object_dirty(self.obj)
+        self.assertTrue(
+            pump(seconds=5.0, until=lambda: requests_of(self.report) >= 1),
+            "the first request never reached the client",
+        )
+
+        # The user moves the slider while the slow client is solving. With one
+        # request in flight nothing goes out now; at the timeout the retry
+        # carries the new value and a new rid, and the client coalesces the
+        # burst — the first request is never answered, only the retry.
+        name = "gh/%s/%s" % (self.stage.key, SCALE)
+        self.obj[name] = 2.0
+        self.assertTrue(
+            pump_dirty(
+                self.obj,
+                seconds=12.0,
+                until=lambda: abs(helper_max(self.obj, self.stage.key) - 2.0) < 0.01,
+            ),
+            "the recovered answer never applied (report=%s)" % report_of(self.report),
+        )
+        self.assertEqual(self.stage.state, "ok", self.stage.error)
+        report = report_of(self.report)
+        self.assertGreaterEqual(
+            report.get("dropped", 0),
+            1,
+            "no request was coalesced, so the test proved nothing (report=%s)" % report,
+        )
+        self.assertGreaterEqual(self.engine.stats["timeouts"], timeouts_before + 1)
 
 
 class TimeDrivenPrefixTests(FrameCacheTestCase):

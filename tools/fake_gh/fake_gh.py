@@ -47,6 +47,7 @@ class StageState(object):
         self.edits = 0  # same-rid responses with a changed output (GH-side edit)
         self.schema_updates = 0  # changed schemas re-sent
         self.refusals = 0  # refs answered with unknown_ref instead of a result
+        self.dropped = 0  # requests superseded by a newer one in a solve window
 
 
 def _summarise(state):
@@ -104,6 +105,10 @@ async def main():
     ap.add_argument("--fail-after", type=int, default=0,
                     help="answer response N with a gh_solve_failed error instead of "
                          "geometry (once; later requests succeed)")
+    ap.add_argument("--coalesce", action="store_true",
+                    help="model the plugin's coalesced ScheduleSolution calls: while a "
+                         "solve window (--delay-ms) is open, later requests supersede "
+                         "the pending one and only the newest is answered")
     args = ap.parse_args()
 
     state = StageState()
@@ -143,6 +148,7 @@ def _write_report(args, state):
                 "edits": state.edits,
                 "schema_updates": state.schema_updates,
                 "refusals": state.refusals,
+                "dropped": state.dropped,
                 "sections": sorted(state.sections.keys()) if state.sections else [],
                 "received_verts": state.received_verts,
                 "received_faces": state.received_faces,
@@ -200,6 +206,22 @@ def _schema_message(stage, scale_param, suffix=""):
     }
 
 
+def _accept(state, header, sections):
+    """Apply one request's bookkeeping (counts, stored geometry); return its mode.
+    Every received request is accepted, even when its answer is later superseded:
+    the plugin updates its slot on arrival too."""
+    mode = (header.get("geom") or {}).get("mode")
+    if mode == "full":
+        state.full += 1
+        state.sections = {
+            name: np.asarray(values, dtype=_np_dtype(name)) for name, values in sections.items()
+        }
+        _summarise(state)
+    else:
+        state.ref += 1
+    return mode
+
+
 async def session(ws, args, state):
     print("[fake-gh] connected to blender", flush=True)
     hello = {
@@ -218,15 +240,31 @@ async def session(ws, args, state):
             continue
         if header.get("stage") != args.stage:
             continue
-        mode = (header.get("geom") or {}).get("mode")
-        if mode == "full":
-            state.full += 1
-            state.sections = {
-                name: np.asarray(values, dtype=_np_dtype(name)) for name, values in sections.items()
-            }
-            _summarise(state)
-        else:
-            state.ref += 1
+        mode = _accept(state, header, sections)
+
+        if args.coalesce and args.delay_ms:
+            # The plugin collapses ScheduleSolution calls: a request that
+            # arrives while a solve is pending replaces it and only the newest
+            # is answered — the earlier ones never get a response. Model the
+            # solve as a window (--delay-ms) in which later requests supersede
+            # the pending one.
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + args.delay_ms / 1000.0
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    break
+                try:
+                    extra = await asyncio.wait_for(ws.recv(), remaining)
+                except asyncio.TimeoutError:
+                    break
+                extra_header, extra_sections = codec.decode_frame(extra)
+                if extra_header.get("type") != "request" or extra_header.get("stage") != args.stage:
+                    continue
+                state.dropped += 1
+                mode = _accept(state, extra_header, extra_sections)
+                header = extra_header
+
         if args.forget_after and mode != "full" and state.responses >= args.forget_after:
             # A restarted client, a replaced document: the geometry is gone, so a
             # later ref cannot be served. Only refs are affected — a full carries
@@ -263,7 +301,7 @@ async def session(ws, args, state):
             continue
 
         scale = float((header.get("params") or {}).get(args.scale_param, 1.0))
-        if args.delay_ms:
+        if args.delay_ms and not args.coalesce:
             await asyncio.sleep(args.delay_ms / 1000.0)
         state.responses += 1
         if args.fail_after and state.responses == args.fail_after:
