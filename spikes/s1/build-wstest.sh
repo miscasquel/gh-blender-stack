@@ -27,7 +27,7 @@ WINEPREFIX="$PREFIX" "$WINE" "$CSC" \
   /nologo /target:exe \
   /out:"$(win_path "$OUT")" \
   /r:"$(win_path "$RS_DLL")" /r:"$(win_path "$SCW_DLL")" \
-  "$(win_path "$HERE/miniws.cs")" "$(win_path "$HERE/wsclienttest.cs")" \
+  "$(win_path "$HERE/miniws.cs")" "$(win_path "$HERE/../../grasshopper/src/gh/MiniWsClient.cs")" "$(win_path "$HERE/wsclienttest.cs")" \
   2>&1 | grep -vE 'fixme:|MESA-EGL|pci id|^$' || true
 
 [ -f "$OUT" ] || { echo "build failed: $OUT not produced" >&2; exit 1; }

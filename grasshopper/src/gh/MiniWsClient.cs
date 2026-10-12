@@ -70,9 +70,15 @@ namespace GhStack
         /// <summary>Sends one binary (opcode 2) WebSocket message.</summary>
         public void SendBinary(byte[] payload)
         {
+            SendFrame(0x2, payload);
+        }
+
+        /// <summary>One masked frame, client-to-server.</summary>
+        private void SendFrame(int opcode, byte[] payload)
+        {
             var ms = new MemoryStream();
             int len = payload.Length;
-            ms.WriteByte(0x82); // FIN + binary
+            ms.WriteByte((byte)(0x80 | (opcode & 0x0F))); // FIN + opcode
             if (len < 126)
             {
                 ms.WriteByte((byte)(0x80 | len));
@@ -101,46 +107,88 @@ namespace GhStack
             _stream.Flush();
         }
 
-        /// <summary>Returns one binary message, or null on close/error.</summary>
+        /// <summary>Returns one binary message, or null on close/error.
+        ///
+        /// Control frames (ping, pong, close) and fragmentation are handled here:
+        /// Blender pings every 2 s (protocol §2), and the ping payload must never
+        /// reach the frame decoder — a ping body decoded as a protocol frame is
+        /// exactly the "header length over the cap" failure. Pings are answered
+        /// with pongs so the server's keepalive stays satisfied.</summary>
         public byte[] ReceiveBinary()
         {
-            int b0 = _stream.ReadByte();
-            if (b0 < 0) return null;
-            int b1 = _stream.ReadByte();
-            if (b1 < 0) return null;
-            int opcode = b0 & 0x0F;
-            bool masked = (b1 & 0x80) != 0;
-            long len = b1 & 0x7F;
-            if (len == 126)
+            var message = new MemoryStream();
+            bool fragmented = false;
+            while (true)
             {
-                len = (_stream.ReadByte() << 8) | _stream.ReadByte();
-            }
-            else if (len == 127)
-            {
-                // 64-bit length, big-endian. Python's websockets uses this for any
-                // payload over 64 KiB, which the 10k+ geometry frames exceed.
-                len = 0;
-                for (int i = 0; i < 8; i++)
+                int b0 = _stream.ReadByte();
+                if (b0 < 0) return null;
+                int b1 = _stream.ReadByte();
+                if (b1 < 0) return null;
+                bool fin = (b0 & 0x80) != 0;
+                int opcode = b0 & 0x0F;
+                bool masked = (b1 & 0x80) != 0;
+                long len = b1 & 0x7F;
+                if (len == 126)
                 {
-                    int b = _stream.ReadByte();
-                    if (b < 0) return null;
-                    len = (len << 8) | (byte)b;
+                    int hi = _stream.ReadByte(), lo = _stream.ReadByte();
+                    if (hi < 0 || lo < 0) return null;
+                    len = ((long)hi << 8) | (byte)lo;
                 }
+                else if (len == 127)
+                {
+                    // 64-bit length, big-endian. Python's websockets uses this for
+                    // any payload over 64 KiB, which the 10k+ geometry frames exceed.
+                    len = 0;
+                    for (int i = 0; i < 8; i++)
+                    {
+                        int b = _stream.ReadByte();
+                        if (b < 0) return null;
+                        len = (len << 8) | (byte)b;
+                    }
+                }
+                byte[] mask = new byte[4];
+                if (masked)
+                    for (int i = 0; i < 4; i++) mask[i] = (byte)_stream.ReadByte();
+                byte[] body = ReadExactly(len);
+                if (body == null) return null;
+                if (masked)
+                    for (int i = 0; i < len; i++) body[i] ^= mask[i % 4];
+
+                if (opcode == 0x8) return null; // close
+                if (opcode == 0x9) // ping: answer and keep reading
+                {
+                    SendFrame(0xA, body);
+                    continue;
+                }
+                if (opcode == 0xA) continue; // pong
+
+                if (opcode == 0x0) // continuation of a fragmented message
+                {
+                    if (!fragmented) continue; // stray continuation
+                    message.Write(body, 0, body.Length);
+                    if (fin) return message.ToArray();
+                    continue;
+                }
+
+                // 0x1 text, 0x2 binary: the protocol is binary-only, but a text
+                // frame is still a complete message; the decoder rejects it.
+                if (fin) return body;
+                fragmented = true;
+                message = new MemoryStream();
+                message.Write(body, 0, body.Length);
             }
-            byte[] mask = new byte[4];
-            if (masked)
-                for (int i = 0; i < 4; i++) mask[i] = (byte)_stream.ReadByte();
+        }
+
+        private byte[] ReadExactly(long len)
+        {
             var body = new byte[len];
             int read = 0;
             while (read < len)
             {
                 int n = _stream.Read(body, read, (int)(len - read));
-                if (n == 0) return null;
+                if (n <= 0) return null;
                 read += n;
             }
-            if (masked)
-                for (int i = 0; i < len; i++) body[i] ^= mask[i % 4];
-            if (opcode == 0x8) return null; // close
             return body;
         }
 
@@ -161,30 +209,6 @@ namespace GhStack
         {
             try { if (_stream != null) _stream.Dispose(); } catch { }
             try { if (_tcp != null) _tcp.Close(); } catch { }
-        }
-    }
-
-    // ------------------------------------------------ spike wire frame helpers
-
-    /// <summary>The spike frame: [u32 little-endian JSON length][UTF-8 JSON].</summary>
-    public static class Wire
-    {
-        public static byte[] Encode(string json)
-        {
-            byte[] body = Encoding.UTF8.GetBytes(json);
-            byte[] head = BitConverter.GetBytes(body.Length);
-            var ms = new MemoryStream(4 + body.Length);
-            ms.Write(head, 0, 4);
-            ms.Write(body, 0, body.Length);
-            return ms.ToArray();
-        }
-
-        public static string DecodeJson(byte[] frame)
-        {
-            if (frame.Length < 4) throw new FormatException("frame too short");
-            int len = BitConverter.ToInt32(frame, 0);
-            if (len <= 0 || 4 + len > frame.Length) throw new FormatException("bad frame length");
-            return Encoding.UTF8.GetString(frame, 4, len);
         }
     }
 }

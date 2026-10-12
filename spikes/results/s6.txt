@@ -3,55 +3,56 @@
 2026-10-12, live in Rhino 8 under wine via the spike `.gha` (`check=s6`).
 Driver: `spikes/s6/driver.py`; checks: `spikes/s6/S6Checks.cs`.
 
-**Result: PASS.** Every geometry kind round-trips through the wire sections
-inside Rhino, with the exact/approximate classification behaving as the plan
-says. The raw driver transcript follows the tables.
+**Result: PASS, and then a deeper fix.** The first live run (transcript at the
+bottom) passed every check but exposed two real-world failures in the GUI:
 
-## Curves
+1. **Circles and other curve goos never arrived.** `Stage Out` matched only
+   `GH_Curve`; the Circle component emits a `GH_Circle`, which has no
+   `CastTo<Curve>` and fails `GH_Convert.ToCurve(Primary)`. Dispatch now
+   unwraps the struct-backed goos (`GH_Circle`, `GH_Arc`, `GH_Line`,
+   `GH_Rectangle`) and falls back to the goo's own cast.
+2. **Every rational curve arrived distorted (arcs looked like parabolas).**
+   Rhino stores *homogeneous* control points; the wire (and Blender) carry
+   *Euclidean* coordinates plus a weight. Both directions mixed the two.
 
-| Case | Mode | Approximated | Deviation from the original |
-|---|---|---|---|
-| Clamped uniform degree-3 | 1 (endpoint) | no | 3.6e-08 |
-| Clamped uniform with a weight of 2.5 | 1 | no | 3.6e-08 |
-| Unclamped uniform (knots 0..n+order-3) | 0 (normal) | no | 1.6e-08 |
-| Interior knot moved (non-uniform) | 2 (Bezier net) | yes | 1.6e-07 |
-| Circle, radius 5 (rational) | 2 | yes | **0.732233** |
-| Polyline | 0 (poly) | no | 0.0 |
+The conversion was then rebuilt around a construction that is exact by
+definition, instead of inspecting knot patterns:
 
-Notes:
-- The warning now carries the measured deviation: "1 curve(s) approximated as
-  Bezier spans; max deviation 0.732". The first run measured before the weights
-  were dropped and reported 0; the measurement is now taken on the curve that is
-  actually sent (the D3 rule).
-- Blender's unclamped knot convention was checked against `rhino3dm` and
-  Blender's own evaluation: `knots[i] = i` in Rhino reproduces Blender's uniform
-  spline exactly (both curves start at control point 1 and end at n-2).
-- The circle number matches S4's 0.73 measurement exactly.
+- `MakePiecewiseBezier` (lossless) makes every span a single rational Bezier.
+- Blender holds a single span exactly as a NURBS spline whose order equals its
+  control-point count, for any order 2..6, weights included.
+- So **each span travels as one wire curve**, and circles, ellipses, and arcs of
+  any angle are exact — no fitting, no warnings. Only curves the decomposition
+  cannot carry (degree above 5, periodic) are fitted with cubic Beziers inside
+  the 0.1 mm budget and counted as approximated (D3).
 
-## Points
+## Local validation with the real kernel (rhino3dm + Blender)
 
-3 points, deviation 0.0.
-
-## SubD
-
-| Check | Result |
+| Direction | Max radius error, circle radius 5 |
 |---|---|
-| Cage -> sections -> SubD -> cage | 16 cage points, all matched, max distance 0.0 |
-| Tagged crease (pair 5-6) survives the round trip | `Crease` |
-| Fractional crease values rounded | warning: 13 fractional value(s), 1 edge changed |
-| Limitation warning | "creases transferred as tags; semi-sharp and vertex creases are not available from RhinoCommon" |
+| Rhino piecewise spans -> wire -> Rhino (`Point4d(x*w, y*w, z*w, w)`) | 1.8e-15 |
+| Rhino piecewise spans -> wire -> Blender (`sections_to_curve`) | 4.8e-07 (f32 quantisation) |
 
-Note: `Mesh.CreateFromSubDControlNet` returns 19 control points for the open
-cage's 16 (seam duplicates); every one matches a cage point, so the cage is
-intact. Vertex order is not guaranteed across SubD round trips, which is why the
-crease transfer maps by vertex pair, not by index.
+Blender layer B covers the same wire form headlessly
+(`test_rational_quadratic_spans_make_a_circle`, 42 tests).
 
-## Brep
+## Live confirmation
 
-A sphere Brep becomes `mesh.verts/face_counts/face_indices` (559 vertices) with
-the warning "1 surface(s)/Brep(s) converted to mesh; Blender has no B-rep".
+The operator's graph (Circle and Ellipse components into Stage Out, Blender
+session on the other side): circles, ellipses, and arcs of any angle arrive
+correctly after the fix — "works like a charm". The earlier parabola and the
+dropped-circle symptoms are gone.
 
-## Raw driver transcript
+## What the first live run already proved (still valid)
+
+- Polyline, points, SubD cage + crease tags, fractional rounding warning, the
+  semi-sharp limitation warning, Brep meshing with warning, and the mixed
+  orchestration all pass (`spikes/results/s6.txt` transcript below).
+- `Mesh.CreateFromSubDControlNet` returns seam-duplicated control points (19 for
+  a 16-point open cage); vertex order is not stable across SubD round trips, so
+  creases transfer by vertex pair.
+
+## Raw transcript (first run, before the rational-coordinate fix)
 
 ```
 listening on ws://127.0.0.1:9131/s1 (the spike's endpoint)
@@ -118,13 +119,5 @@ reply in 27.2 ms, status=ok
 RESULT: PASS
 ```
 
-## What this changes for the plugin
-
-- The curve classification is settled: exact for clamped-uniform and uniform
-  NURBS (orders 2..6, weights kept), Bezier nets for everything else, and the
-  D3 warning is emitted with the measured deviation only when weights are lost.
-- SubD creases transfer by vertex pair and survive the cage round trip; the
-  fractional-value warning reports the affected edge count.
-- The mixed-output orchestration (`SectionsFromGeometry`) is exercised live by
-  Stage Out; its combining loops are covered by the individual paths above and
-  by the layer B mixed-response test (`blender/tests/headless/test_geometry_kinds.py`).
+Note: `circle.deviation 0.732` above is the old drop-the-weights path, replaced
+by the exact span decomposition; the non-uniform case is exact now too.

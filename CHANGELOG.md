@@ -11,20 +11,33 @@ Notable changes to this project, following
 - Curves, points, and SubD flow through a stage in both directions:
   - `Stage In` outputs `Curves`, `Points`, and `SubD` alongside the mesh.
   - `Stage Out` takes one generic `Geometry` input (mesh, curve, point, SubD,
-    or Brep) and converts it to protocol sections.
+    or Brep) and converts it to protocol sections. All curve goos are accepted
+    (`GH_Circle`, `GH_Arc`, `GH_Line`, `GH_Rectangle`, `GH_Curve`, custom goos).
   - SubD cages carry edge-crease tags; fractional values are rounded to the
     nearest tag with a warning, and the semi-sharp/vertex-crease limitation is
     reported on every SubD stage (D2).
-  - Curves round-trip exactly where Blender can express them; otherwise they
-    become degree-3 Bezier spans, exact except when weights are dropped, with
-    the measured deviation in the warning (D3).
+  - Curves are exact by construction: `MakePiecewiseBezier` splits them into
+    single rational Bezier spans (weights kept), each of which Blender holds
+    exactly as a NURBS spline. Circles, ellipses, and arcs of any angle come
+    back exactly; only curves the decomposition cannot carry (degree above 5,
+    periodic) are fitted and warned (D3).
   - Breps and surfaces are meshed on the way out, warned once per stage.
   - Blender mesh stacks can be flagged as SubD cages (`Base is a SubD cage`);
     Blender surface objects are meshed on the way in.
 - Response warnings are shown in the stage panel; the stage record keeps them
   across ticks.
 - Layer B coverage for curve, point, SubD, and mixed-geometry responses
-  (39 headless tests).
+  (42 headless tests).
+
+### Fixed
+
+- WebSocket control frames: the client answers pings and skips pongs, so
+  Blender's 2 s keepalive no longer arrives as a bogus protocol frame
+  ("header length over the cap") and the connection no longer drops.
+- Rational curves: Rhino stores homogeneous control points while the wire (and
+  Blender) carry Euclidean coordinates plus a weight. Mixing the two distorted
+  every rational curve — arcs and ellipses arrived as parabolas. Both
+  directions convert explicitly now.
 
 ## [0.1.0] — 2026-10-12
 

@@ -194,10 +194,18 @@ namespace GhStack.Core
 
         // ------------------------------------------------------- curves -> wire
 
-        /// <summary>Encode curves as crv.* sections. Exact wherever Blender can
-        /// express the curve; otherwise a degree-3 Bezier net with a warning.
-        /// approximated counts every approximated curve; warnings carry the
-        /// deviation when weights had to be dropped (D3).</summary>
+        /// <summary>Encode curves as crv.* sections.
+        ///
+        /// The rule is exact by construction, not by inspecting knots:
+        /// MakePiecewiseBezier (lossless knot insertion) makes every span a single
+        /// rational Bezier of the curve's degree; Blender holds a single span
+        /// exactly as a NURBS spline whose order equals its control-point count, for
+        /// any order 2..6, weights included. So each span travels as one wire curve
+        /// and circles, ellipses, arcs, and every NURBS Blender could not otherwise
+        /// express come back exactly. Only curves that defeat that decomposition
+        /// (degree above 5, periodic curves, degenerate weights) are fitted with
+        /// cubic Beziers inside the deviation budget, and only those are counted as
+        /// approximated (D3).</summary>
         public static List<Section> SectionsFromCurves(
             IList<Curve> curves, double scale, List<string> warnings, out int approximated)
         {
@@ -233,54 +241,51 @@ namespace GhStack.Core
                     continue;
                 }
 
-                if (CanBeBlenderNurbs(nurbs))
+                NurbsCurve piece = nurbs.DuplicateCurve() as NurbsCurve;
+                bool decomposed = piece != null && piece.MakePiecewiseBezier(true);
+                int degree = decomposed ? piece.Order - 1 : 0;
+                int spans = decomposed ? piece.SpanCount : 0;
+                if (decomposed && degree >= 1 && degree <= 5
+                    && piece.Points.Count == spans * degree + 1 && WeightsPositive(piece))
                 {
-                    AppendNurbsSection(nurbs, false, scale, pts, counts, types, orders, modes, cyclic);
+                    for (int s = 0; s < spans; s++)
+                        AppendNurbsSpan(piece, s * degree, degree + 1, scale,
+                            pts, counts, types, orders, modes, cyclic);
                     continue;
                 }
 
-                NurbsCurve piece = nurbs.DuplicateCurve() as NurbsCurve;
-                bool converted = piece != null && piece.MakePiecewiseBezier(true);
-                if (!converted)
+                // Fallback for what the span decomposition cannot carry: fit
+                // non-rational cubic Beziers within the deviation budget. This is
+                // the approximation D3 warns about.
+                BezierCurve[] beziers = BezierCurve.CreateCubicBeziers(
+                    nurbs, FitTolerance(nurbs, scale), KinkTolerance);
+                List<Point3d> net = CubicBezierNet(beziers);
+                if (net == null || net.Count < 4)
                 {
                     AppendSampled(curve, scale, pts, counts, types, orders, modes, cyclic);
                     sampled++;
                     continue;
                 }
-
-                if (piece.IsRational)
+                NurbsCurve fitted = BuildBezier(net);
+                if (fitted != null)
                 {
-                    // Dropping the weights is the lossy step (D3): measure the
-                    // deviation between the original and what will actually be
-                    // sent, then flatten the weights.
-                    for (int i = 0; i < piece.Points.Count; i++) piece.Points.SetWeight(i, 1.0);
-                    double deviation = SpanDeviation(nurbs, piece, 24);
+                    double deviation = SpanDeviation(nurbs, fitted, 24);
                     if (deviation > maxDeviation) maxDeviation = deviation;
                 }
-
-                if (piece.Order > 4)
-                {
-                    AppendSampled(curve, scale, pts, counts, types, orders, modes, cyclic);
-                    sampled++;
-                    continue;
-                }
-                if (piece.Order < 4) piece.IncreaseDegree(3);
-                if (piece.Order != 4 || piece.Points.Count < 4 || (piece.Points.Count - 1) % 3 != 0)
-                {
-                    AppendSampled(curve, scale, pts, counts, types, orders, modes, cyclic);
-                    sampled++;
-                    continue;
-                }
-                AppendNurbsSection(piece, true, scale, pts, counts, types, orders, modes, cyclic);
+                AppendCurveSection(net, null, 2, 4, 2, false, scale,
+                    pts, counts, types, orders, modes, cyclic);
                 approximated++;
             }
 
             if (approximated > 0)
             {
-                string message = approximated + " curve(s) approximated as Bezier spans";
-                if (maxDeviation > 0)
-                    message += "; max deviation " + maxDeviation.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
-                warnings.Add(message);
+                warnings.Add(approximated + " curve(s) approximated as cubic Bezier spans");
+            }
+            if (maxDeviation > DeviationBudgetMeters * Math.Abs(scale))
+            {
+                warnings.Add("curve approximation deviation "
+                    + (maxDeviation / Math.Abs(scale) * 1000.0).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)
+                    + " mm exceeds the 0.1 mm budget");
             }
             if (sampled > 0)
                 warnings.Add(sampled + " curve(s) sampled to polylines; no exact representation was available");
@@ -315,30 +320,39 @@ namespace GhStack.Core
             cyc.Add((byte)(cyclic ? 1 : 0));
         }
 
-        private static void AppendNurbsSection(
-            NurbsCurve curve, bool bezier, double scale, List<float> pts, List<uint> counts,
+        /// <summary>One Bezier span as its own wire curve: a single-span NURBS
+        /// whose order is its control-point count, weights included, so Blender
+        /// reproduces it exactly.
+        ///
+        /// The wire carries Euclidean coordinates plus a weight (Blender's native
+        /// form); Rhino stores homogeneous coordinates (Euclidean * weight), so the
+        /// Euclidean location comes from ControlPoint.Location. Mixing the two made
+        /// every rational curve arrive as a parabola.</summary>
+        private static void AppendNurbsSpan(
+            NurbsCurve piece, int start, int count, double scale, List<float> pts, List<uint> counts,
             List<byte> types, List<byte> orders, List<byte> modes, List<byte> cyclic)
         {
-            for (int i = 0; i < curve.Points.Count; i++)
+            for (int i = start; i < start + count; i++)
             {
-                ControlPoint cp = curve.Points[i];
-                pts.Add((float)(cp.X / scale));
-                pts.Add((float)(cp.Y / scale));
-                pts.Add((float)(cp.Z / scale));
+                ControlPoint cp = piece.Points[i];
+                Point3d location = cp.Location;
+                pts.Add((float)(location.X / scale));
+                pts.Add((float)(location.Y / scale));
+                pts.Add((float)(location.Z / scale));
                 pts.Add((float)cp.Weight);
             }
-            counts.Add((uint)curve.Points.Count);
+            counts.Add((uint)count);
             types.Add(2);
-            orders.Add((byte)curve.Order);
-            if (bezier)
-            {
-                modes.Add(2);
-            }
-            else
-            {
-                modes.Add((byte)(curve.Knots.IsClampedStart && curve.Knots.IsClampedEnd ? 1 : 0));
-            }
+            orders.Add((byte)count);
+            modes.Add(1);
             cyclic.Add(0);
+        }
+
+        private static bool WeightsPositive(NurbsCurve curve)
+        {
+            for (int i = 0; i < curve.Points.Count; i++)
+                if (!(curve.Points[i].Weight > 0.0)) return false;
+            return true;
         }
 
         private static void AppendSampled(
@@ -360,37 +374,45 @@ namespace GhStack.Core
                 pts, counts, types, orders, modes, cyclic);
         }
 
-        /// <summary>Whether Blender can hold this curve exactly: a non-periodic
-        /// NURBS of order 2..6 with clamped-uniform or uniform knots.</summary>
-        private static bool CanBeBlenderNurbs(NurbsCurve curve)
+        /// <summary>0.1 mm on the wire (the plan's default budget), in meters.</summary>
+        private const double DeviationBudgetMeters = 1e-4;
+
+        /// <summary>Kinks sharper than 1 degree survive as kinks in the fit.</summary>
+        private const double KinkTolerance = 0.017453292519943295;
+
+        /// <summary>Fit tolerance in document units: the budget, but never finer
+        /// than the curve itself can justify.</summary>
+        private static double FitTolerance(Curve curve, double scale)
         {
-            if (curve.IsPeriodic) return false;
-            int order = curve.Order;
-            if (order < 2 || order > 6) return false;
-            int count = curve.Knots.Count;
-            if (count < order) return false;
-
-            if (curve.Knots.IsClampedStart && curve.Knots.IsClampedEnd)
-            {
-                // Interior single knots, evenly spaced.
-                int first = order - 1;
-                int last = count - order;
-                if (last <= first) return true;
-                double step = curve.Knots[first + 1] - curve.Knots[first];
-                for (int i = first + 2; i <= last; i++)
-                    if (!Close(curve.Knots[i] - curve.Knots[i - 1], step)) return false;
-                return true;
-            }
-
-            double uniform = curve.Knots[1] - curve.Knots[0];
-            for (int i = 2; i < count; i++)
-                if (!Close(curve.Knots[i] - curve.Knots[i - 1], uniform)) return false;
-            return true;
+            double tolerance = DeviationBudgetMeters * Math.Abs(scale);
+            BoundingBox box = curve.GetBoundingBox(true);
+            double diagonal = box.Diagonal.Length;
+            if (diagonal > 0 && tolerance > diagonal * 1e-3) tolerance = diagonal * 1e-3;
+            return Math.Max(tolerance, RhinoMath.SqrtEpsilon);
         }
 
-        private static bool Close(double a, double b)
+        /// <summary>The Blender Bezier net (co0, hr0, hl1, co1, ...) of a chain of
+        /// cubic Beziers, sharing the endpoints between consecutive segments.</summary>
+        private static List<Point3d> CubicBezierNet(BezierCurve[] beziers)
         {
-            return Math.Abs(a - b) <= 1e-9 * Math.Max(1.0, Math.Abs(a) + Math.Abs(b));
+            if (beziers == null || beziers.Length == 0) return null;
+            var net = new List<Point3d>();
+            foreach (BezierCurve bezier in beziers)
+            {
+                if (bezier == null || bezier.ControlVertexCount < 4) continue;
+                Point3d v0 = bezier.GetControlVertex3d(0);
+                if (net.Count > 0 && net[net.Count - 1].DistanceTo(v0) < 1e-9)
+                {
+                    net.Add(bezier.GetControlVertex3d(1));
+                    net.Add(bezier.GetControlVertex3d(2));
+                    net.Add(bezier.GetControlVertex3d(3));
+                }
+                else
+                {
+                    for (int i = 0; i < 4; i++) net.Add(bezier.GetControlVertex3d(i));
+                }
+            }
+            return net;
         }
 
         /// <summary>Largest distance from samples on the approximation back to the
@@ -522,7 +544,12 @@ namespace GhStack.Core
 
             var curve = new NurbsCurve(3, rational, ord, n);
             for (int i = 0; i < n; i++)
-                curve.Points.SetPoint(i, new Point4d(ps[i].X, ps[i].Y, ps[i].Z, rational ? ws[i] : 1.0));
+            {
+                // The wire is Euclidean + weight; Rhino's Point4d takes
+                // homogeneous coordinates (Euclidean * weight).
+                double w = rational ? ws[i] : 1.0;
+                curve.Points.SetPoint(i, new Point4d(ps[i].X * w, ps[i].Y * w, ps[i].Z * w, w));
+            }
 
             int count = curve.Knots.Count;
             if (endpoint)

@@ -37,11 +37,12 @@ Blender                                     Rhino / Grasshopper (wine)
   with **Base is a SubD cage** in the panel and Blender sends `subd.*`; the GH
   side builds a SubD from the cage and applies the tags. Semi-sharp and vertex
   creases are not available from RhinoCommon, and the stage says so.
-- **Curves** round-trip exactly when Blender can express them (poly, clamped
-  uniform or uniform NURBS, any order 2–6, weights kept; Blender Bezier splines
-  travel as degree-3 Bezier nets). Anything else becomes Bezier spans — exact
-  unless the curve is rational, where dropping the weights is measured and
-  warned (D3).
+- **Curves** are exact by construction: `MakePiecewiseBezier` splits them into
+  single rational Bezier spans, each of which Blender holds exactly as a NURBS
+  spline with its weights. Poly, NURBS of any order 2–6, Blender Bezier splines,
+  circles, ellipses, and arcs of any angle all round-trip exactly. Only curves
+  the split cannot carry (degree above 5, periodic) are fitted with cubic
+  Beziers and warned with the measured deviation (D3).
 
 ## Setup
 

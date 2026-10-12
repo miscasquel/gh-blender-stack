@@ -10,6 +10,7 @@ per-kind helpers, and a later response without curves or points clears them.
 """
 
 import json
+import math
 import os
 import subprocess
 import sys
@@ -56,6 +57,45 @@ def new_pointcloud_object(name="points", positions=(), radii=None):
 
 def by_name(sections):
     return {name: values for name, dtype, values in sections}
+
+
+def circle_bezier_net(radius=1.0, segments=8):
+    """A circle as a closed cubic Bezier net (co0, hr0, hl1, co1, ...)."""
+    k = (4.0 / 3.0) * math.tan(math.pi / (2 * segments)) * radius
+    net = []
+
+    def point(a):
+        return (radius * math.cos(a), radius * math.sin(a), 0.0)
+
+    def tangent(a):
+        return (-math.sin(a), math.cos(a), 0.0)
+
+    a0 = 0.0
+    net.append(point(a0))
+    for i in range(segments):
+        a1 = 2.0 * math.pi * (i + 1) / segments
+        p0, t0 = point(a0), tangent(a0)
+        p1, t1 = point(a1), tangent(a1)
+        net.append((p0[0] + k * t0[0], p0[1] + k * t0[1], 0.0))
+        net.append((p1[0] - k * t1[0], p1[1] - k * t1[1], 0.0))
+        net.append(p1)
+        a0 = a1
+    return net
+
+
+def curve_samples(curve, resolution=12):
+    """The polyline mesh of a curve datablock, as N x 3 positions."""
+    curve.resolution_u = resolution
+    obj = bpy.data.objects.new("eval-curve", curve)
+    bpy.context.scene.collection.objects.link(obj)
+    try:
+        dg = bpy.context.evaluated_depsgraph_get()
+        mesh = bpy.data.meshes.new_from_object(obj.evaluated_get(dg))
+        co = np.empty(len(mesh.vertices) * 3, dtype=np.float32)
+        mesh.vertices.foreach_get("co", co)
+        return co.reshape(-1, 3)
+    finally:
+        bpy.data.objects.remove(obj, do_unlink=True)
 
 
 class CurveRoundTripTests(unittest.TestCase):
@@ -151,6 +191,57 @@ class CurveRoundTripTests(unittest.TestCase):
         np.testing.assert_allclose(back.bezier_points[1].handle_left[:], hl[1], rtol=0, atol=1e-6)
         np.testing.assert_allclose(back.bezier_points[1].handle_right[:], hr[1], rtol=0, atol=1e-6)
         np.testing.assert_allclose(back.bezier_points[2].handle_left[:], hl[2], rtol=0, atol=1e-6)
+
+    def test_rational_quadratic_spans_make_a_circle(self):
+        """The wire form the GH side now sends for a circle: four rational
+        quadratic spans, one wire curve each, Euclidean points plus weights.
+        Blender must reconstruct an exact circle."""
+        k = math.sqrt(0.5)
+        # Euclidean control points plus weight: the tangent-intersection corners
+        # carry the weight, exactly what the wire carries.
+        unique = [
+            (5.0, 0.0, 0.0, 1.0), (5.0, 5.0, 0.0, k), (0.0, 5.0, 0.0, 1.0),
+            (-5.0, 5.0, 0.0, k), (-5.0, 0.0, 0.0, 1.0), (-5.0, -5.0, 0.0, k),
+            (0.0, -5.0, 0.0, 1.0), (5.0, -5.0, 0.0, k), (5.0, 0.0, 0.0, 1.0),
+        ]
+        # Each span is sent with its own control points, so shared endpoints
+        # appear in two spans: span s is unique[2s .. 2s+2].
+        cps = unique[0:3] + unique[2:5] + unique[4:7] + unique[6:9]
+        sections = [
+            ("crv.points", "f32", np.asarray(cps, dtype=np.float32).reshape(-1, 4)),
+            ("crv.counts", "u32", np.array([3, 3, 3, 3], dtype=np.uint32)),
+            ("crv.types", "u8", np.array([2, 2, 2, 2], dtype=np.uint8)),
+            ("crv.orders", "u8", np.array([3, 3, 3, 3], dtype=np.uint8)),
+            ("crv.knots_mode", "u8", np.array([1, 1, 1, 1], dtype=np.uint8)),
+            ("crv.cyclic", "u8", np.array([0, 0, 0, 0], dtype=np.uint8)),
+        ]
+        target = bpy.data.curves.new("spans-dst", "CURVE")
+        geometry_io.sections_to_curve(target, sections)
+        self.assertEqual(len(target.splines), 4)
+        samples = curve_samples(target)
+        radii = np.linalg.norm(samples[:, :2], axis=1)
+        self.assertLess(float(np.max(np.abs(radii - 5.0))), 1e-3)
+
+    def test_closed_cubic_bezier_net_reconstructs_a_circle(self):
+        """The net the GH side now sends for a fitted circle: 8 cubic segments,
+        closed. The reconstructed Bezier spline must sample a circle."""
+        net = circle_bezier_net(1.0, 8)
+        points = np.hstack([np.asarray(net, dtype=np.float32),
+                            np.ones((len(net), 1), dtype=np.float32)])
+        sections = [
+            ("crv.points", "f32", points),
+            ("crv.counts", "u32", np.array([len(net)], dtype=np.uint32)),
+            ("crv.types", "u8", np.array([geometry_io.CURVE_NURBS], dtype=np.uint8)),
+            ("crv.orders", "u8", np.array([4], dtype=np.uint8)),
+            ("crv.knots_mode", "u8", np.array([geometry_io.KNOTS_BEZIER], dtype=np.uint8)),
+            ("crv.cyclic", "u8", np.array([0], dtype=np.uint8)),
+        ]
+        target = bpy.data.curves.new("circle-dst", "CURVE")
+        geometry_io.sections_to_curve(target, sections)
+        self.assertEqual(len(target.splines[0].bezier_points), 9)
+        samples = curve_samples(target)
+        radii = np.linalg.norm(samples[:, :2], axis=1)
+        self.assertLess(float(np.max(np.abs(radii - 1.0))), 1e-3)
 
     def test_cyclic_bezier_closes(self):
         obj = new_curve_object("bez-cyclic")

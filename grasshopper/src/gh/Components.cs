@@ -204,23 +204,11 @@ namespace GhStack
                     var points = new List<Point3d>();
                     var subds = new List<SubD>();
                     var breps = new List<Brep>();
-                    foreach (IGH_Goo goo in goos)
-                    {
-                        if (goo == null) continue;
-                        GH_Mesh gm = goo as GH_Mesh;
-                        if (gm != null) { meshes.Add(gm.Value); continue; }
-                        GH_Curve gc = goo as GH_Curve;
-                        if (gc != null) { curves.Add(gc.Value); continue; }
-                        GH_Point gp = goo as GH_Point;
-                        if (gp != null) { points.Add(gp.Value); continue; }
-                        GH_SubD gd = goo as GH_SubD;
-                        if (gd != null) { subds.Add(gd.Value); continue; }
-                        // GH_Surface derives from GH_Brep, so a surface lands here too.
-                        GH_Brep gb = goo as GH_Brep;
-                        if (gb != null) { breps.Add(gb.Value); continue; }
+                    var ignored = new List<string>();
+                    GooDispatch.Collect(goos, meshes, curves, points, subds, breps, ignored);
+                    foreach (string typeName in ignored)
                         AddRuntimeMessage(GH_RuntimeMessageLevel.Remark,
-                            "ignored unsupported geometry: " + goo.TypeName);
-                    }
+                            "ignored unsupported geometry: " + typeName);
 
                     var warnings = new List<string>();
                     Dictionary<string, object> counts;

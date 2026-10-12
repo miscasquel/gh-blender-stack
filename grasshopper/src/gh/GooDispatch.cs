@@ -1,0 +1,108 @@
+// Sorts GH goo into the geometry kinds Stage Out accepts. One source of truth:
+// the component and the S6 checks both call this, so a missing goo type cannot
+// hide in the component.
+//
+// The generic path is goo.CastTo<T> (IGH_Goo.CastTo<T> under the
+// hood), which handles every goo that stands for a kind: GH_Circle, GH_Arc,
+// GH_Line, GH_Polyline, GH_Rectangle, custom goos. An earlier hand-written
+// cast list silently dropped the struct-backed ones (the live Circle bug).
+// Breps and SubDs are matched before the cast chain so their lossy mesh
+// conversion keeps its warning.
+
+using System.Collections.Generic;
+using Grasshopper.Kernel;
+using Grasshopper.Kernel.Types;
+using Rhino.Geometry;
+
+namespace GhStack
+{
+    public static class GooDispatch
+    {
+        /// <summary>Appends each goo to the right list; unsupported types are
+        /// named in <paramref name="ignored"/>.</summary>
+        public static void Collect(
+            IEnumerable<IGH_Goo> goos,
+            List<Mesh> meshes, List<Curve> curves, List<Point3d> points,
+            List<SubD> subds, List<Brep> breps, List<string> ignored)
+        {
+            foreach (IGH_Goo goo in goos)
+            {
+                if (goo == null) continue;
+
+                // GH_Surface derives from GH_Brep, so surfaces land here too.
+                GH_Brep brepGoo = goo as GH_Brep;
+                if (brepGoo != null)
+                {
+                    breps.Add(brepGoo.Value);
+                    continue;
+                }
+                GH_Mesh meshGoo = goo as GH_Mesh;
+                if (meshGoo != null)
+                {
+                    meshes.Add(meshGoo.Value);
+                    continue;
+                }
+                GH_SubD subdGoo = goo as GH_SubD;
+                if (subdGoo != null)
+                {
+                    subds.Add(subdGoo.Value);
+                    continue;
+                }
+
+                Curve curve = CurveFromGoo(goo);
+                if (curve != null)
+                {
+                    curves.Add(curve);
+                    continue;
+                }
+                Point3d point;
+                if (goo.CastTo<Point3d>(out point))
+                {
+                    points.Add(point);
+                    continue;
+                }
+                // Last resort: anything that can become a mesh or a Brep
+                // (extrusions, custom geometry goos).
+                Mesh mesh;
+                if (goo.CastTo<Mesh>(out mesh) && mesh != null)
+                {
+                    meshes.Add(mesh);
+                    continue;
+                }
+                Brep brep;
+                if (goo.CastTo<Brep>(out brep) && brep != null)
+                {
+                    breps.Add(brep);
+                    continue;
+                }
+
+                ignored.Add(goo.TypeName);
+            }
+        }
+
+        /// <summary>A Curve for any curve goo, or null.
+        ///
+        /// The struct-backed goos (GH_Circle, GH_Arc, GH_Line, GH_Rectangle) have
+        /// no CastTo<Curve> override and fail GH_Convert.ToCurve(Primary) — an
+        /// isinst on Curve — so they are unwrapped by hand. That gap is the live
+        /// Circle bug. Everything else goes through the goo's own cast, then
+        /// Secondary (which must not turn a Brep into its edge curves).</summary>
+        private static Curve CurveFromGoo(IGH_Goo goo)
+        {
+            GH_Circle circle = goo as GH_Circle;
+            if (circle != null) return circle.Value.ToNurbsCurve();
+            GH_Arc arc = goo as GH_Arc;
+            if (arc != null) return arc.Value.ToNurbsCurve();
+            GH_Line line = goo as GH_Line;
+            if (line != null) return new LineCurve(line.Value);
+            GH_Rectangle rectangle = goo as GH_Rectangle;
+            if (rectangle != null) return rectangle.Value.ToNurbsCurve();
+
+            Curve curve;
+            if (goo.CastTo<Curve>(out curve) && curve != null) return curve;
+            if (!(goo is GH_Brep) && GH_Convert.ToCurve(goo, ref curve, GH_Conversion.Secondary))
+                return curve;
+            return null;
+        }
+    }
+}

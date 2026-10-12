@@ -7,6 +7,8 @@
 
 using System;
 using System.Collections.Generic;
+using Grasshopper.Kernel;
+using Grasshopper.Kernel.Types;
 using Rhino.Geometry;
 using GhStack.Core;
 
@@ -22,6 +24,7 @@ namespace GhStack.Spike.S6
             try { Subd(r); } catch (Exception ex) { r["subd_error"] = Err(ex); }
             try { BrepCheck(r); } catch (Exception ex) { r["brep_error"] = Err(ex); }
             try { Mixed(r); } catch (Exception ex) { r["mixed_error"] = Err(ex); }
+            try { Dispatch(r); } catch (Exception ex) { r["dispatch_error"] = Err(ex); }
             return r;
         }
 
@@ -67,28 +70,50 @@ namespace GhStack.Spike.S6
 
         private static void Curves(Dictionary<string, object> r)
         {
-            // 1. clamped uniform degree-3: exact
+            // Every curve below is exact now: the piecewise-Bezier spans carry
+            // weights, and Blender holds a single span exactly. expectedApprox is
+            // 0 and the spans travel with mode 1 (endpoint) for all of them.
+
+            // 1. clamped uniform degree-3
             NurbsCurve uniform = NurbsCurve.Create(false, 3, SinePoints(8));
             RoundTrip(r, "uniform", uniform, 0, 1);
 
-            // 1b. rational weights on clamped-uniform knots: exact
+            // 1b. rational weights on clamped-uniform knots
             NurbsCurve weighted = uniform.DuplicateCurve() as NurbsCurve;
             weighted.Points.SetWeight(3, 2.5);
             RoundTrip(r, "weighted", weighted, 0, 1);
 
-            // 1c. unclamped uniform knots: exact, mode 0
+            // 1c. unclamped uniform knots
             NurbsCurve unclamped = uniform.DuplicateCurve() as NurbsCurve;
             for (int i = 0; i < unclamped.Knots.Count; i++) unclamped.Knots[i] = i;
-            RoundTrip(r, "unclamped", unclamped, 0, 0);
+            RoundTrip(r, "unclamped", unclamped, 0, 1);
 
-            // 2. interior non-uniform knot: exact via the Bezier net
+            // 2. interior non-uniform knot
             NurbsCurve moved = uniform.DuplicateCurve() as NurbsCurve;
             moved.Knots[5] = moved.Knots[5] + 0.35;
-            RoundTrip(r, "nonuniform", moved, 1, 2);
+            RoundTrip(r, "nonuniform", moved, 0, 1);
 
-            // 3. circle: rational, weights dropped on the way out -> approximation
+            // 3. circle: four rational quadratic spans, exact
             NurbsCurve circle = new Circle(Point3d.Origin, 5.0).ToNurbsCurve();
-            RoundTrip(r, "circle", circle, 1, 2);
+            RoundTrip(r, "circle", circle, 0, 1);
+
+            // 3b. ellipse: same, different radii
+            NurbsCurve ellipse = new Ellipse(Plane.WorldXY, 8.0, 3.0).ToNurbsCurve();
+            RoundTrip(r, "ellipse", ellipse, 0, 1);
+
+            // 3c. arcs: one span <=90 degrees; 120/270 degrees arrive as several
+            // spans, each exact on its own
+            var arcPts = new List<Point3d>();
+            for (int i = 0; i < 3; i++)
+                arcPts.Add(new Point3d(5.0 * Math.Cos(i * Math.PI / 4.0), 5.0 * Math.Sin(i * Math.PI / 4.0), 0));
+            RoundTrip(r, "arc90", new Arc(arcPts[0], arcPts[1], arcPts[2]).ToNurbsCurve(), 0, 1);
+            var arcPts120 = new List<Point3d>();
+            for (int i = 0; i < 3; i++)
+                arcPts120.Add(new Point3d(5.0 * Math.Cos(i * Math.PI / 3.0), 5.0 * Math.Sin(i * Math.PI / 3.0), 0));
+            RoundTrip(r, "arc120", new Arc(arcPts120[0], arcPts120[1], arcPts120[2]).ToNurbsCurve(), 0, 1);
+            RoundTrip(r, "arc270",
+                new Arc(new Point3d(5, 0, 0), new Point3d(0, 5, 0), new Point3d(0, -5, 0)).ToNurbsCurve(),
+                0, 1);
 
             // 4. polyline: exact, type 0
             var poly = new PolylineCurve(new List<Point3d> {
@@ -117,12 +142,37 @@ namespace GhStack.Spike.S6
             r[name + ".mode"] = sections.Count > 4 && sections[4].Raw.Length > 0 ? (long)sections[4].Raw[0] : -1;
             r[name + ".order"] = sections.Count > 3 && sections[3].Raw.Length > 0 ? (long)sections[3].Raw[0] : -1;
             r[name + ".cps"] = sections.Count > 1 ? (long)(sections[1].ToU32().Length > 0 ? sections[1].ToU32()[0] : 0) : -1;
+            r[name + ".spans"] = sections.Count > 1 ? (long)sections[1].ToU32().Length : -1;
             r[name + ".back"] = (long)back.Count;
-            r[name + ".deviation"] = back.Count > 0 ? Deviation(original, back[0], 32) : -1.0;
+            r[name + ".deviation"] = DeviationToCurves(original, back, 32);
             r[name + ".warnings"] = warnings.Count > 0 ? warnings[0] : "(none)";
             if (approximated != expectedApprox) r[name + ".approx_UNEXPECTED"] = true;
             if (sections.Count > 4 && sections[4].Raw.Length > 0 && sections[4].Raw[0] != expectedMode)
                 r[name + ".mode_UNEXPECTED"] = (long)sections[4].Raw[0];
+        }
+
+        /// <summary>Largest distance from samples of one curve to the nearest of
+        /// several (a multi-span curve comes back as one wire curve per span).</summary>
+        private static double DeviationToCurves(Curve original, List<Curve> curves, int samples)
+        {
+            if (curves == null || curves.Count == 0) return -1.0;
+            double max = 0.0;
+            for (int i = 0; i <= samples; i++)
+            {
+                Point3d p = original.PointAt(original.Domain.ParameterAt(i / (double)samples));
+                double best = double.MaxValue;
+                foreach (Curve c in curves)
+                {
+                    double t;
+                    if (c.ClosestPoint(p, out t))
+                    {
+                        double d = c.PointAt(t).DistanceTo(p);
+                        if (d < best) best = d;
+                    }
+                }
+                if (best != double.MaxValue && best > max) max = best;
+            }
+            return max;
         }
 
         // ----------------------------------------------------------------- points
@@ -315,6 +365,37 @@ namespace GhStack.Spike.S6
             r["mixed.mesh_verts"] = (long)Conversion.MeshFromSections(Frame(sections), 1.0).Vertices.Count;
             r["mixed.curves"] = (long)Conversion.CurvesFromSections(Frame(sections), 1.0).Count;
             r["mixed.points"] = (long)Conversion.PointsFromSections(Frame(sections), 1.0).Count;
+        }
+
+        // -------------------------------------------------------------- dispatch
+
+        private static void Dispatch(Dictionary<string, object> r)
+        {
+            var goos = new List<IGH_Goo>();
+            goos.Add(new GH_Circle(new Circle(Point3d.Origin, 5.0)));
+            goos.Add(new GH_Arc(new Arc(new Point3d(0, 0, 0), new Point3d(2, 2, 0), new Point3d(4, 0, 0))));
+            goos.Add(new GH_Line(new Line(new Point3d(0, 0, 0), new Point3d(1, 1, 1))));
+            goos.Add(new GH_Point(new Point3d(1, 1, 1)));
+            var mesh = new Mesh();
+            mesh.Vertices.Add(0, 0, 0);
+            mesh.Vertices.Add(1, 0, 0);
+            mesh.Vertices.Add(0, 1, 0);
+            mesh.Faces.AddFace(0, 1, 2);
+            goos.Add(new GH_Mesh(mesh));
+            goos.Add(new GH_Integer(7)); // not geometry: must be ignored
+
+            var meshes = new List<Mesh>();
+            var curves = new List<Curve>();
+            var points = new List<Point3d>();
+            var subds = new List<SubD>();
+            var breps = new List<Brep>();
+            var ignored = new List<string>();
+            GooDispatch.Collect(goos, meshes, curves, points, subds, breps, ignored);
+
+            r["dispatch.curves"] = (long)curves.Count;
+            r["dispatch.points"] = (long)points.Count;
+            r["dispatch.meshes"] = (long)meshes.Count;
+            r["dispatch.ignored"] = string.Join(", ", ignored.ToArray());
         }
     }
 }

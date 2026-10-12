@@ -24,9 +24,10 @@ Blender                                          Rhino / Grasshopper (wine)
   back and shows through a modifier in the stack. Base-geometry edits flow on the
   next tick; no buttons.
 - **Geometry kinds.** Meshes (n-gons and vertex colours), curves (poly, Bezier,
-  NURBS), points, SubD control cages with edge-crease tags, and Breps/surfaces
-  (meshed on the way out, warned). Stage In outputs `Geometry`, `Curves`,
-  `Points`, and `SubD`; Stage Out takes any of them on one generic input.
+  NURBS, circles, ellipses, arcs — all exact), points, SubD control cages with
+  edge-crease tags, and Breps/surfaces (meshed on the way out, warned). Stage In
+  outputs `Geometry`, `Curves`, `Points`, and `SubD`; Stage Out takes any of
+  them on one generic input.
 - **Parameters.** `Param` components declare float, int, bool, vector3, colour,
   value list, and text parameters. Blender draws them in the N-panel with
   ranges, a value-list dropdown, keyframe decorators, and drivers.

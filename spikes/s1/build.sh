@@ -49,9 +49,10 @@ WINEPREFIX="$PREFIX" "$WINE" "$CSC" \
   "$(win_path "$CORE/Json.cs")" "$(win_path "$CORE/Frame.cs")" "$(win_path "$CORE/Conversion.cs")" \
   "$(win_path "$HERE/../s4/S4Checks.cs")" \
   "$(win_path "$HERE/../s6/S6Checks.cs")" \
+  "$(win_path "$REPO/grasshopper/src/gh/GooDispatch.cs")" \
   "$(win_path "$REPO/grasshopper/src/gh/Icons.cs")" \
   "/resource:$(win_path "$REPO/grasshopper/src/gh/icons/geometry_nodes.png"),GhStack.icons.geometry_nodes.png" \
-  "$(win_path "$HERE/miniws.cs")" "$SRC_W" \
+  "$(win_path "$HERE/miniws.cs")" "$(win_path "$REPO/grasshopper/src/gh/MiniWsClient.cs")" "$SRC_W" \
   2>&1 | grep -vE 'fixme:|MESA-EGL|pci id|^$' || true
 
 if [ ! -f "$OUT" ]; then
