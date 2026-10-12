@@ -46,6 +46,12 @@ namespace GhStack
         private static readonly List<GH_Component> Components = new List<GH_Component>();
         private static readonly List<string> Notes = new List<string>();
         private static readonly Queue<byte[]> Outbox = new Queue<byte[]>();
+        private static long OutboxBytes = 0;  // total frame bytes queued; under Gate
+        // The outbox is a best-effort pipe, not a durable log: a response the
+        // engine still needs is fetched again by the next pass, and hello and
+        // schema are republished. If the sender cannot drain it, older frames
+        // are dropped so a stalled link cannot accumulate a stale backlog.
+        private const long MaxOutboxBytes = 64L * 1024 * 1024;
         private static readonly AutoResetEvent OutboxSignal = new AutoResetEvent(false);
 
         private static Thread _thread;
@@ -207,6 +213,15 @@ namespace GhStack
                     if (client != null) client.Dispose();
                     _connected = false;
                     _client = null;
+                    // Frames queued for a connection that just died are stale:
+                    // a reconnect publishes hello/schema again, and the engine
+                    // re-derives any response it still needs. Delivering the
+                    // backlog instead was the other half of the outbox bug.
+                    lock (Gate)
+                    {
+                        Outbox.Clear();
+                        OutboxBytes = 0;
+                    }
                 }
                 int slept = 0;
                 while (_running && slept < backoffMs)
@@ -418,7 +433,13 @@ namespace GhStack
                 lock (Gate)
                 {
                     if (Outbox.Count == 0) break;
-                    frame = Outbox.Peek();
+                    // Take the frame out before sending: a failed send must not
+                    // leave it at the head for every later frame to queue
+                    // behind. The connection is broken anyway — Loop clears the
+                    // queue and reconnects, and the next pass re-derives
+                    // anything the engine still needs.
+                    frame = Outbox.Dequeue();
+                    OutboxBytes -= frame.Length;
                 }
                 try
                 {
@@ -429,13 +450,24 @@ namespace GhStack
                     Note("send failed: " + FirstLine(ex));
                     return;
                 }
-                lock (Gate) { if (Outbox.Count > 0) Outbox.Dequeue(); }
             }
         }
 
         public static void Enqueue(byte[] frame)
         {
-            lock (Gate) { Outbox.Enqueue(frame); }
+            lock (Gate)
+            {
+                Outbox.Enqueue(frame);
+                OutboxBytes += frame.Length;
+                // Drop the oldest, but never the newest: a single oversized
+                // frame (the protocol allows up to 512 MB) must still be able
+                // to go out on a healthy link.
+                while (Outbox.Count > 1 && OutboxBytes > MaxOutboxBytes)
+                {
+                    byte[] dropped = Outbox.Dequeue();
+                    OutboxBytes -= dropped.Length;
+                }
+            }
             OutboxSignal.Set();
         }
 
