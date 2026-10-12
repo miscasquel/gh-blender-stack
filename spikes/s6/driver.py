@@ -4,8 +4,9 @@
 
 The checks run inside Rhino (they need RhinoCommon). Start this driver first,
 then make the spike component solve (drop it on the canvas, or toggle Enabled);
-the driver sends one `check=s6` request, prints the results and writes
-spikes/results/s6.txt.
+the driver sends one `check=s6` request, prints the results and writes its raw
+transcript to spikes/results/s6-run.txt (the curated report is s6.txt, which a
+timed-out run must not overwrite).
 """
 
 import asyncio
@@ -80,9 +81,9 @@ async def main():
 
     log("RESULT: " + ("PASS" if outcome["ok"] else "FAIL"))
     os.makedirs(RESULTS, exist_ok=True)
-    with open(os.path.join(RESULTS, "s6.txt"), "w") as f:
+    with open(os.path.join(RESULTS, "s6-run.txt"), "w") as f:
         f.write("\n".join(TRANSCRIPT) + "\n")
-    log("results: spikes/results/s6.txt")
+    log("raw transcript: spikes/results/s6-run.txt")
     return 0 if outcome["ok"] else 1
 
 
