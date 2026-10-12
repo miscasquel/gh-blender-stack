@@ -16,14 +16,32 @@ Blender                                     Rhino / Grasshopper (wine)
 ## What is deliberately not here yet
 
 - One mesh stack object, one GH stage; mid-stack composition (`GH → GN → GH`) is
-  not evaluated as a prefix yet (the stage always reads the base mesh).
-- Meshes only. Curves, points and SubD arrive with S4/S6.
+  not evaluated as a prefix yet (the stage always reads the base geometry).
+- A Rhino Brep or surface is meshed on the way out (warned); Blender has no
+  B-rep. A Blender surface object is meshed on the way in, the same loss in the
+  other direction.
 - No bake, freeze, preview, orphan list, or disk cache (the cache is in memory).
 - Undo is not specially handled; the stack records are ordinary properties.
 - The `Param` component takes a **Key** input (a demo deviation from the plan's
   signature; the plan assumes one stage per document).
 - Text parameters have a plain field (not animatable, by design). A value-list
   parameter (Type 5) draws a dropdown; its output is the selected index.
+
+## Geometry kinds
+
+- **Stage In** outputs `Geometry` (mesh), `Curves`, `Points`, and `SubD`; wire
+  whichever the definition uses.
+- **Stage Out** takes one generic `Geometry` input: mesh, curve, point, SubD, or
+  Brep. Everything is converted to the protocol's sections.
+- **SubD** is a control cage with edge-crease tags. Flag a mesh stack object
+  with **Base is a SubD cage** in the panel and Blender sends `subd.*`; the GH
+  side builds a SubD from the cage and applies the tags. Semi-sharp and vertex
+  creases are not available from RhinoCommon, and the stage says so.
+- **Curves** round-trip exactly when Blender can express them (poly, clamped
+  uniform or uniform NURBS, any order 2–6, weights kept; Blender Bezier splines
+  travel as degree-3 Bezier nets). Anything else becomes Bezier spans — exact
+  unless the curve is rational, where dropping the weights is measured and
+  warned (D3).
 
 ## Setup
 

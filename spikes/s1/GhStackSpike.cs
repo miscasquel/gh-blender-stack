@@ -295,6 +295,11 @@ namespace GhStack.Spike.S1
                 HandleS4Check(header);
                 return;
             }
+            if (type == "request" && check == "s6")
+            {
+                HandleS6Check(header);
+                return;
+            }
             if (type == "request" && geom != null && mode == "full")
             {
                 HandleGeometry(decoded);
@@ -343,6 +348,27 @@ namespace GhStack.Spike.S1
             }
             Enqueue(FrameCodec.Encode(reply, null));
             Note("S4 checks ran");
+        }
+
+        /// <summary>S6: run the curve/point/SubD/Brep conversion checks.</summary>
+        private static void HandleS6Check(Dictionary<string, object> header)
+        {
+            var reply = new Dictionary<string, object>();
+            reply["type"] = "response";
+            reply["check"] = "s6";
+            reply["stage"] = Json.GetString(header, "stage");
+            try
+            {
+                reply["results"] = GhStack.Spike.S6.S6Checks.Run();
+                reply["status"] = "ok";
+            }
+            catch (Exception ex)
+            {
+                reply["status"] = "error";
+                reply["error"] = ex.GetType().Name + ": " + FirstLine(ex);
+            }
+            Enqueue(FrameCodec.Encode(reply, null));
+            Note("S6 checks ran");
         }
 
         /// <summary>S3: convert the frame's geometry through a Rhino Mesh and reply

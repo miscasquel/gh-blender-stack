@@ -20,9 +20,13 @@ Blender                                          Rhino / Grasshopper (wine)
 
 ## What works today
 
-- **The loop.** A mesh goes to Grasshopper, a definition runs, the result comes
-  back and shows through a modifier in the stack. Base-mesh edits flow on the
+- **The loop.** Geometry goes to Grasshopper, a definition runs, the result comes
+  back and shows through a modifier in the stack. Base-geometry edits flow on the
   next tick; no buttons.
+- **Geometry kinds.** Meshes (n-gons and vertex colours), curves (poly, Bezier,
+  NURBS), points, SubD control cages with edge-crease tags, and Breps/surfaces
+  (meshed on the way out, warned). Stage In outputs `Geometry`, `Curves`,
+  `Points`, and `SubD`; Stage Out takes any of them on one generic input.
 - **Parameters.** `Param` components declare float, int, bool, vector3, colour,
   value list, and text parameters. Blender draws them in the N-panel with
   ranges, a value-list dropdown, keyframe decorators, and drivers.
@@ -32,15 +36,15 @@ Blender                                          Rhino / Grasshopper (wine)
 - **Lifecycle.** States (`waiting`, `ok`, `error`, `disconnected`, `disabled`),
   timeouts, latest-wins requests, an in-memory cache, and reconnect with backoff.
 - **Tests.** `scripts/test-core` (50 tests, standard library only),
-  `scripts/test-blender` (27 headless tests), `scripts/test-gha` (the C# codec
+  `scripts/test-blender` (39 headless tests), `scripts/test-gha` (the C# codec
   against the golden fixtures, under wine).
 
 ## What is deliberately not here yet
 
-- Meshes only. Curves, points, and SubD are next: the conversion primitives are
-  verified (spikes S4), the wiring is not done.
-- One stage per object, and a stage always reads the stack's base mesh.
+- One stage per object, and a stage always reads the stack's base geometry.
   Mid-stack composition (`GH → GN → GH`) is not evaluated as a prefix yet.
+- Breps and surfaces arrive as meshes (lossy, warned); Blender surface objects
+  are meshed on the way in. There is no B-rep on the wire.
 - The cache is in memory. No bake, freeze, preview, or orphan list yet.
 - The add-on installs as a symlink (`scripts/install-addon`); packaging it as a
   Blender extension is planned (S8).

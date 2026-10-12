@@ -6,12 +6,16 @@ mesh in place where the topology allows, rebuilding when it does not. Numpy thro
 the slow path and the one scripted changes take.
 
 Section names follow protocol §5: ``mesh.*`` for plain meshes, ``subd.*`` for a
-mesh flagged as a SubD control cage. The geometry hash order is the same order the
-sections are returned in.
+mesh flagged as a SubD control cage, ``crv.*`` for curves, ``pts.*`` for point
+clouds. The geometry hash order is the same order the sections are returned in.
 
-This module is the bpy layer: core stays pure (see blender/gh_stack/core). Curve
-and point extraction arrive with the curve/point work; mesh and SubD are what the
-geometry round trip needs first.
+Curves: poly, Bezier, and NURBS splines map to the protocol's three curve types.
+A Blender Bezier spline travels as a degree-3 NURBS in Bezier knot mode (exact),
+and comes back as Bezier splines. NURBS splines keep order, weights, and the
+endpoint/uniform flag. Gaps in what Blender can express (arbitrary interior
+knots) are the GH side's job to approximate and warn about (D3).
+
+This module is the bpy layer: core stays pure (see blender/gh_stack/core).
 """
 
 import numpy as np
@@ -35,8 +39,31 @@ SUBD_SECTION_ORDER = (
     "subd.crease_values",
 )
 
+CURVE_SECTION_ORDER = (
+    "crv.points",
+    "crv.counts",
+    "crv.types",
+    "crv.orders",
+    "crv.knots_mode",
+    "crv.cyclic",
+)
+
+POINT_SECTION_ORDER = (
+    "pts.positions",
+    "pts.radii",
+    "pts.colors",
+)
+
 CREASE_ATTRIBUTE = "crease_edge"
 COLOR_ATTRIBUTE = "Col"
+
+CURVE_POLY = 0
+CURVE_BEZIER = 1
+CURVE_NURBS = 2
+
+KNOTS_NORMAL = 0
+KNOTS_ENDPOINT = 1
+KNOTS_BEZIER = 2
 
 
 class GeometryIOError(Exception):
@@ -136,6 +163,129 @@ def read_creases(mesh):
     edge_verts = np.empty(len(mesh.edges) * 2, dtype=np.uint32)
     mesh.edges.foreach_get("vertices", edge_verts)
     return edge_verts.reshape(-1, 2)[mask], values[mask]
+
+
+# ------------------------------------------------------------ curves and points
+
+
+def curve_to_sections(curve):
+    """Read a Blender Curve datablock into ``crv.*`` sections (protocol §5).
+
+    A Bezier spline travels as a degree-3 NURBS in Bezier knot mode, using the
+    control net co0, handle_right0, handle_left1, co1, ... — the representation
+    the GH side rebuilds exactly. A cyclic Bezier spline wraps the closing
+    segment, so its net ends where it starts instead of carrying the cyclic flag.
+    """
+    points = []
+    counts = []
+    types = []
+    orders = []
+    knots_mode = []
+    cyclic = []
+
+    for spline in curve.splines:
+        if spline.type == "BEZIER":
+            net = _bezier_net(spline)
+            if net is None:
+                continue
+            points.extend(net)
+            counts.append(len(net))
+            types.append(CURVE_NURBS)
+            orders.append(4)
+            knots_mode.append(KNOTS_BEZIER)
+            cyclic.append(0)
+            continue
+        if spline.type == "NURBS":
+            p = [(pt.co[0], pt.co[1], pt.co[2], float(pt.weight)) for pt in spline.points]
+            if len(p) < 2:
+                continue
+            points.extend(p)
+            counts.append(len(p))
+            types.append(CURVE_NURBS)
+            orders.append(int(spline.order_u))
+            knots_mode.append(KNOTS_ENDPOINT if spline.use_endpoint_u else KNOTS_NORMAL)
+            cyclic.append(1 if spline.use_cyclic_u else 0)
+            continue
+        # POLY and anything else Blender has: a polyline through the points.
+        p = [(pt.co[0], pt.co[1], pt.co[2], 1.0) for pt in spline.points]
+        if len(p) < 2:
+            continue
+        points.extend(p)
+        counts.append(len(p))
+        types.append(CURVE_POLY)
+        orders.append(0)
+        knots_mode.append(0)
+        cyclic.append(1 if spline.use_cyclic_u else 0)
+
+    if not counts:
+        return []
+    flat = np.asarray(points, dtype=np.float32).reshape(-1, 4)
+    return [
+        ("crv.points", "f32", flat),
+        ("crv.counts", "u32", np.asarray(counts, dtype=np.uint32)),
+        ("crv.types", "u8", np.asarray(types, dtype=np.uint8)),
+        ("crv.orders", "u8", np.asarray(orders, dtype=np.uint8)),
+        ("crv.knots_mode", "u8", np.asarray(knots_mode, dtype=np.uint8)),
+        ("crv.cyclic", "u8", np.asarray(cyclic, dtype=np.uint8)),
+    ]
+
+
+def _bezier_net(spline):
+    """The NURBS control net of a Bezier spline, or None when it has no span."""
+    bp = list(spline.bezier_points)
+    n = len(bp)
+    if n < 2:
+        return None
+
+    def p(v):
+        return (float(v[0]), float(v[1]), float(v[2]), 1.0)
+
+    net = [p(bp[0].co)]
+    for i in range(n - 1):
+        net.append(p(bp[i].handle_right))
+        net.append(p(bp[i + 1].handle_left))
+        net.append(p(bp[i + 1].co))
+    if spline.use_cyclic_u:
+        net.append(p(bp[n - 1].handle_right))
+        net.append(p(bp[0].handle_left))
+        net.append(p(bp[0].co))
+    return net
+
+
+def points_to_sections(cloud):
+    """Read a point cloud into ``pts.*`` sections."""
+    n = len(cloud.points)
+    if n == 0:
+        return []
+    positions = np.empty(n * 3, dtype=np.float32)
+    cloud.points.foreach_get("co", positions)
+    sections = [("pts.positions", "f32", positions.reshape(-1, 3))]
+
+    radii = np.empty(n, dtype=np.float32)
+    cloud.points.foreach_get("radius", radii)
+    if radii.any():
+        sections.append(("pts.radii", "f32", radii))
+
+    colors = read_point_colors(cloud)
+    if colors is not None:
+        sections.append(("pts.colors", "u8", colors))
+    return sections
+
+
+def read_point_colors(cloud):
+    """The active point-domain colour attribute as u8 N×4, or None."""
+    attrs = cloud.color_attributes
+    if not attrs:
+        return None
+    attr = attrs.active_color if attrs.active_color is not None else attrs[0]
+    if attr.domain != "POINT":
+        return None
+    floats = np.empty(len(cloud.points) * 4, dtype=np.float32)
+    if attr.data_type == "BYTE_COLOR":
+        attr.data.foreach_get("color_srgb", floats)
+    else:
+        attr.data.foreach_get("color", floats)
+    return np.clip(np.rint(floats.reshape(-1, 4) * 255.0), 0.0, 255.0).astype(np.uint8)
 
 
 # -------------------------------------------------------------------- write
@@ -253,7 +403,182 @@ def write_creases(mesh, creases):
     attr.data.foreach_set("value", values)
 
 
+# ----------------------------------------------------------- curve and point write
+
+
+def sections_to_curve(curve, sections):
+    """Rebuild a Blender Curve datablock from ``crv.*`` sections, in place."""
+    by_name = {}
+    for name, dtype, values in sections:
+        by_name[name] = values
+
+    points = by_name.get("crv.points")
+    counts = by_name.get("crv.counts")
+    if points is None or counts is None:
+        raise GeometryIOError("curve sections need crv.points and crv.counts")
+    points = np.asarray(points, dtype=np.float32).reshape(-1, 4)
+    counts = np.asarray(counts, dtype=np.uint32).reshape(-1)
+    if int(counts.sum()) != len(points):
+        raise GeometryIOError(
+            "crv.points length %d != sum(crv.counts) %d" % (len(points), int(counts.sum()))
+        )
+    n_curves = len(counts)
+    types = _u8(by_name.get("crv.types"), n_curves)
+    orders = _u8(by_name.get("crv.orders"), n_curves)
+    modes = _u8(by_name.get("crv.knots_mode"), n_curves)
+    cyclic = _u8(by_name.get("crv.cyclic"), n_curves)
+
+    curve.splines.clear()
+    at = 0
+    for i in range(n_curves):
+        n = int(counts[i])
+        chunk = points[at : at + n]
+        at += n
+        if n < 2:
+            continue
+        if types[i] == CURVE_POLY:
+            _poly_spline(curve, chunk, bool(cyclic[i]))
+        elif modes[i] == KNOTS_BEZIER or types[i] == CURVE_BEZIER:
+            _bezier_spline(curve, chunk)
+        else:
+            _nurbs_spline(curve, chunk, int(orders[i]), int(modes[i]), bool(cyclic[i]))
+    curve.update_tag()
+    return curve
+
+
+def _u8(values, count):
+    if values is None:
+        return np.zeros(count, dtype=np.uint8)
+    return np.asarray(values, dtype=np.uint8).reshape(-1)
+
+
+def _poly_spline(curve, chunk, cyclic):
+    spline = curve.splines.new("POLY")
+    spline.points.add(len(chunk) - 1)
+    spline.points.foreach_set("co", chunk.reshape(-1))
+    spline.use_cyclic_u = cyclic
+
+
+def _nurbs_spline(curve, chunk, order, mode, cyclic):
+    spline = curve.splines.new("NURBS")
+    spline.points.add(len(chunk) - 1)
+    spline.order_u = max(2, min(6, int(order)))
+    spline.use_endpoint_u = mode == KNOTS_ENDPOINT
+    spline.use_cyclic_u = cyclic
+    spline.points.foreach_set("co", chunk.reshape(-1))
+
+
+def _bezier_spline(curve, chunk):
+    """A Bezier net is ``co0, hr0, hl1, co1, ...``: 3k+1 points for k spans.
+
+    Closed nets (from a cyclic Blender spline or a closed Rhino curve) end where
+    they start; the open Bezier spline with coincident ends is the same shape.
+    """
+    n = len(chunk)
+    if n < 4 or (n - 1) % 3 != 0:
+        # Not a Bezier net. A NURBS spline keeps the control polygon shape, at
+        # the cost of exactness; the GH side is where approximations are warned.
+        _nurbs_spline(curve, chunk, 4, KNOTS_ENDPOINT, False)
+        return
+    k = (n - 1) // 3
+    spline = curve.splines.new("BEZIER")
+    spline.bezier_points.add(k)
+    for i in range(k + 1):
+        bp = spline.bezier_points[i]
+        co = chunk[3 * i]
+        bp.co = (float(co[0]), float(co[1]), float(co[2]))
+        bp.handle_left_type = "FREE"
+        bp.handle_right_type = "FREE"
+        if i > 0:
+            hl = chunk[3 * i - 1]
+            bp.handle_left = (float(hl[0]), float(hl[1]), float(hl[2]))
+        if i < k:
+            hr = chunk[3 * i + 1]
+            bp.handle_right = (float(hr[0]), float(hr[1]), float(hr[2]))
+    spline.use_cyclic_u = False
+
+
+def sections_to_points(cloud, sections):
+    """Rebuild a point cloud from ``pts.*`` sections, in place."""
+    by_name = {}
+    for name, dtype, values in sections:
+        by_name[name] = values
+
+    positions = by_name.get("pts.positions")
+    if positions is None:
+        cloud.resize(0)
+        return cloud
+    positions = np.asarray(positions, dtype=np.float32).reshape(-1, 3)
+    n = len(positions)
+    cloud.resize(n)
+    cloud.points.foreach_set("co", positions.reshape(-1))
+
+    radii = by_name.get("pts.radii")
+    if radii is not None:
+        radii = np.asarray(radii, dtype=np.float32).reshape(-1)
+        if len(radii) == n:
+            cloud.points.foreach_set("radius", radii)
+    cloud.points.update()
+
+    if "pts.colors" in by_name:
+        write_point_colors(cloud, np.asarray(by_name["pts.colors"], dtype=np.uint8))
+    return cloud
+
+
+def write_point_colors(cloud, colors):
+    """Create or update the byte-colour attribute of a point cloud."""
+    if colors.ndim != 2 or colors.shape[1] != 4:
+        raise GeometryIOError("pts.colors must be N x 4")
+    attr = cloud.color_attributes.get(COLOR_ATTRIBUTE)
+    if attr is None or attr.domain != "POINT" or attr.data_type != "BYTE_COLOR":
+        if attr is not None and attr.name == COLOR_ATTRIBUTE:
+            cloud.color_attributes.remove(attr)
+        attr = cloud.color_attributes.new(COLOR_ATTRIBUTE, "BYTE_COLOR", "POINT")
+    if len(attr.data) != len(colors):
+        raise GeometryIOError(
+            "colour attribute has %d entries, sections have %d" % (len(attr.data), len(colors))
+        )
+    attr.data.foreach_set("color_srgb", colors.reshape(-1).astype(np.float32) / 255.0)
+    cloud.color_attributes.active_color = attr
+
+
 # ------------------------------------------------------------------ helpers
+
+
+def object_to_sections(obj, as_subd=False):
+    """Protocol sections for an object's base geometry, by object type.
+
+    Meshes travel as ``mesh.*`` (or ``subd.*`` when the stack is flagged as a
+    SubD cage), curves as ``crv.*``, point clouds as ``pts.*``. A Blender
+    surface is meshed first: Blender has no B-rep to send, so the surface
+    arrives on the GH side as a mesh (lossy, like a Rhino Brep going the other
+    way).
+    """
+    if obj.type == "MESH":
+        return mesh_to_sections(obj.data, as_subd=as_subd)
+    if obj.type == "CURVE":
+        return curve_to_sections(obj.data)
+    if obj.type == "POINTCLOUD":
+        return points_to_sections(obj.data)
+    if obj.type == "SURFACE":
+        import bpy
+
+        mesh = surface_to_mesh(obj)
+        try:
+            return mesh_to_sections(mesh, as_subd=False)
+        finally:
+            bpy.data.meshes.remove(mesh)
+    return []
+
+
+def surface_to_mesh(obj):
+    """A new mesh datablock for a surface object's evaluated geometry. The
+    caller owns it and removes it after use."""
+    import bpy
+
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    evaluated = obj.evaluated_get(depsgraph)
+    return bpy.data.meshes.new_from_object(evaluated)
 
 
 def evaluated_mesh(obj, depsgraph=None):

@@ -45,6 +45,11 @@ class GHSTACK_PT_panel(bpy.types.Panel):
         row.operator("gh_stack.add_stage", icon="ADD")
         row.operator("gh_stack.push", icon="FILE_REFRESH")
 
+        if obj.type == "MESH":
+            row = layout.row()
+            row.use_property_split = True
+            row.prop(record, "subd", text="Base is a SubD cage")
+
         for index, stage in enumerate(record.stages):
             self.draw_stage(layout, obj, record, stage, index)
 
@@ -64,6 +69,9 @@ class GHSTACK_PT_panel(bpy.types.Panel):
             box.label(text=bridge.state["notice"], icon="INFO")
         if stage.error:
             box.label(text=stage.error, icon="ERROR")
+        for line in (stage.warnings or "").split("\n"):
+            if line:
+                box.label(text=line, icon="INFO")
 
         if stage.params:
             params_box = box.box()

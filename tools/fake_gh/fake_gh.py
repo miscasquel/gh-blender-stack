@@ -47,6 +47,8 @@ async def main():
     ap.add_argument("--scale-param", default=PARAM_ID)
     ap.add_argument("--report", default="")
     ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--extras", action="store_true",
+                    help="also answer with a polyline and points built from the mesh")
     args = ap.parse_args()
 
     state = StageState()
@@ -68,14 +70,25 @@ async def main():
     try:
         await session(ws, args, state)
     finally:
-        if args.report:
-            with open(args.report, "w") as f:
-                json.dump(
-                    {"full": state.full, "ref": state.ref, "responses": state.responses},
-                    f,
-                    indent=2,
-                )
+        _write_report(args, state)
     return 0
+
+
+def _write_report(args, state):
+    """Write the counters, refreshed on every response so tests can poll it."""
+    if not args.report:
+        return
+    with open(args.report, "w") as f:
+        json.dump(
+            {
+                "full": state.full,
+                "ref": state.ref,
+                "responses": state.responses,
+                "sections": sorted(state.sections.keys()) if state.sections else [],
+            },
+            f,
+            indent=2,
+        )
 
 
 async def session(ws, args, state):
@@ -161,6 +174,10 @@ async def session(ws, args, state):
 
         scale = float((header.get("params") or {}).get(args.scale_param, 1.0))
         out_sections = _scaled_sections(state.sections, scale)
+        counts = {"meshes": 1, "subd": 0, "curves": 0, "points": 0, "approximated_curves": 0}
+        if args.extras:
+            out_sections = _with_extras(out_sections, scale)
+            counts = {"meshes": 1, "subd": 0, "curves": 1, "points": 1, "approximated_curves": 0}
         out_hash = hashing.output_hash(
             [(name, codec.section_bytes(name, _proto_dtype(name), values)) for name, dtype, values in out_sections]
         )
@@ -172,43 +189,96 @@ async def session(ws, args, state):
             "status": "ok",
             "error": None,
             "warnings": [],
-            "counts": {"meshes": 1, "subd": 0, "curves": 0, "points": 0, "approximated_curves": 0},
+            "counts": counts,
         }
         state.responses += 1
         await ws.send(codec.encode_frame(reply, out_sections))
+        _write_report(args, state)
         print("[fake-gh] response %d (scale %.3f, %s)" % (state.responses, scale, mode), flush=True)
 
 
+def _is_u8(name):
+    return name.endswith(".colors") or name in (
+        "crv.types",
+        "crv.orders",
+        "crv.knots_mode",
+        "crv.cyclic",
+    )
+
+
+def _is_f32(name):
+    return (
+        name.endswith(".verts")
+        or name.endswith(".crease_values")
+        or name.endswith(".points")
+        or name.endswith(".positions")
+        or name.endswith(".radii")
+    )
+
+
 def _np_dtype(name):
-    if name.endswith(".colors"):
+    if _is_u8(name):
         return np.uint8
-    if name.endswith(".verts") or name.endswith(".crease_values"):
+    if _is_f32(name):
         return np.float32
     return np.uint32
 
 
 def _proto_dtype(name):
-    if name.endswith(".colors"):
+    if _is_u8(name):
         return "u8"
-    if name.endswith(".verts") or name.endswith(".crease_values"):
+    if _is_f32(name):
         return "f32"
     return "u32"
 
 
 def _scaled_sections(sections, scale):
+    """Echo the stored geometry with every position scaled, keeping protocol
+    dtypes per section name."""
     out = []
     for name, values in sections.items():
-        if name.endswith(".verts"):
-            out.append((name, "f32", (values.astype(np.float32) * scale).reshape(-1, 3)))
+        if name.endswith(".verts") or name == "pts.positions":
+            arr = values.astype(np.float32).reshape(-1, 3).copy()
+            arr *= scale
+            out.append((name, "f32", arr))
+        elif name == "crv.points":
+            arr = values.astype(np.float32).reshape(-1, 4).copy()
+            arr[:, :3] *= scale
+            out.append((name, "f32", arr))
         elif name.endswith(".colors"):
             out.append((name, "u8", values.reshape(-1, 4)))
         elif name.endswith(".crease_edges"):
             out.append((name, "u32", values.reshape(-1, 2)))
-        elif name.endswith(".crease_values"):
-            out.append((name, "f32", values))
+        elif _is_f32(name):
+            out.append((name, "f32", values.reshape(-1)))
         else:
-            out.append((name, "u32", values))
+            out.append((name, _proto_dtype(name), values.reshape(-1)))
     return out
+
+
+def _with_extras(sections, scale):
+    """Append a polyline through the first vertices and a point at every vertex,
+    so tests can check the curve and point paths against the mesh they came from."""
+    verts = None
+    for name, dtype, values in sections:
+        if name in ("mesh.verts", "subd.verts"):
+            verts = values.reshape(-1, 3)
+            break
+    if verts is None or len(verts) == 0:
+        return sections
+    n = min(5, len(verts))
+    poly = np.ascontiguousarray(verts[:n], dtype=np.float32)
+    extras = [
+        ("crv.points", "f32", np.hstack([poly, np.ones((n, 1), dtype=np.float32)])),
+        ("crv.counts", "u32", np.array([n], dtype=np.uint32)),
+        ("crv.types", "u8", np.array([0], dtype=np.uint8)),
+        ("crv.orders", "u8", np.array([0], dtype=np.uint8)),
+        ("crv.knots_mode", "u8", np.array([0], dtype=np.uint8)),
+        ("crv.cyclic", "u8", np.array([0], dtype=np.uint8)),
+        ("pts.positions", "f32", np.ascontiguousarray(verts, dtype=np.float32)),
+        ("pts.radii", "f32", np.full(len(verts), 0.02, dtype=np.float32)),
+    ]
+    return list(sections) + extras
 
 
 if __name__ == "__main__":

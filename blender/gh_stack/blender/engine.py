@@ -12,6 +12,7 @@ drains what the server thread decoded.
 import time
 
 import bpy
+import numpy as np
 
 from ..core import codec, hashing, rules
 from . import bridge, geometry_io, helpers, nodes, props, server, stack as stack_mod
@@ -146,6 +147,7 @@ def _handle_response(header, sections):
             # Stale response: cached under its own rid, not applied (protocol §6.4).
             return
         out_hash = header.get("out_hash") or ""
+        stage.warnings = _warnings_text(header)
         if out_hash == stage.applied_out_hash:
             stage.state = stack_mod.STATE_OK
             stage.error = ""
@@ -160,19 +162,49 @@ def _handle_response(header, sections):
         return
 
 
-def _apply(obj, stage, sections):
-    """Write the response geometry into the stage's helper mesh."""
-    import numpy as np
+def _warnings_text(header):
+    """The response's warnings as one line each (protocol §4.4)."""
+    lines = []
+    for warning in header.get("warnings") or []:
+        if isinstance(warning, dict):
+            text = warning.get("message") or warning.get("code")
+        else:
+            text = str(warning)
+        if text:
+            lines.append(text)
+    return "\n".join(lines)
 
-    helper = helpers.ensure_helper(obj, stage.key)
+
+def _apply(obj, stage, sections):
+    """Write the response geometry into the stage's helpers, one per kind.
+
+    A section group that is absent means "none": that helper is cleared, so a
+    definition that stops returning curves stops showing them.
+    """
+    nodes.ensure_group(obj, stage.key)
+    groups = {"mesh": [], "curves": [], "points": []}
+    for name, values in sections.items():
+        if name.startswith("mesh.") or name.startswith("subd."):
+            groups["mesh"].append((name, values))
+        elif name.startswith("crv."):
+            groups["curves"].append((name, values))
+        elif name.startswith("pts."):
+            groups["points"].append((name, values))
+
+    _apply_mesh(obj, stage, groups["mesh"])
+    _apply_curves(obj, stage, groups["curves"])
+    _apply_points(obj, stage, groups["points"])
+
+
+def _apply_mesh(obj, stage, entries):
+    helper = helpers.ensure_helper(obj, stage.key, "mesh")
     mesh = helper.data
-    mesh_sections = [s for s in sections.items() if s[0].startswith("mesh.")]
-    if not mesh_sections:
+    if not entries:
         mesh.clear_geometry()
         helper.update_tag()
         return
     prepared = []
-    for name, values in sections.items():
+    for name, values in entries:
         arr = np.asarray(values)
         if name.endswith(".verts"):
             arr = arr.reshape(-1, 3)
@@ -185,10 +217,50 @@ def _apply(obj, stage, sections):
     helper.update_tag()
 
 
+def _apply_curves(obj, stage, entries):
+    helper = helpers.ensure_helper(obj, stage.key, "curves")
+    if not entries:
+        helper.data.splines.clear()
+        helper.update_tag()
+        return
+    prepared = []
+    for name, values in entries:
+        arr = np.asarray(values)
+        if name == "crv.points":
+            arr = arr.reshape(-1, 4)
+        prepared.append((name, _dtype_of(name), arr))
+    geometry_io.sections_to_curve(helper.data, prepared)
+    helper.update_tag()
+
+
+def _apply_points(obj, stage, entries):
+    helper = helpers.ensure_helper(obj, stage.key, "points")
+    if not entries:
+        helper.data.resize(0)
+        helper.update_tag()
+        return
+    prepared = []
+    for name, values in entries:
+        arr = np.asarray(values)
+        if name == "pts.positions":
+            arr = arr.reshape(-1, 3)
+        elif name == "pts.colors":
+            arr = arr.reshape(-1, 4)
+        prepared.append((name, _dtype_of(name), arr))
+    geometry_io.sections_to_points(helper.data, prepared)
+    helper.update_tag()
+
+
 def _dtype_of(name):
-    if name.endswith(".colors"):
+    if name.endswith(".colors") or name in ("crv.types", "crv.orders", "crv.knots_mode", "crv.cyclic"):
         return "u8"
-    if name.endswith(".verts") or name.endswith(".crease_values"):
+    if (
+        name.endswith(".verts")
+        or name.endswith(".crease_values")
+        or name.endswith(".points")
+        or name.endswith(".positions")
+        or name.endswith(".radii")
+    ):
         return "f32"
     return "u32"
 
@@ -220,7 +292,7 @@ def _process_stage(obj, record, stage):
         stage.state = stack_mod.STATE_DISCONNECTED
         return False
 
-    sections = geometry_io.mesh_to_sections(obj.data)
+    sections = geometry_io.object_to_sections(obj, as_subd=bool(record.subd))
     raw = {name: codec.section_bytes(name, dtype, values) for name, dtype, values in sections}
     geom_hash = hashing.geometry_hash(raw)
     params_json = props.canonical_json(obj, stage)
@@ -253,7 +325,7 @@ def _process_stage(obj, record, stage):
         "rid": rid,
         "nonce": stage.nonce,
         "params": props.cast_values(obj, stage),
-        "geom": {"mode": mode, "hash": geom_hash, "subd": False},
+        "geom": {"mode": mode, "hash": geom_hash, "subd": bool(record.subd)},
         "units": "m",
         "space": "stack-local",
     }

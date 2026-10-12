@@ -48,10 +48,15 @@ namespace GhStack
 
         protected override void RegisterOutputParams(GH_OutputParamManager p)
         {
-            p.AddMeshParameter("Geometry", "G", "Geometry received from Blender", GH_ParamAccess.item);
+            p.AddMeshParameter("Geometry", "G", "Mesh received from Blender", GH_ParamAccess.item);
             p.AddTextParameter("Request ID", "R", "Request this geometry belongs to", GH_ParamAccess.item);
             p.AddTextParameter("Status", "S", "Stage status", GH_ParamAccess.item);
             p.AddTextParameter("Message", "M", "Diagnostics", GH_ParamAccess.item);
+            // Appended after the original outputs so documents saved before the
+            // curve/point/SubD work keep their wires.
+            p.AddCurveParameter("Curves", "C", "Curves received from Blender", GH_ParamAccess.list);
+            p.AddPointParameter("Points", "P", "Points received from Blender", GH_ParamAccess.list);
+            p.AddSubDParameter("SubD", "D", "SubD cage received from Blender", GH_ParamAccess.item);
         }
 
         protected override void SolveInstance(IGH_DataAccess da)
@@ -77,17 +82,33 @@ namespace GhStack
 
             StageSlot slot = GhLink.Slot(key);
             Mesh mesh = null;
+            var curves = new List<Curve>();
+            var points = new List<Point3d>();
+            SubD subd = null;
             string status = slot.Status;
             if (slot.Sections != null && slot.Sections.Count > 0)
             {
-                mesh = Conversion.MeshFromSections(
-                    new DecodedFrame(new Dictionary<string, object>(), slot.Sections), GhLink.DocumentScale());
+                var frame = new DecodedFrame(new Dictionary<string, object>(), slot.Sections);
+                double scale = GhLink.DocumentScale();
+                mesh = Conversion.MeshFromSections(frame, scale);
+                curves = Conversion.CurvesFromSections(frame, scale);
+                points = Conversion.PointsFromSections(frame, scale);
+                if (frame.Find("subd.verts") != null)
+                {
+                    var notes = new List<string>();
+                    subd = Conversion.SubDFromSections(frame, scale, notes);
+                    foreach (string note in notes)
+                        AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, note);
+                }
             }
             else
             {
                 status = GhLink.Connected ? "waiting" : "disconnected";
             }
             da.SetData("Geometry", mesh);
+            da.SetDataList("Curves", curves);
+            da.SetDataList("Points", points);
+            da.SetData("SubD", subd);
             da.SetData("Request ID", slot.Rid);
             da.SetData("Status", status);
             da.SetData("Message", slot.Message);
@@ -132,11 +153,13 @@ namespace GhStack
         protected override void RegisterInputParams(GH_InputParamManager p)
         {
             p.AddTextParameter("Key", "K", "Stage key, copied from the GH Stack panel in Blender", GH_ParamAccess.item);
-            p.AddMeshParameter("Geometry", "G", "The graph's result for this stage", GH_ParamAccess.item);
+            // One generic input: mesh, curves, points, SubD, or Brep. A Brep (or
+            // surface) is meshed on the way out, with a warning.
+            p.AddGenericParameter("Geometry", "G", "The graph's result: mesh, curve, point, SubD, or Brep", GH_ParamAccess.list);
             p.AddBooleanParameter("Enabled", "On", "Send results to Blender", GH_ParamAccess.item);
             p[0].Optional = true;
-            ((Grasshopper.Kernel.Parameters.Param_Boolean)p[2]).PersistentData.Append(new GH_Boolean(true));
             p[1].Optional = true;
+            ((Grasshopper.Kernel.Parameters.Param_Boolean)p[2]).PersistentData.Append(new GH_Boolean(true));
         }
 
         protected override void RegisterOutputParams(GH_OutputParamManager p)
@@ -150,10 +173,10 @@ namespace GhStack
         {
             string key = "";
             bool enabled = true;
-            Mesh mesh = null;
+            var goos = new List<IGH_Goo>();
             da.GetData("Key", ref key);
             da.GetData("Enabled", ref enabled);
-            da.GetData("Geometry", ref mesh);
+            da.GetDataList("Geometry", goos);
             GhLink.Register(this);
             foreach (string note in GhLink.TakeNotes())
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, note);
@@ -172,11 +195,48 @@ namespace GhStack
             string outHash = "";
             string status = slot.Status;
 
-            if (enabled && GhLink.Connected && mesh != null)
+            if (enabled && GhLink.Connected)
             {
                 try
                 {
-                    List<Section> sections = Conversion.SectionsFromMesh(mesh, GhLink.DocumentScale());
+                    var meshes = new List<Mesh>();
+                    var curves = new List<Curve>();
+                    var points = new List<Point3d>();
+                    var subds = new List<SubD>();
+                    var breps = new List<Brep>();
+                    foreach (IGH_Goo goo in goos)
+                    {
+                        if (goo == null) continue;
+                        GH_Mesh gm = goo as GH_Mesh;
+                        if (gm != null) { meshes.Add(gm.Value); continue; }
+                        GH_Curve gc = goo as GH_Curve;
+                        if (gc != null) { curves.Add(gc.Value); continue; }
+                        GH_Point gp = goo as GH_Point;
+                        if (gp != null) { points.Add(gp.Value); continue; }
+                        GH_SubD gd = goo as GH_SubD;
+                        if (gd != null) { subds.Add(gd.Value); continue; }
+                        // GH_Surface derives from GH_Brep, so a surface lands here too.
+                        GH_Brep gb = goo as GH_Brep;
+                        if (gb != null) { breps.Add(gb.Value); continue; }
+                        AddRuntimeMessage(GH_RuntimeMessageLevel.Remark,
+                            "ignored unsupported geometry: " + goo.TypeName);
+                    }
+
+                    var warnings = new List<string>();
+                    Dictionary<string, object> counts;
+                    List<Section> sections = Conversion.SectionsFromGeometry(
+                        meshes, curves, points, subds, breps, GhLink.DocumentScale(),
+                        warnings, out counts);
+
+                    var warningList = new List<object>();
+                    foreach (string w in warnings)
+                    {
+                        var entry = new Dictionary<string, object>();
+                        entry["code"] = "conversion";
+                        entry["message"] = w;
+                        warningList.Add(entry);
+                    }
+
                     outHash = FrameCodec.OutputHash(sections);
                     var header = new Dictionary<string, object>();
                     header["type"] = "response";
@@ -184,17 +244,14 @@ namespace GhStack
                     header["rid"] = slot.Rid;
                     header["out_hash"] = outHash;
                     header["status"] = "ok";
-                    var counts = new Dictionary<string, object>();
-                    counts["meshes"] = (long)1;
-                    counts["subd"] = (long)0;
-                    counts["curves"] = (long)0;
-                    counts["points"] = (long)0;
-                    counts["approximated_curves"] = (long)0;
+                    header["warnings"] = warningList;
                     header["counts"] = counts;
                     GhLink.Enqueue(FrameCodec.Encode(header, sections));
                     sent = true;
                     status = "ok";
                     slot.Status = "ok";
+                    foreach (string w in warnings)
+                        AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, w);
                 }
                 catch (Exception ex)
                 {

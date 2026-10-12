@@ -1,15 +1,18 @@
 """Helper objects and the GH Stage Data collection (plan §5).
 
-Helpers are hidden objects that carry a stage's output geometry. A node group
-reads them with Object Info (Original transform space, so the data stays in
-stack-local coordinates), which is what makes GH output ride along with native
-modifiers.
+Helpers are hidden objects that carry a stage's output geometry, one per
+geometry kind: a mesh, a curve, and a point cloud. A node group reads them with
+Object Info (Original transform space, so the data stays in stack-local
+coordinates), which is what makes GH output ride along with native modifiers.
+
+A SubD cage is a mesh, so it shares the mesh helper.
 """
 
 import bpy
 
 COLLECTION_NAME = "GH Stage Data"
 HELPER_PREFIX = "GHS "
+KINDS = ("mesh", "curves", "points")
 
 
 def collection(context=None):
@@ -26,17 +29,17 @@ def collection(context=None):
     return coll
 
 
-def helper_name(stack_obj, stage_key):
-    return "%s%s.%s" % (HELPER_PREFIX, stack_obj.name, stage_key)
+def helper_name(stack_obj, stage_key, kind="mesh"):
+    base = "%s%s.%s" % (HELPER_PREFIX, stack_obj.name, stage_key)
+    return base if kind == "mesh" else "%s.%s" % (base, kind)
 
 
-def ensure_helper(stack_obj, stage_key):
-    """The mesh helper for one stage. Created hidden and identity-transformed."""
-    name = helper_name(stack_obj, stage_key)
+def ensure_helper(stack_obj, stage_key, kind="mesh"):
+    """The helper for one kind of one stage. Created hidden and identity-transformed."""
+    name = helper_name(stack_obj, stage_key, kind)
     helper = bpy.data.objects.get(name)
     if helper is None:
-        mesh = bpy.data.meshes.new(name)
-        helper = bpy.data.objects.new(name, mesh)
+        helper = bpy.data.objects.new(name, _new_data(name, kind))
         collection().objects.link(helper)
     helper.hide_viewport = True
     helper.hide_render = True
@@ -44,14 +47,39 @@ def ensure_helper(stack_obj, stage_key):
     return helper
 
 
+def ensure_helpers(stack_obj, stage_key):
+    """All helpers of a stage, by kind."""
+    return {kind: ensure_helper(stack_obj, stage_key, kind) for kind in KINDS}
+
+
+def helper_for(stack_obj, stage_key, kind):
+    return bpy.data.objects.get(helper_name(stack_obj, stage_key, kind))
+
+
+def _new_data(name, kind):
+    if kind == "curves":
+        return bpy.data.curves.new(name, "CURVE")
+    if kind == "points":
+        return bpy.data.pointclouds.new(name)
+    return bpy.data.meshes.new(name)
+
+
 def remove_helper(stack_obj, stage_key):
-    helper = bpy.data.objects.get(helper_name(stack_obj, stage_key))
-    if helper is None:
-        return
-    mesh = helper.data
-    bpy.data.objects.remove(helper, do_unlink=True)
-    if mesh is not None and mesh.users == 0:
-        bpy.data.meshes.remove(mesh)
+    """Remove every helper of one stage and its orphaned data."""
+    for kind in KINDS:
+        helper = helper_for(stack_obj, stage_key, kind)
+        if helper is None:
+            continue
+        data = helper.data
+        bpy.data.objects.remove(helper, do_unlink=True)
+        if data is None or data.users != 0:
+            continue
+        if kind == "curves":
+            bpy.data.curves.remove(data)
+        elif kind == "points":
+            bpy.data.pointclouds.remove(data)
+        else:
+            bpy.data.meshes.remove(data)
 
 
 def register():

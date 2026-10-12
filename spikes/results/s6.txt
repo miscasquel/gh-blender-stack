@@ -1,0 +1,130 @@
+# S6 — curves, points, SubD and Brep through the product conversions
+
+2026-10-12, live in Rhino 8 under wine via the spike `.gha` (`check=s6`).
+Driver: `spikes/s6/driver.py`; checks: `spikes/s6/S6Checks.cs`.
+
+**Result: PASS.** Every geometry kind round-trips through the wire sections
+inside Rhino, with the exact/approximate classification behaving as the plan
+says. The raw driver transcript follows the tables.
+
+## Curves
+
+| Case | Mode | Approximated | Deviation from the original |
+|---|---|---|---|
+| Clamped uniform degree-3 | 1 (endpoint) | no | 3.6e-08 |
+| Clamped uniform with a weight of 2.5 | 1 | no | 3.6e-08 |
+| Unclamped uniform (knots 0..n+order-3) | 0 (normal) | no | 1.6e-08 |
+| Interior knot moved (non-uniform) | 2 (Bezier net) | yes | 1.6e-07 |
+| Circle, radius 5 (rational) | 2 | yes | **0.732233** |
+| Polyline | 0 (poly) | no | 0.0 |
+
+Notes:
+- The warning now carries the measured deviation: "1 curve(s) approximated as
+  Bezier spans; max deviation 0.732". The first run measured before the weights
+  were dropped and reported 0; the measurement is now taken on the curve that is
+  actually sent (the D3 rule).
+- Blender's unclamped knot convention was checked against `rhino3dm` and
+  Blender's own evaluation: `knots[i] = i` in Rhino reproduces Blender's uniform
+  spline exactly (both curves start at control point 1 and end at n-2).
+- The circle number matches S4's 0.73 measurement exactly.
+
+## Points
+
+3 points, deviation 0.0.
+
+## SubD
+
+| Check | Result |
+|---|---|
+| Cage -> sections -> SubD -> cage | 16 cage points, all matched, max distance 0.0 |
+| Tagged crease (pair 5-6) survives the round trip | `Crease` |
+| Fractional crease values rounded | warning: 13 fractional value(s), 1 edge changed |
+| Limitation warning | "creases transferred as tags; semi-sharp and vertex creases are not available from RhinoCommon" |
+
+Note: `Mesh.CreateFromSubDControlNet` returns 19 control points for the open
+cage's 16 (seam duplicates); every one matches a cage point, so the cage is
+intact. Vertex order is not guaranteed across SubD round trips, which is why the
+crease transfer maps by vertex pair, not by index.
+
+## Brep
+
+A sphere Brep becomes `mesh.verts/face_counts/face_indices` (559 vertices) with
+the warning "1 surface(s)/Brep(s) converted to mesh; Blender has no B-rep".
+
+## Raw driver transcript
+
+```
+listening on ws://127.0.0.1:9131/s1 (the spike's endpoint)
+connection from ('127.0.0.1', 47298)
+reply in 27.2 ms, status=ok
+  brep.counts.meshes: 1
+  brep.mesh_verts: 559
+  brep.sections: mesh.verts, mesh.face_counts, mesh.face_indices
+  brep.warning: 1 surface(s)/Brep(s) converted to mesh; Blender has no B-rep
+  circle.approx: 1
+  circle.back: 1
+  circle.cps: 13
+  circle.deviation: 0.732233089819309
+  circle.mode: 2
+  circle.order: 4
+  circle.warnings: 1 curve(s) approximated as Bezier spans; max deviation 0.732
+  nonuniform.approx: 1
+  nonuniform.back: 1
+  nonuniform.cps: 16
+  nonuniform.deviation: 1.625657633973513e-07
+  nonuniform.mode: 2
+  nonuniform.order: 4
+  nonuniform.warnings: 1 curve(s) approximated as Bezier spans
+  points.count: 3
+  points.deviation: 0.0
+  poly.approx: 0
+  poly.count: 1
+  poly.deviation: 0.0
+  poly.type: 0
+  subd.back: True
+  subd.back_faces: 9
+  subd.back_verts: 16
+  subd.cage_max_distance: 0.0
+  subd.cage_round_trip: True
+  subd.cage_unmatched: 0
+  subd.cage_verts: 16
+  subd.control_verts: 19
+  subd.crease_survived: Crease
+  subd.creased_pair: 5-6
+  subd.fractional_warning: 13 fractional crease value(s) rounded to the nearest tag; 1 edge(s) changed
+  subd.sections: subd.verts, subd.face_counts, subd.face_indices, subd.crease_edges, subd.crease_values
+  subd.warnings: creases transferred as tags; semi-sharp and vertex creases are not available from RhinoCommon
+  unclamped.approx: 0
+  unclamped.back: 1
+  unclamped.cps: 8
+  unclamped.deviation: 1.6130067746173063e-08
+  unclamped.mode: 0
+  unclamped.order: 4
+  unclamped.warnings: (none)
+  uniform.approx: 0
+  uniform.back: 1
+  uniform.cps: 8
+  uniform.deviation: 3.587329819806811e-08
+  uniform.mode: 1
+  uniform.order: 4
+  uniform.warnings: (none)
+  weighted.approx: 0
+  weighted.back: 1
+  weighted.cps: 8
+  weighted.deviation: 3.587329824705371e-08
+  weighted.mode: 1
+  weighted.order: 4
+  weighted.warnings: (none)
+RESULT: PASS
+```
+
+## What this changes for the plugin
+
+- The curve classification is settled: exact for clamped-uniform and uniform
+  NURBS (orders 2..6, weights kept), Bezier nets for everything else, and the
+  D3 warning is emitted with the measured deviation only when weights are lost.
+- SubD creases transfer by vertex pair and survive the cage round trip; the
+  fractional-value warning reports the affected edge count.
+- The mixed-output orchestration (`SectionsFromGeometry`) is exercised live by
+  Stage Out; its combining loops are covered by the individual paths above and
+  by the layer B mixed-response test (`blender/tests/headless/test_geometry_kinds.py`).

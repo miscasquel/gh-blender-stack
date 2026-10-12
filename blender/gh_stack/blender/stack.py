@@ -105,6 +105,7 @@ class GhStage(bpy.types.PropertyGroup):
     geom_hash: StringProperty(name="Geometry hash", default="")
     applied_out_hash: StringProperty(name="Applied output hash", default="")
     error: StringProperty(name="Last error", default="")
+    warnings: StringProperty(name="Warnings", default="")
     params: CollectionProperty(type=GhParam)
 
 
@@ -113,6 +114,9 @@ class GhStack(bpy.types.PropertyGroup):
 
     stack_id: StringProperty(name="Stack ID", default="")
     connected_doc: StringProperty(name="GH document", default="")
+    # A mesh stack flagged as a SubD control cage travels as subd.* sections
+    # (protocol §5); the GH side builds a SubD from it and tags the creases.
+    subd: BoolProperty(name="SubD cage", default=False)
     stages: CollectionProperty(type=GhStage)
 
 

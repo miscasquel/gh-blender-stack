@@ -1,16 +1,22 @@
 """Node groups and modifier wiring (plan §5).
 
 Each stage owns a node group: one Object Info (Original transform space, per the
-plan's evidence) per geometry type feeding a Join Geometry and the group output.
+plan's evidence) per helper kind feeding a Join Geometry and the group output.
 The stack object gets a Geometry Nodes modifier built from that group, so the GH
 stage sits in the modifier stack like any other modifier and native modifiers
 still compose around it.
+
+The group is rebuilt only when the helper set changes (a stage that starts
+returning curves or points), never per tick: node graph churn would dirty the
+depsgraph every pass.
 
 Modifier inputs are never set from Python: the wiring is through node values
 inside the group (plan §5).
 """
 
 import bpy
+
+from . import helpers
 
 GROUP_PREFIX = "GHS "
 MODIFIER_PREFIX = "GH · "
@@ -20,21 +26,17 @@ def group_name(stage_key):
     return "%s%s" % (GROUP_PREFIX, stage_key)
 
 
-def ensure_group(stage_key, helper):
-    """The node group for one stage, wired to the helper. Returns the group."""
+def ensure_group(stack_obj, stage_key):
+    """The node group for one stage, wired to all of its helpers. Returns the group."""
+    helpers_map = helpers.ensure_helpers(stack_obj, stage_key)
     name = group_name(stage_key)
     group = bpy.data.node_groups.get(name)
+    if group is not None and _group_matches(group, helpers_map):
+        return group
     if group is None:
         group = bpy.data.node_groups.new(name, "GeometryNodeTree")
     group.nodes.clear()
     group.interface.clear()
-
-    info = group.nodes.new("GeometryNodeObjectInfo")
-    info.location = (-200.0, 0.0)
-    info.inputs["Object"].default_value = helper
-    # Original space: the helper's data is already stack-local, and the plan's
-    # evidence shows Relative gives wrong coordinates.
-    info.transform_space = "ORIGINAL"
 
     join = group.nodes.new("GeometryNodeJoinGeometry")
     join.location = (0.0, 0.0)
@@ -43,15 +45,39 @@ def ensure_group(stage_key, helper):
     output.location = (200.0, 0.0)
     group.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
 
-    group.links.new(info.outputs["Geometry"], join.inputs["Geometry"])
+    y = -100.0
+    for kind in helpers.KINDS:
+        info = group.nodes.new("GeometryNodeObjectInfo")
+        info.location = (-200.0, y)
+        info.inputs["Object"].default_value = helpers_map[kind]
+        # Original space: the helper's data is already stack-local, and the
+        # plan's evidence shows Relative gives wrong coordinates.
+        info.transform_space = "ORIGINAL"
+        group.links.new(info.outputs["Geometry"], join.inputs["Geometry"])
+        y += 100.0
+
     group.links.new(join.outputs["Geometry"], output.inputs["Geometry"])
     return group
 
 
-def ensure_modifier(stack_obj, stage, helper):
+def _group_matches(group, helpers_map):
+    """Whether the group already reads exactly this helper set."""
+    wanted = list(helpers_map.values())
+    seen = 0
+    for node in group.nodes:
+        if node.bl_idname != "GeometryNodeObjectInfo":
+            continue
+        for helper in wanted:
+            if node.inputs["Object"].default_value == helper:
+                seen += 1
+                break
+    return seen == len(wanted)
+
+
+def ensure_modifier(stack_obj, stage):
     """The GN modifier on the stack object for one stage, inserted after the
     active modifier, or after the last GH stage when there is no active one."""
-    group = ensure_group(stage.key, helper)
+    group = ensure_group(stack_obj, stage.key)
     modifier = modifier_for(stack_obj, stage.key)
     if modifier is None:
         modifier = stack_obj.modifiers.new(name=MODIFIER_PREFIX + (stage.label or stage.key), type="NODES")

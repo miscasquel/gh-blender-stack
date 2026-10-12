@@ -4,6 +4,28 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Curves, points, and SubD flow through a stage in both directions:
+  - `Stage In` outputs `Curves`, `Points`, and `SubD` alongside the mesh.
+  - `Stage Out` takes one generic `Geometry` input (mesh, curve, point, SubD,
+    or Brep) and converts it to protocol sections.
+  - SubD cages carry edge-crease tags; fractional values are rounded to the
+    nearest tag with a warning, and the semi-sharp/vertex-crease limitation is
+    reported on every SubD stage (D2).
+  - Curves round-trip exactly where Blender can express them; otherwise they
+    become degree-3 Bezier spans, exact except when weights are dropped, with
+    the measured deviation in the warning (D3).
+  - Breps and surfaces are meshed on the way out, warned once per stage.
+  - Blender mesh stacks can be flagged as SubD cages (`Base is a SubD cage`);
+    Blender surface objects are meshed on the way in.
+- Response warnings are shown in the stage panel; the stage record keeps them
+  across ticks.
+- Layer B coverage for curve, point, SubD, and mixed-geometry responses
+  (39 headless tests).
+
 ## [0.1.0] — 2026-10-12
 
 First public release: a working demo of the Blender ↔ Grasshopper loop.

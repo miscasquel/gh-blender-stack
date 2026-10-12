@@ -5,6 +5,8 @@ from bpy.props import IntProperty, StringProperty
 
 from . import engine, helpers, nodes, stack as stack_mod
 
+STACK_TYPES = {"MESH", "CURVE", "POINTCLOUD", "SURFACE"}
+
 
 class GHSTACK_OT_add_stage(bpy.types.Operator):
     bl_idname = "gh_stack.add_stage"
@@ -16,8 +18,8 @@ class GHSTACK_OT_add_stage(bpy.types.Operator):
 
     def execute(self, context):
         obj = context.object
-        if obj is None or obj.type != "MESH":
-            self.report({"ERROR"}, "select a mesh object first")
+        if obj is None or obj.type not in STACK_TYPES:
+            self.report({"ERROR"}, "select a mesh, curve, point cloud or surface first")
             return {"CANCELLED"}
         record = stack_mod.ensure_stack(obj)
         if record is None:
@@ -26,8 +28,8 @@ class GHSTACK_OT_add_stage(bpy.types.Operator):
         stage = record.stages.add()
         stage.key = stack_mod.new_stage_key(self.label)
         stage.label = self.label
-        helper = helpers.ensure_helper(obj, stage.key)
-        nodes.ensure_modifier(obj, stage, helper)
+        helpers.ensure_helpers(obj, stage.key)
+        nodes.ensure_modifier(obj, stage)
         obj.update_tag()
         engine.push(obj)
         self.report({"INFO"}, "Added stage %s" % stage.key)

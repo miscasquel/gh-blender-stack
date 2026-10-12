@@ -34,6 +34,7 @@ Several scripts write scratch files to `/tmp/opencode/probe/`. Create that folde
 | `s1/` | S1: the C# spike `.gha`, its Python peer, and the build/deploy scripts. See `s1/README.md`; run `server.py --selftest` before any live session | §10, §15 |
 | `s3/` | S3: the geometry driver and a fake-GH stand-in for pre-flighting it. `driver.py` is the server side; the spike `.gha` does the conversion | §6, §15 |
 | `s4/` | S4: SubD and curve checks (`S4Checks.cs`) with `driver.py`; run through the spike `.gha` (`check=s4`) | §6, §15 |
+| `s6/` | S6: curve/point/SubD/Brep conversion checks (`S6Checks.cs`) and `probe.sh` (the standalone RhinoCommon probe that does not run under wine); run through the spike `.gha` (`check=s6`) | §6, §15 |
 
 Do not run `probe_gn.py` or `probe_hang*.py` without a timeout. They are the cases that hang.
 
@@ -45,4 +46,6 @@ Do not run `probe_gn.py` or `probe_hang*.py` without a timeout. They are the cas
 | S2 | passed 2026-10-11 | `results/s2-background.txt`, `results/s2-gui.txt`, `results/s2_timer.txt` |
 | S3 | passed 2026-10-11 | `results/s3.txt`; exact round trips at 1k/10k/100k, 100k in 30.3 ms end to end |
 | S4 | passed 2026-10-11 | `results/s4.txt`; tag setter works, `MakePiecewiseBezier` lossless, weight-dropping is the lossy step |
-| S5–S8 | open | |
+| S5 | passed 2026-10-12 | GUI checklist; keyframes/drivers/decorators and the value-list dropdown confirmed (plan §15) |
+| S6 | conversions passed 2026-10-12 | `results/s6.txt`; curves/points/SubD/Brep round-trip through the product code; the GUI display half remains |
+| S7, S8 | open | |
