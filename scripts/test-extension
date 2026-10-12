@@ -6,10 +6,15 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-ZIP="$REPO/dist/gh_stack-0.2.0.zip"
 TESTDIR="${EXTENSION_TEST_DIR:-/tmp/opencode/bl-extension-test}"
 
 "$REPO/scripts/build-extension" >/dev/null
+
+ZIP="$(ls -t "$REPO"/dist/gh_stack-*.zip 2>/dev/null | head -1 || true)"
+if [ -z "$ZIP" ]; then
+  echo "no extension zip in $REPO/dist after the build" >&2
+  exit 1
+fi
 
 rm -rf "$TESTDIR"
 mkdir -p "$TESTDIR/config" "$TESTDIR/scripts" "$TESTDIR/extensions"

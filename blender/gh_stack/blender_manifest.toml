@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "gh_stack"
-version = "0.2.0"
+version = "0.1.1"
 name = "GH Stack"
 tagline = "Grasshopper definitions as stackable modifiers in Blender"
 maintainer = "Miquel Oller <miqueloc14@gmail.com>"

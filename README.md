@@ -5,9 +5,10 @@ native Geometry Nodes modifiers, in one visible object per stack. Geometry and
 parameters both flow through the stack, so parameters can be keyframed, driven,
 and baked.
 
-That is the v1 goal. **v0.1.0 is a working demo**: a mesh in Blender driven by a
-real Grasshopper definition, with parameters you can edit and keyframe in
-Blender. [DEMO.md](DEMO.md) walks through the loop.
+That is the v1 goal. **v0.1.1 is a working demo**: geometry (meshes, curves,
+points, SubD cages) driven by a real Grasshopper definition, with parameters you
+can edit and keyframe in Blender, packaged as a Blender extension.
+[DEMO.md](DEMO.md) walks through the loop.
 
 ```
 Blender                                          Rhino / Grasshopper (wine)
