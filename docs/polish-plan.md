@@ -573,42 +573,54 @@ identical.
 W2 established *that* writes should be change-gated, and got that right. What is
 left is the cost of *deciding*.
 
-### P4-1 · `_prefix_revision` runs on every tick
-**Where:** `blender/gh_stack/blender/engine.py:674-687`, called from
-`_prefix_sections` (`:648`).
-**Why it matters:** the single largest avoidable cost in the add-on, and P0-8 made
-it measurable: a *memo hit* — the cheap path, the one that is supposed to avoid
-work — costs **0.99 ms at 4k triangles and 8.7 ms at 50k**, because the revision
-reads and hashes the whole base mesh before it can decide anything. The clone it
-avoids costs 4.1 ms and 45 ms. Every tick,
-for every stage with anything before it in the stack, the revision tuple is
-rebuilt from scratch:
-- `geometry_io.object_to_sections(obj)` + `codec.section_bytes` +
-  `hashing.geometry_hash` over the **whole base geometry** (`:679-680`);
-- `_modifier_descriptor` (`:690-714`) walks **every property of every preceding
-  modifier** through `modifier.bl_rna.properties`, with a `getattr` and a
-  `try`/`except` per property;
-- `_node_tree_signature` (`:734-773`) walks every node, every input socket's
-  `default_value`, every link — **sorting the links** — and the whole interface.
+### P4-1 · `_prefix_revision` runs on every tick — **re-scoped, see the profile**
+**Where:** `blender/gh_stack/blender/engine.py:801-830`, called from
+`_prefix_sections` (`:771`).
+**Why it matters:** a *memo hit* — the cheap path, the one that is supposed to avoid
+work — costs **0.99 ms at 4k triangles and 8.3 ms at 50k**, while the clone it
+avoids costs 4.1 ms and 45 ms. So the memo is worth having, but its floor is high
+for a stage with anything before it in the stack.
+**Profiled 2026-10-12** (50,625 triangles, a 42-node prefix graph), timing the
+parts of one revision:
 
-That is O(graph) at `IDLE_INTERVAL` = 20 Hz, spent deciding whether to skip the
-expensive part. The memo at `:651` saves the clone, not the cost of deciding to.
-At 100k triangles this is measurable against the §13 budget.
-**Fix, in order of preference:**
-1. Gate on cheap version counters first, and compute the full tuple only when one
-   moved. Blender gives you `obj.data.version` (bumped by any mesh edit), the
-   modifier list's names and types, `stage.nonce`, and the upstream
-   `applied_out_hash`es. A cheap tuple over those catches the overwhelming
-   majority of real edits for near-zero cost.
-2. Cache the base-geometry hash against `obj.data.version` instead of
-   recomputing it.
-3. Only then compute the deep `_modifier_descriptor` / `_node_tree_signature`.
-**Test:** `test_frame_cache.py::NoOpQuietTests.test_02_event_loop_idle_is_quiet`
-already asserts the quiet path. Add an assertion that
-`engine.stats["prefix_clones"]` stays flat across a burst of idle ticks, and a
-timing assertion at 100k.
-**Verify:** `scripts/test-blender`.
-**Effort:** L.
+| part | ms | share |
+|---|---:|---:|
+| `geometry_io.object_to_sections` — the geometry read | **7.35** | 89% |
+| `hashing.geometry_hash` | 0.60 | 7% |
+| `_modifier_descriptor` — the `bl_rna` property walk | **0.21** | 3% |
+| `_node_tree_signature` — nodes, sockets, links | **0.20** | 2% |
+| `codec.section_bytes` | 0.03 | <1% |
+| whole `_prefix_revision` | 8.23 | |
+
+> **This re-scopes the item.** The original fix here was to gate
+> `_modifier_descriptor` and `_node_tree_signature` behind cheap counters. Those
+> two are **0.41 ms combined — 5% of the cost** — so gating them is complexity for
+> almost nothing. The cost is the geometry read, and the read is what makes the
+> change signal *sound*: a vertex moved without changing any count is exactly the
+> edit a cheap gate would miss, which is the class of bug P0-8 was.
+**The real question is whether the read can be skipped at all.** Blender exposes no
+per-datablock content counter to lean on: `Mesh.version` does not exist in 5.2, and
+`NodeTree` offers only `tag`, `session_uid`, `update_tag` and `interface_update` —
+none of them a count of content changes. So:
+1. **Accept it.** 8.3 ms at 50k, paid once per pass per stage-with-a-prefix; a stage
+   at the head of the stack reads the base datablocks directly and pays nothing
+   extra. Do nothing and write the number down.
+2. **Cheapen the read**, not the decision: reuse preallocated numpy buffers across
+   passes instead of allocating fresh arrays per read. Modest (allocation is part
+   of the 7.35 ms), sound, and independent of everything else.
+3. **Skip the read only with a sound signal.** A "the depsgraph updated" flag is
+   not one: our own passes tag the depsgraph constantly (helper writes, modifier
+   visibility, the prefix clone's link/unlink). Finding a signal that distinguishes
+   input changes from our own writes is the whole problem, and a heuristic here
+   reintroduces silent stale geometry. If someone wants this, it needs a design
+   note first, not a patch.
+**Do not** do the original item 1/3: gating the descriptor walks.
+**Tests:** `test_frame_cache.py::NoOpQuietTests.test_02_event_loop_idle_is_quiet`
+already asserts the quiet path, and
+`TimeDrivenPrefixTests.test_03_an_unchanged_frame_still_hits_the_memo` asserts the
+memo still hits at an unchanged frame. Any change here must keep both green, and
+must keep the frame in whatever tuple gets compared.
+**Effort:** S for option 2; L and design-first for option 3.
 
 ### P4-2 · Nested node groups are not walked
 **Where:** `blender/gh_stack/blender/engine.py:734-737` — the docstring says so
@@ -625,16 +637,30 @@ datablock.
 prefix changes.
 **Effort:** M.
 
-### P4-3 · `_modifier_descriptor` skips collections entirely
-**Where:** `blender/gh_stack/blender/engine.py:707-708` — `continue` for
+### P4-3 · `_modifier_descriptor` skips collections — **not a defect, close it**
+**Where:** `blender/gh_stack/blender/engine.py:854-855` — `continue` for
 `prop.type == "COLLECTION"`.
-**Why it matters:** the same class of silent staleness as P4-2, for any modifier
-whose behaviour depends on a collection (vertex groups, particle systems, any
-modifier with an ID property collection).
-**Fix:** freeze collection contents as `len()` plus a stable per-item key. If some
-collections are genuinely too expensive, skip them **by name**, with a comment
-saying which and why — not by type.
-**Effort:** S.
+**Why it was filed:** presumed to be the same silent-staleness class as P4-2, "for
+any modifier whose behaviour depends on a collection".
+**Checked 2026-10-12 across every registered modifier type.** Exactly four have a
+COLLECTION-typed property, and none of them is an input this protocol carries:
+
+| modifier | collections | matters? |
+|---|---|---|
+| `NodesModifier` | `bakes`, `panels`, `node_warnings` | no — a bake cache, node-editor layout, and diagnostics |
+| `UVProjectModifier` | `projectors` | no — changes UVs, and the wire carries vertex colours, not UVs |
+| `GreasePencilDashModifierData` | `segments` | no — not one of the supported object types |
+| `GreasePencilTimeModifier` | `segments` | no |
+
+So skipping by type is **correct as written**, and freezing those collections would
+add cost for no signal. **Close the item** — but leave a comment in place saying
+which four were checked and why none matters, so it is not re-filed.
+**One corner worth a note, not a fix:** `NodesModifier.bakes` is a *bake cache* — if
+a prefix graph contains a Bake node, recomputing that bake changes the evaluated
+geometry with no property and no node-graph change, so the revision would not see
+it and the memo would serve a stale prefix. Narrow (a baked prefix modifier), and
+unverified — confirm whether a re-bake is observable before treating it as real.
+**Effort:** S (the comment), or zero if the checked table above is enough.
 
 ### P4-4 · Quadratic eviction in two places
 **Where:** `engine.py:488-492` (recomputes `_memory_usage` on every loop
