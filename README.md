@@ -5,7 +5,7 @@ native Geometry Nodes modifiers, in one visible object per stack. Geometry and
 parameters both flow through the stack, so parameters can be keyframed, driven,
 and played back.
 
-That is the v1 goal. **v0.1.1 is a working demo**: geometry (meshes, curves,
+That is the v1 goal. **v0.1.2 is a working demo**: geometry (meshes, curves,
 points, SubD cages) driven by a real Grasshopper definition, with parameters you
 can edit and keyframe in Blender, packaged as a Blender extension.
 [DEMO.md](DEMO.md) walks through the loop.

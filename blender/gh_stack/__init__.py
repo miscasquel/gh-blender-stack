@@ -8,10 +8,13 @@ Only the pure core is imported at module load, so tests and tools can import
 registered.
 """
 
+# Extension installs read blender_manifest.toml; this bl_info version is what
+# the development symlink install (scripts/install-addon) reports, and it must
+# stay in sync with the manifest (P8-4).
 bl_info = {
     "name": "GH Stack",
     "author": "GH Stack",
-    "version": (0, 1, 1),
+    "version": (0, 1, 2),
     "blender": (5, 2, 0),
     "location": "View3D > Sidebar > GH Stack",
     "description": "Drive Grasshopper definitions from Blender as stackable modifiers",

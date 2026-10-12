@@ -1047,6 +1047,12 @@ states that `stack.py:25-29` owns.
 today the module reads as dead code to anyone who greps for its callers.
 
 ### P8-4 · `bl_info` versus the manifest version
+
+> **Done 2026-10-12** with the v0.1.2 release: both files say `0.1.2` and each
+> carries a comment pointing at the other, so the next bump cannot miss one.
+> (Blender ignores `bl_info` for extension installs; only the development symlink
+> install reads it.) The history is below.
+
 `blender/gh_stack/__init__.py:14` (`"version": (0, 1, 1)`) and
 `blender_manifest.toml:4` (`version = "0.1.1"`) must be bumped together. For an
 extension Blender ignores `bl_info` — it is required only by the development

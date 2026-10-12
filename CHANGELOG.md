@@ -4,7 +4,10 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.2] — 2026-10-12
+
+Third release: the simulation-style frame cache, mid-stack prefix evaluation, and
+a hardening pass over the plugin and the decode boundary.
 
 ### Added
 
@@ -281,3 +284,4 @@ First public release: a working demo of the Blender ↔ Grasshopper loop.
 
 [0.1.0]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.1.0
 [0.1.1]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.1.1
+[0.1.2]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.1.2
