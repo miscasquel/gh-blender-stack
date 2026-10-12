@@ -302,6 +302,7 @@ A stage's prefix never includes its own parameters, so a parameter change cannot
 - Stage records, helper data, and node groups live in the `.blend`.
 - The disk cache is content-addressed, so restoring an earlier state is a cache hit.
 - On load, stages are re-bound by key. Missing helpers or groups are rebuilt and marked `unbound`.
+- The engine's timer and handlers are persistent (Blender clears non-persistent ones on every file load), and a load resets mid-request stages and marks every stack for evaluation, so a reopened file talks to Grasshopper without an edit.
 
 ### 9.8 Operators
 Add Stage, Remove Stage, Push, Pull, Recompute from here, Freeze, Preview, Key all, Clear keys, Purge orphans. All are undo-safe. (Bake range is removed: the frame cache fills during playback, ADR 0008.)

@@ -53,6 +53,17 @@ Notable changes to this project, following
   in full (protocol §8.8 and §4.3). Error responses are no longer cached as
   results.
 
+### Fixed
+
+- Reopened files: opening a `.blend` (File → Open, Open Recent, Revert, or
+  Blender started with a file) cleared the engine's timer and app handlers,
+  because Blender only preserves persistent ones. After any load the add-on
+  went silent and never talked to Grasshopper again. The timer and handlers are
+  persistent now, and a load behaves like a reconnect: stages saved mid-request
+  are reset and every stack is evaluated against the cache and Grasshopper
+  without waiting for an edit. Layer B covers the save/open ordering where
+  Grasshopper connected before the file was opened (3 tests).
+
 ### Changed
 
 - The planned Bake operator is dropped (ADR 0008): the frame cache fills as you

@@ -62,13 +62,40 @@ def _mark_dirty_all():
             _dirty.add(obj.name)
 
 
+@bpy.app.handlers.persistent
 def _on_depsgraph(scene, depsgraph=None):
     if _evaluating:
         return
     _mark_dirty_all()
 
 
+@bpy.app.handlers.persistent
 def _on_frame_change(scene, depsgraph=None):
+    _mark_dirty_all()
+
+
+@bpy.app.handlers.persistent
+def _on_load(scene=None):
+    """A file was opened (or reverted, or Blender started with one).
+
+    Blender clears non-persistent handlers and timers on every file load, so
+    these hooks are registered as persistent: without that the engine goes
+    silent on reopen and never talks to Grasshopper again. A freshly loaded
+    file must behave like a reconnect: an in-flight request belonged to the old
+    session, a stage saved mid-request must not wait for it, and every stack is
+    evaluated against the cache and Grasshopper (plan §9.7).
+    """
+    if not bpy.app.timers.is_registered(_timer):
+        bpy.app.timers.register(_timer, first_interval=IDLE_INTERVAL, persistent=True)
+    _waiting_since.clear()
+    _prefix_memo.clear()
+    for obj in bpy.data.objects:
+        record = stack_mod.stack_of(obj)
+        if record is None:
+            continue
+        for stage in record.stages:
+            if stage.state == stack_mod.STATE_WAITING:
+                _set(stage, "state", stack_mod.STATE_IDLE)
     _mark_dirty_all()
 
 
@@ -866,9 +893,12 @@ def register():
     _stores.clear()
     # A UI-driven parameter write (the choice dropdown) must reach the engine.
     stack_mod.set_param_changed_hook(_mark_object_dirty)
-    bpy.app.timers.register(_timer, first_interval=IDLE_INTERVAL)
+    # Persistent: Blender clears non-persistent timers and handlers on every
+    # file load, which would otherwise silence the engine on reopen.
+    bpy.app.timers.register(_timer, first_interval=IDLE_INTERVAL, persistent=True)
     bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph)
     bpy.app.handlers.frame_change_post.append(_on_frame_change)
+    bpy.app.handlers.load_post.append(_on_load)
     _registered = True
     start_server()
 
@@ -883,6 +913,7 @@ def unregister():
     for handler_list, handler in (
         (bpy.app.handlers.depsgraph_update_post, _on_depsgraph),
         (bpy.app.handlers.frame_change_post, _on_frame_change),
+        (bpy.app.handlers.load_post, _on_load),
     ):
         if handler in handler_list:
             handler_list.remove(handler)
