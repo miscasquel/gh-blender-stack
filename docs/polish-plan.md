@@ -956,8 +956,10 @@ still describes the pre-W2 tree:
 - `:108-117` — the "Idle stability" checklist reads as TODO; items 1 and 2 are
   done (`_set()` change-gating, `nodes.set_modifier_visible`), and item 3 is
   partly done (the prefix memo exists — but see P4-1/P4-2/P4-3).
-**Fix:** prefer a short "Superseded — see ADR 0008" banner over a rewrite. The
-document exists to record what was true when it was written; preserve that.
+**Resolved 2026-10-12:** the file was deleted rather than bannered — it described a
+branch of history that had already been superseded, and ADR 0008 plus this plan's
+P4 items now carry everything it established. Nothing referenced it except ADR
+0008, whose link was updated.
 
 ### P8-3 · `core/rules.py` has no consumer
 `blender/gh_stack/core/rules.py` (116 lines) is well-documented and exhaustively

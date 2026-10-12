@@ -1,15 +1,17 @@
 # Handoff — stale inputs and truthful failures (next batch)
 
-**Status:** proposed, not started. Written 2026-10-12, after the frame-cache and
-protocol work landed (`0a2bf22` plugin, `c1d19d7` engine, `a8054ab` plan).
+**Status:** in progress. Written 2026-10-12, after the frame-cache and protocol
+work landed (`0a2bf22` plugin, `c1d19d7` engine, `a8054ab` plan); revised the same
+day after a code-level review of every reference.
 
 **Supersedes:** nothing. `docs/polish-plan.md` remains the full backlog, with every
 item's evidence; this is the next slice of it, chosen and re-justified against what
 the last batch taught us.
 
-**Baseline, all green at `a8054ab`:** 60 core, 80 headless, 10 golden fixtures,
-installed-extension round trip. The plugin is deployed and matches the build
-(`grasshopper/build/out/GhStack.gha`).
+**Baseline, all green at `a8054ab` (re-run 2026-10-12):** 60 core, 80 headless,
+10 golden fixtures, installed-extension round trip. The deployed plugin is
+byte-identical to the build (`grasshopper/build/out/GhStack.gha`); re-verified the
+same day.
 
 ---
 
@@ -20,11 +22,11 @@ installed-extension round trip. The plugin is deployed and matches the build
 | 1 | **P4-2** nested node groups are not walked | The same failure class as the bug that just cost days: a prefix edit the engine does not notice delivers stale geometry, silently. The docstring admits it. A complex GH tree is exactly the case. |
 | 2 | **P3-2** the client's outbox jams on a failed send | A live stall in the client: one failed write leaves the frame at the head of the queue forever. Small, and it is the kind of thing that looks like "it randomly stopped". |
 | 3 | **P1-1** `Stage Out` never answers with an error | A failing stage sits for the full 30 s timeout instead of answering `gh_solve_failed`. The protocol defines it, the fixture pins it, the engine already handles it. Only the client is missing. |
-| 4 | **P2-1, P2-3** the decoder's malformed-input contract, and `dtype` validation | Same files as item 3, cheap, and the plugin has just been rebuilt anyway. A malformed frame currently kills a healthy connection. |
+| 4 | **P2-1, P2-2, P2-3** the decoder's malformed-input contract, `proto_mismatch`, and `dtype` validation | Same build cycle as item 3, cheap, and the plugin has just been rebuilt anyway. A malformed frame currently kills a healthy connection. |
 | 5 | **P0-9** coverage and deployment discipline | The reason items 1–4 are findable at all. Two concrete pieces: a `fake_gh` mode that coalesces, and a script that says whether the deployed plugin is current. |
 
 Items 1 and 2 are independent of everything else and can go in either order. Items
-3 and 4 touch the same two C# files and want one rebuild-and-deploy cycle. Item 5 is
+3 and 4 both land in the same `.gha` and want one rebuild-and-deploy cycle. Item 5 is
 the only one that is pure infrastructure, and it is what makes the next handoff
 cheaper.
 
@@ -77,7 +79,7 @@ The pieces an implementer needs to know:
   the playhead has moved to.
 - The **cache lookup runs before the gate**, so a cached frame applies immediately
   even with a request outstanding. This is what makes a replay smooth.
-- **`_inflight`/`stats`** carry `timeouts` and `undelivered` for diagnostics;
+- **`stats`** carries `timeouts` and `undelivered` for diagnostics;
   `undelivered` counts requests no client socket could carry.
 
 ### Three invariants that must not be broken
@@ -205,28 +207,39 @@ so a retry is a fresh attempt, which is what you want.
 `unknown_ref`). Add a mode that fails a solve — `--fail-after N` — and assert in
 layer B that the Blender stage reaches `error` **without waiting for the timeout**
 (assert on elapsed time, not just on the state, or the test passes for the wrong
-reason).
+reason). Note the layer boundary: layer B drives the fake, so this pins the
+*engine's* error path (only the `unknown_ref` flavor is covered today); the
+`Components.cs` half cannot be reached by any automated suite and needs inspection
+plus a live session.
 
 **Effort:** M.
 
 ---
 
-## Item 4 — P2-1, P2-3: the decoder's contract
+## Item 4 — P2-1, P2-2, P2-3: the decoder's contract
 
-Same two files as item 3, so do them in the same edit–build–deploy cycle.
+Different files from item 3 (`Json.cs`, plus a few lines each in `Frame.cs` and
+`GhLink.cs`), but one edit–build–deploy cycle: all of it lands in the same `.gha`.
 
-- **P2-1** — `Json.cs:119` and `:147-154`: the parser documents `JsonException` as
-  its failure mode but throws `FormatException` / `ArgumentException` /
-  `OverflowException` for `\uZZZZ`, `1.2.3`, `1e`. `GhLink.ReceiveLoop` catches only
+- **P2-1** — `Json.cs:119` and `:147-154`: the parser's contract is `JsonException`
+  (the one exception `Frame.Decode` catches) but it throws `FormatException` /
+  `ArgumentException` / `OverflowException` for `\uZZZZ`, `1.2.3`, `1e`. `GhLink.ReceiveLoop` catches only
   `FrameException` and `JsonException`, so anything else escapes into `Loop`'s
   catch-all and **tears down a healthy connection**. Both halves needed: make the
   conversions raise `JsonException`, *and* add a last-resort `catch (Exception)` in
   `ReceiveLoop` that notes and continues.
+- **P2-2** — `Frame.cs:195-198`: `"v": "x"` makes `Convert.ToInt64` throw
+  `FormatException`, and the message builder throws again through `Convert.ToDouble`
+  and `Json.FormatDouble`, so the one error the protocol mandates for a version
+  mismatch is an unclassified exception. After P2-1 it would merely be swallowed
+  instead of answered. Require an integral JSON type (`Json.IsNumber` already
+  exists) before converting, and build the message with `Convert.ToString` rather
+  than the double formatter. This also settles P5-2.
 - **P2-3** — `Frame.cs:219-227` accepts any `dtype` other than the `"u8"` special
   case, so C# accepts frames Python rejects (`codec.py:88`, `:105`); and `:211` reads
-  `name` through `Json.GetString`, which returns `null`, so `Section(null, …)` reaches
-  `UpdateSection` and throws an NRE. Validate `dtype` against `{f32,u32,u8}` and
-  require a non-empty `name`.
+  `name` through `Json.GetString`, which returns `null` — a name `DecodedFrame.Find`
+  can never match, so the frame is accepted and its geometry is silently unusable.
+  Validate `dtype` against `{f32,u32,u8}` and require a non-empty `name`.
 
 **Tests:** `grasshopper/tests/console/Program.cs` runs without Rhino, so these *are*
 testable — add malformed-frame cases there, mirroring the coverage

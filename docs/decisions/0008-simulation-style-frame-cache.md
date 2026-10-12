@@ -11,7 +11,8 @@ Geometry-Nodes-simulation behavior instead: the cache fills as the user plays
 and scrubs, with no bake setup and no start/end frame fields; it resets when
 Grasshopper sends an update; idle must not tag the depsgraph (Cycles could not
 accumulate more than one viewport sample); and renders use cached frames.
-`docs/handoff-frame-cache.md` worked out the design.
+The design was worked out in the frame-cache handoff (deleted 2026-10-12; its
+substance lives in this ADR and in the polish plan's P4 items).
 
 ## Decision
 
