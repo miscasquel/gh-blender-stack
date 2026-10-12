@@ -98,6 +98,13 @@ class GHSTACK_OT_start_server(bpy.types.Operator):
         return {"FINISHED"} if ok else {"CANCELLED"}
 
 
+def _safe_unregister(cls):
+    try:
+        bpy.utils.unregister_class(cls)
+    except (RuntimeError, ValueError):
+        pass
+
+
 def register():
     for cls in (
         GHSTACK_OT_add_stage,
@@ -117,4 +124,4 @@ def unregister():
         GHSTACK_OT_remove_stage,
         GHSTACK_OT_add_stage,
     ):
-        bpy.utils.unregister_class(cls)
+        _safe_unregister(cls)

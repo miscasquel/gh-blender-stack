@@ -15,18 +15,34 @@ from ..core import codec
 from . import bridge
 
 VENDOR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "vendor")
-if VENDOR not in sys.path:
-    sys.path.insert(0, VENDOR)
 
-try:
-    import websockets
-    from websockets.asyncio.server import serve
-except ImportError as exc:  # pragma: no cover - reported in the UI
-    websockets = None
-    serve = None
-    IMPORT_ERROR = exc
-else:
-    IMPORT_ERROR = None
+
+def _load_websockets():
+    """Import websockets, preferring an installed copy.
+
+    The extension ships the official pure-Python wheel, which Blender installs
+    into the extension's _libs directory (on sys.path while the extension is
+    enabled). The vendored copy under vendor/ is the fallback for development
+    installs (scripts/install-addon), which have no wheel.
+    """
+    try:
+        import websockets as ws
+        from websockets.asyncio.server import serve as ws_serve
+
+        return ws, ws_serve, None
+    except ImportError as first_error:
+        if VENDOR not in sys.path:
+            sys.path.insert(0, VENDOR)
+        try:
+            import websockets as ws
+            from websockets.asyncio.server import serve as ws_serve
+
+            return ws, ws_serve, None
+        except ImportError as exc:  # pragma: no cover - reported in the UI
+            return None, None, exc or first_error
+
+
+websockets, serve, IMPORT_ERROR = _load_websockets()
 
 
 class GhServer(object):
@@ -53,13 +69,10 @@ class GhServer(object):
 
     def stop(self):
         self._stop.set()
-        loop = self._loop
-        if loop is not None:
-            try:
-                if not loop.is_closed():
-                    loop.call_soon_threadsafe(loop.stop)
-            except RuntimeError:
-                pass  # the loop went away between the check and the call
+        # The serve loop polls the stop event every 100 ms and then closes its
+        # connections on the live loop. Stopping the loop directly here would
+        # make websockets schedule its close on a dead loop (noisy RuntimeError
+        # at interpreter shutdown).
         if self._thread is not None:
             self._thread.join(timeout=3.0)
         self._thread = None
@@ -137,12 +150,22 @@ class GhServer(object):
                     bridge.set_connected(header.get("doc", ""))
                 bridge.post_incoming(header, sections)
         except Exception as exc:
-            # Never swallow silently: a handler bug closes the connection, and
-            # that is exactly the kind of thing that is invisible from the UI.
-            import traceback
+            # An abrupt disconnect is normal (GH closed, Blender quit); a handler
+            # bug is not. Only the latter deserves a traceback in the log.
+            closed = False
+            try:
+                import websockets.exceptions
 
-            bridge.state["error"] = "handler error: %r" % (exc,)
-            print("[gh-stack] handler error: %r\n%s" % (exc, traceback.format_exc()), flush=True)
+                closed = isinstance(exc, websockets.exceptions.ConnectionClosed)
+            except Exception:
+                pass
+            if closed:
+                print("[gh-stack] client disconnected: %r" % (exc,), flush=True)
+            else:
+                import traceback
+
+                bridge.state["error"] = "handler error: %r" % (exc,)
+                print("[gh-stack] handler error: %r\n%s" % (exc, traceback.format_exc()), flush=True)
         finally:
             try:
                 self._clients.remove(ws)

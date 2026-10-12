@@ -47,14 +47,18 @@ Blender                                     Rhino / Grasshopper (wine)
 ## Setup
 
 ```
-scripts/install-addon          # symlinks the add-on into Blender's user addons
+scripts/build-extension        # builds dist/gh_stack-<version>.zip
+scripts/install-extension      # installs and enables the extension in Blender
+
 grasshopper/build/build-gha.sh # builds GhStack.gha
 grasshopper/deploy/deploy.sh   # installs it into the Grasshopper Libraries
 ```
 
-Enable **GH Stack** in Blender's Preferences > Add-ons (search `gh_stack`). The
-panel is in the 3D viewport sidebar (**N**) under the **GH Stack** tab. The server
-starts with the add-on on port 9130 (add-on preferences).
+For development, `scripts/install-addon` symlinks the working tree instead (no
+wheel; the vendored websockets copy is used). The add-on appears as **GH Stack**
+in Blender's Preferences > Add-ons. The panel is in the 3D viewport sidebar
+(**N**) under the **GH Stack** tab. The server starts with the add-on on port
+9130 (add-on preferences).
 
 ## The loop
 

@@ -1,0 +1,20 @@
+schema_version = "1.0.0"
+
+id = "gh_stack"
+version = "0.2.0"
+name = "GH Stack"
+tagline = "Grasshopper definitions as stackable modifiers in Blender"
+maintainer = "Miquel Oller <miqueloc14@gmail.com>"
+type = "add-on"
+
+license = ["SPDX:GPL-3.0-or-later"]
+blender_version_min = "5.2.0"
+website = "https://github.com/miscasquel/gh-blender-stack"
+
+# The official pure-Python wheel. Blender installs it into the extension's
+# _libs directory; the vendored copy in vendor/ is only the fallback for
+# development installs (scripts/install-addon).
+wheels = ["./wheels/websockets-17.2-py3-none-any.whl"]
+
+[permissions]
+network = "Listen on localhost for the Grasshopper connection"

@@ -168,7 +168,12 @@ def register():
 
 
 def unregister():
-    del bpy.types.Object.gh_stack
-    bpy.utils.unregister_class(GhStack)
-    bpy.utils.unregister_class(GhStage)
-    bpy.utils.unregister_class(GhParam)
+    try:
+        del bpy.types.Object.gh_stack
+    except AttributeError:
+        pass
+    for cls in (GhStack, GhStage, GhParam):
+        try:
+            bpy.utils.unregister_class(cls)
+        except (RuntimeError, ValueError):
+            pass

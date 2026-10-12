@@ -186,11 +186,24 @@ def _port():
         return 9130
 
 
+def _safe_unregister(cls):
+    """Unregister a class that may already be gone.
+
+    Disabling an add-on can race a partially registered state (for example when
+    an extension replaces a development install); an unregister that raises
+    leaves the rest of the module registered.
+    """
+    try:
+        bpy.utils.unregister_class(cls)
+    except (RuntimeError, ValueError):
+        pass
+
+
 def register():
     bpy.utils.register_class(GHSTACK_PT_panel)
     bpy.utils.register_class(GHSTACK_PT_diagnostics)
 
 
 def unregister():
-    bpy.utils.unregister_class(GHSTACK_PT_diagnostics)
-    bpy.utils.unregister_class(GHSTACK_PT_panel)
+    _safe_unregister(GHSTACK_PT_diagnostics)
+    _safe_unregister(GHSTACK_PT_panel)

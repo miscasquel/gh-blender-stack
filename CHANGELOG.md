@@ -8,6 +8,12 @@ Notable changes to this project, following
 
 ### Added
 
+- Blender extension packaging (S8): `blender_manifest.toml` with the network
+  permission and the official pure-Python `websockets` wheel,
+  `scripts/build-extension`, `scripts/install-extension`, and
+  `scripts/test-extension` (installs into a throwaway config and round-trips
+  against `tools/fake_gh`). The development symlink install stays and falls
+  back to `vendor/`.
 - Curves, points, and SubD flow through a stage in both directions:
   - `Stage In` outputs `Curves`, `Points`, and `SubD` alongside the mesh.
   - `Stage Out` takes one generic `Geometry` input (mesh, curve, point, SubD,

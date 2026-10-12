@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Install the built extension zip into Blender's user repository and enable it.
+#
+#     scripts/install-extension [path/to/gh_stack-x.y.z.zip]
+#
+# Without an argument, the newest zip in dist/ is used. Build one first with
+# scripts/build-extension.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+
+ZIP="${1:-}"
+if [ -z "$ZIP" ]; then
+  ZIP="$(ls -t "$REPO"/dist/gh_stack-*.zip 2>/dev/null | head -1 || true)"
+fi
+if [ -z "$ZIP" ] || [ ! -f "$ZIP" ]; then
+  echo "no extension zip; run scripts/build-extension first" >&2
+  exit 1
+fi
+
+blender --command extension install-file -r user_default -e "$ZIP" 2>&1 | grep -v '^DEBUG' || true
+echo "installed and enabled: $ZIP"
+echo "the add-on appears as 'GH Stack' in Preferences > Add-ons > Extensions"

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# S8 gate: build the extension, install it into a throwaway Blender config, and
+# prove it registers and completes a round trip from its install location.
+#
+#     scripts/test-extension
+set -euo pipefail
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+ZIP="$REPO/dist/gh_stack-0.2.0.zip"
+TESTDIR="${EXTENSION_TEST_DIR:-/tmp/opencode/bl-extension-test}"
+
+"$REPO/scripts/build-extension" >/dev/null
+
+rm -rf "$TESTDIR"
+mkdir -p "$TESTDIR/config" "$TESTDIR/scripts" "$TESTDIR/extensions"
+export BLENDER_USER_CONFIG="$TESTDIR/config"
+export BLENDER_USER_SCRIPTS="$TESTDIR/scripts"
+export BLENDER_USER_EXTENSIONS="$TESTDIR/extensions"
+
+blender --command extension install-file -r user_default -e "$ZIP" 2>&1 | grep -v '^DEBUG' || true
+
+LOG="$(mktemp)"
+set +e
+blender -b --factory-startup --python-exit-code 1 \
+  --python "$REPO/blender/tests/installed/run.py" >"$LOG" 2>&1
+CODE=$?
+set -e
+
+grep -vE '^Blender [0-9]|^Read prefs|^$' "$LOG" || true
+rm -f "$LOG"
+exit "$CODE"

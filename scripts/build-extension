@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Build the Blender extension zip (S8).
+#
+#     scripts/build-extension
+#
+# The zip in dist/ is the install path for users (scripts/install-extension or
+# Blender's Install from Disk). scripts/install-addon stays for development: it
+# symlinks the working tree, which has no wheel and falls back to vendor/.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+SOURCE="$REPO/blender/gh_stack"
+OUT="$REPO/dist"
+
+# The manifest, its wheel, and the add-on code must validate before building.
+blender --command extension validate "$SOURCE" 2>&1 | grep -v '^DEBUG' || true
+
+# Stage without the vendored websockets copy or caches: the extension declares
+# the official pure-Python wheel instead (manifest `wheels`), so the zip stays
+# platform-neutral and does not carry a Linux-only speedups build.
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+mkdir -p "$STAGE"
+tar -C "$SOURCE" \
+  --exclude './vendor' \
+  --exclude '__pycache__' \
+  --exclude '*.pyc' \
+  -cf - . | tar -C "$STAGE" -xf -
+
+mkdir -p "$OUT"
+blender --command extension build --source-dir "$STAGE" --output-dir "$OUT" 2>&1 | grep -v '^DEBUG' || true
+
+ZIP="$(ls -t "$OUT"/gh_stack-*.zip 2>/dev/null | head -1 || true)"
+if [ -z "$ZIP" ]; then
+  echo "build failed: no zip in $OUT" >&2
+  exit 1
+fi
+echo "built $ZIP ($(stat -c%s "$ZIP") bytes)"

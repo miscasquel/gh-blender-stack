@@ -37,4 +37,7 @@ def register():
 
 
 def unregister():
-    bpy.utils.unregister_class(GhStackPreferences)
+    try:
+        bpy.utils.unregister_class(GhStackPreferences)
+    except (RuntimeError, ValueError):
+        pass

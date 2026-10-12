@@ -68,22 +68,31 @@ run under wine there.
 
 ## Install
 
+Release path: the add-on ships as a Blender extension with the official
+pure-Python `websockets` wheel.
+
 ```
-scripts/install-addon            # symlink the add-on into Blender's user scripts
+scripts/build-extension          # builds dist/gh_stack-<version>.zip
+scripts/install-extension        # installs and enables it in Blender
+
 grasshopper/build/build-gha.sh   # build GhStack.gha (needs wine + Rhino 8)
 grasshopper/deploy/deploy.sh     # copy it into the Grasshopper Libraries
 ```
 
-Then enable **GH Stack** in Blender's Preferences > Add-ons and follow
-[DEMO.md](DEMO.md). The server listens on port 9130 (configurable in the
-add-on preferences).
+Development path: `scripts/install-addon` symlinks the working tree into
+Blender's user scripts (no wheel; the vendored copy under `vendor/` is used).
+Both installs appear as **GH Stack** in Preferences > Add-ons.
+
+Then follow [DEMO.md](DEMO.md). The server listens on port 9130 (configurable in
+the add-on preferences).
 
 ## Working on it
 
 ```
-scripts/test-core      # layer A: pure Python core, no Blender needed
-scripts/test-blender   # layer B: Blender headless, against tools/fake_gh
-scripts/test-gha       # layer C: the C# codec under wine, the same golden fixtures
+scripts/test-core        # layer A: pure Python core, no Blender needed
+scripts/test-blender     # layer B: Blender headless, against tools/fake_gh
+scripts/test-gha         # layer C: the C# codec under wine, the same golden fixtures
+scripts/test-extension   # layer D-lite: builds, installs into a throwaway config, round trip
 
 python3 scripts/make-fixtures   # regenerate protocol/fixtures after a protocol change
 ```

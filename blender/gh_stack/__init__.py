@@ -11,7 +11,7 @@ registered.
 bl_info = {
     "name": "GH Stack",
     "author": "GH Stack",
-    "version": (0, 1, 0),
+    "version": (0, 2, 0),
     "blender": (5, 2, 0),
     "location": "View3D > Sidebar > GH Stack",
     "description": "Drive Grasshopper definitions from Blender as stackable modifiers",
