@@ -62,6 +62,7 @@ stats = {
     "sends": 0,  # requests actually sent
     "timeouts": 0,  # requests given up on after the timeout and retried in full
     "undelivered": 0,  # requests not even sent: no client socket to carry them
+    "signature_truncated": 0,  # node-tree walks cut at the depth cap (memo disabled)
 }
 
 
@@ -817,16 +818,20 @@ def _prefix_revision(obj, record, stage, index):
     - **the object identity**, which is in the memo key rather than the tuple
       (see :func:`_prefix_sections`).
 
-    ``None`` means "do not memoize" (surfaces are meshed on the fly and rarely
-    used).
+    ``None`` means "do not memoize": surfaces are meshed on the fly and rarely
+    used, and a truncated node-tree signature (see :func:`_node_tree_signature`)
+    must not be trusted.
     """
     if obj.type == "SURFACE":
         return None
     base = geometry_io.object_to_sections(obj, as_subd=False)
     raw = {name: codec.section_bytes(name, dtype, values) for name, dtype, values in base}
+    descriptor = _modifier_descriptor(obj, index)
+    if descriptor is None:
+        return None
     return (
         hashing.geometry_hash(raw),
-        _modifier_descriptor(obj, index),
+        descriptor,
         _upstream_hashes(obj, record, stage, index),
         bool(record.subd),
         _shapekey_state(obj),
@@ -837,7 +842,10 @@ def _prefix_revision(obj, record, stage, index):
 def _modifier_descriptor(obj, index):
     """Settings of every modifier before the stage, plus the objects they
     reference. Any edit that matters changes this tuple; UI-only state is left
-    out so selecting a modifier does not invalidate the memo."""
+    out so selecting a modifier does not invalidate the memo.
+
+    ``None`` means one of them could not be described completely (a truncated
+    node-tree walk); the caller must not memoize against it."""
     items = []
     for modifier in list(obj.modifiers)[:index]:
         props_state = []
@@ -856,7 +864,12 @@ def _modifier_descriptor(obj, index):
             else:
                 props_state.append((identifier, _freeze(value)))
         if modifier.type == "NODES" and modifier.node_group is not None:
-            props_state.append(("node_tree", _node_tree_signature(modifier.node_group)))
+            signature = _node_tree_signature(modifier.node_group)
+            if signature is None:
+                # A truncated signature cannot be trusted to catch every edit;
+                # `None` bubbles up as "do not memoize" (see `_prefix_sections`).
+                return None
+            props_state.append(("node_tree", signature))
         items.append((modifier.name, modifier.type, tuple(props_state)))
     return tuple(items)
 
@@ -878,10 +891,33 @@ def _object_geometry_hash(obj):
     return hashing.geometry_hash(raw)
 
 
+_MAX_NODE_TREE_DEPTH = 32  # backstop for a pathological graph; a hit disables the memo
+
+
 def _node_tree_signature(tree):
-    """Node names, wiring, and every socket default in one node group, so an
-    edit inside a prefix modifier's graph invalidates the memo. Nested groups
-    are not walked."""
+    """Node names, wiring, and every socket default reachable from one node
+    group, so an edit inside a prefix modifier's graph invalidates the memo.
+
+    Group-type nodes are walked recursively: a nested group is how a real graph
+    is organised, and the node that holds it does not change when the group's
+    body does. Blender 5.2 exposes ``node_tree`` on exactly the group node types
+    (``NodeGroup``, ``GeometryNodeGroup``, the custom variants, and the shader/
+    compositor/texture equivalents); a simulation zone keeps its body in the
+    same tree. A recursive group is legal, so every tree is visited once, keyed
+    by identity; a repeat is recorded as a reference, not re-walked.
+
+    The depth cap is a backstop: when it is hit the signature is ``None``,
+    which the revision treats as "do not memoize". A silently truncated
+    signature is the stale-geometry bug this walk exists to prevent.
+    """
+    return _tree_signature(tree, set(), 0)
+
+
+def _tree_signature(tree, visited, depth):
+    if depth >= _MAX_NODE_TREE_DEPTH:
+        stats["signature_truncated"] += 1
+        return None
+    visited.add(tree.as_pointer())
     nodes_state = []
     for node in tree.nodes:
         sockets = []
@@ -893,7 +929,19 @@ def _node_tree_signature(tree):
             if value is None:
                 continue
             sockets.append((socket.identifier, _freeze(value)))
-        nodes_state.append((node.bl_idname, node.name, tuple(sockets)))
+        try:
+            nested = node.node_tree
+        except (AttributeError, RuntimeError):
+            nested = None
+        subtree = None
+        if nested is not None:
+            if nested.as_pointer() in visited:
+                subtree = ("visited", nested.name)
+            else:
+                subtree = _tree_signature(nested, visited, depth + 1)
+                if subtree is None:
+                    return None
+        nodes_state.append((node.bl_idname, node.name, tuple(sockets), subtree))
     links = []
     for link in tree.links:
         try:

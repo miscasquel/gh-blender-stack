@@ -61,8 +61,8 @@ is private and has no stability promise.
   detected when the same rid is answered twice with different output. A
   definition change that is never re-answered for a cached rid can leave stale
   frames until the next schema/document/reset event (documented limitation).
-- The prefix memo tracks node groups at one level; edits inside *nested* node
-  groups of a prefix modifier are not part of the revision (documented in the
-  engine; revisit if it matters).
+- The prefix memo walks node groups recursively (identity-keyed, depth-capped;
+  hitting the cap disables the memo rather than guessing), so an edit inside a
+  *nested* group invalidates the revision like any other.
 - Layer B grows the frame-cache suite (progressive fill, replay, both reset
   paths, quiet no-op and idle, eviction, uncached-frame behavior).

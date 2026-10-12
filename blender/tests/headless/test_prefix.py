@@ -411,6 +411,118 @@ class ComponentPrefixTests(unittest.TestCase):
         self.assertAlmostEqual(report_b.get("received_first", [None])[0], 5.0, places=4)
 
 
+class NestedGroupPrefixTests(unittest.TestCase):
+    """P4-2: an edit inside a *nested* node group must invalidate the prefix
+    memo, not replay the geometry from before the edit.
+
+    The prefix modifier is a group (`Outer`) that contains another group
+    (`Inner`), the normal way to organise a real graph. The stage after it must
+    follow an edit to a node *inside* `Inner`.
+
+    In Blender 5.2, `node_tree` exists on group-type nodes only (NodeGroup,
+    GeometryNodeGroup, the custom variants, and the shader/compositor/texture
+    equivalents); a simulation zone keeps its body in the same tree.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        bpy.ops.preferences.addon_enable(module="gh_stack")
+        isolate_data_root()
+        import gh_stack.blender.engine as engine
+
+        cls.engine = engine
+
+        bpy.ops.mesh.primitive_cube_add(size=2.0)
+        cls.obj = bpy.context.object
+        cls.obj.name = "Nested"
+
+        engine.start_server(PORT)
+        time.sleep(0.5)
+
+        cls.inner = cls._transform_group("Inner", 5.0)
+        cls.outer = cls._nested_group("Outer", cls.inner)
+
+        modifier = cls.obj.modifiers.new("NestedOffset", "NODES")
+        modifier.node_group = cls.outer
+        cls.obj.modifiers.active = modifier
+        bpy.ops.gh_stack.add_stage(label="AfterNested")
+        cls.stage = cls.obj.gh_stack.stages[0]
+
+        cls.report = os.path.join(tempfile.gettempdir(), "fake_gh_nested.json")
+        if os.path.exists(cls.report):
+            os.remove(cls.report)
+        cls.fake = start_fake(cls.stage.key, cls.report)
+
+        def ready():
+            return cls.stage.state == "ok" and report_of(cls.report).get("responses", 0) >= 1
+
+        pump(seconds=10.0, until=ready)
+
+    @classmethod
+    def tearDownClass(cls):
+        stop_fake(cls.fake)
+        bpy.ops.preferences.addon_disable(module="gh_stack")
+
+    @staticmethod
+    def _transform_group(name, offset):
+        """A group whose body translates geometry by `offset` in X."""
+        ng = bpy.data.node_groups.new(name, "GeometryNodeTree")
+        ng.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+        ng.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+        group_in = ng.nodes.new("NodeGroupInput")
+        group_out = ng.nodes.new("NodeGroupOutput")
+        transform = ng.nodes.new("GeometryNodeTransform")
+        transform.name = "Offset"
+        transform.inputs["Translation"].default_value = (offset, 0.0, 0.0)
+        ng.links.new(group_in.outputs["Geometry"], transform.inputs["Geometry"])
+        ng.links.new(transform.outputs["Geometry"], group_out.inputs["Geometry"])
+        return ng
+
+    @staticmethod
+    def _nested_group(name, inner):
+        """A group whose body is a single node referencing `inner`."""
+        ng = bpy.data.node_groups.new(name, "GeometryNodeTree")
+        ng.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+        ng.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+        group_in = ng.nodes.new("NodeGroupInput")
+        group_out = ng.nodes.new("NodeGroupOutput")
+        nested = ng.nodes.new("GeometryNodeGroup")
+        nested.node_tree = inner
+        ng.links.new(group_in.outputs["Geometry"], nested.inputs["Geometry"])
+        ng.links.new(nested.outputs["Geometry"], group_out.inputs["Geometry"])
+        return ng
+
+    def test_01_prefix_is_evaluated_through_the_nested_group(self):
+        self.assertEqual(self.stage.state, "ok", self.stage.error)
+        report = report_of(self.report)
+        # The cube spans x in [-1, 1]; +5 puts its first vertex at x = 4.
+        self.assertAlmostEqual(report.get("received_first", [None])[0], 4.0, places=3)
+        self.assertGreaterEqual(report.get("full", 0), 1)
+
+    def test_02_edit_inside_the_nested_group_invalidates_the_memo(self):
+        rid_before = self.stage.rid
+        self.inner.nodes["Offset"].inputs["Translation"].default_value = (10.0, 0.0, 0.0)
+        bpy.context.view_layer.update()
+
+        def followed():
+            report = report_of(self.report)
+            first = report.get("received_first") or [None]
+            return (
+                self.stage.rid != rid_before
+                and first[0] is not None
+                and abs(first[0] - 9.0) < 1e-3
+            )
+
+        self.assertTrue(
+            pump(seconds=10.0, until=followed),
+            "the nested-group edit never reached Grasshopper: stale prefix memo?",
+        )
+        self.assertEqual(self.stage.state, "ok", self.stage.error)
+        # +10 puts the cube's first vertex at x = 9: the new evaluation, sent.
+        self.assertAlmostEqual(report_of(self.report).get("received_first", [None])[0], 9.0, places=3)
+
+
 class LateClientTests(unittest.TestCase):
     """A request sent before a stage's client connected is re-sent when that
     client says hello (protocol §8.8), not left waiting for the timeout. The
