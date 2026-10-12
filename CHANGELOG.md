@@ -52,8 +52,49 @@ Notable changes to this project, following
   away is lost), and an `unknown_ref` answer makes Blender resend the geometry
   in full (protocol §8.8 and §4.3). Error responses are no longer cached as
   results.
+- Deployment discipline and test tooling for the plugin (which has no automated
+  layer of its own):
+  - `scripts/check-deployed` compares the deployed `GhStack.gha` (sha256) against
+    the last build, so a stale copy is visible before it costs a debugging
+    session; `scripts/test-gha` prints the warning, and the README's install
+    section says a build is not live until the copy *and* a Rhino restart have
+    happened.
+  - `fake_gh --fail-after N` answers response N with `gh_solve_failed`;
+    `--coalesce` models the plugin's collapsed `ScheduleSolution` solves — only
+    the newest request of a solve window is answered, and the report counts the
+    dropped ones as `dropped`.
 
 ### Fixed
+
+- **A failed `Stage Out` now answers immediately** instead of leaving Blender to
+  wait out the 30 s timeout: the component enqueues the protocol's error response
+  (`gh_solve_failed`, empty hash, zeroed counts) when nothing was sent, and
+  records the slot status under the same lock the retry path reads. The engine's
+  error branch also no longer re-sends on the same tick — a solve that just
+  failed fails again, so retries now follow protocol §7 (next change or Push).
+  Layer B pins both halves of that behavior (`SolveFailureTests`), with
+  `fake_gh --fail-after` and the negative control in the commit.
+- **The plugin's outbox can no longer jam or grow without bound.** A failed send
+  dequeued nothing, so that frame stayed at the head and every later frame queued
+  behind it forever; the queue had no cap and was never cleared on disconnect, so
+  a stalled link accumulated a frame per solve and delivered the backlog on
+  reconnect. `SendFrames` now dequeues before sending, `Enqueue` keeps the queue
+  under 64 MB (oldest first, never the newest), and a disconnect clears it.
+- **A malformed frame can no longer tear down a healthy connection.** Every
+  malformed path in the C# JSON parser raises `JsonException` (`\uZZZZ`, `1.2.3`,
+  `1e`), `ReceiveLoop` has a last-resort catch that notes and continues, a
+  non-numeric `v` is a `proto_mismatch` instead of a converter crash (`"2"` is
+  rejected as in Python), and `Decode` rejects unknown dtypes and nameless
+  sections exactly as the Python codec does. The console suite gained a
+  `decoder-boundary` group; against the old code it reports six problems.
+- **Edits inside nested node groups now invalidate the prefix memo.** The
+  signature walked only the group's top level, so a prefix modifier built as
+  `Outer → Inner` kept serving the geometry from before an edit inside `Inner`.
+  The walk is now recursive over every node with a `node_tree` (Blender exposes
+  one exactly on the group node types), identity-keyed so a recursive group
+  cannot loop, and depth-capped in a way that disables the memo rather than
+  truncating the signature silently. Layer B builds the nested case and fails
+  with the old walk (negative control).
 
 - **A prefix modifier that reads scene time produced the same geometry for every
   frame**, so the frame cache answered every frame with the first frame's result

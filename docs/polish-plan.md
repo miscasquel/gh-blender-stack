@@ -1,7 +1,8 @@
 # Polish and cleanup plan
 
-**Status:** proposed, not started. Written 2026-10-12 from a full read of the tree
-at `ea0f651`, after the W2 frame cache (`b3305cf`) and the reopen fix (`ea0f651`).
+**Status:** in progress. Written 2026-10-12 from a full read of the tree at
+`ea0f651`, after the W2 frame cache (`b3305cf`) and the reopen fix (`ea0f651`);
+items carried out since carry a **Done** banner with commit and evidence.
 
 **Scope:** correctness fixes, hardening, dead-code removal, and documentation
 drift. No new features and no protocol changes. Every item either removes a silent
@@ -53,8 +54,10 @@ state where **the stage never receives geometry again and never reports an
 error**; the only escape is deleting and re-creating the stage. Fix all three:
 each is independently sufficient to keep the loop broken.
 
-> **Done 2026-10-12.** `P0-1`..`P0-8` are fixed, with layer B coverage. `P0-9` is
-> open: it is the finding that made half of this tier possible to miss.
+> **Done 2026-10-12.** `P0-1`..`P0-8` are fixed, with layer B coverage. `P0-9`'s
+> deployment check and coalescing fake landed the same day; its plugin-contract test
+> and units path stay open. It is the finding that made half of this tier possible
+> to miss.
 > **`P0-8` is the one reported from a live scene** (a prefix modifier reading
 > scene time); the rest were found while investigating it or during the review.
 > Read `P0-8` first if you are looking for why a timeline-driven stage did not
@@ -380,6 +383,15 @@ do not touch GH types); then a `fake_gh` mode that coalesces, so P0-4's defect i
 reproducible in the suite rather than only by instrumentation; then the units path.
 **Effort:** L.
 
+> **Two of three done 2026-10-12** (`97f1425`, `74df6fb`): `scripts/check-deployed`
+> compares the deployed `.gha` against the build (warned from `scripts/test-gha`,
+> documented in the README), and `fake_gh --coalesce` models the collapsed
+> `ScheduleSolution` solves — later requests supersede the pending one and the
+> report counts them as `dropped` — exercised by `CoalescedAnswerTests`, which
+> converges only because the engine's own timeout retry handles the dropped answer.
+> The plugin-sends contract test and the units path remain open; units is
+> deliberately deferred as the latent one.
+
 **State of the deployment, 2026-10-12:** `grasshopper/deploy/deploy.sh` copies the
 built `.gha` into the wine Grasshopper Libraries folder, and **Grasshopper only
 scans Libraries on load** — so the plugin in a running Rhino is the one loaded at
@@ -396,6 +408,17 @@ Each of these turns a fast, diagnosable failure into a 30-second timeout or a
 lost connection.
 
 ### P1-1 · `Stage Out` never answers with an error
+
+> **Done 2026-10-12** (`34499a0`). The catch enqueues the protocol's error response
+> (`gh_solve_failed`, empty hash, zeroed counts) when nothing was sent, and records
+> `slot.Status`/`Message` under `Gate` through the new `GhLink.SetSlotStatus`, which
+> also settles `RetryStaleSolves`. `fake_gh --fail-after` plus `SolveFailureTests`
+> pin the fast error from the Blender side; the `Components.cs` half is compiled and
+> deployed but has no automated reach, so it awaits a live session. The new test also
+> surfaced a second bug: the engine's generic error branch marked the object dirty,
+> re-sending on the same tick — with a solve that just failed, a request loop. It now
+> follows protocol §7 and retries on the next change instead.
+
 **Where:** `grasshopper/src/gh/Components.cs:244-248`.
 **Why it matters:** the `catch` sets a local `status` and adds a runtime message,
 then falls through to `da.SetData(...)`. **No response frame is enqueued**, and
@@ -439,6 +462,14 @@ The frame decoder is the boundary. Today several malformed inputs throw what the
 callers do not catch, and one path tears down the connection.
 
 ### P2-1 · `Json`'s stated contract is not total
+
+> **Done 2026-10-12** (`34499a0`). Every malformed path in `Json` raises
+> `JsonException` (`int.TryParse` for `\uZZZZ`, `double.TryParse` for numerics), and
+> `ReceiveLoop` gained a last-resort `catch (Exception)` that notes and continues, so
+> no single frame can tear down a healthy connection. The console suite's new
+> `decoder-boundary` group covers the escapes and numerics; against the old code
+> they throw raw .NET exceptions.
+
 **Where:** `grasshopper/src/core/Json.cs:119`
 (`Convert.ToInt32(s.Substring(pos, 4), 16)`, on a `\uZZZZ` escape) and
 `:147-154` (`double.Parse` on `1.2.3`, `1e`, `--5`).
@@ -457,6 +488,12 @@ It runs without Rhino, so this is cheap.
 **Effort:** M.
 
 ### P2-2 · The `proto_mismatch` path itself throws
+
+> **Done 2026-10-12** (`34499a0`). `Frame.Decode` requires a numeric `v`
+> (`Json.IsNumber`), compares numerically so `2.0 == 2` and `"2"` is rejected as in
+> Python (which settles P5-2), and builds the message with `Convert.ToString`. The
+> console case pins `"v":"x"` as a `proto_mismatch`, not a converter crash.
+
 **Where:** `grasshopper/src/core/Frame.cs:195-198`.
 **Why it matters:** `Convert.ToInt64(v, ...)` throws `FormatException` for
 `"v": "x"`, and the message builder throws again through `Convert.ToDouble` and
@@ -472,6 +509,15 @@ the double formatter. This also settles P5-2 (below): Python's `check_version`
 **Effort:** S.
 
 ### P2-3 · `Decode` does not validate `dtype`, and `name` may be null
+
+> **Done 2026-10-12** (`34499a0`). `Decode` rejects dtypes outside `{f32,u32,u8}`
+> and nameless sections with `bad_frame`; the console cases cover both. The "reaches
+> `UpdateSection` and throws an NRE at hash time" sentence below was wrong, found
+> while implementing: nothing in the product hashes a decoded section, and
+> `Encoding.UTF8.GetBytes(null)` would throw `ArgumentNullException` if it did. The
+> validation stands on the real consequence — a null name matches nothing, so the
+> frame is accepted and its geometry is silently unusable.
+
 **Where:** `grasshopper/src/core/Frame.cs:219-227` accepts any dtype other than
 the `"u8"` special case. `:214` reads `name` through `Json.GetString`, which
 returns `null` for a missing key (`Json.cs:322-326`).
@@ -505,6 +551,15 @@ socket outlive the call by an unbounded time.
 **Effort:** S.
 
 ### P3-2 · `Outbox` is unbounded, never cleared, and can jam permanently
+
+> **Done 2026-10-12** (`0283021`). `SendFrames` dequeues before sending, so a failed
+> send drops just that frame — no frame is ever left at the head; `Enqueue` keeps the
+> queue under 64 MB (dropping the oldest first, but never the newest, so one
+> oversized frame can still go out); `Loop`'s `finally` clears the queue on
+> disconnect. Deliberately no priority queue: frames are redundant by design. The
+> plugin has no automated suite, so verification is inspection plus the deployed
+> build and a live session.
+
 **Where:** `grasshopper/src/gh/GhLink.cs:45`, `:361-365`, `:191-196`, `:338-359`.
 **Why it matters:** two distinct problems.
 1. **A live stall.** `SendFrames` (`:348-356`) catches a `SendBinary` failure and
@@ -623,6 +678,15 @@ must keep the frame in whatever tuple gets compared.
 **Effort:** S for option 2; L and design-first for option 3.
 
 ### P4-2 · Nested node groups are not walked
+
+> **Done 2026-10-12** (`d045b42`). `_tree_signature` (`engine.py:921`) recurses into
+> every node with a `node_tree` — Blender 5.2 exposes one exactly on the group node
+> types — visits each tree once keyed by `as_pointer()` so a recursive group cannot
+> loop, and turns the depth cap into "do not memoize" rather than a silently
+> truncated signature. `NestedGroupPrefixTests` builds `Outer → Inner`, edits a node
+> inside `Inner`, and asserts the stage requests again; with the old walk it fails
+> (the negative control), with the new one the suite is green.
+
 **Where:** `blender/gh_stack/blender/engine.py:734-737` — the docstring says so
 outright.
 **Why it matters:** a prefix modifier whose node group contains a *nested* group —

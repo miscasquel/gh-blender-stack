@@ -1,8 +1,9 @@
 # Handoff — stale inputs and truthful failures (next batch)
 
-**Status:** in progress. Written 2026-10-12, after the frame-cache and protocol
+**Status:** implemented 2026-10-12. Written after the frame-cache and protocol
 work landed (`0a2bf22` plugin, `c1d19d7` engine, `a8054ab` plan); revised the same
-day after a code-level review of every reference.
+day after a code-level review, then carried out. What shipped, where it deviated
+from the plan, and what is still open are at the end, under "Outcome".
 
 **Supersedes:** nothing. `docs/polish-plan.md` remains the full backlog, with every
 item's evidence; this is the next slice of it, chosen and re-justified against what
@@ -353,3 +354,38 @@ negative control in the commit message.
    and it is never cleared. If a stage key is reused after a document change, a stale
    slot could serve geometry for the wrong definition. Worth a look while in that
    file for item 2.
+
+---
+
+## Outcome (2026-10-12)
+
+All five items landed, with three deviations from the plan above:
+
+1. **P2-2 joined item 4** after review — same teardown class, same files, S —
+   `34499a0`.
+2. **The engine half of item 3 changed behavior.** `_handle_response`'s generic
+   error branch marked the object dirty, re-sending the request on the same tick;
+   with a solve that just failed, that is a request loop against the client.
+   Protocol §7 says an errored stage retries on the next change or Push, so the
+   dirty-add is gone. `SolveFailureTests` pins both the fast error and the
+   no-immediate-retry.
+3. **`SchemaResetTests` was racy**, and the new class exposed it: the schema landed
+   while frame 1 was the playhead, so the engine re-evaluated and re-cached frame 1
+   under the new generation, and the "requested again" assertion passed only when
+   the frame-2 request count happened to land after the budget was recorded. Its
+   script now visits both frames before the change — `74df6fb`.
+
+Also: `P8-2` was resolved by deleting the superseded frame-cache handoff and
+updating ADR 0008; `P0-9` pieces 1 and 2 landed (check-deployed, `--coalesce`);
+piece 3 (units) stays backlog along with the plugin-contract test.
+
+Still open from this batch:
+
+- **The two plugin halves — P3-2's outbox and P1-1's error response — are compiled
+  and deployed but not exercised by any suite.** They need a Rhino restart and a
+  live session: a failing `Stage Out` should answer immediately (not after 30 s),
+  and a failed send should not jam later frames. `scripts/check-deployed` confirms
+  the deployed `.gha` is current (`c9001aca…`).
+- The live session is also where P2-1..P2-3's runtime effect is seen (a malformed
+  frame no longer drops the link).
+- Open questions 1–4 above remain open as written.
