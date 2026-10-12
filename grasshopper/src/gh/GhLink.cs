@@ -28,6 +28,9 @@ namespace GhStack
         public string Rid = "";
         public Dictionary<string, object> Params = new Dictionary<string, object>();
         public List<Section> Sections;
+        /// <summary>The `geom.hash` the held sections were sent for. A `ref` for
+        /// any other hash cannot be served and must be refused.</summary>
+        public string GeometryHash = "";
         public string Status = "waiting";
         public string Message = "";
         public DateTime RequestedAt = DateTime.UtcNow;
@@ -135,6 +138,17 @@ namespace GhStack
             }
         }
 
+        /// <summary>The slot for a key, or null. Never creates one: used by paths
+        /// that must not grow the registry (an error naming a stage nobody has).</summary>
+        public static StageSlot FindSlot(string key)
+        {
+            lock (Gate)
+            {
+                StageSlot slot;
+                return Slots.TryGetValue(key ?? "", out slot) ? slot : null;
+            }
+        }
+
         // -------------------------------------------------------------- socket
 
         public static void Start()
@@ -233,17 +247,42 @@ namespace GhStack
         {
             Dictionary<string, object> header = decoded.Header;
             string type = Json.GetString(header, "type");
+
+            if (type == "error")
+            {
+                // A protocol error from Blender (protocol §4.6). Surface it on the
+                // stage, not only in the log: a mismatch nobody sees is a mismatch
+                // nobody fixes.
+                string stageKey = Json.GetString(header, "stage");
+                string problem = Json.GetString(header, "code");
+                string detail = Json.GetString(header, "message");
+                StageSlot target = string.IsNullOrEmpty(stageKey) ? null : FindSlot(stageKey);
+                if (target != null)
+                {
+                    lock (Gate)
+                    {
+                        target.Status = "error";
+                        target.Message = problem + ": " + detail;
+                    }
+                }
+                Note("protocol error " + problem + ": " + detail);
+                return;
+            }
+
             if (type != "request")
             {
                 Note("ignoring message type " + type);
                 return;
             }
+
             string key = Json.GetString(header, "stage");
             string rid = Json.GetString(header, "rid");
             var geom = Json.Get(header, "geom") as Dictionary<string, object>;
             string mode = geom == null ? null : Json.GetString(geom, "mode");
+            string hash = geom == null ? null : Json.GetString(geom, "hash");
 
             StageSlot slot = Slot(key);
+            bool canServe;
             lock (Gate)
             {
                 slot.Rid = rid;
@@ -251,12 +290,48 @@ namespace GhStack
                 slot.Message = "";
                 slot.RequestedAt = DateTime.UtcNow;
                 slot.ResolveAttempts = 0;
-                slot.Params = new Dictionary<string, object>();
+                // Build the dictionary locally and publish it in one assignment:
+                // a solve on the UI thread reads slot.Params, and filling the
+                // field in place would show it half-populated.
                 var paramsObj = Json.Get(header, "params") as Dictionary<string, object>;
-                if (paramsObj != null)
-                    foreach (var kv in paramsObj) slot.Params[kv.Key] = kv.Value;
-                if (mode == "full") slot.Sections = decoded.Sections;
+                var incoming = paramsObj == null
+                    ? new Dictionary<string, object>()
+                    : new Dictionary<string, object>(paramsObj);
+                slot.Params = incoming;
+                if (mode == "full")
+                {
+                    slot.Sections = decoded.Sections;
+                    slot.GeometryHash = hash ?? "";
+                }
+                // A ref is servable only for the geometry we actually hold. A
+                // missing hash (an older client) falls back to "do we hold any".
+                canServe = slot.Sections != null && slot.Sections.Count > 0
+                           && (string.IsNullOrEmpty(hash) || hash == slot.GeometryHash);
             }
+
+            if (mode == "ref" && !canServe)
+            {
+                // We cannot answer: a client that restarted, a document that was
+                // replaced, a stage whose slot was cleared. Say so (protocol §4.3)
+                // so Blender resends in full. Silently dropping it instead leaves
+                // Blender waiting out its timeout, and its retry is another ref —
+                // a loop with no way out, which is what a reopened .blend looked
+                // like: no geometry, no error, forever.
+                var refusal = new Dictionary<string, object>();
+                refusal["type"] = "error";
+                refusal["code"] = "unknown_ref";
+                refusal["message"] = "no geometry for hash " + (hash ?? "(none)");
+                refusal["stage"] = key;
+                refusal["rid"] = rid;
+                lock (Gate)
+                {
+                    slot.Status = "unknown_ref";
+                    slot.Message = "not holding this geometry; asking Blender to resend it";
+                }
+                Enqueue(FrameCodec.Encode(refusal, null));
+                return;
+            }
+
             RequestSolve();
         }
 
