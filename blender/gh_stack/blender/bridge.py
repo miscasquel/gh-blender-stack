@@ -15,9 +15,14 @@ OUTGOING = queue.Queue()  # frame bytes
 state = {
     "listening": False,
     "connected": False,
+    # Live client sockets. `connected` says a `hello` has been seen; this says how
+    # many sockets would actually receive a frame, which is what decides whether a
+    # request can be sent at all.
+    "clients": 0,
     "doc": "",
     "connected_at": 0.0,
     "error": "",
+    "notice": "",
 }
 
 
@@ -64,3 +69,9 @@ def set_disconnected(reason=""):
 
 def set_listening(listening):
     state["listening"] = bool(listening)
+
+
+def set_clients(count):
+    """How many client sockets the server is holding. A frame can only be
+    delivered to a non-zero number of them."""
+    state["clients"] = int(count)

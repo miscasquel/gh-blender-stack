@@ -55,6 +55,95 @@ Notable changes to this project, following
 
 ### Fixed
 
+- **A prefix modifier that reads scene time produced the same geometry for every
+  frame**, so the frame cache answered every frame with the first frame's result
+  and the stage never moved on the timeline. `_prefix_revision` enumerates what
+  the evaluated prefix depends on, and the frame was not in that list: a Scene
+  Time node — like a simulation zone or a driver expression — is read at solve
+  time rather than stored on the modifier, so the revision (modifier properties,
+  node-graph wiring, base geometry, upstream outputs, shape keys) was
+  byte-identical across frames and the prefix memo returned the first evaluation.
+  The geometry hash never moved, so the request ID never moved, so the cache
+  answered every frame from one entry and Grasshopper was never asked again.
+  The revision now includes `scene.frame_float`, and its docstring states the
+  invariant it has to hold: **every input the evaluated prefix reads belongs in
+  that list**. Measured before the fix: a prefix offset by 1.0 at frame 24 still
+  served the frame-1 geometry and the request ID was unchanged. Layer B covers a
+  time-driven prefix (3 tests); with the one line removed, all three fail, which
+  is the negative control for exactly this bug.
+- Two holes in the same memo. It was keyed by object *name*, so an object could
+  inherit what a different object of that name had evaluated; it is keyed by
+  object identity now (`as_pointer()`, which holds no reference). And the prefix
+  memo's revision read the whole base mesh on every pass, not only on a clone, so
+  a *memo hit* cost 8.7 ms at 50k triangles against 45 ms for the clone — see
+  P4-1 in `docs/polish-plan.md`.
+- `register()` cleared only the disk stores, so a decoded frame, an evaluated
+  prefix, a pending request and the counters all survived a disable/enable. All
+  four are cleared now, so a session starts with nothing it did not evaluate.
+- Playback did not evaluate most frames, so it never got smoother. Only one
+  request could be in flight per stage and a frame that arrived while it was in
+  flight was not requested at all, so a pass over a range evaluated a fraction of
+  it (measured: 3 of 10 frames). Each frame is now evaluated on demand: **one
+  evaluation at a time**, and the frame the playhead is on is requested on the
+  first pass after an answer lands. Frames merely passed over are **not queued** —
+  see the entry below for why — but every answer is stored, so a frame evaluated
+  once is free afterwards. Measured over 24 frames scrubbed at 20 fps: 3 requests
+  at a 400 ms round trip and 2 at 800 ms, against one per frame before, with the
+  frame the playhead stops on always evaluated. A `stage.rid` regression from the
+  same work is fixed with it: it was written on every pass rather than when a
+  request went out, so a reply still in flight stopped matching the stage and was
+  discarded. Layer B covers one-at-a-time and replay (4 tests).
+- Asking for every frame the playhead passes over queued a backlog at the client.
+  The engine briefly requested each frame as it arrived, abandoning the request in
+  hand; Grasshopper solves on one thread in arrival order, so scrubbing handed it
+  a queue of frames the user had already moved past and it stopped responding
+  until the queue drained. A frame that arrives while an answer is outstanding is
+  not requested now: the stage waits, and asks for whatever frame the playhead is
+  on once the answer lands. A cached frame never reaches that gate, so a replay is
+  not throttled by an outstanding request.
+- **A cached frame answered while a request was in flight cleared that request's
+  bookkeeping**, so the next pass saw an open gate and sent a second request: the
+  one-at-a-time guarantee was not actually held. Measured with the engine's send
+  and response paths instrumented while scrubbing over a mix of cached and
+  uncached frames: **a peak of two requests in flight**, and 11 requests where 7
+  do the same work. That is the backlog above returning by another route, and,
+  because the plugin coalesces its solves, it can answer a request the engine has
+  stopped waiting for — which left a stage looking stuck until a manual Push. The
+  in-flight entry now survives a cache hit and is cleared only when the answer
+  arrives, when the timeout gives up on it, or on an explicit reset (Push, a
+  client `hello`, a load). Layer B covers the invariant directly
+  (`OneRequestOutstandingTests`) and fails with the one line restored.
+- A request that was never delivered stalled the stage for a whole timeout. With
+  no client socket to carry it, `GhServer.send` dropped the frame silently while
+  the engine recorded it as pending, so the stage waited for an answer nobody had
+  been asked for — and the retry was gated on that same entry. `send` now reports
+  whether a client received the frame, the engine leaves the stage `disconnected`
+  instead of pending, and `bridge.state["clients"]` exposes the socket count.
+- Reopened files could end up with no geometry and no visible error. A stage
+  keeps its geometry hash in the `.blend`, so the first request after a load was
+  a `ref` — for geometry the client may no longer hold. The plugin read
+  `geom.mode` and then ignored it, so an unservable `ref` was dropped without a
+  reply: Blender waited out its timeout, retried with another `ref`, and looped
+  forever. Both sides are fixed:
+  - A load, and a `hello`, now clear the geometry hash, so the next request goes
+    out in full — the rule protocol §8.8 already states for the first request
+    after a connection.
+  - The plugin tracks the hash its sections belong to and answers `unknown_ref`
+    (protocol §4.3) for a `ref` it cannot serve, so Blender resends in full
+    instead of hanging.
+  - Blender now handles the standalone `error` message (protocol §4.6), which it
+    previously ignored entirely — only the error-status response shape was
+    handled, so a spec-shaped refusal passed unnoticed.
+  - A request that does time out no longer retries the same `ref`: it is retried
+    in full, and the failure stays visible instead of being overwritten by the
+    next pass's `waiting` state.
+  - `fake_gh` gained `--forget-after` and `--refusal` (both shapes) and now
+    reports `refusals`. Layer B covers the recovery through the error message and
+    through the error response (2 tests).
+- `_handle_response` returned from inside its loop over objects, so a response
+  for one stack ended the pass for every other stack sharing that stage key: the
+  second object never applied the answer. The outcomes are per-stage, so they
+  `continue` now.
 - Reopened files: opening a `.blend` (File → Open, Open Recent, Revert, or
   Blender started with a file) cleared the engine's timer and app handlers,
   because Blender only preserves persistent ones. After any load the add-on

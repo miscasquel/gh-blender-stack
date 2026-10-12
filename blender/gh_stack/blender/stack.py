@@ -100,6 +100,11 @@ class GhStage(bpy.types.PropertyGroup):
     label: StringProperty(name="Label", default="")
     enabled: BoolProperty(name="Enabled", default=True)
     state: StringProperty(name="State", default=STATE_IDLE)
+    # The request the stage last asked for: set when a request goes out (or when a
+    # cached frame is applied), never for a frame the scene has merely moved to.
+    # `_handle_response` compares an incoming rid against this to recognise the
+    # answer to the frame the playhead is on; a reply for any other frame is
+    # stored in the cache instead of being displayed.
     rid: StringProperty(name="Request ID", default="")
     nonce: IntProperty(name="Nonce", default=0)
     # Bumped whenever Grasshopper sends something that makes previously cached

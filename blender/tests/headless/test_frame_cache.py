@@ -17,6 +17,12 @@ What it proves (handoff tests 1-8):
 7. Eviction: a tiny budget drops the oldest frames and playback still works.
 8. Uncached frames never block: the last good output stays until the wanted
    frame's answer arrives; a stale answer is cached, not displayed.
+9. A time-driven prefix: a native modifier before the stage that reads scene time
+   moves the geometry every frame, so each frame gets its own request and the
+   cache keys them apart. This is the case that made the whole cache inert — the
+   prefix was memoized against a revision that did not include the frame, so the
+   same request ID came back for every frame and one frame's geometry answered
+   them all.
 """
 
 import json
@@ -125,6 +131,52 @@ def helper_max(obj, stage_key):
     return float(np.abs(co.reshape(-1, 3)).max())
 
 
+def helper_bounds(obj, stage_key):
+    """(min, max) of the helper mesh's X, so a test can see a prefix offset."""
+    import gh_stack.blender.helpers as helpers
+
+    helper = helpers.helper_for(obj, stage_key, "mesh")
+    if helper is None or not len(helper.data.vertices):
+        return None
+    count = len(helper.data.vertices)
+    co = np.empty(count * 3, dtype=np.float32)
+    helper.data.vertices.foreach_get("co", co)
+    x = co.reshape(-1, 3)[:, 0]
+    return float(x.min()), float(x.max())
+
+
+def time_driven_modifier(obj):
+    """Put a Geometry Nodes modifier reading scene time at the head of the stack.
+
+    The group offsets the geometry along X by the scene time in seconds, so the
+    evaluated prefix moves with the timeline while nothing about the modifier's
+    properties or its node graph changes."""
+    tree = bpy.data.node_groups.new("TimePrefix", "GeometryNodeTree")
+    tree.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    tree.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    source = tree.nodes.new("NodeGroupInput")
+    sink = tree.nodes.new("NodeGroupOutput")
+    clock = tree.nodes.new("GeometryNodeInputSceneTime")
+    combine = tree.nodes.new("ShaderNodeCombineXYZ")
+    offset = tree.nodes.new("GeometryNodeSetPosition")
+    offset.location = (200.0, 0.0)
+    tree.links.new(source.outputs["Geometry"], offset.inputs["Geometry"])
+    tree.links.new(clock.outputs["Seconds"], combine.inputs["X"])
+    tree.links.new(combine.outputs["Vector"], offset.inputs["Offset"])
+    tree.links.new(offset.outputs["Geometry"], sink.inputs["Geometry"])
+
+    modifier = obj.modifiers.new("TimePrefix", "NODES")
+    modifier.node_group = tree
+    obj.modifiers.move(len(obj.modifiers) - 1, 0)
+    return modifier
+
+
+def expected_offset(frame):
+    """Scene Time's Seconds output: the frame over the scene's frame rate."""
+    scene = bpy.context.scene
+    return float(frame) * scene.render.fps_base / float(scene.render.fps)
+
+
 def store_of(obj, stage):
     import gh_stack.blender.engine as engine
     import gh_stack.blender.stack as stack_mod
@@ -180,6 +232,27 @@ class FrameCacheTestCase(unittest.TestCase):
         bpy.ops.preferences.addon_disable(module="gh_stack")
 
     @classmethod
+    def await_client(cls, seconds=15.0):
+        """The fake connects on its own retry loop, so a test that needs a live
+        client must wait for one instead of assuming it: without this a class can
+        race the connect and spend its pumps with nothing on the other end, which
+        showed up as an unrelated assertion failing only in a full-suite run.
+
+        This deliberately does not tick the engine. The client count is set by the
+        socket thread as soon as the handshake completes, and running a pass here
+        would send a request early — which shifts the response counts that
+        `--echo-after`, `--gh-edit-after`, `--schema-after` and `--forget-after`
+        are scripted against."""
+        import gh_stack.blender.bridge as bridge
+
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if bridge.state["clients"] > 0:
+                return
+            time.sleep(0.02)
+        raise AssertionError("the fake never connected to the engine")
+
+    @classmethod
     def add_cube(cls, label="Cache"):
         bpy.ops.mesh.primitive_cube_add(size=2.0)
         obj = bpy.context.object
@@ -205,6 +278,7 @@ class ProgressiveFillTests(FrameCacheTestCase):
         keyframe_scale(cls.obj, cls.stage, [1.0, 2.0, 3.0, 4.0, 5.0])
         cls.report = cls.report_path("fill")
         cls.fake = start_fake(cls.stage.key, cls.report)
+        cls.await_client()
 
     @classmethod
     def tearDownClass(cls):
@@ -255,6 +329,7 @@ class GhEditResetTests(FrameCacheTestCase):
         keyframe_scale(cls.obj, cls.stage, [1.0, 2.0, 3.0])
         cls.report = cls.report_path("edit")
         cls.fake = start_fake(cls.stage.key, cls.report, "--gh-edit-after", "3")
+        cls.await_client()
         # Cache two frames first; the third response triggers the GH-side edit
         # inside test_01, where the generation is captured beforehand.
         for frame in (1, 2):
@@ -305,6 +380,7 @@ class SchemaResetTests(FrameCacheTestCase):
         keyframe_scale(cls.obj, cls.stage, [1.0, 2.0])
         cls.report = cls.report_path("schema")
         cls.fake = start_fake(cls.stage.key, cls.report, "--schema-after", "1")
+        cls.await_client()
         scrub(cls.obj, 1)
         pump(until=lambda: memory_count(cls.obj, cls.stage) >= 1 and cls.stage.params[0].label.endswith("v2"))
         scrub(cls.obj, 2)
@@ -346,6 +422,7 @@ class NoOpQuietTests(FrameCacheTestCase):
         cls.obj.modifiers.move(len(cls.obj.modifiers) - 1, 0)
         cls.report = cls.report_path("quiet")
         cls.fake = start_fake(cls.stage.key, cls.report, "--echo-after", "1")
+        cls.await_client()
         scrub(cls.obj, 1)
         pump(until=lambda: cls.stage.state == "ok" and report_of(cls.report).get("echoes", 0) >= 1)
         pump(seconds=0.3)
@@ -408,6 +485,7 @@ class DocumentResetTests(FrameCacheTestCase):
         keyframe_scale(cls.obj, cls.stage, [1.0, 2.0])
         cls.report = cls.report_path("doc")
         cls.fake = start_fake(cls.stage.key, cls.report, "--doc", "first.gh")
+        cls.await_client()
         scrub(cls.obj, 1)
         pump(until=lambda: memory_count(cls.obj, cls.stage) >= 1)
         stop_fake(cls.fake)
@@ -421,6 +499,7 @@ class DocumentResetTests(FrameCacheTestCase):
     def test_01_document_change_resets(self):
         generation = self.stage.generation
         type(self).fake = start_fake(self.stage.key, self.report, "--doc", "second.gh")
+        self.await_client()
 
         def reset():
             self.engine._timer()
@@ -466,6 +545,7 @@ class EvictionTests(FrameCacheTestCase):
         keyframe_scale(cls.obj, cls.stage, [1.0, 2.0, 3.0, 4.0])
         cls.report = cls.report_path("evict")
         cls.fake = start_fake(cls.stage.key, cls.report)
+        cls.await_client()
         for frame in range(1, 5):
             scrub(cls.obj, frame)
             pump(seconds=15.0, until=lambda f=frame: requests_of(cls.report) >= f and cls.stage.state in ("ok", "error"))
@@ -496,9 +576,10 @@ class EvictionTests(FrameCacheTestCase):
         )
 
 
-class UncachedFrameTests(FrameCacheTestCase):
-    """Playback never blocks, and a stale answer never replaces the last good
-    output of a frame the scene has already moved past."""
+class OneEvaluationAtATimeTests(FrameCacheTestCase):
+    """A frame that arrives while an answer is outstanding is not requested. The
+    stage waits, then evaluates whatever frame the playhead is on when the answer
+    lands: it never queues frames behind a working Grasshopper."""
 
     @classmethod
     def setUpClass(cls):
@@ -507,19 +588,19 @@ class UncachedFrameTests(FrameCacheTestCase):
         keyframe_scale(cls.obj, cls.stage, [1.0, 2.0, 3.0])
         cls.report = cls.report_path("slow")
         cls.fake = start_fake(cls.stage.key, cls.report, "--delay-ms", "800")
+        cls.await_client()
         scrub(cls.obj, 1)
         pump(seconds=10.0, until=lambda: cls.stage.state == "ok")
         pump(until=lambda: abs(helper_max(cls.obj, cls.stage.key) - 1.0) < 0.01)
-        cls.applies = cls.engine.stats["applies"]
 
     @classmethod
     def tearDownClass(cls):
         stop_fake(getattr(cls, "fake", None))
         super().tearDownClass()
 
-    def test_01_uncached_frames_keep_the_last_good_output(self):
+    def test_01_a_frame_while_one_is_outstanding_is_not_queued(self):
         sends = self.engine.stats["sends"]
-        type(self).sends_before_answer = sends
+        type(self).sends_with_one_in_flight = sends + 1
         scrub(self.obj, 2)
         self.assertTrue(
             pump(seconds=5.0, until=lambda: self.engine.stats["sends"] == sends + 1),
@@ -530,28 +611,324 @@ class UncachedFrameTests(FrameCacheTestCase):
         scrub(self.obj, 3)  # the playhead moves on while the answer is in flight
         pump(seconds=0.4)
         self.assertEqual(
-            self.engine.stats["sends"], sends + 1, "a second request went out while one was in flight"
+            self.engine.stats["sends"],
+            sends + 1,
+            "a second request went out while the first was still outstanding",
         )
         self.assertEqual(self.stage.state, "waiting")
+        # Nothing has been displayed for either frame yet: their answers are not in.
         self.assertAlmostEqual(helper_max(self.obj, self.stage.key), 1.0, places=2)
 
-    def test_02_wanted_frame_is_fetched_after_the_answer(self):
-        # The frame-2 answer arrives, is cached, and must not be displayed; the
-        # wanted frame (3) is requested next and applies.
-        sends = type(self).sends_before_answer
+    def test_02_the_answer_lands_and_the_current_frame_is_asked_for_next(self):
+        sends = type(self).sends_with_one_in_flight
         self.assertTrue(
-            pump(seconds=10.0, until=lambda: self.engine.stats["sends"] >= sends + 2),
-            "the wanted frame was never requested after the answer",
+            pump(seconds=10.0, until=lambda: self.engine.stats["sends"] > sends),
+            "the frame the playhead moved to was never requested after the answer",
         )
-        pump(seconds=0.3)
-        self.assertEqual(self.engine.stats["applies"], self.applies, "a stale answer was applied")
-        self.assertAlmostEqual(helper_max(self.obj, self.stage.key), 1.0, places=2)
-
         self.assertTrue(
             pump(seconds=10.0, until=lambda: abs(helper_max(self.obj, self.stage.key) - 3.0) < 0.01),
-            "the wanted frame never applied",
+            "the frame the playhead stopped on never applied",
         )
         self.assertEqual(self.stage.state, "ok")
+        # The answer for the frame the playhead had left was stored, not dropped: a
+        # later pass over it replays from the cache without asking again.
+        self.assertGreaterEqual(memory_count(self.obj, self.stage), 3)
+
+
+class PlaybackTests(FrameCacheTestCase):
+    """A scrub evaluates one frame per round trip and stores what it evaluated.
+    Frames merely passed over are not queued: that backlog is what made the client
+    stop responding while it worked through frames nobody was looking at."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.obj, cls.stage = cls.add_cube("Play")
+        keyframe_scale(cls.obj, cls.stage, [float(f) for f in range(1, 9)])
+        cls.report = cls.report_path("play")
+        # A round trip slower than the playhead step, as a real GH solve can be.
+        cls.fake = start_fake(cls.stage.key, cls.report, "--delay-ms", "400")
+        cls.await_client()
+        scrub(cls.obj, 1)
+        pump(seconds=10.0, until=lambda: cls.stage.state == "ok")
+
+    @classmethod
+    def tearDownClass(cls):
+        stop_fake(getattr(cls, "fake", None))
+        super().tearDownClass()
+
+    @classmethod
+    def play(cls, frames, hold=0.08):
+        for frame in frames:
+            scrub(cls.obj, frame)
+            until = time.time() + hold
+            while time.time() < until:
+                cls.engine._timer()
+                time.sleep(0.005)
+
+    def test_01_a_scrub_does_not_queue_every_frame_it_passes(self):
+        before = self.engine.stats["sends"]
+        type(self).play(range(1, 9))
+        requested = self.engine.stats["sends"] - before
+        self.assertLess(
+            requested,
+            8,
+            "a fast scrub asked for every frame it passed over (%d of 8): that is the "
+            "backlog that blocks the client" % requested,
+        )
+        self.assertGreaterEqual(requested, 1, "a scrub asked for nothing at all")
+
+    def test_02_the_frame_it_stopped_on_lands_then_replays(self):
+        cls = type(self)
+        cls.play([8], hold=0.8)
+        self.assertTrue(
+            pump(seconds=15.0, until=lambda: abs(helper_max(self.obj, cls.stage.key) - 8.0) < 0.01),
+            "the frame the playhead stopped on was never evaluated",
+        )
+        self.assertEqual(self.stage.state, "ok")
+
+        sends = self.engine.stats["sends"]
+        cls.play([8], hold=0.3)
+        self.assertEqual(self.engine.stats["sends"], sends, "a cached frame was asked for again")
+
+
+
+class OneRequestOutstandingTests(FrameCacheTestCase):
+    """The client is never handed a second request while one is in flight.
+
+    A cached frame answered while a request was outstanding used to clear that
+    request's bookkeeping, so the next frame's pass saw an open gate and sent a
+    second request. The client solves serially, so two requests in flight is a
+    backlog the user feels; worse, a client that coalesces its solves can then
+    answer a request the engine has stopped waiting for, which is how a stage came
+    to look stuck until a manual Push. Measured before the fix: a peak of two
+    requests in flight, and 11 requests where 7 do the same work."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.obj, cls.stage = cls.add_cube("Outstanding")
+        keyframe_scale(cls.obj, cls.stage, [float((f % 7) + 1) for f in range(1, 21)])
+        cls.report = cls.report_path("outstanding")
+        cls.fake = start_fake(cls.stage.key, cls.report, "--delay-ms", "300")
+        cls.await_client()
+
+    @classmethod
+    def tearDownClass(cls):
+        stop_fake(getattr(cls, "fake", None))
+        super().tearDownClass()
+
+    def test_01_only_one_request_is_ever_outstanding(self):
+        import gh_stack.blender.server as server
+
+        engine = self.engine
+        seen = {"outstanding": 0, "peak": 0}
+        real_send = server.SERVER.send
+        real_response = engine._handle_response
+
+        def counting_send(frame):
+            sent = real_send(frame)
+            if sent:
+                seen["outstanding"] += 1
+                seen["peak"] = max(seen["peak"], seen["outstanding"])
+            return sent
+
+        def counting_response(header, sections):
+            seen["outstanding"] = max(0, seen["outstanding"] - 1)
+            return real_response(header, sections)
+
+        server.SERVER.send = counting_send
+        engine._handle_response = counting_response
+        try:
+            # Back and forth, so cached and uncached frames interleave: that mix is
+            # what opened the gate early.
+            for frame in list(range(1, 21)) + list(range(20, 0, -1)):
+                scrub(self.obj, frame)
+                until = time.time() + 0.04
+                while time.time() < until:
+                    engine._timer()
+                    time.sleep(0.004)
+            pump(seconds=2.0)
+        finally:
+            server.SERVER.send = real_send
+            engine._handle_response = real_response
+
+        self.assertGreater(seen["peak"], 0, "no request was ever sent")
+        self.assertEqual(
+            seen["peak"],
+            1,
+            "up to %d requests were outstanding at once; the client solves serially "
+            "and a second request is a backlog it works through after the user has "
+            "moved on" % seen["peak"],
+        )
+
+
+class UnknownRefTests(FrameCacheTestCase):
+    """A ref the client cannot serve is refused, and Blender resends in full.
+
+    The regression: the plugin read `geom.mode` and then ignored it, so a ref it
+    could not serve was dropped without a reply. Blender waited out its timeout,
+    its retry was another ref, and the stage sat with no geometry and no visible
+    error — the reopened-.blend bug. Blender must also understand the refusal in
+    both shapes the protocol defines: the standalone error message (4.6, which the
+    plugin sends) and an error-status response (4.4)."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.obj, cls.stage = cls.add_cube("Ref")
+        keyframe_scale(cls.obj, cls.stage, [1.0, 2.0])
+        cls.report = cls.report_path("unknown_ref")
+        cls.fake = start_fake(cls.stage.key, cls.report, "--forget-after", "1")
+        cls.await_client()
+        scrub(cls.obj, 1)
+        pump(seconds=10.0, until=lambda: cls.stage.state == "ok")
+
+    @classmethod
+    def tearDownClass(cls):
+        stop_fake(getattr(cls, "fake", None))
+        super().tearDownClass()
+
+    def test_01_a_ref_that_cannot_be_served_is_refused_and_resent(self):
+        # The geometry has not changed, so frame 2 travels as a ref; the client has
+        # forgotten the geometry, so it refuses and Blender must resend in full.
+        fulls = report_of(self.report).get("full", 0)
+        self.assertEqual(self.stage.state, "ok", self.stage.error)
+
+        scrub(self.obj, 2)
+        self.assertTrue(
+            pump(seconds=15.0, until=lambda: report_of(self.report).get("full", 0) > fulls),
+            "the refused ref never triggered a full resend (report=%s)" % report_of(self.report),
+        )
+        self.assertTrue(
+            pump(seconds=15.0, until=lambda: abs(helper_max(self.obj, self.stage.key) - 2.0) < 0.01),
+            "the recovered frame never applied",
+        )
+        self.assertEqual(self.stage.state, "ok")
+        self.assertEqual(self.stage.error, "")
+        self.assertEqual(
+            self.engine.stats["timeouts"], 0, "the recovery went through a timeout instead"
+        )
+
+
+class UnknownRefResponseTests(UnknownRefTests):
+    """The same recovery when the refusal arrives as an error-status response."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        stop_fake(cls.fake)
+        cls.report = cls.report_path("unknown_ref_response")
+        cls.fake = start_fake(
+            cls.stage.key, cls.report, "--forget-after", "1", "--refusal", "response"
+        )
+        cls.await_client()
+        cls.stage.geom_hash = ""
+        scrub(cls.obj, 1)
+        pump(seconds=10.0, until=lambda: cls.stage.state == "ok")
+
+
+class TimeDrivenPrefixTests(FrameCacheTestCase):
+    """A native modifier before the stage reads scene time, so the geometry fed to
+    Grasshopper moves with the timeline — the case that made the frame cache inert.
+
+    Nothing about the modifier changes between frames: the same node graph, the
+    same property values. Only the evaluated prefix moves. So this fails unless the
+    prefix memo's revision includes the frame, which was exactly the bug: the memo
+    served one frame's geometry for every frame, the geometry hash never moved, the
+    request ID never moved, and the cache answered every frame with the first
+    frame's result."""
+
+    # The cube is size 2, so the unshifted helper reaches x = 1.0.
+    CUBE_MAX_X = 1.0
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        import gh_stack.blender.stack as stack_mod
+
+        bpy.ops.mesh.primitive_cube_add(size=2.0)
+        cls.obj = bpy.context.object
+        cls.obj.name = "Clock"
+        bpy.ops.gh_stack.add_stage(label="Clock")
+        cls.stage = cls.obj.gh_stack.stages[0]
+        # A constant parameter: the prefix is the only thing that can differ
+        # between frames, so no keyframes are involved anywhere.
+        cls.obj[stack_mod.param_prop_name(cls.stage.key, SCALE)] = 1.0
+        time_driven_modifier(cls.obj)
+        cls.report = cls.report_path("clock")
+        cls.fake = start_fake(cls.stage.key, cls.report)
+        cls.await_client()
+
+    @classmethod
+    def tearDownClass(cls):
+        stop_fake(getattr(cls, "fake", None))
+        super().tearDownClass()
+
+    def at_frame(self, frame, seconds=15.0):
+        """Move to a frame and wait until the helper actually shows it."""
+        scrub(self.obj, frame)
+        expected = self.CUBE_MAX_X + expected_offset(frame)
+        reached = pump(
+            seconds=seconds,
+            until=lambda: self.max_x() is not None and abs(self.max_x() - expected) < 0.05,
+        )
+        self.assertTrue(
+            reached,
+            "frame %d never reached the helper: max x %r, expected %.3f"
+            % (frame, self.max_x(), expected),
+        )
+        return self.max_x()
+
+    def max_x(self):
+        bounds = helper_bounds(self.obj, self.stage.key)
+        return None if bounds is None else bounds[1]
+
+    def test_01_each_frame_is_its_own_request(self):
+        # Two frames, two request IDs: the frame is part of what a request means.
+        before = self.engine.stats["sends"]
+        first = self.at_frame(1)
+        rid_one = self.stage.rid
+        second = self.at_frame(24)
+        rid_two = self.stage.rid
+
+        self.assertNotEqual(rid_one, rid_two, "both frames produced the same request ID")
+        self.assertGreater(abs(second - first), 0.5, "the prefix did not move with the frame")
+        self.assertGreaterEqual(
+            requests_of(self.report), 2,
+            "the second frame was never requested (report=%s)" % report_of(self.report),
+        )
+        self.assertGreaterEqual(self.engine.stats["sends"] - before, 2)
+
+    def test_02_the_frame_moves_the_geometry_both_ways(self):
+        # The second pass: both frames are cached, so this is a replay, and the
+        # geometry must still follow the frame in both directions.
+        first = self.at_frame(1)
+        second = self.at_frame(24)
+        self.assertLess(first, second, "the replay went the wrong way: %r then %r" % (first, second))
+
+    def test_03_an_unchanged_frame_still_hits_the_memo(self):
+        # The memo must keep earning its place: a pass at the frame already
+        # evaluated is the wait-free no-op that lets Cycles accumulate samples.
+        # The pass is forced the way the depsgraph handler forces it, because
+        # `_timer` only touches objects something has marked dirty.
+        self.at_frame(24)
+
+        def idle_passes(count):
+            for _ in range(count):
+                self.engine._mark_object_dirty(self.obj)
+                self.engine._timer()
+
+        idle_passes(3)
+        hits = self.engine.stats["prefix_memo_hits"]
+        clones = self.engine.stats["prefix_clones"]
+        idle_passes(5)
+        self.assertGreater(
+            self.engine.stats["prefix_memo_hits"], hits, "an idle pass re-evaluated the prefix"
+        )
+        self.assertEqual(
+            self.engine.stats["prefix_clones"], clones, "an idle pass cloned the object"
+        )
 
 
 if __name__ == "__main__":

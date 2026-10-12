@@ -31,10 +31,20 @@ from . import bridge, geometry_io, helpers, nodes, prefs, props, server, stack a
 WAIT_INTERVAL = 0.005
 IDLE_INTERVAL = 0.05
 
+# How long a stage may wait for its outstanding answer before the request is given
+# up on and retried in full. See `_timeout()`.
+
 _cache = {}  # (stack_id, stage_key) -> {rid: (header, sections)}; the hot path
 _stores = {}  # (stack_id, stage_key) -> ResponseStore; the backing store
-_prefix_memo = {}  # (object name, stage key) -> {"revision": tuple, "sections": list}
-_waiting_since = {}  # (stack_id, stage_key) -> monotonic seconds
+_prefix_memo = {}  # (obj.as_pointer(), stage key) -> {"revision": tuple, "sections": list}
+# (stack_id, stage_key) -> {rid: monotonic seconds it was sent}. At most one entry:
+# the evaluation in flight. One at a time, deliberately — a frame that arrives while
+# an answer is outstanding is not queued behind it, because Grasshopper solves in
+# arrival order on one thread and a queue of frames the user has already scrubbed
+# past only keeps the client busy after they have moved on. The frame the playhead
+# is on is asked for on the first pass after the answer lands, and every answer is
+# stored either way, so nothing evaluated is wasted.
+_pending = {}
 _dirty = set()  # object names that need a pass
 _registered = False
 # True while the engine evaluates a prefix clone. Linking and removing that
@@ -50,7 +60,20 @@ stats = {
     "applies": 0,  # responses written into helper objects
     "tags": 0,  # obj.update_tag() calls
     "sends": 0,  # requests actually sent
+    "timeouts": 0,  # requests given up on after the timeout and retried in full
+    "undelivered": 0,  # requests not even sent: no client socket to carry them
 }
+
+
+def _pending_of(stack_id, stage_key):
+    """The frame this stage is waiting on: ``{rid: monotonic}``, at most one entry."""
+    return _pending.setdefault((stack_id, stage_key), {})
+
+
+def _forget(stack_id, stage_key):
+    """Stop waiting for a stage's active frame."""
+    _pending.pop((stack_id, stage_key), None)
+
 
 
 # --------------------------------------------------------------------- triggers
@@ -84,10 +107,16 @@ def _on_load(scene=None):
     file must behave like a reconnect: an in-flight request belonged to the old
     session, a stage saved mid-request must not wait for it, and every stack is
     evaluated against the cache and Grasshopper (plan §9.7).
+
+    A load is also a *new session from Grasshopper's point of view*: the client
+    may be a fresh process or a different document, so the geometry hash — a
+    claim about what GH still holds — does not survive it. Clearing it makes the
+    next request go out with `geom.mode = "full"`, which is what protocol §8.8
+    already prescribes for the first request after a connection.
     """
     if not bpy.app.timers.is_registered(_timer):
         bpy.app.timers.register(_timer, first_interval=IDLE_INTERVAL, persistent=True)
-    _waiting_since.clear()
+    _pending.clear()
     _prefix_memo.clear()
     for obj in bpy.data.objects:
         record = stack_mod.stack_of(obj)
@@ -96,6 +125,9 @@ def _on_load(scene=None):
         for stage in record.stages:
             if stage.state == stack_mod.STATE_WAITING:
                 _set(stage, "state", stack_mod.STATE_IDLE)
+            if stage.geom_hash:
+                # We cannot know that GH kept the geometry: ask again in full.
+                stage.geom_hash = ""
     _mark_dirty_all()
 
 
@@ -143,6 +175,8 @@ def _handle_incoming():
             _handle_schema(header)
         elif mtype == "response":
             _handle_response(header, sections)
+        elif mtype == "error":
+            _handle_error(header)
         elif mtype == "hello":
             _on_client_hello(header)
 
@@ -155,6 +189,10 @@ def _on_client_hello(header):
     every stack dirty so the current request goes out again (protocol §8.8).
     A reconnect with a *different* document resets the stages it claims: frames
     cached against the old document must not replay (handoff reset rules).
+
+    Every claimed stage also forgets its geometry hash: a `hello` is a new client
+    session, so the geometry it holds is unknown, and protocol §8.8 wants the
+    next request in full.
     """
     doc = (header or {}).get("doc") or ""
     claimed = set()
@@ -175,8 +213,9 @@ def _on_client_hello(header):
                 record.connected_doc = doc
         for stage in record.stages:
             if stage.state == stack_mod.STATE_WAITING:
-                _waiting_since.pop((record.stack_id, stage.key), None)
+                _forget(record.stack_id, stage.key)
                 _set(stage, "state", stack_mod.STATE_IDLE)
+            _set(stage, "geom_hash", "")
         _dirty.add(obj.name)
 
 
@@ -229,27 +268,21 @@ def _handle_response(header, sections):
             continue
         if not record.stack_id:
             record.stack_id = stack_mod.ensure_stack(obj).stack_id
-        waiting_key = (record.stack_id, key)
 
         if header.get("status") == "error":
             error = header.get("error") or {}
             code = error.get("code") if isinstance(error, dict) else None
-            _waiting_since.pop(waiting_key, None)
             if code == "unknown_ref":
                 # GH lost the geometry a ref named (reconnect, restarted
                 # document): send it again in full (protocol §4.3). The error is
                 # not a result and must not be cached.
-                if stage.geom_hash:
-                    stage.geom_hash = ""
-                _set(stage, "state", stack_mod.STATE_IDLE)
-                if stage.error:
-                    stage.error = ""
-                _dirty.add(obj.name)
-                return
+                _resend_in_full(obj, record, stage, "unknown_ref response")
+                continue
+            _forget(record.stack_id, stage.key)
             _set(stage, "state", stack_mod.STATE_ERROR)
             _set(stage, "error", error.get("message") if isinstance(error, dict) else str(error))
             _dirty.add(obj.name)
-            return
+            continue
 
         out_hash = header.get("out_hash") or ""
         stored_out = None
@@ -272,22 +305,32 @@ def _handle_response(header, sections):
         _remember(record, stage, rid, header, sections)
         _store_frame(record, stage, rid, header, sections)
 
-        was_waiting = _waiting_since.pop(waiting_key, None) is not None
+        was_pending = rid in _pending_of(record.stack_id, key)
+        _forget(record.stack_id, stage.key)
         applied = False
         if rid == stage.rid and out_hash != stage.applied_out_hash:
             _apply(obj, stage, sections)
             stats["applies"] += 1
             _set(stage, "applied_out_hash", out_hash)
             applied = True
-        if not applied and not was_waiting:
-            # A response for a request the scene has moved past: cached under
-            # its own rid, nothing else changes (protocol §6.4).
-            return
+        if not applied and not was_pending:
+            # Nothing to apply and nothing was being waited for: the answer is
+            # stored under its own rid, which is what makes a later pass over that
+            # frame a replay rather than a request (protocol §6.4).
+            #
+            # If it was for a frame the playhead has moved past, the stage still
+            # gets a pass: that pass is what asks for the frame the scene is on, and
+            # dropping it is how a stage ended up looking stuck until a manual Push.
+            # If it was for the frame already displayed, it is a duplicate and stays
+            # a complete no-op, which is what keeps an idle scene quiet.
+            if rid != stage.rid:
+                _dirty.add(obj.name)
+            continue
         _set(stage, "warnings", _warnings_text(header))
-        if was_waiting and not applied:
-            # The stage's in-flight answer arrived, but the wanted frame moved
-            # on: keep the last good output and let the next pass fetch (or
-            # replay) the frame the scene is actually on.
+        if was_pending and not applied:
+            # The active frame's answer arrived, but the playhead moved on while
+            # it was in flight: keep the last good output and let the next pass
+            # evaluate the frame the scene is actually on.
             _set(stage, "state", stack_mod.STATE_IDLE)
         else:
             _set(stage, "state", stack_mod.STATE_OK)
@@ -295,9 +338,57 @@ def _handle_response(header, sections):
         if applied:
             stats["tags"] += 1
             obj.update_tag()
-        if applied or was_waiting:
+        if applied or was_pending:
             _dirty.add(obj.name)
+
+
+def _handle_error(header):
+    """A standalone `error` message (protocol §4.6).
+
+    `unknown_ref` is the one that needs action: Grasshopper does not hold the
+    geometry the last request named. Everything else is reported on the stages it
+    names so a protocol mismatch is not silent.
+    """
+    code = header.get("code")
+    message = header.get("message") or code or "protocol error"
+    if code == "unknown_ref":
+        matched = False
+        for obj in bpy.data.objects:
+            record = stack_mod.stack_of(obj)
+            if record is None or not record.stages:
+                continue
+            stage = stack_mod.stage_of(obj, header.get("stage"))
+            if stage is None:
+                continue
+            matched = True
+            _resend_in_full(obj, record, stage, "unknown_ref")
+        if not matched:
+            print("[gh-stack] unknown_ref for unknown stage %r" % (header.get("stage"),), flush=True)
         return
+
+    print("[gh-stack] protocol error %s: %s" % (code, message), flush=True)
+    for obj in bpy.data.objects:
+        record = stack_mod.stack_of(obj)
+        if record is None or not record.stages:
+            continue
+        stage = stack_mod.stage_of(obj, header.get("stage"))
+        if stage is None:
+            continue
+        _set(stage, "error", "%s: %s" % (code, message))
+        _dirty.add(obj.name)
+
+
+def _resend_in_full(obj, record, stage, reason):
+    """Grasshopper no longer holds this stage's geometry, so the next request
+    must carry it. Shared by the `unknown_ref` error message, the response-shaped
+    `unknown_ref` and the request timeout, because all three leave the same
+    uncertainty behind (protocol §4.3, §8.8)."""
+    _forget(record.stack_id, stage.key)
+    _set(stage, "geom_hash", "")
+    _set(stage, "state", stack_mod.STATE_IDLE)
+    _set(stage, "error", "")
+    _dirty.add(obj.name)
+    print("[gh-stack] %s: resending geometry (%s)" % (stage.key, reason), flush=True)
 
 
 def _warnings_text(header):
@@ -570,12 +661,21 @@ def _process_stage(obj, record, stage):
     geom_hash = hashing.geometry_hash(raw)
     params_json = props.canonical_json(obj, stage)
     rid = hashing.request_id(stage.key, params_json, geom_hash, "m", "stack-local", stage.nonce)
-    _set(stage, "rid", rid)
+
+    # `stage.rid` is deliberately NOT set here. It names the request the stage is
+    # waiting on — the answer it must recognise as its own — so it is written only
+    # when a request actually goes out (or when a cached frame is applied). While
+    # a reply is in flight the playhead may have moved on, and updating `stage.rid`
+    # up front would make `_handle_response` discard that reply as stale: during
+    # playback nothing would ever be applied and the output would freeze for as
+    # long as the round trip takes. The wanted frame is fetched on the next pass,
+    # from the frame cache when it is warm.
 
     cached = _cached_response(record, stage, rid)
     if cached is not None:
         header, cached_sections = cached
         out_hash = header.get("out_hash") or ""
+        _set(stage, "rid", rid)
         if out_hash != stage.applied_out_hash:
             _apply(obj, stage, cached_sections)
             stats["applies"] += 1
@@ -583,7 +683,6 @@ def _process_stage(obj, record, stage):
             _set(stage, "warnings", _warnings_text(header))
             _set(stage, "state", stack_mod.STATE_OK)
             _set(stage, "error", "")
-            _waiting_since.pop((record.stack_id, stage.key), None)
             return "busy"
         _set(stage, "state", stack_mod.STATE_OK)
         return "idle"
@@ -594,16 +693,31 @@ def _process_stage(obj, record, stage):
         _set(stage, "state", stack_mod.STATE_DISCONNECTED)
         return "idle"
 
-    waiting_key = (record.stack_id, stage.key)
-    since = _waiting_since.get(waiting_key)
-    if stage.state == stack_mod.STATE_WAITING and since is not None:
-        timeout = _timeout()
-        if time.monotonic() - since > timeout:
-            _waiting_since.pop(waiting_key, None)
-            _set(stage, "state", stack_mod.STATE_ERROR)
-            _set(stage, "error", "timed out after %.0f s" % timeout)
-            return "idle"  # the helper keeps its last output; downstream may run
-        return "waiting"  # still waiting; keep the fast timer
+    pending = _pending_of(record.stack_id, stage.key)
+    retry_note = ""
+    if pending:
+        # One evaluation at a time. While an answer is outstanding the stage asks
+        # for nothing else — not even the frame the playhead has moved to.
+        # Grasshopper solves on one thread in the order it receives, so asking for
+        # frames while it works only builds a backlog it grinds through after the
+        # user has moved on: the client stops responding and every queued frame is
+        # one nobody is looking at by the time it arrives. The frame the scene is
+        # on is requested on the first pass after this answer lands, and the answer
+        # itself is stored either way, so an evaluation is never wasted.
+        #
+        # A cached frame never reaches here: the lookup above answers it first, so
+        # a replay is not throttled by whatever is outstanding.
+        sent_at = next(iter(pending.values()))
+        if time.monotonic() - sent_at <= _timeout():
+            return "waiting"
+        # The answer never came. We cannot know whether Grasshopper received the
+        # geometry, so the retry goes out in full — the same reasoning as the
+        # unknown_ref handler. And the failure stays visible: retrying silently is
+        # what made a stage stuck in this loop look healthy.
+        _forget(record.stack_id, stage.key)
+        _set(stage, "geom_hash", "")
+        stats["timeouts"] += 1
+        retry_note = "timed out after %.0f s; requesting the geometry again" % _timeout()
 
     mode = "full" if geom_hash != stage.geom_hash else "ref"
     header = {
@@ -617,13 +731,22 @@ def _process_stage(obj, record, stage):
         "space": "stack-local",
     }
     frame = codec.encode_frame(header, sections if mode == "full" else [])
-    server.SERVER.send(frame)
+    if not server.SERVER.send(frame):
+        # No client socket to carry it. Recording a pending request here would
+        # make the stage wait out a whole timeout for an answer nobody was asked
+        # for — and the retry would be gated on that same pending entry.
+        stats["undelivered"] += 1
+        _set(stage, "state", stack_mod.STATE_DISCONNECTED)
+        return "idle"
+    if retry_note:
+        print("[gh-stack] %s: %s" % (stage.key, retry_note), flush=True)
     stats["sends"] += 1
 
+    _pending_of(record.stack_id, stage.key)[rid] = time.monotonic()
+    _set(stage, "rid", rid)
     _set(stage, "geom_hash", geom_hash)
     _set(stage, "state", stack_mod.STATE_WAITING)
-    _set(stage, "error", "")
-    _waiting_since[waiting_key] = time.monotonic()
+    _set(stage, "error", retry_note)
     return "waiting"
 
 
@@ -646,7 +769,11 @@ def _prefix_sections(obj, record, stage):
         return geometry_io.object_to_sections(obj, as_subd=bool(record.subd))
 
     revision = _prefix_revision(obj, record, stage, index)
-    memo_key = (obj.name, stage.key)
+    # Keyed by identity, not by name: an object renamed to a name another object
+    # used to hold would otherwise inherit what that object had evaluated.
+    # as_pointer() is stable for the session and keeps no reference to the object,
+    # so a deleted object does not live on through this dict.
+    memo_key = (obj.as_pointer(), stage.key)
     memo = _prefix_memo.get(memo_key)
     if revision is not None and memo is not None and memo["revision"] == revision:
         stats["prefix_memo_hits"] += 1
@@ -672,8 +799,27 @@ def _prefix_sections(obj, record, stage):
 
 
 def _prefix_revision(obj, record, stage, index):
-    """Everything the evaluated prefix depends on, cheaply comparable. None
-    means "do not memoize" (surfaces are meshed on the fly and rarely used)."""
+    """Everything the evaluated prefix depends on, cheaply comparable.
+
+    **This list must name every input the evaluated prefix reads.** The memo in
+    :func:`_prefix_sections` trusts it, so an input that is missing here is an
+    input whose change goes unnoticed: the stage then sends Grasshopper geometry
+    that no longer matches the scene, with nothing to show for it. Two of them are
+    read at solve time rather than stored on the modifier, which makes them easy
+    to miss:
+
+    - **the frame** (``scene.frame_float``), because anything in the prefix that
+      reads the timeline — a Scene Time node, a simulation zone, a driver
+      expression — moves with it. A prefix that moves has to produce a new
+      geometry hash, so the frame cache can key each frame separately; without
+      this the same request ID came back for every frame and the cache answered
+      them all with one frame's geometry;
+    - **the object identity**, which is in the memo key rather than the tuple
+      (see :func:`_prefix_sections`).
+
+    ``None`` means "do not memoize" (surfaces are meshed on the fly and rarely
+    used).
+    """
     if obj.type == "SURFACE":
         return None
     base = geometry_io.object_to_sections(obj, as_subd=False)
@@ -684,6 +830,7 @@ def _prefix_revision(obj, record, stage, index):
         _upstream_hashes(obj, record, stage, index),
         bool(record.subd),
         _shapekey_state(obj),
+        bpy.context.scene.frame_float,
     )
 
 
@@ -861,7 +1008,7 @@ def request_again(obj, stage=None):
     stages = [stage] if stage is not None else list(record.stages)
     for item in stages:
         item.nonce += 1
-        _waiting_since.pop((record.stack_id, item.key), None)
+        _forget(record.stack_id, item.key)
         _set(item, "state", stack_mod.STATE_IDLE)
     _dirty.add(obj.name)
 
@@ -890,7 +1037,17 @@ def register():
     global _registered
     if _registered:
         return
+    # Everything the last registration learned belongs to the session that just
+    # ended: a decoded frame, an evaluated prefix, a request in flight, a counter.
+    # Leaving them behind served a stale prefix and stale counters across a
+    # disable/enable. `_dirty` is left alone — it discards nameless objects on its
+    # own, and clearing it could skip the first pass a stack needs.
     _stores.clear()
+    _cache.clear()
+    _pending.clear()
+    _prefix_memo.clear()
+    for counter in stats:
+        stats[counter] = 0
     # A UI-driven parameter write (the choice dropdown) must reach the engine.
     stack_mod.set_param_changed_hook(_mark_object_dirty)
     # Persistent: Blender clears non-persistent timers and handlers on every

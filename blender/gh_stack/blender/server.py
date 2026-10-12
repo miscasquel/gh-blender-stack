@@ -52,6 +52,7 @@ class GhServer(object):
         self._stop = threading.Event()
         self._port = None
         self._send_queue = None  # asyncio.Queue, created on the loop
+        self._clients = []  # live sockets; only touched on the loop thread
 
     # ------------------------------------------------------------------ start
     def start(self, port):
@@ -86,11 +87,16 @@ class GhServer(object):
 
     # ------------------------------------------------------------------- send
     def send(self, frame):
-        """Queue a frame from the main thread. The loop drains it."""
+        """Queue a frame from the main thread. False when there is no client to
+        receive it: a dropped request must not be recorded as sent, or the caller
+        waits out a whole timeout for an answer nobody was ever asked for."""
+        if not bridge.state["clients"]:
+            return False
         loop = self._loop
         if loop is None:
-            return
+            return False
         loop.call_soon_threadsafe(self._enqueue, frame)
+        return True
 
     def _enqueue(self, frame):
         if self._send_queue is not None:
@@ -127,16 +133,15 @@ class GhServer(object):
     async def _sender(self):
         while True:
             frame = await self._send_queue.get()
-            for ws in list(getattr(self, "_clients", ())):
+            for ws in list(self._clients):
                 try:
                     await ws.send(frame)
                 except Exception:
                     pass
 
     async def _on_connect(self, ws):
-        if not hasattr(self, "_clients"):
-            self._clients = []
         self._clients.append(ws)
+        bridge.set_clients(len(self._clients))
         try:
             async for message in ws:
                 if isinstance(message, str):
@@ -171,6 +176,7 @@ class GhServer(object):
                 self._clients.remove(ws)
             except ValueError:
                 pass
+            bridge.set_clients(len(self._clients))
             if not self._clients:
                 bridge.set_disconnected("client disconnected")
 

@@ -46,6 +46,7 @@ class StageState(object):
         self.echoes = 0  # identical responses re-sent
         self.edits = 0  # same-rid responses with a changed output (GH-side edit)
         self.schema_updates = 0  # changed schemas re-sent
+        self.refusals = 0  # refs answered with unknown_ref instead of a result
 
 
 def _summarise(state):
@@ -93,6 +94,13 @@ async def main():
                     help="after this many responses, send a same-rid response with a changed output")
     ap.add_argument("--schema-after", type=int, default=0,
                     help="after this many responses, send a changed schema")
+    ap.add_argument("--forget-after", type=int, default=0,
+                    help="after this many requests, drop the stored geometry so a "
+                         "later ref cannot be served (a restarted client)")
+    ap.add_argument("--refusal", choices=("message", "response"), default="message",
+                    help="how to refuse an unservable ref: the standalone error "
+                         "message of protocol 4.6 (what the plugin sends), or an "
+                         "error-status response (protocol 4.4)")
     args = ap.parse_args()
 
     state = StageState()
@@ -131,6 +139,7 @@ def _write_report(args, state):
                 "echoes": state.echoes,
                 "edits": state.edits,
                 "schema_updates": state.schema_updates,
+                "refusals": state.refusals,
                 "sections": sorted(state.sections.keys()) if state.sections else [],
                 "received_verts": state.received_verts,
                 "received_faces": state.received_faces,
@@ -215,17 +224,39 @@ async def session(ws, args, state):
             _summarise(state)
         else:
             state.ref += 1
+        if args.forget_after and mode != "full" and state.responses >= args.forget_after:
+            # A restarted client, a replaced document: the geometry is gone, so a
+            # later ref cannot be served. Only refs are affected — a full carries
+            # the geometry it needs, so it always repairs the slot. Counted in
+            # served responses so the request that filled the slot is answered.
+            state.sections = None
         if state.sections is None:
-            reply = {
-                "type": "response",
-                "stage": args.stage,
-                "rid": header.get("rid"),
-                "out_hash": "",
-                "status": "error",
-                "error": {"code": "unknown_ref", "message": "no geometry stored"},
-                "warnings": [],
-            }
-            await ws.send(codec.encode_frame(reply))
+            # Cannot serve this ref. The plugin answers with the standalone error
+            # message (protocol 4.6); an error-status response (4.4) is the other
+            # shape Blender accepts.
+            if args.refusal == "message":
+                refusal = {
+                    "type": "error",
+                    "code": "unknown_ref",
+                    "message": "no geometry stored",
+                    "stage": args.stage,
+                    "rid": header.get("rid"),
+                }
+            else:
+                refusal = {
+                    "type": "response",
+                    "stage": args.stage,
+                    "rid": header.get("rid"),
+                    "out_hash": "",
+                    "status": "error",
+                    "error": {"code": "unknown_ref", "message": "no geometry stored"},
+                    "warnings": [],
+                }
+            await ws.send(codec.encode_frame(refusal))
+            state.refusals += 1
+            # Refresh the report: a refusal is a request that arrived, and tests
+            # need to see it (a refusal is not a response).
+            _write_report(args, state)
             continue
 
         scale = float((header.get("params") or {}).get(args.scale_param, 1.0))
