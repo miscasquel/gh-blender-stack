@@ -12,11 +12,11 @@ can edit and keyframe in Blender, packaged as a Blender extension.
 
 ```
 Blender                                          Rhino / Grasshopper (wine)
-┌───────────────────────────┐      WebSocket     ┌────────────────────────────────┐
+┌───────────────────────────┐      WebSocket     ┌─────────────────────────────────┐
 │ Cube                      │◄──────────────────►│ Stage In ──► Scale ──► Stage Out│
-│   GH · Demo (stage)       │        9130        │                 ▲              │
-│   Bevel (native, optional)│                    │               Param            │
-└───────────────────────────┘                    └────────────────────────────────┘
+│   GH · Demo (stage)       │        9130        │                 ▲               │
+│   Bevel (native, optional)│                    │               Param             │
+└───────────────────────────┘                    └─────────────────────────────────┘
 ```
 
 ## What works today
