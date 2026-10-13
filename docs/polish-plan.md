@@ -4,6 +4,12 @@
 `ea0f651`, after the W2 frame cache (`b3305cf`) and the reopen fix (`ea0f651`);
 items carried out since carry a **Done** banner with commit and evidence.
 
+**Next slice:** `docs/handoff-next-batch-2.md` (written 2026-10-13 at `6cc4cb1`).
+Its findings that are not yet items below are tagged **`N1`–`N9`** there — notably
+`N4` (a measured per-tick cost that re-scopes **P4-1**, see item 5 of that handoff)
+and `N1` (a gap in the decode contract that `P2-1`/`P2-3` left one layer deeper).
+Fold those in here when this plan is next touched.
+
 **Scope:** correctness fixes, hardening, dead-code removal, and documentation
 drift. No new features and no protocol changes. Every item either removes a silent
 failure, removes a stall, or removes code that is not reachable.
@@ -1029,6 +1035,25 @@ P4 items now carry everything it established. Nothing referenced it except ADR
 0008, whose link was updated.
 
 ### P8-3 · `core/rules.py` has no consumer
+
+> **Dropped 2026-10-13**, re-scored after a user-value review and removed from
+> `docs/handoff-next-batch-2.md`. Adopting it changes nothing a user can see — it
+> routes two inline comparisons through pure functions with the same semantics — and
+> the module **has already drifted from the engine it would describe**:
+> `decide_response` takes 8 parameters and uses 5 (`stage_key`, `cached_rids`,
+> `rid_nonce` unused), and it models neither `unknown_ref` (`engine.py:276`) nor the
+> generation counter (`engine.py:310`). So option (b) below is unsound while it is
+> stale — documenting it would enshrine the wrong rules — and option (a) is a
+> refactor with a sharp edge: a careless adoption would silently drop the
+> `unknown_ref` recovery that P0-1 fixed.
+> **The live option is (c): delete it.** `docs/protocol.md` §6.4 already carries the
+> five apply rules and `plan.md` §9.1 the request side; the 11 layer-A tests go with
+> it, because they currently cover code that does not run. Do it whenever someone is
+> next in `core/` for another reason — not as a session of its own.
+> **On the score:** this module is a 3 on *module health* and a 1 on *risk to the
+> product*. The two axes are not the same thing, and grading it on the first while
+> scheduling it like the second is what put it in a batch it did not belong in.
+
 `blender/gh_stack/core/rules.py` (116 lines) is well-documented and exhaustively
 unit-tested, but it is **not imported by the add-on at all** — `engine.py:27-29`
 imports `cache`, `codec` and `hashing`, not `rules`. `_process_stage` and
@@ -1043,8 +1068,9 @@ states that `stack.py:25-29` owns.
   `docs/protocol.md`, and have `rules.py` import the state constants from
   `stack.py` rather than restating them.
 
-(a) is more work and better; (b) is honest and cheap. Do not leave it ambiguous —
-today the module reads as dead code to anyone who greps for its callers.
+**Superseded the same day — see the banner above.** (a) is more work and better;
+(b) is honest and cheap *only once the module is correct*; (c) delete is now the
+live option.
 
 ### P8-4 · `bl_info` versus the manifest version
 
