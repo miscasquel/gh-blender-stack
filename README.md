@@ -44,8 +44,8 @@ Blender                                          Rhino / Grasshopper (wine)
   play and scrub, stores frames on disk (content-addressed, bounded, resettable
   per stage), replays with Grasshopper closed, and leaves an idle scene alone so
   Cycles keeps accumulating samples. No explicit bake operator.
-- **Tests.** `scripts/test-core` (60 tests, standard library only),
-  `scripts/test-blender` (69 headless tests), `scripts/test-gha` (the C# codec
+- **Tests.** `scripts/test-core` (standard library only), `scripts/test-blender`
+  (Blender headless against `tools/fake_gh`), `scripts/test-gha` (the C# codec
   against the golden fixtures, under wine), `scripts/test-extension` (installed
   extension round trip).
 

@@ -15,7 +15,7 @@ in the plan are tagged **`N1`–`N9`** and are not yet folded into the plan belo
 
 | layer | command | result |
 |---|---|---|
-| A, pure core | `scripts/test-core` | 60 tests, OK |
+| A, pure core | `scripts/test-core` | 60 tests, OK (49 after the `rules.py` removal, below) |
 | B, Blender headless | `scripts/test-blender` | 86 tests, OK (35 s) |
 | C, C# under wine | `scripts/test-gha` | 10 fixtures PASS, `param-values` PASS, `decoder-boundary` PASS |
 | D-lite, extension | `scripts/test-extension` | PASS (websockets from the wheel, round trip from the install location) |
@@ -46,26 +46,20 @@ least risk reduction.
 
 ## Deliberately not in this batch
 
-- **P8-3 · `core/rules.py`** — it was item 5 of the first draft and is now dropped,
-  not deferred. It is 116 lines with **zero production callers**
-  (`engine.py:27-29` imports `cache`, `codec`, `hashing`), and it has already drifted
-  from the code it describes: `decide_response` takes 8 parameters and uses 5
-  (`stage_key`, `cached_rids`, `rid_nonce` are unused), and it models neither
-  `unknown_ref` (`engine.py:276`) nor the generation counter (`:310`). So:
-  - **Adopting it (P8-3 option a) changes nothing a user can see.** It routes two
-    inline comparisons through pure functions with the same semantics. The only way
-    it becomes visible is if it is done carelessly — a naive adoption would drop the
-    `unknown_ref` recovery that P0-1 spent days on.
-  - **Documenting it as the spec (option b) is unsound** while it is stale; that
-    would enshrine the wrong rules in a docstring.
-  - The live option is **delete it** and let `docs/protocol.md` §6.4 carry the table
-    (it already contains the five apply rules, and `plan.md` §9.1 has the request
-    side). Its 11 layer-A tests go with it: they are currently a green light for code
-    that does not run, and deleting the module and its tests leaves the product
-    exactly as safe.
-  - **Do this when someone is next in `core/` for another reason.** It is not a batch
-    item and it is not worth a session on its own. See `docs/polish-plan.md` P8-3 for
-    the decision record.
+- **P8-3 · `core/rules.py` — resolved before this batch started.** Deleted, with its
+  11 layer-A tests (layer A: 60 → 49). The record of why is in
+  `docs/polish-plan.md` P8-3; the short version: adopting it changes nothing a user
+  can see, and it had already drifted from the engine it described — 8 parameters
+  with 3 unused, and no `unknown_ref` (`engine.py:276`) or generation counter
+  (`:310`). Documenting a drifted module as the spec would enshrine the wrong rules,
+  and a careless adoption would drop the `unknown_ref` recovery P0-1 fixed. The
+  apply rules live in `docs/protocol.md` §6.4 and the request side in `plan.md` §9.1.
+  **One consequence to not lose:** `rules.py` was also the more complete of the two
+  copies of the stage-state vocabulary (it had `disabled`, `frozen`, `unbound`;
+  `stack.py:25-29` has only five states, and the engine still writes the bare literal
+  `"disabled"` at `engine.py:654` and `ui.py:177`). That inconsistency is now
+  entirely P4-6's third bullet, which should be done while someone is next in
+  `stack.py` — not as part of this batch.
 - **P0-9 piece 3 (units).** Still the largest untested axis, still latent: the
   development document is in metres, and the conversion is silent in both
   directions. It needs a non-metres Rhino document to test honestly, which means a
@@ -372,12 +366,15 @@ pointer placed before the stage.
 No behaviour change intended anywhere below. The suites staying green is the whole
 verification.
 
-**N2 · the test counts are wrong again, and now the plan is wrong too.**
-`README.md:48` says "69 headless tests"; `docs/polish-plan.md` P8-1 says "actual is
-72"; the runner prints **86**. The plan's own advice is the fix: *"a count in a README
-is stale the moment a test is added"*. Drop the numbers, or derive them — `run.py`
-already prints them, and CI already runs layer A, so an assertion there is nearly
-free. Do not update them a fourth time.
+**N2 · the test counts — half done, and the half that is left is the interesting one.**
+The README's counts (60 / 69, both wrong) were removed in the same commit as the
+`rules.py` deletion, which is the fix the plan itself recommends: *"a count in a README
+is stale the moment a test is added."* What remains:
+- `docs/polish-plan.md` P8-1 still says "actual is 72"; the runner prints **86**. The
+  stale sentence there should go when P8-1 is closed.
+- The open question is whether to *derive* the numbers instead. `run.py` already
+  prints them and CI already runs layer A, so an assertion or a badge is nearly free;
+  what must not happen is a fourth hand-edit.
 
 **N5 · `--coalesce` is harsher than the client, and the help text does not say so.**
 The window is fixed at the first request's arrival, so a request arriving a
@@ -456,8 +453,10 @@ scripts/test-extension    # layer D-lite: build, install, round trip
 scripts/check-deployed    # after any .gha change
 ```
 
-Baseline to beat: **60 / 86 / 10 fixtures + 2 groups / PASS**, all verified at
-`6cc4cb1` on 2026-10-13. Items 1 and 2 also want `grasshopper/build/build-gha.sh`
+Baseline to beat: **49 / 86 / 10 fixtures + 2 groups / PASS**, all verified at
+`6cc4cb1` on 2026-10-13 (layer A was 60 there; `core/rules.py` and its 11 tests
+were removed before this batch started — see "Deliberately not in this batch").
+Items 1 and 2 also want `grasshopper/build/build-gha.sh`
 (which compiles `GhLink.cs` and `Components.cs` against RhinoCommon —
 `scripts/test-gha` builds only the codec) and then `deploy.sh` plus a Rhino restart.
 

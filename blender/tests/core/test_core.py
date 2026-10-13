@@ -5,7 +5,7 @@ import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from blender.gh_stack.core import codec, hashing, params, rules  # noqa: E402
+from blender.gh_stack.core import codec, hashing, params  # noqa: E402
 
 
 class CanonicalJsonTests(unittest.TestCase):
@@ -208,60 +208,6 @@ class ParamsTests(unittest.TestCase):
         with self.assertRaises(params.SchemaError):
             params.default_for("nonsense")
 
-
-class RulesTests(unittest.TestCase):
-    def test_apply_on_new_out_hash(self):
-        d = rules.decide_response("k", "sha256:1", "sha256:out2", "sha256:1", "sha256:out1")
-        self.assertEqual(d.action, rules.APPLY)
-        self.assertEqual(d.out_hash, "sha256:out2")
-
-    def test_ignore_repeat_out_hash(self):
-        d = rules.decide_response("k", "sha256:1", "sha256:out1", "sha256:1", "sha256:out1")
-        self.assertEqual(d.action, rules.IGNORE)
-
-    def test_cache_only_for_other_rid(self):
-        d = rules.decide_response("k", "sha256:old", "sha256:out9", "sha256:1", "sha256:out1")
-        self.assertEqual(d.action, rules.CACHE_ONLY)
-
-    def test_error_status_keeps_last_good(self):
-        d = rules.decide_response(
-            "k", "sha256:1", "sha256:out2", "sha256:1", "sha256:out1", status="error"
-        )
-        self.assertEqual(d.action, rules.ERROR_OUT)
-
-    def test_request_is_full_when_geometry_changed(self):
-        d = rules.decide_request("k", "sha256:1", {}, geom_changed=True)
-        self.assertEqual(d.action, rules.SEND_FULL)
-        self.assertEqual(d.geom_mode, "full")
-
-    def test_request_is_ref_when_only_params_moved(self):
-        d = rules.decide_request("k", "sha256:1", {}, geom_changed=False, gh_holds_geom=True)
-        self.assertEqual(d.action, rules.SEND_REF)
-        self.assertEqual(d.geom_mode, "ref")
-
-    def test_request_is_full_after_reconnect(self):
-        d = rules.decide_request("k", "sha256:1", {}, geom_changed=False, gh_holds_geom=False)
-        self.assertEqual(d.action, rules.SEND_FULL)
-
-    def test_cache_hit_sends_nothing(self):
-        d = rules.decide_request("k", "sha256:1", {"sha256:1": object()}, geom_changed=True)
-        self.assertEqual(d.action, rules.USE_CACHE)
-
-    def test_disconnected_sends_nothing(self):
-        d = rules.decide_request("k", "sha256:1", {}, geom_changed=True, connected=False)
-        self.assertEqual(d.action, rules.NOTHING)
-
-    def test_frozen_and_disabled_send_nothing(self):
-        for state in (rules.FROZEN, rules.DISABLED, rules.UNBOUND):
-            d = rules.decide_request("k", "sha256:1", {}, geom_changed=True, state=state)
-            self.assertEqual(d.action, rules.NOTHING, state)
-
-    def test_state_machine(self):
-        self.assertEqual(rules.next_stage_state(rules.OK, connected=True, has_gh_document=True), rules.OK)
-        self.assertEqual(rules.next_stage_state(rules.OK, connected=True, has_gh_document=False), rules.UNBOUND)
-        self.assertEqual(rules.next_stage_state(rules.OK, connected=False), rules.DISCONNECTED)
-        self.assertEqual(rules.next_stage_state(rules.OK, connected=True, frozen=True), rules.FROZEN)
-        self.assertEqual(rules.next_stage_state(rules.OK, connected=True, disabled=True), rules.DISABLED)
 
 
 class CacheTests(unittest.TestCase):

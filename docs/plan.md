@@ -363,7 +363,6 @@ blender/gh_stack/
   core/                          pure Python, no bpy
     codec.py                     frame encode and decode, sections
     hashing.py                   geometry hash, request IDs
-    rules.py                     the per-stage decision function
     cache.py                     cache index and eviction
     params.py                    schema types and value casting
   blender/

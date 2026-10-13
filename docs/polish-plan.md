@@ -766,9 +766,13 @@ different object that has since taken the name.
   it. A settings field that does nothing is worse than no field.
 - `blender/gh_stack/blender/ui.py:181-186` (`_port`) re-implements the prefs
   lookup that `prefs._pref()` (`:54-61`) now provides. Use `_pref("port", 9130)`.
-- `"disabled"` is a bare literal at `engine.py:563` and `ui.py:177`.
+- `"disabled"` is a bare literal at `engine.py:654` and `ui.py:177`.
   `stack.py:25-29` defines `STATE_IDLE`..`STATE_DISCONNECTED` but no
   `STATE_DISABLED`. Add it and use it in both places.
+  **Updated 2026-10-13:** this bullet is now the *only* record of that
+  inconsistency. `core/rules.py` had a second, more complete state list
+  (`disabled`, `frozen`, `unbound`) and was deleted (P8-3), so nothing else defines
+  the missing three. Worth doing while someone is next in `stack.py`.
 - `blender/gh_stack/blender/bridge.py:15-21` initialises `state` without a
   `"notice"` key, but `props.py:158` writes it and `ui.py:68` reads it. Add
   `"notice": ""` so the channel is declared.
@@ -1012,11 +1016,14 @@ Low priority — noted for completeness.
 ## P8 — Documentation drift
 
 ### P8-1 · README test counts
-`README.md:48` says "69 headless tests"; **actual is 72** — `test_reload.py`
-landed in `ea0f651` after the count was updated in `b3305cf`. The core count ("60")
-is correct.
-**Fix:** correct the numbers, and consider dropping them entirely — a count in a
-README is stale the moment a test is added, and `scripts/test-*` prints its own.
+**Resolved 2026-10-13, by removal.** The README's counts were dropped rather than
+corrected, which is what this item recommended ("a count in a README is stale the
+moment a test is added"). They had drifted twice — the text here said 69/72 when the
+runner printed 86 — and the `rules.py` removal changed layer A again (60 → 49), which
+is exactly the treadmill. `run.py` still prints each layer's count, and CI runs layer
+A, so a derived number or a badge remains available if one is ever wanted; a
+hand-written one should not come back.
+The history is below.
 
 ### P8-2 · `docs/handoff-frame-cache.md` contradicts itself
 The status line says "implemented 2026-10-12 (W2)", but §"Where things stand"
@@ -1036,25 +1043,32 @@ P4 items now carry everything it established. Nothing referenced it except ADR
 
 ### P8-3 · `core/rules.py` has no consumer
 
-> **Dropped 2026-10-13**, re-scored after a user-value review and removed from
-> `docs/handoff-next-batch-2.md`. Adopting it changes nothing a user can see — it
-> routes two inline comparisons through pure functions with the same semantics — and
-> the module **has already drifted from the engine it would describe**:
-> `decide_response` takes 8 parameters and uses 5 (`stage_key`, `cached_rids`,
-> `rid_nonce` unused), and it models neither `unknown_ref` (`engine.py:276`) nor the
-> generation counter (`engine.py:310`). So option (b) below is unsound while it is
-> stale — documenting it would enshrine the wrong rules — and option (a) is a
-> refactor with a sharp edge: a careless adoption would silently drop the
-> `unknown_ref` recovery that P0-1 fixed.
-> **The live option is (c): delete it.** `docs/protocol.md` §6.4 already carries the
-> five apply rules and `plan.md` §9.1 the request side; the 11 layer-A tests go with
-> it, because they currently cover code that does not run. Do it whenever someone is
-> next in `core/` for another reason — not as a session of its own.
-> **On the score:** this module is a 3 on *module health* and a 1 on *risk to the
+> **Done 2026-10-13.** Deleted: `core/rules.py` and its 11 layer-A tests (layer A
+> 60 → 49), with the four references it invalidated — the test module's import, the
+> `core/__init__.py` docstring, the §11 layout listing in `plan.md`, and the README's
+> test counts (removed rather than re-numbered; see P8-1).
+> Removed rather than adopted after a user-value review: adopting it changes nothing
+> a user can see — it routes two inline comparisons through pure functions with the
+> same semantics — and the module **had already drifted from the engine it would
+> describe**: `decide_response` took 8 parameters and used 5 (`stage_key`,
+> `cached_rids`, `rid_nonce` unused), and it modelled neither `unknown_ref`
+> (`engine.py:276`) nor the generation counter (`engine.py:310`). So option (b) below
+> was unsound while it was stale — documenting it would have enshrined the wrong rules
+> — and option (a) was a refactor with a sharp edge: a careless adoption would have
+> silently dropped the `unknown_ref` recovery that P0-1 fixed. The live option was
+> (c) delete: `docs/protocol.md` §6.4 already carries the five apply rules and
+> `plan.md` §9.1 the request side.
+> **One consequence, deliberately left to P4-6:** `rules.py` was also the more
+> complete of the two copies of the stage-state vocabulary (it had `disabled`,
+> `frozen`, `unbound`; `stack.py:25-29` has five states, and the engine still writes
+> the bare literal `"disabled"` at `engine.py:654` and `ui.py:177`). Deleting the
+> module removed the more complete copy, so P4-6's third bullet is now the only place
+> that inconsistency lives. It should be done while someone is next in `stack.py`.
+> **On the score:** this module was a 3 on *module health* and a 1 on *risk to the
 > product*. The two axes are not the same thing, and grading it on the first while
 > scheduling it like the second is what put it in a batch it did not belong in.
 
-`blender/gh_stack/core/rules.py` (116 lines) is well-documented and exhaustively
+`blender/gh_stack/core/rules.py` (116 lines) was well-documented and exhaustively
 unit-tested, but it is **not imported by the add-on at all** — `engine.py:27-29`
 imports `cache`, `codec` and `hashing`, not `rules`. `_process_stage` and
 `_handle_response` re-implement its decisions inline. It also restates the stage
