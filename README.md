@@ -1,8 +1,8 @@
-# GH Stack
+# GH Stack (placeholder name)
 
 Drive Grasshopper definitions from Blender as stackable modifiers, next to
 native Geometry Nodes modifiers, in one visible object per stack. Geometry and
-parameters both flow through the stack, so parameters can be keyframed, driven,
+parameters can flow through the stack, so parameters can be keyframed, driven,
 and played back.
 
 That is the v1 goal. **v0.1.2 is a working demo**: geometry (meshes, curves,
@@ -28,22 +28,22 @@ Blender                                          Rhino / Grasshopper (wine)
   sees everything before its own modifier in the stack, so `GH → GN → GH` chains
   evaluate as a prefix, and a waiting stage pauses the ones after it.
 - **Geometry kinds.** Meshes (n-gons and vertex colours), curves (poly, Bezier,
-  NURBS, circles, ellipses, arcs — all exact), points, SubD control cages with
-  edge-crease tags, and Breps/surfaces (meshed on the way out, warned). Stage In
+  NURBS, circles, ellipses, arcs), points, SubD control cages with
+  edge-crease tags, and Breps/surfaces (meshed on the way out, lossy). Stage In
   outputs `Geometry`, `Curves`, `Points`, and `SubD`; Stage Out takes any of
   them on one generic input.
 - **Parameters.** `Param` components declare float, int, bool, vector3, colour,
   value list, and text parameters. Blender draws them in the N-panel with
   ranges, a value-list dropdown, keyframe decorators, and drivers.
-- **Protocol v2.** Binary frames with a canonical JSON header; geometry and
+- **Protocol.** Binary frames with a canonical JSON header; geometry and
   parameters in the same stream. The Python and C# codecs are checked against
   ten shared golden fixtures.
 - **Lifecycle.** States (`waiting`, `ok`, `error`, `disconnected`, `disabled`),
-  timeouts, latest-wins requests, and reconnect with backoff.
+  timeouts, latest-wins requests, and reconnect with backoff. Inspecteable from the UI.
 - **Frame cache.** The cache behaves like a simulation cache: it fills as you
   play and scrub, stores frames on disk (content-addressed, bounded, resettable
   per stage), replays with Grasshopper closed, and leaves an idle scene alone so
-  Cycles keeps accumulating samples. No bake operator and no frame range.
+  Cycles keeps accumulating samples. No explicit bake operator.
 - **Tests.** `scripts/test-core` (60 tests, standard library only),
   `scripts/test-blender` (69 headless tests), `scripts/test-gha` (the C# codec
   against the golden fixtures, under wine), `scripts/test-extension` (installed
@@ -52,11 +52,9 @@ Blender                                          Rhino / Grasshopper (wine)
 ## What is deliberately not here yet
 
 - Breps and surfaces arrive as meshes (lossy, warned); Blender surface objects
-  are meshed on the way in. There is no B-rep on the wire.
+  are meshed on the way in. There is no B-rep on the wire. There are some issues with the meshing an it's obviously a lossy conversion. That won't be solved without a proper surface kernel inside blender (surface psycho may bridge this gap)
 - Freeze, preview, and the orphan list are not here yet. The frame cache's disk
-  format is private and has no stability promise.
-- Undo is not special-cased; stage records are ordinary properties, so undo
-  works as Blender's own property undo.
+  format is per machine and has no persistent promise.
 
 The authoritative roadmap and scope are in [docs/plan.md](docs/plan.md).
 
@@ -66,10 +64,9 @@ Development and testing happen on one Linux machine; Rhino 8 and Grasshopper
 run under wine there.
 
 - Blender 5.2 (Python 3.14).
-- Rhino 8 with Grasshopper under wine. The build scripts assume
+- Rhino 8 with Grasshopper under wine or windows (mac needs testing). The build scripts assume
   `~/.local/share/wine-rhino` and a `rhino8` wine prefix; both are overridable
-  with the `WINE` and `WINEPREFIX` environment variables. Native Windows Rhino
-  is designed for but untested.
+  with the `WINE` and `WINEPREFIX` environment variables.
 - Mono's `csc.exe` (ships with wine) to build the plugin.
 
 ## Install
@@ -81,7 +78,7 @@ pure-Python `websockets` wheel.
 scripts/build-extension          # builds dist/gh_stack-<version>.zip
 scripts/install-extension        # installs and enables it in Blender
 
-grasshopper/build/build-gha.sh   # build GhStack.gha (needs wine + Rhino 8)
+grasshopper/build/build-gha.sh   # build GhStack.gha (Rhino 8)
 grasshopper/deploy/deploy.sh     # copy it into the Grasshopper Libraries
 ```
 
