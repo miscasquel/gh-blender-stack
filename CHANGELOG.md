@@ -4,6 +4,43 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `gh_stack.retry` ("Retry", in the panel next to Push): ask Grasshopper for the
+  current state again without discarding the frame cache, so a stuck stage has a
+  recovery that keeps what has been computed. It is a fresh request (nonce bump)
+  with the frame cache left intact, which is the one thing Push cannot offer.
+
+### Fixed
+
+- **A slider on a prefix Geometry Nodes modifier now reaches Grasshopper.** A
+  Geometry Nodes modifier reads its group inputs from its stored input values
+  (`modifier.properties.inputs`, an ID-property group per socket), which are not
+  RNA properties, so the prefix revision's property walk could not see them.
+  Moving one changed the scene while the revision stayed the same, and with it the
+  memoized prefix, the geometry hash, the request id and the frame cache: the same
+  request id was served from the cache, the stage did nothing, and only a frame
+  change, a file reload or a Push moved it. `_modifier_descriptor` now folds the
+  stored inputs into the revision.
+- **Push, and every cache reset, now retires the memoized prefix** as well as the
+  frame store. A reset left the memo standing, so the "get past anything cached"
+  recovery re-sent the same geometry and produced the same output.
+
+### Changed
+
+- The engine runs at the fast cadence (5 ms) for a second after an edit, a
+  response or a frame change, instead of the 50 ms idle one. Playback fills
+  frames this way: each answer re-dirties the stack and the next frame goes out
+  on the next tick. A quiet scene still idles at 50 ms, because `_dirty` is
+  emptied on every pass.
+- The plugin's `MiniWsClient.SendFrame` is serialised: a pong (written from the
+  socket thread) could otherwise interleave with a large frame being written by
+  the sender thread, corrupting the stream for the rest of the connection. The
+  server's keepalive is now explicit (5 s ping, 20 s timeout) instead of the
+  library defaults, closing part of the gap protocol section 2 left open (N9).
+
 ## [0.1.2] — 2026-10-12
 
 Third release: the simulation-style frame cache, mid-stack prefix evaluation, and

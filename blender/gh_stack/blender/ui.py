@@ -44,6 +44,7 @@ class GHSTACK_PT_panel(bpy.types.Panel):
         row = layout.row()
         row.operator("gh_stack.add_stage", icon="ADD")
         row.operator("gh_stack.push", icon="FILE_REFRESH")
+        row.operator("gh_stack.retry", icon="LOOP_FORWARDS")
 
         if obj.type == "MESH":
             row = layout.row()

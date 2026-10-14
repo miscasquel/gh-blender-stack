@@ -19,6 +19,9 @@ namespace GhStack
         private readonly string _path;
         private TcpClient _tcp;
         private NetworkStream _stream;
+        // Serialises frame writes: SendFrame is called by the sender thread
+        // (responses) and by the socket thread (pongs).
+        private readonly object _writeLock = new object();
 
         public MiniWsClient(string endpoint)
         {
@@ -74,6 +77,12 @@ namespace GhStack
         }
 
         /// <summary>One masked frame, client-to-server.</summary>
+        /// <remarks>Written from two threads: the sender thread for responses,
+        /// and the socket thread for pongs. NetworkStream is not thread safe, so
+        /// a pong written while a large frame was half-sent would interleave
+        /// with it and corrupt the stream for the rest of the connection — the
+        /// server would then see a malformed frame and close. The lock serialises
+        /// the two; a pong waits at most for the frame currently being written.</remarks>
         private void SendFrame(int opcode, byte[] payload)
         {
             var ms = new MemoryStream();
@@ -103,8 +112,11 @@ namespace GhStack
             ms.Write(mask, 0, 4);
             for (int i = 0; i < len; i++) ms.WriteByte((byte)(payload[i] ^ mask[i % 4]));
             byte[] frame = ms.ToArray();
-            _stream.Write(frame, 0, frame.Length);
-            _stream.Flush();
+            lock (_writeLock)
+            {
+                _stream.Write(frame, 0, frame.Length);
+                _stream.Flush();
+            }
         }
 
         /// <summary>Returns one binary message, or null on close/error.

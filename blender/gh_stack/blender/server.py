@@ -119,7 +119,20 @@ class GhServer(object):
     async def _serve(self):
         self._send_queue = asyncio.Queue()
         try:
-            async with serve(self._on_connect, "127.0.0.1", self._port, max_size=None):
+            # The keepalive closes a peer that stops answering: with the
+            # library defaults (20 s ping, 20 s timeout) a half-open socket
+            # costs a whole request timeout (30 s) to notice, which is exactly
+            # the window protocol §2 meant to close. The Grasshopper client
+            # answers pings from its socket thread; SendFrame holds a lock, so
+            # a pong never interleaves with a frame being written.
+            async with serve(
+                self._on_connect,
+                "127.0.0.1",
+                self._port,
+                max_size=None,
+                ping_interval=5.0,
+                ping_timeout=20.0,
+            ):
                 bridge.set_listening(True)
                 sender = asyncio.create_task(self._sender())
                 try:

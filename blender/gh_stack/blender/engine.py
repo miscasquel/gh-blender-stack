@@ -30,6 +30,13 @@ from . import bridge, geometry_io, helpers, nodes, prefs, props, server, stack a
 
 WAIT_INTERVAL = 0.005
 IDLE_INTERVAL = 0.05
+# While the scene is being edited the fast cadence applies instead of the idle
+# one: an edit keeps the engine hot for HOT_SECONDS, so a reaction costs one tick
+# rather than up to one idle interval. Playback fills frames this way — each
+# answer re-dirties the stack and the next frame goes out at once — and a quiet
+# scene costs nothing, because `_dirty` is emptied on every pass.
+HOT_INTERVAL = 0.005
+HOT_SECONDS = 1.0
 
 # How long a stage may wait for its outstanding answer before the request is given
 # up on and retried in full. See `_timeout()`.
@@ -47,6 +54,9 @@ _prefix_memo = {}  # (obj.as_pointer(), stage key) -> {"revision": tuple, "secti
 _pending = {}
 _dirty = set()  # object names that need a pass
 _registered = False
+# Monotonic deadline until which the engine runs at the fast cadence; see
+# HOT_INTERVAL. Advanced by every edit, response and frame change.
+_hot_until = 0.0
 # True while the engine evaluates a prefix clone. Linking and removing that
 # clone tags the depsgraph; without the guard every pass would re-mark every
 # stack dirty and the engine would never idle.
@@ -86,16 +96,26 @@ def _mark_dirty_all():
             _dirty.add(obj.name)
 
 
+def _mark_hot():
+    """Run the fast cadence for another HOT_SECONDS (see HOT_INTERVAL)."""
+    global _hot_until
+    _hot_until = time.monotonic() + HOT_SECONDS
+
+
 @bpy.app.handlers.persistent
 def _on_depsgraph(scene, depsgraph=None):
     if _evaluating:
         return
     _mark_dirty_all()
+    _mark_hot()
 
 
 @bpy.app.handlers.persistent
 def _on_frame_change(scene, depsgraph=None):
+    # A frame change tags nothing, which is why the frame is part of the prefix
+    # revision and this handler exists separately from the depsgraph one.
     _mark_dirty_all()
+    _mark_hot()
 
 
 @bpy.app.handlers.persistent
@@ -130,6 +150,7 @@ def _on_load(scene=None):
                 # We cannot know that GH kept the geometry: ask again in full.
                 stage.geom_hash = ""
     _mark_dirty_all()
+    _mark_hot()
 
 
 # ------------------------------------------------------------------------ tick
@@ -160,7 +181,11 @@ def _timer():
 
                 print("[gh-stack] engine error:\n%s" % traceback.format_exc(), flush=True)
             _dirty.discard(name)
-        return WAIT_INTERVAL if busy else IDLE_INTERVAL
+        if busy:
+            return WAIT_INTERVAL
+        if time.monotonic() < _hot_until:
+            return HOT_INTERVAL
+        return IDLE_INTERVAL
     except Exception as exc:
         bridge.state["error"] = "engine error: %r" % (exc,)
         import traceback
@@ -209,7 +234,7 @@ def _on_client_hello(header):
             if record.connected_doc and record.connected_doc != doc:
                 for stage in record.stages:
                     if stage.key in claimed:
-                        _bump_generation(record, stage, "document changed")
+                        _bump_generation(obj, record, stage, "document changed")
             if record.connected_doc != doc:
                 record.connected_doc = doc
         for stage in record.stages:
@@ -218,6 +243,7 @@ def _on_client_hello(header):
                 _set(stage, "state", stack_mod.STATE_IDLE)
             _set(stage, "geom_hash", "")
         _dirty.add(obj.name)
+    _mark_hot()
 
 
 def _handle_schema(header):
@@ -248,7 +274,7 @@ def _handle_schema(header):
                 continue
             # A changed schema is a changed definition: frames cached against
             # the old one must not replay.
-            _bump_generation(record, stage, "schema changed")
+            _bump_generation(obj, record, stage, "schema changed")
             _dirty.add(obj.name)
             obj.update_tag()
     if not matched:
@@ -307,7 +333,7 @@ def _handle_response(header, sections):
             # definition changed (a slider upstream of Stage Out, a graph edit
             # that does not touch Blender's inputs). Everything cached for this
             # stage is suspect.
-            _bump_generation(record, stage, "Grasshopper's answer changed")
+            _bump_generation(obj, record, stage, "Grasshopper's answer changed")
         _remember(record, stage, rid, header, sections)
         _store_frame(record, stage, rid, header, sections)
 
@@ -346,6 +372,7 @@ def _handle_response(header, sections):
             obj.update_tag()
         if applied or was_pending:
             _dirty.add(obj.name)
+            _mark_hot()
 
 
 def _handle_error(header):
@@ -532,8 +559,22 @@ def _definition(stage):
     return props.definition_fingerprint(stage)
 
 
-def _bump_generation(record, stage, reason=""):
+def _forget_prefix(obj, stage_key):
+    """Drop one stage's memoized prefix so the next pass re-evaluates it.
+
+    The memo caches the evaluated *sections* under a revision, so anything that
+    makes a revision untrustworthy has to retire the entry. Push in particular is
+    documented as the way to get past anything cached: before this it reset only
+    the frame store, so a stale prefix survived it and the re-request went out
+    carrying the same geometry.
+    """
+    if obj is not None:
+        _prefix_memo.pop((obj.as_pointer(), stage_key), None)
+
+
+def _bump_generation(obj, record, stage, reason=""):
     """A reset: old frames describe the wrong definition and are deleted."""
+    _forget_prefix(obj, stage.key)
     stage.generation += 1
     _cache.pop((record.stack_id, stage.key), None)
     try:
@@ -823,6 +864,11 @@ def _prefix_revision(obj, record, stage, index):
     - **the object identity**, which is in the memo key rather than the tuple
       (see :func:`_prefix_sections`).
 
+    A third was found later, and it is why this warning is not academic: a
+    Geometry Nodes modifier reads its group inputs from its stored input values
+    (``modifier.properties.inputs``), ID properties rather than RNA, so the
+    property walk in :func:`_modifier_descriptor` never saw them.
+
     ``None`` means "do not memoize": surfaces are meshed on the fly and rarely
     used, and a truncated node-tree signature (see :func:`_node_tree_signature`)
     must not be trusted.
@@ -868,6 +914,7 @@ def _modifier_descriptor(obj, index):
                 continue
             else:
                 props_state.append((identifier, _freeze(value)))
+        props_state.append(("inputs", _modifier_input_state(modifier)))
         if modifier.type == "NODES" and modifier.node_group is not None:
             signature = _node_tree_signature(modifier.node_group)
             if signature is None:
@@ -877,6 +924,29 @@ def _modifier_descriptor(obj, index):
             props_state.append(("node_tree", signature))
         items.append((modifier.name, modifier.type, tuple(props_state)))
     return tuple(items)
+
+
+def _modifier_input_state(modifier):
+    """A modifier's stored input values, which is what its evaluation reads.
+
+    A Geometry Nodes modifier holds the values of its group inputs in
+    ``modifier.properties.inputs``, an ID-property group per socket
+    (``{"value": ..., "type": ..., "attribute_name": ...}``). Those are not RNA
+    properties, so the walk in :func:`_modifier_descriptor` cannot see them: a
+    slider dragged on such a modifier moved the scene while the revision — and
+    with it the memo, the geometry hash, the request id and the frame cache —
+    stayed exactly where it was.
+    """
+    inputs = getattr(getattr(modifier, "properties", None), "inputs", None)
+    if inputs is None:
+        return ()
+    state = []
+    for identifier in inputs.keys():
+        try:
+            state.append((identifier, _freeze(inputs[identifier].to_dict())))
+        except (AttributeError, KeyError, TypeError, RuntimeError):
+            continue
+    return tuple(state)
 
 
 def _pointer_state(value):
@@ -976,6 +1046,12 @@ def _tree_signature(tree, visited, depth):
 def _freeze(value):
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
+    if isinstance(value, dict):
+        # From `to_dict()`: sort by key, so the mapping's own order cannot
+        # decide equality.
+        return tuple(
+            sorted(((str(key), _freeze(value[key])) for key in value), key=lambda item: item[0])
+        )
     try:
         if hasattr(value, "__len__") and hasattr(value, "__getitem__"):
             return tuple(_freeze(value[i]) for i in range(len(value)))
@@ -1052,7 +1128,8 @@ def start_server(port=None):
 def request_again(obj, stage=None):
     """Force a fresh request without touching the frame cache: the nonce changes
     so the request id cannot collide with a cached one. Used when a stage is
-    created or its identity changes."""
+    created or its identity changes, and by the Retry operator. The memoized
+    prefix is retired with it: a fresh request must carry what the scene shows."""
     record = stack_mod.stack_of(obj)
     if record is None:
         return
@@ -1062,8 +1139,10 @@ def request_again(obj, stage=None):
     for item in stages:
         item.nonce += 1
         _forget(record.stack_id, item.key)
+        _forget_prefix(obj, item.key)
         _set(item, "state", stack_mod.STATE_IDLE)
     _dirty.add(obj.name)
+    _mark_hot()
 
 
 def push(obj=None):
@@ -1078,16 +1157,17 @@ def push(obj=None):
     if not record.stack_id:
         record.stack_id = stack_mod.ensure_stack(obj).stack_id
     for stage in record.stages:
-        _bump_generation(record, stage, "Push")
+        _bump_generation(obj, record, stage, "Push")
     request_again(obj)
 
 
 def _mark_object_dirty(obj):
     _dirty.add(obj.name)
+    _mark_hot()
 
 
 def register():
-    global _registered
+    global _registered, _hot_until
     if _registered:
         return
     # Everything the last registration learned belongs to the session that just
@@ -1099,6 +1179,7 @@ def register():
     _cache.clear()
     _pending.clear()
     _prefix_memo.clear()
+    _hot_until = 0.0
     for counter in stats:
         stats[counter] = 0
     # A UI-driven parameter write (the choice dropdown) must reach the engine.
