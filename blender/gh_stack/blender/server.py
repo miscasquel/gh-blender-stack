@@ -134,6 +134,10 @@ class GhServer(object):
                 ping_timeout=20.0,
             ):
                 bridge.set_listening(True)
+                # Bind succeeded, so anything a previous bind or a previous
+                # shutdown wrote here is stale: leaving it up shows a running
+                # server as stopped, which is how a restart looks broken.
+                bridge.state["error"] = ""
                 sender = asyncio.create_task(self._sender())
                 try:
                     while not self._stop.is_set():

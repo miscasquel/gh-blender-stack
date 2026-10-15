@@ -44,6 +44,15 @@ HOT_SECONDS = 1.0
 _cache = {}  # (stack_id, stage_key) -> {rid: (header, sections)}; the hot path
 _stores = {}  # (stack_id, stage_key) -> ResponseStore; the backing store
 _prefix_memo = {}  # (obj.as_pointer(), stage key) -> {"revision": tuple, "sections": list}
+# A referenced modifier target's geometry hash, cached across passes. Blender
+# gives no content counter for a datablock, so the hash is the only sound signal
+# a pointer property has, and computing it costs a serialize + SHA-256 of that
+# datablock: measured at 0.6 ms for 5k triangles and 10 ms for 82k, per pointer,
+# on every pass including memo hits (handoff Item 5). An entry is retired when
+# the depsgraph tags the target, and by `_apply` — the engine's own writes are
+# the one geometry change that never comes through the depsgraph. See
+# `_retire_reference_hashes` for why the match is by name.
+_reference_hashes = {}  # (as_pointer, object name, data name) -> geometry hash
 # (stack_id, stage_key) -> {rid: monotonic seconds it was sent}. At most one entry:
 # the evaluation in flight. One at a time, deliberately — a frame that arrives while
 # an answer is outstanding is not queued behind it, because Grasshopper solves in
@@ -57,6 +66,9 @@ _registered = False
 # Monotonic deadline until which the engine runs at the fast cadence; see
 # HOT_INTERVAL. Advanced by every edit, response and frame change.
 _hot_until = 0.0
+# When each stage last asked Grasshopper something, so a wait that is really a
+# fault is visible in the diagnostics panel: (stack_id, stage_key) -> monotonic.
+_state_since = {}
 # True while the engine evaluates a prefix clone. Linking and removing that
 # clone tags the depsgraph; without the guard every pass would re-mark every
 # stack dirty and the engine would never idle.
@@ -102,10 +114,37 @@ def _mark_hot():
     _hot_until = time.monotonic() + HOT_SECONDS
 
 
+def _retire_reference_hashes(depsgraph):
+    """Drop the cached hash of every target the depsgraph just tagged.
+
+    The update list resolves to *evaluated* IDs, whose pointers are not the
+    originals' — a tagged mesh and the mesh it was copied from sit at different
+    addresses — so matching by pointer never matches. Names do match: a
+    datablock's name is unique for its type, the key holds the object's name and
+    its data's name, and the pointer keeps two objects that have swapped names
+    apart. Anything unrecognized clears the whole cache, because a stale hash
+    here is a wrong pointer state, and the cost of being wrong is far above the
+    cost of recomputing.
+    """
+    if depsgraph is None:
+        _reference_hashes.clear()
+        return
+    try:
+        tagged = set(update.id.name for update in depsgraph.updates)
+    except (AttributeError, RuntimeError, TypeError):
+        _reference_hashes.clear()
+        return
+    if not tagged:
+        return
+    for key in [key for key in _reference_hashes if key[1] in tagged or key[2] in tagged]:
+        del _reference_hashes[key]
+
+
 @bpy.app.handlers.persistent
 def _on_depsgraph(scene, depsgraph=None):
     if _evaluating:
         return
+    _retire_reference_hashes(depsgraph)
     _mark_dirty_all()
     _mark_hot()
 
@@ -139,6 +178,8 @@ def _on_load(scene=None):
         bpy.app.timers.register(_timer, first_interval=IDLE_INTERVAL, persistent=True)
     _pending.clear()
     _prefix_memo.clear()
+    _state_since.clear()
+    _reference_hashes.clear()  # a replaced file has other data at the same addresses
     for obj in bpy.data.objects:
         record = stack_mod.stack_of(obj)
         if record is None:
@@ -443,6 +484,9 @@ def _apply(obj, stage, sections):
     A section group that is absent means "none": that helper is cleared, so a
     definition that stops returning curves stops showing them.
     """
+    # Helpers can be a prefix modifier's target in a GH -> GN -> GH chain, and
+    # the depsgraph is not what told us this write happened.
+    _reference_hashes.clear()
     nodes.ensure_group(obj, stage.key)
     groups = {"mesh": [], "curves": [], "points": []}
     for name, values in sections.items():
@@ -789,7 +833,9 @@ def _process_stage(obj, record, stage):
         print("[gh-stack] %s: %s" % (stage.key, retry_note), flush=True)
     stats["sends"] += 1
 
-    _pending_of(record.stack_id, stage.key)[rid] = time.monotonic()
+    now = time.monotonic()
+    _pending_of(record.stack_id, stage.key)[rid] = now
+    _state_since[(record.stack_id, stage.key)] = now
     _set(stage, "rid", rid)
     _set(stage, "geom_hash", geom_hash)
     _set(stage, "state", stack_mod.STATE_WAITING)
@@ -958,12 +1004,21 @@ def _pointer_state(value):
 
 
 def _object_geometry_hash(obj):
+    data = getattr(obj, "data", None)
+    if data is None:
+        return ""
+    key = (obj.as_pointer(), obj.name, data.name)
+    cached = _reference_hashes.get(key)
+    if cached is not None:
+        return cached
     try:
         sections = geometry_io.object_to_sections(obj, as_subd=False)
     except Exception:
         return ""
     raw = {name: codec.section_bytes(name, dtype, values) for name, dtype, values in sections}
-    return hashing.geometry_hash(raw)
+    digest = hashing.geometry_hash(raw)
+    _reference_hashes[key] = digest
+    return digest
 
 
 _MAX_NODE_TREE_DEPTH = 32  # backstop for a pathological graph; a hit disables the memo
@@ -1116,6 +1171,18 @@ def _timeout():
     return float(prefs._pref("timeout", 30.0))
 
 
+def waiting_seconds(stack_id, stage_key):
+    """How long a stage has been waiting for an answer, or 0.0 when it is not.
+
+    Read by the diagnostics panel: an answer outstanding for a second is where a
+    sync fault is indistinguishable from a stage that is merely thinking.
+    """
+    since = _state_since.get((stack_id, stage_key))
+    if since is None:
+        return 0.0
+    return time.monotonic() - since
+
+
 # ------------------------------------------------------------------- lifecycle
 
 
@@ -1128,8 +1195,8 @@ def start_server(port=None):
 def request_again(obj, stage=None):
     """Force a fresh request without touching the frame cache: the nonce changes
     so the request id cannot collide with a cached one. Used when a stage is
-    created or its identity changes, and by the Retry operator. The memoized
-    prefix is retired with it: a fresh request must carry what the scene shows."""
+    created or its identity changes. The memoized prefix is retired with it: a
+    fresh request must carry what the scene shows."""
     record = stack_mod.stack_of(obj)
     if record is None:
         return
@@ -1179,6 +1246,8 @@ def register():
     _cache.clear()
     _pending.clear()
     _prefix_memo.clear()
+    _state_since.clear()
+    _reference_hashes.clear()
     _hot_until = 0.0
     for counter in stats:
         stats[counter] = 0

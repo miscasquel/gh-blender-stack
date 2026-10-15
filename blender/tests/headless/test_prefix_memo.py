@@ -17,8 +17,6 @@ because each one cost a release:
    rid with the frame from before the edit and never asked Grasshopper anything.
 2. A cache reset (Push) must retire the memoized prefix as well as the frame
    store, or the "recovery" re-sends the same geometry.
-
-Retry, which asks again without discarding the frame cache, is covered here too.
 """
 
 import os
@@ -265,12 +263,11 @@ class ModifierInputMemoTests(unittest.TestCase):
 
 
 class ResetRetiresMemoTests(unittest.TestCase):
-    """Push and Retry must both carry the geometry the scene is showing.
+    """Push must carry the geometry the scene is showing.
 
     Push resets the frame cache; before it also retired the memoized prefix, a
-    stage whose revision was stale could not be recovered by anything the
-    add-on offered: the re-request went out with the same geometry and produced
-    the same output.
+    stale stage could not be recovered by anything the add-on offered: the
+    re-request went out with the same geometry and produced the same output.
     """
 
     @classmethod
@@ -323,36 +320,212 @@ class ResetRetiresMemoTests(unittest.TestCase):
         )
         self.assertEqual(self.stage.state, "ok", self.stage.error)
 
-    def test_02_retry_keeps_the_frame_cache(self):
-        """Retry is the non-destructive recovery: no frames are dropped."""
-        store_before = sorted(
-            name for name in os.listdir(_stage_dir(self.obj, self.stage)) if name.endswith(".bin")
-        )
-        nonce_before = self.stage.nonce
-        set_gn_input(self.gn, -10.0, self.obj)
-        bpy.ops.gh_stack.retry()
-        self.assertGreater(self.stage.nonce, nonce_before, "Retry did not ask again")
-        self.assertTrue(
-            pump(seconds=10.0, until=lambda: self._seen(-11.0)),
-            "Retry did not reach Grasshopper",
-        )
-        store_after = os.listdir(_stage_dir(self.obj, self.stage))
-        for name in store_before:
-            self.assertIn(
-                name,
-                store_after,
-                "Retry discarded a cached frame; it must only ask again",
-            )
-
-
-def _stage_dir(obj, stage):
-    """The stage's frame-cache directory on disk."""
-    import gh_stack.blender.prefs as prefs
-    import gh_stack.blender.stack as stack_mod
-
-    record = stack_mod.stack_of(obj)
-    return os.path.join(prefs.data_root(), "cache", record.stack_id, stage.key)
-
-
 if __name__ == "__main__":
     unittest.main()
+
+
+class WaitingAgeTests(unittest.TestCase):
+    """`waiting_seconds` is what the diagnostics panel shows while a stage is
+    outstanding. It has to read 0 when nothing is waiting — otherwise every stage
+    would advertise a wait — and grow once the engine has asked for something."""
+
+    @classmethod
+    def setUpClass(cls):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        bpy.ops.preferences.addon_enable(module="gh_stack")
+        isolate_data_root()
+
+    @classmethod
+    def tearDownClass(cls):
+        bpy.ops.preferences.addon_disable(module="gh_stack")
+
+    def test_idle_stages_report_no_wait(self):
+        import gh_stack.blender.engine as engine
+
+        bpy.ops.mesh.primitive_cube_add(size=2.0)
+        bpy.ops.gh_stack.add_stage(label="Age")
+        stage = bpy.context.object.gh_stack.stages[0]
+        record = bpy.context.object.gh_stack
+        self.assertEqual(engine.waiting_seconds(record.stack_id, stage.key), 0.0)
+        self.assertEqual(
+            engine.waiting_seconds("no-such-stack", "no-such-stage"),
+            0.0,
+            "an unknown stage must not look like a wait",
+        )
+
+    def test_a_stamp_ages(self):
+        import gh_stack.blender.engine as engine
+
+        bpy.ops.mesh.primitive_cube_add(size=2.0)
+        bpy.ops.gh_stack.add_stage(label="AgeB")
+        stage = bpy.context.object.gh_stack.stages[0]
+        record = bpy.context.object.gh_stack
+        engine._state_since[(record.stack_id, stage.key)] = time.monotonic() - 4.0
+        self.assertGreaterEqual(engine.waiting_seconds(record.stack_id, stage.key), 3.9)
+        # A new registration throws the stamps away: a stamp from a previous
+        # session would age a stage that is not waiting at all.
+        engine._state_since.clear()
+        self.assertEqual(engine.waiting_seconds(record.stack_id, stage.key), 0.0)
+
+
+class ReferenceHashCacheTests(unittest.TestCase):
+    """A pointer property's target is hashed per pass, which handoff Item 5
+    measured at 0.6 ms (5k triangles) to 10 ms (82k) per pointer, on the memo
+    hit path. The hash is cached, and the cache must retire the moment the
+    depsgraph says that datablock changed, or the prefix keeps reading a target
+    that has moved and the premise of this file is back."""
+
+    @classmethod
+    def setUpClass(cls):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        bpy.ops.preferences.addon_enable(module="gh_stack")
+        isolate_data_root()
+        import gh_stack.blender.engine as engine
+
+        cls.engine = engine
+        engine.start_server(PORT)
+        time.sleep(0.5)
+
+        bpy.ops.mesh.primitive_cube_add(size=2.0)
+        cls.obj = bpy.context.object
+        cls.obj.name = "Holder"
+        cls.target = bpy.data.objects.new("Target", bpy.data.meshes.new_from_object(cls.obj))
+        bpy.context.scene.collection.objects.link(cls.target)
+        cls.array = cls.obj.modifiers.new("OffsetArray", "ARRAY")
+        cls.array.count = 2
+        cls.array.offset_object = cls.target
+        cls.obj.modifiers.active = cls.array
+        bpy.ops.gh_stack.add_stage(label="Held")
+        cls.stage = cls.obj.gh_stack.stages[0]
+
+    @classmethod
+    def tearDownClass(cls):
+        bpy.ops.preferences.addon_disable(module="gh_stack")
+
+    def _revision(self):
+        index = self.engine._modifier_index(
+            self.obj, self.engine.nodes.modifier_for(self.obj, self.stage.key)
+        )
+        return self.engine._prefix_revision(self.obj, self.obj.gh_stack, self.stage, index)
+
+    def _retire_as_the_handler_would(self):
+        """Run one real depsgraph event through the engine's retirement.
+
+        The update list is only valid inside the handler, so the depsgraph has to
+        be captured there rather than fetched afterwards.
+        """
+        seen = []
+
+        def capture(scene, depsgraph):
+            seen.append(depsgraph)
+
+        bpy.app.handlers.depsgraph_update_post.append(capture)
+        try:
+            bpy.context.view_layer.update()
+        finally:
+            bpy.app.handlers.depsgraph_update_post.remove(capture)
+        self.assertTrue(seen, "no depsgraph event was produced")
+        self.engine._retire_reference_hashes(seen[-1])
+
+    def test_a_target_vertex_move_moves_the_revision(self):
+        before = self._revision()
+        # Base geometry only: the transform stays put, so the geometry hash is
+        # the only thing that can report this change.
+        self.target.data.vertices[0].co.x += 1.5
+        self.target.data.update()
+        self._retire_as_the_handler_would()
+        self.assertNotEqual(before, self._revision(), "a moved target did not move the revision")
+
+    def test_the_hash_is_computed_once_until_something_changes(self):
+        import gh_stack.blender.geometry_io as geometry_io
+
+        self.engine._reference_hashes.clear()
+        calls = []
+        original = geometry_io.object_to_sections
+
+        def counting(obj, as_subd=False):
+            calls.append(obj.name)
+            return original(obj, as_subd=as_subd)
+
+        geometry_io.object_to_sections = counting
+        try:
+            index = self.engine._modifier_index(
+                self.obj, self.engine.nodes.modifier_for(self.obj, self.stage.key)
+            )
+            self.engine._modifier_descriptor(self.obj, index)
+            self.engine._modifier_descriptor(self.obj, index)
+        finally:
+            geometry_io.object_to_sections = original
+        self.assertEqual(len(calls), 1, "the target was hashed on every call")
+
+
+class TruncatedSignatureTests(unittest.TestCase):
+    """N3: a graph deeper than the signature walk's cap falls back to "do not
+    memoize", which is the right behavior and the most expensive one — a full
+    clone on every pass. The counter was the only witness, and it was never read,
+    so the cost was invisible. It is surfaced in the diagnostics panel now, and
+    the fallback itself is pinned here."""
+
+    @classmethod
+    def setUpClass(cls):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        bpy.ops.preferences.addon_enable(module="gh_stack")
+        isolate_data_root()
+        import gh_stack.blender.engine as engine
+
+        cls.engine = engine
+        engine.start_server(PORT)
+        time.sleep(0.5)
+        bpy.ops.mesh.primitive_cube_add(size=2.0)
+        cls.obj = bpy.context.object
+        cls.modifier = cls.obj.modifiers.new("Deep", "NODES")
+        cls.modifier.node_group = cls._chain(cls.engine._MAX_NODE_TREE_DEPTH)
+        bpy.ops.gh_stack.add_stage(label="Deep")
+        cls.stage = cls.obj.gh_stack.stages[0]
+
+    @classmethod
+    def tearDownClass(cls):
+        bpy.ops.preferences.addon_disable(module="gh_stack")
+
+    @staticmethod
+    def _chain(depth):
+        """`depth + 1` node groups, each holding the previous one."""
+        groups = []
+        for level in range(depth + 1):
+            tree = bpy.data.node_groups.new("deep-%02d" % level, "GeometryNodeTree")
+            tree.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+            if groups:
+                tree.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+                inner = tree.nodes.new("GeometryNodeGroup")
+                inner.node_tree = groups[-1]
+                source = tree.nodes.new("NodeGroupInput")
+                sink = tree.nodes.new("NodeGroupOutput")
+                tree.links.new(source.outputs["Geometry"], inner.inputs["Geometry"])
+                tree.links.new(inner.outputs["Geometry"], sink.inputs["Geometry"])
+            else:
+                tree.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+                source = tree.nodes.new("NodeGroupInput")
+                sink = tree.nodes.new("NodeGroupOutput")
+                tree.links.new(source.outputs["Geometry"], sink.inputs["Geometry"])
+            groups.append(tree)
+        return groups[-1]
+
+    def test_the_walk_gives_up_rather_than_truncating(self):
+        signature = self.engine._node_tree_signature(self.modifier.node_group)
+        self.assertIsNone(signature, "a walk deeper than the cap must not be trusted")
+        self.assertGreater(self.engine.stats["signature_truncated"], 0)
+
+    def test_the_stage_still_settles_and_the_revision_is_unmemoizable(self):
+        record = self.obj.gh_stack
+        index = self.engine._modifier_index(
+            self.obj, self.engine.nodes.modifier_for(self.obj, self.stage.key)
+        )
+        self.assertIsNone(
+            self.engine._prefix_revision(self.obj, record, self.stage, index),
+            "a deep prefix must be re-evaluated every pass, never memoized",
+        )
+        pump(
+            seconds=15.0,
+            until=lambda: self.stage.state in ("ok", "error", "disconnected"),
+        )
+        self.assertNotEqual(self.stage.state, "error", self.stage.error)

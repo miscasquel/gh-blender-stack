@@ -684,6 +684,17 @@ already asserts the quiet path, and
 `TimeDrivenPrefixTests.test_03_an_unchanged_frame_still_hits_the_memo` asserts the
 memo still hits at an unchanged frame. Any change here must keep both green, and
 must keep the frame in whatever tuple gets compared.
+**Update 2026-10-14.** Option 1's "8.3 ms at 50k" is still the floor and is now
+understood as two different costs: the *stack object's own base read* (the 89% the
+profile named) and *referenced targets* (`_pointer_state` hashing a second datablock,
+per pointer, additive — handoff-next-batch-2 item 5 measured it at 0.6 ms/5k and
+10 ms/82k). The second is resolved: the target hash is cached across passes and
+retired when the depsgraph tags that target, which takes 9.3 ms off one pointer at
+114k triangles on the memo hit path. The first is untouched and remains the
+dominant per-pass cost for a heavy base mesh; it needs the epoch design (see
+handoff-next-batch-2 item 5, closing paragraph), and still option 3's sound signal
+problem, not a patch.
+
 **Effort:** S for option 2; L and design-first for option 3.
 
 ### P4-2 · Nested node groups are not walked

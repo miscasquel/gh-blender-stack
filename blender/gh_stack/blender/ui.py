@@ -44,7 +44,6 @@ class GHSTACK_PT_panel(bpy.types.Panel):
         row = layout.row()
         row.operator("gh_stack.add_stage", icon="ADD")
         row.operator("gh_stack.push", icon="FILE_REFRESH")
-        row.operator("gh_stack.retry", icon="LOOP_FORWARDS")
 
         if obj.type == "MESH":
             row = layout.row()
@@ -156,6 +155,11 @@ class GHSTACK_PT_diagnostics(bpy.types.Panel):
             box = layout.box()
             box.label(text="%s (%s)" % (stage.key, stage.state))
             box.label(text="rid: %s" % (stage.rid[-16:] or "-"))
+            # Only while something is actually slow: an answer outstanding for a
+            # second is where a sync fault looks like nothing at all.
+            age = engine.waiting_seconds(record.stack_id, stage.key)
+            if stage.state == stack_mod.STATE_WAITING and age >= 1.0:
+                box.label(text="waiting %.1f s" % age, icon="TIME")
             if stage.error:
                 box.label(text=stage.error, icon="ERROR")
             for entry in stage.params:
@@ -163,6 +167,15 @@ class GHSTACK_PT_diagnostics(bpy.types.Panel):
                 if entry.type == "value_list":
                     detail += " (%d values)" % len([c for c in entry.values.split("\n") if c])
                 box.label(text="%s: %s" % (entry.label or entry.param_id, detail))
+
+        truncated = engine.stats["signature_truncated"]
+        if truncated:
+            # A graph deeper than the walk's cap: the prefix is re-evaluated on
+            # every pass instead of being memoized - a cost nobody could see.
+            layout.label(
+                text="node-tree walks truncated: %d (prefix memo disabled for those)" % truncated,
+                icon="INFO",
+            )
 
 
 def _state_text(stage):

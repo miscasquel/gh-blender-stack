@@ -1,4 +1,4 @@
-"""Operators: Add Stage, Remove Stage, Push, Retry, server control (plan §9.8, demo v0)."""
+"""Operators: Add Stage, Remove Stage, Push, server control (plan §9.8, demo v0)."""
 
 import bpy
 from bpy.props import IntProperty, StringProperty
@@ -69,19 +69,6 @@ class GHSTACK_OT_push(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class GHSTACK_OT_retry(bpy.types.Operator):
-    bl_idname = "gh_stack.retry"
-    bl_label = "Retry"
-    bl_description = "Ask Grasshopper for the current state again, keeping the frame cache"
-    bl_options = {"REGISTER", "UNDO"}
-
-    def execute(self, context):
-        obj = context.object
-        if obj is not None and stack_mod.stack_of(obj) is not None:
-            engine.request_again(obj)
-        return {"FINISHED"}
-
-
 class GHSTACK_OT_copy_key(bpy.types.Operator):
     bl_idname = "gh_stack.copy_key"
     bl_label = "Copy stage key"
@@ -123,7 +110,6 @@ def register():
         GHSTACK_OT_add_stage,
         GHSTACK_OT_remove_stage,
         GHSTACK_OT_push,
-        GHSTACK_OT_retry,
         GHSTACK_OT_copy_key,
         GHSTACK_OT_start_server,
     ):
@@ -134,7 +120,6 @@ def unregister():
     for cls in (
         GHSTACK_OT_start_server,
         GHSTACK_OT_copy_key,
-        GHSTACK_OT_retry,
         GHSTACK_OT_push,
         GHSTACK_OT_remove_stage,
         GHSTACK_OT_add_stage,

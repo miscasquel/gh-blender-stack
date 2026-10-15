@@ -32,7 +32,7 @@ in, with negative controls, and nothing regressed.
 |---|---|---|
 | 1 | **N1** `Decode`'s contract is still not total | It is the one-layer-deeper twin of the bug `decoder-boundary` was written to pin. The test group claims the contract; three inputs break it. Same file, same build cycle, S. |
 | 2 | **N8** a SubD crease that cannot be mapped is dropped silently | **Inserted** relative to the review's order. It shares item 1's `.gha` build + deploy + Rhino restart, and in this project that cycle is the expensive part. It is also a silent loss, which is the tier this repo treats as unforgivable (D2, principle 6). |
-| 3 | **N3 + N7** two failures the product knows and the user cannot see | Both are the same shape: an internal condition with no surface. One shows a *cost* the user is paying, the other removes a foot-gun in the only manual recovery path. Independent of everything else, S each. |
+| 3 | **N3** a truncated node-tree signature silently pays the full clone every pass | An internal condition with no surface: a cost the user is paying and nobody can see. S, and independent of everything else. **N7 is closed as decided-against** — see item 3. |
 | 4 | **the prefs/engine registration order** | One line, and it is a *verified*, fully deterministic user-visible bug: a saved port is ignored and the panel reports the wrong one. |
 | 5 | **N4** one object-pointer property costs more than the whole documented memo floor | Measured, and the number is large enough to change P4-1's conclusion. It is a *recording* task first: measure, write the number where the profile lives, then decide. |
 | 6 | The hygiene tier, with the counts fixed for the last time | N2, N5, N6, N9, dead code, `spikes/`. No behaviour change; the suites staying green is the whole verification. Best done when someone is already in those files — which this batch puts them in for items 1, 2 and 4. |
@@ -201,11 +201,7 @@ RhinoCommon — `scripts/test-gha` builds only the codec), then
 
 ---
 
-## Item 3 — N3 + N7: two failures the product knows and the user cannot see
-
-Both are the same shape, in different files, and both are S. Pair them.
-
-### N3 — a truncated node-tree signature silently pays the full clone every pass
+## Item 3 — N3: a truncated node-tree signature silently pays the full clone every pass
 
 **Where:** `engine.py:65` (the counter) and `:923` (the increment).
 
@@ -217,14 +213,19 @@ pass — 45 ms at 50k triangles by the plan's own P4-1 measurement — with noth
 anywhere saying why. That is the "why is it slow" report nobody can answer from the
 UI.
 
-**Design.** A `_warned_truncated` set of stack ids, mirroring the "schema for an
-unknown stage" pattern: print once per stack, and show the line in the Diagnostics
-panel beside `connected`/`doc`. Do not add a preference or a knob.
+**Done, one deviation.** The counter is shown in the Diagnostics panel (`ui.py`,
+`GHSTACK_PT_diagnostics`), which is the proposed surface and is opt-in by being a
+collapsed child panel, so nothing is added to the panel users read every day. The
+deviation: no `_warned_truncated` per-stack print-once set. The panel line is the
+surface, the console already prints the fallback's cause where it decides not to
+memoize, and a second warning channel was one more thing to keep in step.
 
-**Test:** layer B can build a chain deeper than `_MAX_NODE_TREE_DEPTH` (32 groups is
-mechanical to generate) and assert that the stage still reaches `ok` *and* the
-diagnostic is set — that the fallback is a cost, not a failure, is the property
-worth pinning.
+**Test.** `TruncatedSignatureTests` (layer B) builds a chain `_MAX_NODE_TREE_DEPTH`
+deep and pins both halves: `_node_tree_signature` returns `None` rather than a
+truncated signature, and `_prefix_revision` returns `None` with it, so the prefix is
+re-evaluated every pass — the fallback is a cost, not a failure, and the stage
+settles anyway. The counter assertion in it fails if the counter is ever dropped
+again.
 
 ### N7 — the only way to retry a stage discards its cache
 
@@ -237,17 +238,21 @@ Push). But the only manual recovery is Push, and Push's stated purpose is "get p
 anything cached", so a user whose solve failed once has to choose between touching
 the scene to force a change and destroying their frame cache.
 
-**Design.** The non-destructive path already exists and no operator calls it:
-`engine.request_again` (`engine.py:1052`) increments the nonce — so a stale cached
-frame cannot answer it, which is what you want after an error — and touches nothing
-on disk. Add `gh_stack.retry` calling `engine.request_again(context.object)` and put
-it beside Push in the panel with a tooltip that says which one keeps the cache.
+**Built, then removed on request.** `gh_stack.retry` landed in `cfcab50`: operator,
+panel button, and a layer-B test asserting the stage recovers *and* `_cache` is
+unchanged, the second assertion being the one that distinguishes it from Push. It
+was then reverted at the user's request: the panel already carried
+`Add Stage | Push`, and a third button plus a second recovery path was judged UI
+surface for a condition a user hits rarely. `engine.request_again` remains, is still
+what `add_stage` calls, and now also retires the stage's memoized prefix — the part
+of this item that was worth keeping.
 
-**Test:** layer B, extending `SolveFailureTests`: after the error, fire the operator
-and assert the stage recovers *and* the frame count in `_cache` is unchanged. The
-second assertion is the one that distinguishes Retry from Push.
+If a stuck stage needs one, it is a ten-line re-add: an operator calling
+`engine.request_again(context.object)`, a row button, and a test that asserts the
+frame count survives. The record of why it is not there is this paragraph, so the
+next reader does not re-derive it or assume it was forgotten.
 
-**Effort:** S each.
+**Effort:** S, and already spent once.
 
 ---
 
@@ -301,7 +306,7 @@ agree with a non-default port.
 
 ---
 
-## Item 5 — N4: one object-pointer property costs more than the whole documented memo floor
+## Item 5 — N4: one object-pointer property costs more than the whole documented memo floor (resolved)
 
 **Where:** `engine._modifier_descriptor` → `_pointer_state` → `_object_geometry_hash`
 (`engine.py:837-878`).
@@ -331,7 +336,33 @@ Put in P4-1's terms, and with the caveat that the densities are not identical:
   floor at 50k. That is why the density caveat matters: the ratio between the two
   rows is the signal, not the absolute.
 
-**What to do: record it, then decide — this is P4-1's problem, not a new one.**
+**Resolved.** The sound content signal P4-1 could not find does not exist, so the
+fix is not to find one but to stop asking: a referenced target's geometry hash is
+cached across passes and retired when the depsgraph tags that target. The update
+list resolves to *evaluated* IDs, whose pointers are not the originals' — a tagged
+mesh and the mesh it was copied from sit at different addresses, so a pointer match
+never matches — and the cache is keyed by `(as_pointer, object name, data name)`:
+names are unique for a type, and the pointer keeps two objects that swapped names
+apart. `_apply` clears the cache outright, because the engine's own writes are the
+one geometry change that never comes through the depsgraph.
+
+Measured, `Array.offset_object` -> a grid mesh, minimum of 5 (the table's own method):
+
+| target | hash, cold | hash, warm (a memo-hit pass) | saved per pass |
+|---|---:|---:|---:|
+| 9,522 tris | 0.789 ms | 0.020 ms | 0.769 ms |
+| 38,642 tris | 3.167 ms | 0.019 ms | 3.147 ms |
+| 114,242 tris | 9.284 ms | 0.020 ms | 9.264 ms |
+
+Per pointer, additive, on the memo hit path — the reproduction of Item 5's own
+10.0 ms at 82k that settles its "decide" as implemented. Layer B pins the soundness
+side, not the speed: a target vertex move must move the prefix revision (with the
+retirement broken it does not), and the hash is computed once until something
+changes.
+
+The remaining question this does not answer, and neither does the old enumeration:
+the memo *hit* floor is now dominated by the stack object's own base read, which
+only the epoch design removes.
 Blender gives no content counter for a datablock, which is the whole difficulty in
 P4-1; the target object has exactly the same problem as the prefix. So:
 
@@ -370,8 +401,10 @@ verification.
 The README's counts (60 / 69, both wrong) were removed in the same commit as the
 `rules.py` deletion, which is the fix the plan itself recommends: *"a count in a README
 is stale the moment a test is added."* What remains:
-- `docs/polish-plan.md` P8-1 still says "actual is 72"; the runner prints **86**. The
-  stale sentence there should go when P8-1 is closed.
+- `docs/polish-plan.md:41` "72 headless" is P8-1's original baseline at `ea0f651`,
+  not drift: P8-1 was closed by *removing* the counts, so the baseline sentence is
+  history, and the runner now prints **96**. Nothing to do; recorded here because
+  this item looked like it said otherwise.
 - The open question is whether to *derive* the numbers instead. `run.py` already
   prints them and CI already runs layer A, so an assertion or a badge is nearly free;
   what must not happen is a fourth hand-edit.

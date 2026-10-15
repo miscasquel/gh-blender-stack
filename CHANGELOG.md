@@ -6,13 +6,6 @@ Notable changes to this project, following
 
 ## [Unreleased]
 
-### Added
-
-- `gh_stack.retry` ("Retry", in the panel next to Push): ask Grasshopper for the
-  current state again without discarding the frame cache, so a stuck stage has a
-  recovery that keeps what has been computed. It is a fresh request (nonce bump)
-  with the frame cache left intact, which is the one thing Push cannot offer.
-
 ### Fixed
 
 - **A slider on a prefix Geometry Nodes modifier now reaches Grasshopper.** A
@@ -22,24 +15,49 @@ Notable changes to this project, following
   Moving one changed the scene while the revision stayed the same, and with it the
   memoized prefix, the geometry hash, the request id and the frame cache: the same
   request id was served from the cache, the stage did nothing, and only a frame
-  change, a file reload or a Push moved it. `_modifier_descriptor` now folds the
-  stored inputs into the revision.
-- **Push, and every cache reset, now retires the memoized prefix** as well as the
-  frame store. A reset left the memo standing, so the "get past anything cached"
-  recovery re-sent the same geometry and produced the same output.
+  change, a file reload or a Push moved it. `_modifier_descriptor` folds the stored
+  inputs into the revision.
+- **Every cache reset retires the memoized prefix** as well as the frame store.
+  Before, Push — documented as the way to get past anything cached — re-sent the
+  same geometry and produced the same output again.
 
 ### Changed
 
-- The engine runs at the fast cadence (5 ms) for a second after an edit, a
-  response or a frame change, instead of the 50 ms idle one. Playback fills
-  frames this way: each answer re-dirties the stack and the next frame goes out
-  on the next tick. A quiet scene still idles at 50 ms, because `_dirty` is
-  emptied on every pass.
-- The plugin's `MiniWsClient.SendFrame` is serialised: a pong (written from the
-  socket thread) could otherwise interleave with a large frame being written by
-  the sender thread, corrupting the stream for the rest of the connection. The
-  server's keepalive is now explicit (5 s ping, 20 s timeout) instead of the
-  library defaults, closing part of the gap protocol section 2 left open (N9).
+- **The engine runs at the fast cadence (5 ms) for a second after an edit, a
+  response or a frame change**, instead of the 50 ms idle one. Playback fills
+  frames this way: each answer re-dirties the stack and the next frame goes out on
+  the next tick. A quiet scene still idles, because `_dirty` is emptied on every
+  pass.
+- **A referenced modifier target's geometry hash is cached across passes**, taking
+  the per-pointer cost the previous release's handoff measured (0.6 ms at 5k
+  triangles, 10 ms at 82k) off the memo hit path: measured at 0.789/3.167/9.284 ms
+  for one pointer at 9.5k/39k/114k triangles, against 0.020 ms when cached. The
+  entry is retired when the depsgraph tags that target — by name, because the
+  update list resolves to evaluated IDs whose pointers are not the originals' —
+  and `_apply` clears the cache, since the engine's own writes are the one
+  geometry change that never comes through the depsgraph.
+- **The Diagnostics panel shows what a slow sync looks like**: how long a stage
+  has been waiting (only while it is, and only past a second), and how many
+  node-tree walks were truncated by the signature cap — a graph deeper than it
+  pays a full clone on every pass and had no surface at all. The panel users read
+  every day is unchanged.
+- `GhServer.start` clears the connection error once a bind succeeds, so
+  restarting the server on another port no longer leaves a stale
+  "server stopped" in the panel.
+- **The plugin's `MiniWsClient.SendFrame` is serialised**: a pong written from the
+  socket thread could interleave with a large frame the sender thread was writing,
+  corrupting the stream for the rest of the connection. The server's keepalive is
+  explicit (5 s ping, 20 s timeout) instead of the library defaults, closing part
+  of the gap protocol section 2 left open (N9).
+
+### Fixed tests
+
+- Layer B gains `test_prefix_memo.py`: the stored-input round trip reaching
+  Grasshopper, the revision seeing and restoring it, Push carrying the geometry
+  the scene shows, the target-hash cache moving when its target does, the waiting
+  age, and a prefix deeper than the signature cap falling back to re-evaluate
+  rather than memoize (10 tests). 96 headless tests pass; layers A, C and D
+  unchanged.
 
 ## [0.1.2] — 2026-10-12
 
