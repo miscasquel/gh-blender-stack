@@ -6,6 +6,10 @@ Notable changes to this project, following
 
 ## [0.1.3] — 2026-10-15
 
+Fourth release: the prefix memo is invalidated by Blender's depsgraph instead of a
+description of its inputs, a saved port is the port the server listens on, and the
+stale plans are replaced by one live backlog.
+
 ### Added
 
 - The Diagnostics panel reports how long a stage has been waiting, past a second
