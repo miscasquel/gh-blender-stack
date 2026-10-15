@@ -535,7 +535,10 @@ namespace GhStack
                 }
                 var hello = new Dictionary<string, object>();
                 hello["type"] = "hello";
-                hello["client"] = "GhStack 0.1.2";
+                // Keep in sync with blender_manifest.toml (the release path
+                // enforces that one), bl_info in gh_stack/__init__.py and the
+                // example in docs/protocol.md. N6: six places, two checked.
+                hello["client"] = "GhStack 0.1.3";
                 hello["doc"] = _lastDocName;
                 hello["doc_units"] = UnitsName();
                 hello["stages"] = list;

@@ -8,7 +8,7 @@ property decorators.
 
 import bpy
 
-from . import bridge, engine, stack as stack_mod
+from . import bridge, engine, server as server_mod, stack as stack_mod
 
 
 class GHSTACK_PT_panel(bpy.types.Panel):
@@ -184,6 +184,12 @@ def _state_icon(stage):
 
 
 def _port():
+    """The port the add-on is on: the running server's, or the preference when it
+    is not running. Reading only the preference is how the panel came to report a
+    saved port while the socket listened on the default."""
+    bound = server_mod.SERVER.port
+    if bound:
+        return bound
     try:
         prefs = bpy.context.preferences.addons[__package__.split(".")[0]].preferences
         return prefs.port

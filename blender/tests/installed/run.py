@@ -28,10 +28,54 @@ def check(name, ok, detail=""):
         failures.append(name)
 
 
+SAVED_PORT = 9149
+
+
+def saved_port_check(server, prefs):
+    """Save a non-default port, restart Blender on the same config, and require
+    the server to be on it.
+
+    The failure this exists for: `prefs` was registered after `engine`, so
+    `engine.register()` started the server before the preference existed, fell
+    back to the default, and the panel reported a port nothing listened on. The
+    second process is the whole point — in-process, the preference is already
+    registered and the bug cannot happen.
+    """
+    original = prefs.port
+    prefs.port = SAVED_PORT
+    bpy.ops.wm.save_userpref()
+    server.SERVER.stop()
+    phase2 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "port_phase2.py")
+    # `sys.executable` inside Blender is the embedded Python, not Blender itself;
+    # `bpy.app.binary_path` is the interpreter that can run a second headless pass.
+    result = subprocess.run(
+        [bpy.app.binary_path, "-b", "--python", phase2],
+        env=dict(os.environ, GHSTACK_PORT_EXPECT=str(SAVED_PORT)),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=120,
+    )
+    lines = (result.stdout or "").splitlines()
+    for line in lines:
+        if line.startswith(("saved preference:", "PASS:", "FAIL:")):
+            print("  " + line)
+    detail = "exit %d" % result.returncode
+    if result.returncode != 0:
+        detail += " :: " + " | ".join(lines[-4:])
+    check("a saved port survives a restart", result.returncode == 0, detail)
+    prefs.port = original
+    bpy.ops.wm.save_userpref()
+
+
 def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
-    addon_utils.enable(MODULE, default_set=False)
+    # default_set=True matters twice: it creates the preferences entry this test
+    # needs to write (under --factory-startup nothing is enabled yet), and it is
+    # what makes the data-root redirect below take effect instead of silently
+    # raising the KeyError that used to be swallowed here.
+    addon_utils.enable(MODULE, default_set=True)
     import importlib
 
     server = importlib.import_module(MODULE + ".blender.server")
@@ -44,6 +88,11 @@ def main():
         )
     except KeyError:
         pass
+    check(
+        "frame cache kept out of the real data root",
+        bpy.context.preferences.addons[MODULE].preferences.data_root.startswith(tempfile.gettempdir()),
+        bpy.context.preferences.addons[MODULE].preferences.data_root,
+    )
 
     check("extension module imported", server is not None)
     check("panel class registered", hasattr(bpy.types, "GHSTACK_PT_panel"))
@@ -92,6 +141,9 @@ def main():
         fake.wait(timeout=5)
     except subprocess.TimeoutExpired:
         fake.kill()
+
+    saved_port_check(server, bpy.context.preferences.addons[MODULE].preferences)
+
     bpy.ops.preferences.addon_disable(module=MODULE)
 
     if failures:

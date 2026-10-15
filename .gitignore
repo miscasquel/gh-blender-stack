@@ -14,10 +14,9 @@ venv/
 grasshopper/build/out/
 
 # Spike scratch
-spikes/s1/WsTest.exe
 spikes/s1/GhStackSpike.gha
-spikes/s1/MkDoc.exe
 spikes/results/s6-run.txt
+*.exe
 
 # Packaging
 *.zip

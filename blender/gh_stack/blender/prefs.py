@@ -3,7 +3,7 @@
 import os
 
 import bpy
-from bpy.props import BoolProperty, FloatProperty, IntProperty, StringProperty
+from bpy.props import FloatProperty, IntProperty, StringProperty
 
 DEFAULT_DATA_ROOT = "~/.local/share/gh-stack"
 DEFAULT_CACHE_MB = 256

@@ -85,6 +85,12 @@ class GhServer(object):
     def running(self):
         return bool(self._thread and self._thread.is_alive())
 
+    @property
+    def port(self):
+        """The port actually bound, or None when nothing is listening. The panel
+        reports this rather than the preference: the two disagreed once."""
+        return self._port if self.running else None
+
     # ------------------------------------------------------------------- send
     def send(self, frame):
         """Queue a frame from the main thread. False when there is no client to

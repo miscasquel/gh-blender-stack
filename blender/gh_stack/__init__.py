@@ -14,7 +14,7 @@ registered.
 bl_info = {
     "name": "GH Stack",
     "author": "GH Stack",
-    "version": (0, 1, 2),
+    "version": (0, 1, 3),
     "blender": (5, 2, 0),
     "location": "View3D > Sidebar > GH Stack",
     "description": "Drive Grasshopper definitions from Blender as stackable modifiers",
@@ -23,9 +23,13 @@ bl_info = {
 
 from . import core  # noqa: F401,E402  (pure Python; safe outside Blender)
 
-# Registration order matters: the server and engine hooks first, then records,
-# then the UI.
+# Registration order matters, and `prefs` goes first: `engine.register()` starts
+# the server, and the server reads the port preference. With prefs registered last
+# the engine could not see it, so a saved port was silently ignored — the socket
+# listened on the default while the panel, reading the preference, reported the
+# saved one. Unregister walks this in reverse, so prefs still tears down last.
 MODULE_ORDER = (
+    "prefs",
     "props",
     "stack",
     "helpers",
@@ -34,7 +38,6 @@ MODULE_ORDER = (
     "engine",
     "ops",
     "ui",
-    "prefs",
 )
 
 

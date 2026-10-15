@@ -1,10 +1,19 @@
 # Polish and cleanup plan
 
+> **Historical record.** This is one review, kept for its measured profiles and
+> the reasoning behind the items that were deferred. It is not the plan: the live
+> list is `docs/backlog.md`, and resolved items are in the commits and the
+> CHANGELOG. Line numbers and function names below refer to the tree as it was
+> when the review was written.
+
+
 **Status:** in progress. Written 2026-10-12 from a full read of the tree at
 `ea0f651`, after the W2 frame cache (`b3305cf`) and the reopen fix (`ea0f651`);
 items carried out since carry a **Done** banner with commit and evidence.
 
-**Next slice:** `docs/handoff-next-batch-2.md` (written 2026-10-13 at `6cc4cb1`).
+**Next slice:** `docs/backlog.md`. (The handoffs this plan fed — `handoff-next-batch.md`
+and `handoff-next-batch-2.md` — were folded into it once their items were done or
+re-stated, 2026-10-15.)
 Its findings that are not yet items below are tagged **`N1`–`N9`** there — notably
 `N4` (a measured per-tick cost that re-scopes **P4-1**, see item 5 of that handoff)
 and `N1` (a gap in the decode contract that `P2-1`/`P2-3` left one layer deeper).
@@ -695,12 +704,12 @@ subject of the note below.
 **Update 2026-10-14.** Option 1's "8.3 ms at 50k" is still the floor and is now
 understood as two different costs: the *stack object's own base read* (the 89% the
 profile named) and *referenced targets* (`_pointer_state` hashing a second datablock,
-per pointer, additive — handoff-next-batch-2 item 5 measured it at 0.6 ms/5k and
+per pointer, additive — measured at 0.6 ms/5k and
 10 ms/82k). The second is resolved: the target hash is cached across passes and
 retired when the depsgraph tags that target, which takes 9.3 ms off one pointer at
 114k triangles on the memo hit path. The first is untouched and remains the
 dominant per-pass cost for a heavy base mesh; it needs the epoch design (see
-handoff-next-batch-2 item 5, closing paragraph), and still option 3's sound signal
+the backlog's epoch note), and still option 3's sound signal
 problem, not a patch.
 
 **Effort:** S for option 2; L and design-first for option 3.

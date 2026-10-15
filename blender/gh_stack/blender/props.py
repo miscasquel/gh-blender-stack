@@ -5,8 +5,6 @@ keyframed and driven. Ranges go through ``id_properties_ui``. The schema itself
 (types, labels, value lists) is kept in the stage's parameter collection for the UI.
 """
 
-import bpy
-
 from ..core import codec, params as core_params
 from . import bridge, stack as stack_mod
 
