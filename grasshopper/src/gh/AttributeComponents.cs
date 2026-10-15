@@ -301,7 +301,7 @@ namespace GhStack
                     // indistinguishable from attributes never arriving.
                     string[] names = AttributeStore.Names(geometry);
                     AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, names.Length == 0
-                        ? "this geometry carries no attributes (is Blender running a build with attribute support?)"
+                        ? "this geometry carries no attributes"
                         : "no attribute named " + name + " (this geometry carries: "
                           + string.Join(", ", names) + ")");
                 }
