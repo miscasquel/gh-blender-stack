@@ -214,8 +214,11 @@ namespace GhStack.Core
             if (value is float) { sb.Append(FormatDouble((float)value)); return; }
             var dict = value as Dictionary<string, object>;
             if (dict != null) { WriteObject(sb, dict); return; }
-            var list = value as List<object>;
-            if (list != null) { WriteArray(sb, list); return; }
+            // Any IList, not only List<object>: the decoder produces List<object>,
+            // but callers build typed lists (attribute descriptors, for example),
+            // and "cannot encode List`1" is a runtime crash in a live canvas.
+            var items = value as System.Collections.IList;
+            if (items != null) { WriteArray(sb, items); return; }
             throw new JsonException("cannot encode " + value.GetType().Name);
         }
 
@@ -234,7 +237,7 @@ namespace GhStack.Core
             sb.Append('}');
         }
 
-        private static void WriteArray(StringBuilder sb, List<object> list)
+        private static void WriteArray(StringBuilder sb, System.Collections.IList list)
         {
             sb.Append('[');
             for (int i = 0; i < list.Count; i++)

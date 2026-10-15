@@ -55,6 +55,8 @@ namespace GhStack.Tests.Console
 
             CheckDecoderBoundary();
 
+            CheckJsonWriter();
+
             System.Console.WriteLine();
             if (_failures == 0)
             {
@@ -261,6 +263,45 @@ namespace GhStack.Tests.Console
             }
             _failures += problems.Count;
             System.Console.WriteLine("FAIL decoder-boundary");
+            foreach (string p in problems) System.Console.WriteLine("     " + p);
+        }
+
+        private static void CheckJsonWriter()
+        {
+            var problems = new List<string>();
+
+            // A typed list encodes exactly like List<object>. The writer used to
+            // reject anything but List<object>, which crashed a live canvas the
+            // first time it met the attribute descriptor list
+            // ("Stage Out: cannot encode List`1").
+            var descriptors = new List<Dictionary<string, object>>();
+            var entry = new Dictionary<string, object>();
+            entry["name"] = "test";
+            entry["count"] = 2L;
+            descriptors.Add(entry);
+            string text = Json.WriteCanonical(descriptors);
+            if (text != "[{\"count\":2,\"name\":\"test\"}]")
+                problems.Add("typed list: " + text);
+
+            var header = new Dictionary<string, object>();
+            header["attributes"] = descriptors;
+            string headerText = Json.WriteCanonical(header);
+            if (headerText != "{\"attributes\":[{\"count\":2,\"name\":\"test\"}]}")
+                problems.Add("typed list in a header: " + headerText);
+
+            var strings = new List<string>();
+            strings.Add("a");
+            strings.Add("b");
+            if (Json.WriteCanonical(strings) != "[\"a\",\"b\"]")
+                problems.Add("string list: " + Json.WriteCanonical(strings));
+
+            if (problems.Count == 0)
+            {
+                System.Console.WriteLine("PASS json-writer");
+                return;
+            }
+            _failures += problems.Count;
+            System.Console.WriteLine("FAIL json-writer");
             foreach (string p in problems) System.Console.WriteLine("     " + p);
         }
 
