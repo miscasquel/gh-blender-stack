@@ -351,18 +351,18 @@ class ObjectDispatchTests(unittest.TestCase):
         obj = new_curve_object("dispatch-curve")
         spline = obj.data.splines.new("POLY")
         spline.points.add(1)
-        names = [s[0] for s in geometry_io.object_to_sections(obj)]
+        names = [s[0] for s in geometry_io.object_to_sections(obj)[0]]
         self.assertTrue(names[0].startswith("crv."), names)
 
         cloud = new_pointcloud_object("dispatch-points", [(0, 0, 0)])
-        names = [s[0] for s in geometry_io.object_to_sections(cloud)]
+        names = [s[0] for s in geometry_io.object_to_sections(cloud)[0]]
         self.assertTrue(names[0].startswith("pts."), names)
 
         mesh = bpy.data.meshes.new("dispatch-mesh")
         mesh.from_pydata([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [], [(0, 1, 2)])
         mesh.update()
         names = [s[0] for s in geometry_io.object_to_sections(
-            bpy.data.objects.new("dispatch-mesh", mesh))]
+            bpy.data.objects.new("dispatch-mesh", mesh))[0]]
         self.assertTrue(names[0].startswith("mesh."), names)
 
 

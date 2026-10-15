@@ -49,12 +49,13 @@ def canonical_json(obj):
 
 _DTYPE_FMT = {
     "f32": ("f", 4),
+    "i32": ("i", 4),
     "u32": ("I", 4),
     "u8": ("B", 1),
 }
 
 # numpy dtype strings, little-endian, used when the input carries its own buffer.
-_NP_DTYPE = {"f32": "<f4", "u32": "<u4", "u8": "u1"}
+_NP_DTYPE = {"f32": "<f4", "i32": "<i4", "u32": "<u4", "u8": "u1"}
 
 
 def element_count(array_like):

@@ -28,16 +28,23 @@ Blender                                          Rhino / Grasshopper (wine)
   sees everything before its own modifier in the stack, so `GH → GN → GH` chains
   evaluate as a prefix, and a waiting stage pauses the ones after it.
 - **Geometry kinds.** Meshes (n-gons and vertex colours), curves (poly, Bezier,
-  NURBS, circles, ellipses, arcs), points, SubD control cages with
+  NURBS, circles, ellipses, arcs), point clouds, SubD control cages with
   edge-crease tags, and Breps/surfaces (meshed on the way out, lossy). Stage In
-  outputs `Geometry`, `Curves`, `Points`, and `SubD`; Stage Out takes any of
-  them on one generic input.
+  delivers everything through one generic `Geometry` output — mesh, SubD cage,
+  curves, point cloud, in that order; Stage Out takes any of them on one generic
+  input.
+- **Attributes.** Blender's named attributes (floats, ints, booleans, strings,
+  vectors, colours, quaternions, matrices — every type, on every mesh domain)
+  travel with the geometry: Stage In attaches them to the Rhino geometry, Stage
+  Out sends back what the graph attached. **Attribute Get** and **Attribute Set**
+  read and write them in Grasshopper. The active colour attribute and edge
+  creases keep their native channels (vertex colours, SubD tags).
 - **Parameters.** `Param` components declare float, int, bool, vector3, colour,
   value list, and text parameters. Blender draws them in the N-panel with
   ranges, a value-list dropdown, keyframe decorators, and drivers.
 - **Protocol.** Binary frames with a canonical JSON header; geometry and
   parameters in the same stream. The Python and C# codecs are checked against
-  ten shared golden fixtures.
+  eleven shared golden fixtures.
 - **Lifecycle.** States (`waiting`, `ok`, `error`, `disconnected`, `disabled`),
   timeouts, latest-wins requests, and reconnect with backoff. Inspecteable from the UI.
 - **Frame cache.** The cache behaves like a simulation cache: it fills as you

@@ -19,11 +19,15 @@ namespace GhStack
     public static class GooDispatch
     {
         /// <summary>Appends each goo to the right list; unsupported types are
-        /// named in <paramref name="ignored"/>.</summary>
+        /// named in <paramref name="ignored"/>. Geometry that can carry
+        /// attributes is also appended to <paramref name="sources"/> (when the
+        /// caller passes a list): Stage Out harvests the dictionaries from
+        /// there, because a flattened point cloud otherwise loses them.</summary>
         public static void Collect(
             IEnumerable<IGH_Goo> goos,
             List<Mesh> meshes, List<Curve> curves, List<Point3d> points,
-            List<SubD> subds, List<Brep> breps, List<string> ignored)
+            List<SubD> subds, List<Brep> breps, List<string> ignored,
+            List<Rhino.Geometry.GeometryBase> sources = null)
         {
             foreach (IGH_Goo goo in goos)
             {
@@ -40,12 +44,24 @@ namespace GhStack
                 if (meshGoo != null)
                 {
                     meshes.Add(meshGoo.Value);
+                    if (sources != null && meshGoo.Value != null) sources.Add(meshGoo.Value);
                     continue;
                 }
                 GH_SubD subdGoo = goo as GH_SubD;
                 if (subdGoo != null)
                 {
                     subds.Add(subdGoo.Value);
+                    if (sources != null && subdGoo.Value != null) sources.Add(subdGoo.Value);
+                    continue;
+                }
+                // A point cloud is how Stage In hands points over; expand it so
+                // both representations travel the same way (the wire carries a
+                // flat point list either way).
+                GH_PointCloud cloudGoo = goo as GH_PointCloud;
+                if (cloudGoo != null && cloudGoo.Value != null)
+                {
+                    points.AddRange(cloudGoo.Value.GetPoints());
+                    if (sources != null) sources.Add(cloudGoo.Value);
                     continue;
                 }
 

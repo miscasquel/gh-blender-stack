@@ -36,6 +36,7 @@ python3 scripts/make-fixtures
 | `request-subd` | `subd.*` sections with a crease |
 | `response-mesh` | a two-triangle mesh response |
 | `response-mixed` | mesh + curves + points in one response, with a warning |
+| `response-attributes` | attributes: `i32` face ids, `f32` point loads, boolean flags, an UTF-8 string tag with its offsets section |
 | `response-error` | a solve failure (`status = "error"`) |
 | `error-unknown-ref` | the `error` message type for an unknown geometry ref |
 

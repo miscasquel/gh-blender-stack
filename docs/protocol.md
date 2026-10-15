@@ -79,6 +79,7 @@ Sent after `hello`, and again whenever a Param component's declaration changes.
 ```
 
 - `params` maps parameter `id` to a value cast to the schema type before encoding: floats as JSON numbers, ints as integers, bools as `true`/`false`, vectors and colors as arrays of three numbers, value lists as integers (the index), text as strings.
+- `attributes` (optional) lists the attribute sections the request carries (§5.1). It is present only with `sections`, so a `ref` request never carries it.
 - `geom.mode` is `full` or `ref`.
   - `full`: `sections` carries the geometry (§5). `hash` is the geometry hash.
   - `ref`: `sections` is empty. `hash` names geometry GH already holds for this stage. If GH does not hold it, GH answers `unknown_ref` and Blender resends `full`.
@@ -98,6 +99,7 @@ Sent after `hello`, and again whenever a Param component's declaration changes.
 - `rid` echoes the request's `rid`. For a GH-initiated change (a slider upstream of Stage Out moved), `rid` is the last one received for that stage.
 - `status` is `ok` or `error`. An `error` response has no sections, and `error` holds `{"code": …, "message": …}`.
 - `out_hash` identifies the output. Blender compares it for equality and never recomputes it (see §6.3).
+- `attributes` (optional) lists the attribute sections the response carries (§5.1), exactly like a request's.
 - `warnings` carries every loss or approximation, each with a code and a message. Blender shows them in the stage status and logs them.
 
 ### 4.5 `ping` / `pong`
@@ -162,6 +164,35 @@ Rules:
 - Curve `crv.points` length equals the sum of `crv.counts`.
 - Blender sends `subd.*` for a mesh its stack object flags as SubD (the `gh_subd` marker, §6 of the plan). Otherwise it sends `mesh.*`.
 - `subd.colors` does not exist in v2.
+- `i32` is the signed 32-bit dtype, four bytes per element. It exists for Blender's signed `INT` attribute type.
+
+### 5.1 Attributes
+
+Attributes are per-element named arrays attached to one geometry group. Each
+attribute contributes one `attr.<i>.values` section plus one entry in the frame's
+`attributes` header list:
+
+```json
+{"group":"mesh","name":"panel_id","domain":"FACE","type":"INT",
+ "components":1,"count":2,"section":"attr.0.values"}
+```
+
+- `group` is the geometry group it belongs to: `mesh`, `subd`, `crv`, or `pts`.
+- `name` is the attribute's name; `domain` is `POINT`, `EDGE`, `FACE`, `CORNER`,
+  `CURVE` or `INSTANCE`; `type` is Blender's attribute vocabulary: `FLOAT`,
+  `INT`, `BOOLEAN`, `STRING`, `FLOAT_VECTOR`, `FLOAT2`, `FLOAT4`, `FLOAT_COLOR`,
+  `BYTE_COLOR`, `QUATERNION`, `FLOAT4X4`, `INT8`, `INT16_2D`, `INT32_2D`.
+- `components` is the values per element, `count` the elements. The section dtype
+  follows from the type: `f32` for floats and compound types, `i32` for
+  `INT`/`INT8`/`INT16_2D`/`INT32_2D`, `u8` for `BOOLEAN` (0/1) and `BYTE_COLOR`.
+- STRING adds an `attr.<i>.offsets` section (u32 byte lengths, one per string);
+  `attr.<i>.values` is the concatenated UTF-8 bytes.
+- The list is present only when its sections are: no geometry, no attributes.
+- Platforms map what they can natively. Blender carries the active colour
+  attribute and the edge creases through `mesh.colors` / the crease sections, and
+  everything else through this format; Rhino attaches each attribute to the
+  geometry object (UserDictionary), so it rides along with duplication and
+  transforms.
 
 ## 6. Identifiers, hashes, and apply rules
 
@@ -175,6 +206,8 @@ for section in [sections in the order of §5 table, only those present]:
 ```
 
 Prefixed with `sha256:` and hex-encoded. Computed with numpy on the Blender side. Never a hash of a file.
+
+**Attributes take part.** When the frame carries attributes, their descriptor list (§5.1) is hashed as one extra entry named `attr.descriptors`, holding the canonical JSON of the list. Section names are index-based (`attr.0.values`), so without the descriptors a renamed attribute would hash identically and a cache hit would silently keep the old name.
 
 ### 6.2 Request ID (Blender only)
 
@@ -192,7 +225,7 @@ Prefixed with `sha256:`. GH never computes or validates request IDs. It echoes t
 
 ### 6.3 Output hash (GH only)
 
-SHA-256 over the response sections, in header order: name (UTF-8), 0x00, raw bytes. Prefixed with `sha256:`. Blender treats it as an opaque string.
+SHA-256 over the response sections, in header order: name (UTF-8), 0x00, raw bytes. Prefixed with `sha256:`. Blender treats it as an opaque string. Attribute descriptors take part the same way as in the geometry hash: one extra entry named `attr.descriptors` after the sections, holding the canonical JSON of the list.
 
 ### 6.4 Apply rules (Blender)
 
@@ -234,7 +267,7 @@ Both the Python and C# codecs must decode every fixture to the same values, and 
 - C# under wine: `scripts/test-gha`, via `grasshopper/tests/console/GhStackCoreTests.exe`.
 - Regenerate with `python3 scripts/make-fixtures`.
 
-Ten fixtures, covering `ping`, `hello`, `schema`, a `ref` request, a mesh request, a SubD request, a mesh response, a mixed mesh/curve/point response, an error response, and the `error` message. Floats in fixtures are exactly representable in f32, so both codecs agree byte for byte without a tolerance.
+Eleven fixtures, covering `ping`, `hello`, `schema`, a `ref` request, a mesh request, a SubD request, a mesh response, a mixed mesh/curve/point response, a response with attributes (`i32`, `f32`, `u8` and a STRING offsets section), an error response, and the `error` message. Floats in fixtures are exactly representable in f32, so both codecs agree byte for byte without a tolerance.
 
 ## 10. Changes from plan rev 2
 
@@ -255,3 +288,8 @@ Ten fixtures, covering `ping`, `hello`, `schema`, a `ref` request, a mesh reques
 - 2026-10-12: the `choice` parameter type is renamed `value_list` and its schema
   field `choices` to `values`, because "value list" is the Grasshopper term for
   it. The fixture generator was re-run; no other change.
+- 2026-10-15: attributes add §5.1 (`attr.*` sections with an `attributes` header
+  list) and the `i32` dtype; the geometry and output hashes fold the descriptor
+  list in as `attr.descriptors` so a rename invalidates the cache. The
+  `response-attributes` fixture pins i32, `f32`, `u8` and the STRING offsets
+  section through both codecs. Additive inside v2.

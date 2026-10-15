@@ -20,8 +20,11 @@ This module is the bpy layer: core stays pure (see blender/gh_stack/core).
 
 import numpy as np
 
+from ..core import attributes as attr_mod
+
 # Section orders per protocol §5. mesh.colors exists only for plain meshes;
-# subd.colors does not exist in v2.
+# subd.colors does not exist in v2. Attribute sections (``attr.<i>.values``,
+# ``attr.<i>.offsets``) are described by the frame header, not by a fixed order.
 MESH_SECTION_ORDER = (
     "mesh.verts",
     "mesh.face_counts",
@@ -123,10 +126,9 @@ def read_colors(mesh):
     A CORNER-domain attribute is folded to one entry per vertex; the last loop that
     references a vertex wins, which is deterministic for Blender's loop order.
     """
-    attrs = mesh.color_attributes
-    if not attrs:
+    attr = _active_color(mesh)
+    if attr is None:
         return None
-    attr = attrs.active_color if attrs.active_color is not None else attrs[0]
     n = len(mesh.vertices) if attr.domain == "POINT" else len(mesh.loops)
 
     floats = np.empty(n * 4, dtype=np.float32)
@@ -163,6 +165,233 @@ def read_creases(mesh):
     edge_verts = np.empty(len(mesh.edges) * 2, dtype=np.uint32)
     mesh.edges.foreach_get("vertices", edge_verts)
     return edge_verts.reshape(-1, 2)[mask], values[mask]
+
+
+def _active_color(owner):
+    """The active colour attribute (or the first one), or None. One source of
+    truth for the native colour mapping and for the skip list of the generic
+    attribute reader, so an attribute is never sent twice."""
+    attrs = owner.color_attributes
+    if not attrs:
+        return None
+    return attrs.active_color if attrs.active_color is not None else attrs[0]
+
+
+# ------------------------------------------------------------------ attributes
+
+
+# Blender attribute data type -> (foreach property, buffer dtype). The buffer
+# dtype matters: Blender refuses float buffers for integer-typed attributes.
+_FOREACH = {
+    "FLOAT": ("value", np.float32),
+    "INT": ("value", np.int32),
+    "BOOLEAN": ("value", np.bool_),
+    "FLOAT_VECTOR": ("vector", np.float32),
+    "FLOAT2": ("vector", np.float32),
+    "FLOAT4": ("vector", np.float32),
+    "FLOAT_COLOR": ("color", np.float32),
+    "BYTE_COLOR": ("color_srgb", np.float32),
+    "QUATERNION": ("value", np.float32),
+    "FLOAT4X4": ("value", np.float32),
+    "INT8": ("value", np.int8),
+    "INT16_2D": ("value", np.int32),
+    "INT32_2D": ("value", np.int32),
+}
+
+
+def read_attributes(owner, group, index0=0, skip=()):
+    """Every transportable attribute of one geometry data owner, as
+    ``(sections, descriptors)``.
+
+    ``owner`` is anything with Blender's attribute API (Mesh, PointCloud,
+    Curves component). Internal attributes (leading dot) and the geometry
+    itself (``position``) are skipped, as is anything in ``skip`` — the names
+    the caller already carries through a native channel (``mesh.colors``,
+    ``crease_edge``), so nothing travels twice. ``index0`` is the running
+    attribute count of the frame: the sections are named from it.
+    """
+    sections = []
+    descriptors = []
+    attrs = getattr(owner, "attributes", None)
+    if attrs is None:
+        return sections, descriptors
+
+    for attr in attrs:
+        name = attr.name
+        if name.startswith(".") or name in attr_mod.SKIP_NAMES or name in skip:
+            continue
+        type_name = attr.data_type
+        if type_name not in attr_mod.WIRE_TYPES:
+            continue
+        index = index0 + len(descriptors)
+        value_section, offsets_section = attr_mod.section_names(index)
+        n = len(attr.data)
+        comps = attr_mod.components(type_name)
+
+        if type_name == "STRING":
+            # Strings have no foreach path; element access is the only way and
+            # the counts are small by nature.
+            data = [bytes(element.value) for element in attr.data]
+            raw = np.frombuffer(b"".join(data), dtype=np.uint8) if data else np.zeros(0, np.uint8)
+            sections.append((value_section, "u8", raw))
+            sections.append(
+                (offsets_section, "u32", np.asarray([len(item) for item in data], dtype=np.uint32))
+            )
+        else:
+            prop, buf_dtype = _FOREACH[type_name]
+            buf = np.zeros(n * comps, dtype=buf_dtype)
+            attr.data.foreach_get(prop, buf)
+            if type_name == "BYTE_COLOR":
+                values = np.clip(np.rint(buf * 255.0), 0.0, 255.0).astype(np.uint8)
+            elif type_name == "BOOLEAN":
+                values = buf.astype(np.uint8)
+            elif type_name == "INT8":
+                values = buf.astype(np.int32)
+            else:
+                values = np.ascontiguousarray(buf)
+            sections.append((value_section, attr_mod.wire_dtype(type_name), values))
+
+        descriptors.append(
+            attr_mod.descriptor(group, name, attr.domain, type_name, n, index)
+        )
+    return sections, descriptors
+
+
+def mesh_attributes(mesh, as_subd=False, index0=0):
+    """The generic attributes of a mesh (or SubD cage). The active colour
+    attribute is excluded only when the native ``mesh.colors`` channel carries
+    it, so a SubD cage's colours travel as an ordinary attribute."""
+    skip = [CREASE_ATTRIBUTE]
+    if not as_subd:
+        color = _active_color(mesh)
+        if color is not None:
+            skip.append(color.name)
+    return read_attributes(mesh, "subd" if as_subd else "mesh", index0=index0, skip=skip)
+
+
+def points_attributes(cloud, index0=0):
+    """The generic attributes of a point cloud. The native ``pts.colors``
+    channel carries the active colour attribute; everything else travels."""
+    skip = []
+    color = _active_color(cloud)
+    if color is not None:
+        skip.append(color.name)
+    return read_attributes(cloud, "pts", index0=index0, skip=skip)
+
+
+def write_attributes(owner, entries):
+    """Create or update attributes from decoded wire sections.
+
+    ``entries`` is ``(descriptor, values, offsets)`` per attribute, straight
+    from a decoded frame. Values that do not fit the target domain are dropped
+    with a note in the returned list — a wrong count is a topology mismatch, and
+    writing it anyway would be silent corruption.
+    """
+    notes = []
+    for descriptor, values, offsets in entries:
+        name = descriptor.get("name") or "?"
+        domain = descriptor.get("domain") or "POINT"
+        type_name = descriptor.get("type")
+        spec = attr_mod.WIRE_TYPES.get(type_name)
+        if spec is None:
+            notes.append("attribute %r: unknown type %r" % (name, type_name))
+            continue
+        target = _domain_length(owner, domain)
+        if target is None:
+            notes.append("attribute %r: %s has no %s domain" % (name, describe(owner), domain))
+            continue
+
+        if type_name == "STRING":
+            data, lengths = _decode_strings(values, offsets)
+            if len(data) != target:
+                notes.append(
+                    "attribute %r: %d strings for %d %s elements"
+                    % (name, len(data), target, domain.lower())
+                )
+                continue
+            attr = _attribute_for(owner, name, domain, type_name)
+            for i, raw in enumerate(data):
+                attr.data[i].value = raw
+            continue
+
+        comps = spec[1]
+        arr = np.asarray(values)
+        count = arr.size // comps
+        if count != target:
+            notes.append(
+                "attribute %r: %d values for %d %s elements"
+                % (name, count, target, domain.lower())
+            )
+            continue
+        attr = _attribute_for(owner, name, domain, type_name)
+        if type_name == "BYTE_COLOR":
+            attr.data.foreach_set("color_srgb", arr.astype(np.float32) / 255.0)
+        elif type_name == "BOOLEAN":
+            attr.data.foreach_set("value", arr.astype(bool))
+        elif type_name == "INT8":
+            attr.data.foreach_set("value", arr.astype(np.int8))
+        elif type_name in ("FLOAT_VECTOR", "FLOAT2", "FLOAT4"):
+            attr.data.foreach_set("vector", arr.reshape(-1).astype(np.float32))
+        elif type_name == "FLOAT_COLOR":
+            attr.data.foreach_set("color", arr.reshape(-1).astype(np.float32))
+        elif type_name == "INT":
+            attr.data.foreach_set("value", arr.reshape(-1).astype(np.int32))
+        elif type_name in ("INT16_2D", "INT32_2D"):
+            attr.data.foreach_set("value", arr.reshape(-1).astype(np.int32))
+        else:  # FLOAT, QUATERNION, FLOAT4X4
+            attr.data.foreach_set("value", arr.reshape(-1).astype(np.float32))
+    return notes
+
+
+def describe(owner):
+    """A short name for an attribute owner, for notes."""
+    if hasattr(owner, "vertices"):
+        return "mesh"
+    if hasattr(owner, "points"):
+        return "point cloud"
+    return "geometry"
+
+
+def _attribute_for(owner, name, domain, type_name):
+    """One attribute of the owner, created or replaced when its shape changed."""
+    attr = owner.attributes.get(name)
+    if attr is not None and (attr.domain != domain or attr.data_type != type_name):
+        owner.attributes.remove(attr)
+        attr = None
+    if attr is None:
+        attr = owner.attributes.new(name, type_name, domain)
+    return attr
+
+
+def _domain_length(owner, domain):
+    """Element count of one domain, or None when the owner has no such domain."""
+    if hasattr(owner, "vertices"):
+        counts = {
+            "POINT": len(owner.vertices),
+            "EDGE": len(owner.edges),
+            "FACE": len(owner.polygons),
+            "CORNER": len(owner.loops),
+        }
+        return counts.get(domain)
+    if hasattr(owner, "points"):
+        return len(owner.points) if domain == "POINT" else None
+    return None
+
+
+def _decode_strings(values, offsets):
+    """The wire's concatenated UTF-8 bytes plus per-string lengths, as bytes."""
+    raw = (
+        np.asarray(values, dtype=np.uint8).tobytes()
+        if not isinstance(values, (bytes, bytearray))
+        else bytes(values)
+    )
+    lengths = () if offsets is None else [int(length) for length in offsets]
+    data = []
+    at = 0
+    for length in lengths:
+        data.append(raw[at : at + length])
+        at += length
+    return data, lengths
 
 
 # ------------------------------------------------------------ curves and points
@@ -299,23 +528,35 @@ CURVE_TYPE_NURBS = 3
 
 
 def geometry_set_to_sections(geometry, as_subd=False):
-    """Protocol sections for an evaluated ``GeometrySet`` (a stage's prefix).
+    """Protocol sections and attribute descriptors for an evaluated
+    ``GeometrySet`` (a stage's prefix). Returns ``(sections, attributes)``.
 
     A stage's prefix is everything before its own modifier in the stack, so it
     can hold a mesh, curves, and points at once. The geometry set must stay
     referenced while the components are read: its datablocks die with it.
+
+    Curves carry no attributes yet: Blender's curve helper is a legacy Curve
+    datablock, which cannot store attributes, so a read-only channel would be
+    lost on the way back anyway. Mesh, SubD cage and point attributes are
+    supported end to end.
     """
     sections = []
+    attributes = []
     mesh = geometry.mesh
     if mesh is not None and len(mesh.vertices):
         sections += mesh_to_sections(mesh, as_subd=as_subd)
+        attribute_sections, attributes = mesh_attributes(mesh, as_subd=as_subd)
+        sections += attribute_sections
     curves = geometry.curves
     if curves is not None and len(curves.points):
         sections += curves_component_to_sections(curves)
     cloud = geometry.pointcloud
     if cloud is not None and len(cloud.points):
         sections += points_to_sections(cloud)
-    return sections
+        attribute_sections, point_attributes = points_attributes(cloud, index0=len(attributes))
+        sections += attribute_sections
+        attributes += point_attributes
+    return sections, attributes
 
 
 def curves_component_to_sections(curves):
@@ -699,7 +940,8 @@ def write_point_colors(cloud, colors):
 
 
 def object_to_sections(obj, as_subd=False):
-    """Protocol sections for an object's base geometry, by object type.
+    """Protocol sections and attribute descriptors for an object's base
+    geometry, by object type. Returns ``(sections, attributes)``.
 
     Meshes travel as ``mesh.*`` (or ``subd.*`` when the stack is flagged as a
     SubD cage), curves as ``crv.*``, point clouds as ``pts.*``. A Blender
@@ -708,20 +950,23 @@ def object_to_sections(obj, as_subd=False):
     way).
     """
     if obj.type == "MESH":
-        return mesh_to_sections(obj.data, as_subd=as_subd)
+        attribute_sections, attributes = mesh_attributes(obj.data, as_subd=as_subd)
+        return mesh_to_sections(obj.data, as_subd=as_subd) + attribute_sections, attributes
     if obj.type == "CURVE":
-        return curve_to_sections(obj.data)
+        return curve_to_sections(obj.data), []
     if obj.type == "POINTCLOUD":
-        return points_to_sections(obj.data)
+        attribute_sections, attributes = points_attributes(obj.data)
+        return points_to_sections(obj.data) + attribute_sections, attributes
     if obj.type == "SURFACE":
         import bpy
 
         mesh = surface_to_mesh(obj)
         try:
-            return mesh_to_sections(mesh, as_subd=False)
+            attribute_sections, attributes = mesh_attributes(mesh, as_subd=False)
+            return mesh_to_sections(mesh, as_subd=False) + attribute_sections, attributes
         finally:
             bpy.data.meshes.remove(mesh)
-    return []
+    return [], []
 
 
 def surface_to_mesh(obj):

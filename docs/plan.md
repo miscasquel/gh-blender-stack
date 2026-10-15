@@ -39,6 +39,10 @@ Drive Grasshopper definitions from Blender as stackable modifiers, alongside nat
 - Curves: poly, Bezier, and NURBS, with approximation and warnings where needed (D3).
 - Points.
 - Brep, converted to mesh on the GH side (lossy by nature; warned).
+- Attributes: Blender's named attributes (every type, mesh POINT/EDGE/FACE/CORNER
+  domains, SubD cages, point clouds) travel with the geometry in both directions.
+  Curve attributes are read-only for now: Blender's curve datablock cannot store
+  them.
 - Parameters: float, int, bool, vector3, color, value list. Text parameters are supported but not animatable.
 - Mid-stack GH stages (`GH → GN → GH`), enable/disable, reorder, freeze, preview.
 - Keyframes, drivers, and playback from the frame cache.
@@ -155,6 +159,17 @@ Blender reads geometry components through `Object.evaluated_geometry()`, which r
 - Approximation never blocks the transfer. The warning is the signal.
 
 **Mixed outputs.** A stage can emit any combination. Blender keeps them as geometry-set components. Native mesh-only modifiers such as Bevel and Subsurf act on the mesh component only. This is standard Blender behavior and is checked in spike S6.
+
+**Attributes.** Blender's named attributes travel with the geometry in both
+directions. The wire carries one section plus one descriptor per attribute
+(protocol §5.1); Rhino attaches each attribute to the geometry object's
+UserDictionary, so it rides along with duplication and transforms the way it
+does in Blender's dependency graph. Mesh and SubD cage attributes cover
+POINT/EDGE/FACE/CORNER, point clouds cover POINT; the active colour attribute and
+edge creases keep their native channels instead (vertex colours, SubD tags). In a
+definition, `Attribute Get` and `Attribute Set` read and write the values. Curve
+attributes are read-only: Blender's curve helper is a legacy Curve datablock,
+which has no attribute API to write back into.
 
 **Stack type.** The stack object's base type sets what the native modifiers act on. GH curves and points ride along as components. Stacks whose base is empty are allowed. GH can supply everything.
 
@@ -322,7 +337,7 @@ Add Stage, Remove Stage, Push, Pull, Recompute from here, Freeze, Preview, Key a
 
 | Component | Inputs | Outputs |
 |---|---|---|
-| Stage In | Key, Root (ignored in v2, reserved), Enabled | Geometry (Mesh, Curve, Point, SubD), Request ID, Status, Message |
+| Stage In | Key, Root (ignored in v2, reserved), Enabled | Geometry (generic list: mesh, SubD cage, curves, point cloud), Request ID, Status, Message |
 | Stage Out | Key, Geometry (any Rhino geometry), Request ID, Enabled | Sent (bool), Output hash, Status |
 | Param | GUID (generated, hidden), Label, Type (menu), Default, Min, Max, Step, Choices, Group, Override (optional) | Value |
 

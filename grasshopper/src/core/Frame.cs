@@ -57,6 +57,13 @@ namespace GhStack.Core
             return new Section(name, "u8", values);
         }
 
+        public static Section Ints(string name, int[] values)
+        {
+            var raw = new byte[values.Length * 4];
+            Buffer.BlockCopy(values, 0, raw, 0, raw.Length);
+            return new Section(name, "i32", raw);
+        }
+
         public float[] ToFloats()
         {
             var values = new float[Raw.Length / 4];
@@ -67,6 +74,13 @@ namespace GhStack.Core
         public uint[] ToU32()
         {
             var values = new uint[Raw.Length / 4];
+            Buffer.BlockCopy(Raw, 0, values, 0, Raw.Length);
+            return values;
+        }
+
+        public int[] ToI32()
+        {
+            var values = new int[Raw.Length / 4];
             Buffer.BlockCopy(Raw, 0, values, 0, Raw.Length);
             return values;
         }
@@ -221,7 +235,7 @@ namespace GhStack.Core
                     if (string.IsNullOrEmpty(name))
                         throw new FrameException("bad_frame", "section entry without a name");
                     string dtype = Json.GetString(entry, "dtype");
-                    if (dtype != "f32" && dtype != "u32" && dtype != "u8")
+                    if (dtype != "f32" && dtype != "i32" && dtype != "u32" && dtype != "u8")
                         throw new FrameException("bad_frame",
                             "section " + name + " has unknown dtype " + (dtype ?? "(missing)"));
                     long nbytes = Json.GetLong(entry, "bytes");
@@ -285,12 +299,22 @@ namespace GhStack.Core
             }
         }
 
-        /// <summary>Output hash: sections in the given (header) order (protocol §6.3).</summary>
-        public static string OutputHash(IList<Section> sections)
+        /// <summary>Output hash: sections in the given (header) order (protocol
+        /// §6.3). Attribute descriptors take part as one synthetic entry named
+        /// `attr.descriptors` (canonical JSON): section names are index-based,
+        /// so without it a renamed attribute would hash identically and Blender
+        /// would skip the apply.</summary>
+        public static string OutputHash(IList<Section> sections, string attributesJson = null)
         {
             using (var sha = SHA256.Create())
             {
                 foreach (Section s in sections) UpdateSection(sha, s);
+                if (!string.IsNullOrEmpty(attributesJson))
+                {
+                    byte[] json = Encoding.UTF8.GetBytes(attributesJson);
+                    var synthetic = new Section("attr.descriptors", "u8", json);
+                    UpdateSection(sha, synthetic);
+                }
                 sha.TransformFinalBlock(new byte[0], 0, 0);
                 return "sha256:" + ToHex(sha.Hash);
             }

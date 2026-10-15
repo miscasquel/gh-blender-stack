@@ -28,6 +28,9 @@ namespace GhStack
         public string Rid = "";
         public Dictionary<string, object> Params = new Dictionary<string, object>();
         public List<Section> Sections;
+        /// <summary>Attribute descriptors of the held sections (protocol §5).
+        /// Written under Gate together with Sections; read during a solve.</summary>
+        public List<Dictionary<string, object>> Attributes = new List<Dictionary<string, object>>();
         /// <summary>The `geom.hash` the held sections were sent for. A `ref` for
         /// any other hash cannot be served and must be refused.</summary>
         public string GeometryHash = "";
@@ -337,6 +340,7 @@ namespace GhStack
                 if (mode == "full")
                 {
                     slot.Sections = decoded.Sections;
+                    slot.Attributes = AttributeList(header);
                     slot.GeometryHash = hash ?? "";
                 }
                 // A ref is servable only for the geometry we actually hold. A
@@ -371,8 +375,22 @@ namespace GhStack
             RequestSolve();
         }
 
-        private static void RequestSolve()
+        /// <summary>The request's attribute descriptors as a list, tolerating a
+        /// frame that carries none (or a malformed list).</summary>
+        private static List<Dictionary<string, object>> AttributeList(Dictionary<string, object> header)
         {
+            var list = new List<Dictionary<string, object>>();
+            var raw = Json.Get(header, "attributes") as List<object>;
+            if (raw == null) return list;
+            foreach (object entry in raw)
+            {
+                var dict = entry as Dictionary<string, object>;
+                if (dict != null) list.Add(dict);
+            }
+            return list;
+        }
+
+        private static void RequestSolve()        {
             GH_Component origin;
             lock (Gate) { origin = Components.Count > 0 ? Components[0] : null; }
             if (origin == null)

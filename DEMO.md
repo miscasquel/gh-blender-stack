@@ -29,10 +29,11 @@ Blender                                     Rhino / Grasshopper (wine)
 
 ## Geometry kinds
 
-- **Stage In** outputs `Geometry` (mesh), `Curves`, `Points`, and `SubD`; wire
-  whichever the definition uses.
-- **Stage Out** takes one generic `Geometry` input: mesh, curve, point, SubD, or
-  Brep. Everything is converted to the protocol's sections.
+- **Stage In** outputs one generic `Geometry` list: the mesh, the SubD cage,
+  curves, and points, in that order. One wire carries everything the stage
+  returns, mixed kinds included.
+- **Stage Out** takes one generic `Geometry` input: mesh, curve, point cloud, SubD,
+  or Brep. Everything is converted to the protocol's sections.
 - **SubD** is a control cage with edge-crease tags. Flag a mesh stack object
   with **Base is a SubD cage** in the panel and Blender sends `subd.*`; the GH
   side builds a SubD from the cage and applies the tags. Semi-sharp and vertex
@@ -43,6 +44,16 @@ Blender                                     Rhino / Grasshopper (wine)
   circles, ellipses, and arcs of any angle all round-trip exactly. Only curves
   the split cannot carry (degree above 5, periodic) are fitted with cubic
   Beziers and warned with the measured deviation (D3).
+- **Points** arrive as one point cloud per stage, which is the geometry that can
+  carry point colours and attributes. Use **Point Cloud Points** (GH Stack tab)
+  to explode it into a point list.
+- **Attributes** are Blender's named attributes (any type, any mesh domain:
+  floats, ints, booleans, strings, vectors, colours, quaternions, matrices).
+  They travel with the geometry both ways: put one on a base mesh (Mesh
+  properties → Attributes) and **Attribute Get** reads it in Grasshopper;
+  **Attribute Set** attaches one the graph computed, and Stage Out writes it
+  back into the helper mesh. The active colour attribute and the edge creases
+  keep their native Blender channels.
 
 ## Setup
 

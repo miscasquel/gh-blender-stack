@@ -50,6 +50,31 @@ class FrameRoundTripTests(unittest.TestCase):
         header, _ = codec.decode_frame(frame)
         self.assertNotIn("sections", header)
 
+    def test_i32_round_trip(self):
+        """i32 exists for Blender's signed INT attribute type; it is four bytes
+        per element and round-trips negative values."""
+        frame = codec.encode_frame(
+            {"type": "response", "stage": "s"},
+            [("attr.0.values", "i32", (-3, 0, 7, 2147483647, -2147483648))],
+        )
+        header, sections = codec.decode_frame(frame)
+        entry = header["sections"][0]
+        self.assertEqual(entry["dtype"], "i32")
+        self.assertEqual(entry["bytes"], 20)
+        self.assertEqual(sections["attr.0.values"], (-3, 0, 7, 2147483647, -2147483648))
+
+    def test_attribute_descriptors_name_their_sections(self):
+        from blender.gh_stack.core import attributes as attr_mod
+
+        entry = attr_mod.descriptor("mesh", "panel_id", "FACE", "INT", 2, 3)
+        self.assertEqual(entry["section"], "attr.3.values")
+        self.assertEqual(entry["components"], 1)
+        self.assertNotIn("offsets", entry)
+        strings = attr_mod.descriptor("pts", "tag", "POINT", "STRING", 6, 4)
+        self.assertEqual(strings["offsets"], "attr.4.offsets")
+        self.assertEqual(attr_mod.wire_dtype("FLOAT4X4"), "f32")
+        self.assertEqual(attr_mod.components("FLOAT4X4"), 16)
+
     def test_section_order_is_preserved(self):
         frame = codec.encode_frame(
             {"type": "request"},

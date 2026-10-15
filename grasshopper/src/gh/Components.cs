@@ -48,15 +48,17 @@ namespace GhStack
 
         protected override void RegisterOutputParams(GH_OutputParamManager p)
         {
-            p.AddMeshParameter("Geometry", "G", "Mesh received from Blender", GH_ParamAccess.item);
+            // One list, every kind (plan user decision 2026-10-15): the mesh, the
+            // SubD cage, curves and points all leave through `Geometry`, in that
+            // order. A stage that returns a single mesh still feeds item-access
+            // mesh components the way it always did, and mixed outputs no longer
+            // require the user to pick the right typed output.
+            p.AddGenericParameter("Geometry", "G",
+                "Everything received from Blender: meshes, SubD cages, curves, points, in that order",
+                GH_ParamAccess.list);
             p.AddTextParameter("Request ID", "R", "Request this geometry belongs to", GH_ParamAccess.item);
             p.AddTextParameter("Status", "S", "Stage status", GH_ParamAccess.item);
             p.AddTextParameter("Message", "M", "Diagnostics", GH_ParamAccess.item);
-            // Appended after the original outputs so documents saved before the
-            // curve/point/SubD work keep their wires.
-            p.AddCurveParameter("Curves", "C", "Curves received from Blender", GH_ParamAccess.list);
-            p.AddPointParameter("Points", "P", "Points received from Blender", GH_ParamAccess.list);
-            p.AddSubDParameter("SubD", "D", "SubD cage received from Blender", GH_ParamAccess.item);
         }
 
         protected override void SolveInstance(IGH_DataAccess da)
@@ -72,7 +74,7 @@ namespace GhStack
             {
                 // Unconfigured components stay quiet: no key, nothing to do.
                 Message = "no key";
-                da.SetData("Geometry", null);
+                da.SetDataList("Geometry", new List<IGH_Goo>());
                 da.SetData("Request ID", "");
                 da.SetData("Status", "no key");
                 da.SetData("Message", "connect the stage key from Blender's GH Stack panel");
@@ -81,34 +83,22 @@ namespace GhStack
             GhLink.PublishStage(key, enabled);
 
             StageSlot slot = GhLink.Slot(key);
-            Mesh mesh = null;
-            var curves = new List<Curve>();
-            var points = new List<Point3d>();
-            SubD subd = null;
+            var geometry = new List<IGH_Goo>();
             string status = slot.Status;
             if (slot.Sections != null && slot.Sections.Count > 0)
             {
                 var frame = new DecodedFrame(new Dictionary<string, object>(), slot.Sections);
                 double scale = GhLink.DocumentScale();
-                mesh = Conversion.MeshFromSections(frame, scale);
-                curves = Conversion.CurvesFromSections(frame, scale);
-                points = Conversion.PointsFromSections(frame, scale);
-                if (frame.Find("subd.verts") != null)
+                geometry = StageGeometry.Build(frame, scale, slot.Attributes, delegate(string note)
                 {
-                    var notes = new List<string>();
-                    subd = Conversion.SubDFromSections(frame, scale, notes);
-                    foreach (string note in notes)
-                        AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, note);
-                }
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, note);
+                });
             }
             else
             {
                 status = GhLink.Connected ? "waiting" : "disconnected";
             }
-            da.SetData("Geometry", mesh);
-            da.SetDataList("Curves", curves);
-            da.SetDataList("Points", points);
-            da.SetData("SubD", subd);
+            da.SetDataList("Geometry", geometry);
             da.SetData("Request ID", slot.Rid);
             da.SetData("Status", status);
             da.SetData("Message", slot.Message);
@@ -155,7 +145,7 @@ namespace GhStack
             p.AddTextParameter("Key", "K", "Stage key, copied from the GH Stack panel in Blender", GH_ParamAccess.item);
             // One generic input: mesh, curves, points, SubD, or Brep. A Brep (or
             // surface) is meshed on the way out, with a warning.
-            p.AddGenericParameter("Geometry", "G", "The graph's result: mesh, curve, point, SubD, or Brep", GH_ParamAccess.list);
+            p.AddGenericParameter("Geometry", "G", "The graph's result: mesh, point cloud, curve, SubD, or Brep", GH_ParamAccess.list);
             p.AddBooleanParameter("Enabled", "On", "Send results to Blender", GH_ParamAccess.item);
             p[0].Optional = true;
             p[1].Optional = true;
@@ -205,7 +195,8 @@ namespace GhStack
                     var subds = new List<SubD>();
                     var breps = new List<Brep>();
                     var ignored = new List<string>();
-                    GooDispatch.Collect(goos, meshes, curves, points, subds, breps, ignored);
+                    var sources = new List<GeometryBase>();
+                    GooDispatch.Collect(goos, meshes, curves, points, subds, breps, ignored, sources);
                     foreach (string typeName in ignored)
                         AddRuntimeMessage(GH_RuntimeMessageLevel.Remark,
                             "ignored unsupported geometry: " + typeName);
@@ -216,6 +207,16 @@ namespace GhStack
                         meshes, curves, points, subds, breps, GhLink.DocumentScale(),
                         warnings, out counts);
 
+                    // Attributes ride on the source geometry's UserDictionary;
+                    // harvest them after the geometry so the sections carry both.
+                    var attributes = new List<Dictionary<string, object>>();
+                    foreach (GeometryBase source in sources)
+                    {
+                        string group = AttributeStore.GroupOf(source);
+                        if (group != null)
+                            AttributeStore.Collect(source, group, sections, attributes);
+                    }
+
                     var warningList = new List<object>();
                     foreach (string w in warnings)
                     {
@@ -225,7 +226,8 @@ namespace GhStack
                         warningList.Add(entry);
                     }
 
-                    outHash = FrameCodec.OutputHash(sections);
+                    outHash = FrameCodec.OutputHash(
+                        sections, attributes.Count > 0 ? Json.WriteCanonical(attributes) : null);
                     var header = new Dictionary<string, object>();
                     header["type"] = "response";
                     header["stage"] = key;
@@ -234,6 +236,8 @@ namespace GhStack
                     header["status"] = "ok";
                     header["warnings"] = warningList;
                     header["counts"] = counts;
+                    if (attributes.Count > 0)
+                        header["attributes"] = attributes;
                     GhLink.Enqueue(FrameCodec.Encode(header, sections));
                     sent = true;
                     status = "ok";
@@ -474,6 +478,65 @@ namespace GhStack
                     (int)Math.Round(Math.Min(1.0, Math.Max(0.0, c[2])) * 255.0));
             }
             return cast;
+        }
+    }
+
+    // ------------------------------------------------------------ point cloud
+
+    /// <summary>Explodes a point cloud into individual points. Stage In hands
+    /// points over as one point cloud (the kind that can carry colours and
+    /// attributes); this is how they become a point list again, which is what
+    /// most per-point work wants.</summary>
+    public class PointCloudPointsComponent : GH_Component
+    {
+        public PointCloudPointsComponent()
+            : base("Point Cloud Points", "Cloud Pts",
+                   "Explodes a point cloud into its points.",
+                   "GH Stack", "Util")
+        {
+        }
+
+        public override Guid ComponentGuid
+        {
+            get { return new Guid("d4a3b2c1-5e6f-4a7b-8c9d-0e1f2a3b4c56"); }
+        }
+
+        protected override System.Drawing.Bitmap Icon
+        {
+            get { return Icons.Get("geometry_nodes"); }
+        }
+
+        protected override void RegisterInputParams(GH_InputParamManager p)
+        {
+            p.AddGenericParameter("Geometry", "G", "A point cloud (or a single point)", GH_ParamAccess.item);
+        }
+
+        protected override void RegisterOutputParams(GH_OutputParamManager p)
+        {
+            p.AddPointParameter("Points", "P", "The cloud's points", GH_ParamAccess.list);
+        }
+
+        protected override void SolveInstance(IGH_DataAccess da)
+        {
+            IGH_Goo goo = null;
+            da.GetData("Geometry", ref goo);
+            var points = new List<GH_Point>();
+            if (goo != null)
+            {
+                GH_PointCloud cloud = goo as GH_PointCloud;
+                if (cloud != null && cloud.Value != null)
+                {
+                    foreach (Point3d point in cloud.Value.GetPoints())
+                        points.Add(new GH_Point(point));
+                }
+                else
+                {
+                    Point3d point;
+                    if (goo.CastTo<Point3d>(out point))
+                        points.Add(new GH_Point(point));
+                }
+            }
+            da.SetDataList("Points", points);
         }
     }
 }

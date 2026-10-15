@@ -27,6 +27,7 @@ for path in (os.path.join(REPO_ROOT, "blender", "gh_stack", "vendor"), REPO_ROOT
 
 import numpy as np  # noqa: E402
 import websockets  # noqa: E402
+from blender.gh_stack.core import attributes as attr_mod  # noqa: E402
 from blender.gh_stack.core import codec, hashing  # noqa: E402
 
 PARAM_ID = "00000000-0000-4000-8000-0000000000aa"
@@ -35,6 +36,7 @@ PARAM_ID = "00000000-0000-4000-8000-0000000000aa"
 class StageState(object):
     def __init__(self):
         self.sections = None  # stored input geometry
+        self.attributes = []  # stored attribute descriptors (protocol §5)
         self.full = 0
         self.ref = 0
         self.responses = 0
@@ -43,6 +45,7 @@ class StageState(object):
         self.received_max = 0.0
         self.received_curve_points = 0
         self.received_first = None
+        self.received_attributes = []
         self.echoes = 0  # identical responses re-sent
         self.edits = 0  # same-rid responses with a changed output (GH-side edit)
         self.schema_updates = 0  # changed schemas re-sent
@@ -155,6 +158,7 @@ def _write_report(args, state):
                 "received_max": state.received_max,
                 "received_curve_points": state.received_curve_points,
                 "received_first": state.received_first,
+                "received_attributes": state.received_attributes,
             },
             f,
             indent=2,
@@ -213,9 +217,16 @@ def _accept(state, header, sections):
     mode = (header.get("geom") or {}).get("mode")
     if mode == "full":
         state.full += 1
+        state.attributes = list(header.get("attributes") or [])
         state.sections = {
-            name: np.asarray(values, dtype=_np_dtype(name)) for name, values in sections.items()
+            name: np.asarray(values, dtype=_np_dtype_for(name, state.attributes))
+            for name, values in sections.items()
         }
+        state.received_attributes = [
+            "%s/%s/%s"
+            % (d.get("name"), d.get("domain"), d.get("type"))
+            for d in state.attributes
+        ]
         _summarise(state)
     else:
         state.ref += 1
@@ -322,13 +333,13 @@ async def session(ws, args, state):
             _write_report(args, state)
             print("[fake-gh] response %d (gh_solve_failed, %s)" % (state.responses, mode), flush=True)
             continue
-        out_sections = _scaled_sections(state.sections, scale)
+        out_sections = _scaled_sections(state.sections, scale, state.attributes)
         counts = {"meshes": 1, "subd": 0, "curves": 0, "points": 0, "approximated_curves": 0}
         if args.extras:
             out_sections = _with_extras(out_sections, scale)
             counts = {"meshes": 1, "subd": 0, "curves": 1, "points": 1, "approximated_curves": 0}
         out_hash = hashing.output_hash(
-            [(name, codec.section_bytes(name, _proto_dtype(name), values)) for name, dtype, values in out_sections]
+            [(name, codec.section_bytes(name, dtype, values)) for name, dtype, values in out_sections]
         )
         reply = {
             "type": "response",
@@ -340,6 +351,8 @@ async def session(ws, args, state):
             "warnings": [],
             "counts": counts,
         }
+        if state.attributes:
+            reply["attributes"] = state.attributes
         frame = codec.encode_frame(reply, out_sections)
         await ws.send(frame)
         _write_report(args, state)
@@ -353,9 +366,9 @@ async def session(ws, args, state):
             _write_report(args, state)
         if args.gh_edit_after and state.responses == args.gh_edit_after:
             # A GH-side definition change: same request, different answer.
-            edited_sections = _scaled_sections(state.sections, 42.0)
+            edited_sections = _scaled_sections(state.sections, 42.0, state.attributes)
             edited_hash = hashing.output_hash(
-                [(name, codec.section_bytes(name, _proto_dtype(name), values)) for name, dtype, values in edited_sections]
+                [(name, codec.section_bytes(name, dtype, values)) for name, dtype, values in edited_sections]
             )
             edited_reply = {
                 "type": "response",
@@ -367,6 +380,8 @@ async def session(ws, args, state):
                 "warnings": [],
                 "counts": counts,
             }
+            if state.attributes:
+                edited_reply["attributes"] = state.attributes
             await ws.send(codec.encode_frame(edited_reply, edited_sections))
             state.edits += 1
             _write_report(args, state)
@@ -397,12 +412,33 @@ def _is_f32(name):
     )
 
 
+def _attribute_spec(name, descriptors):
+    """The wire ``(dtype, components)`` of an attribute section, or None.
+
+    Attribute sections are named by the descriptor list, not by a convention:
+    ``attr.<i>.values`` takes the descriptor's type, ``attr.<i>.offsets`` is
+    always u32."""
+    for descriptor in descriptors or ():
+        if name == descriptor.get("section"):
+            return attr_mod.WIRE_TYPES.get(descriptor.get("type"))
+        if name and name == descriptor.get("offsets"):
+            return ("u32", 1)
+    return None
+
+
 def _np_dtype(name):
     if _is_u8(name):
         return np.uint8
     if _is_f32(name):
         return np.float32
     return np.uint32
+
+
+def _np_dtype_for(name, descriptors):
+    spec = _attribute_spec(name, descriptors)
+    if spec is None:
+        return _np_dtype(name)
+    return {"f32": np.float32, "i32": np.int32, "u32": np.uint32, "u8": np.uint8}[spec[0]]
 
 
 def _proto_dtype(name):
@@ -413,11 +449,16 @@ def _proto_dtype(name):
     return "u32"
 
 
-def _scaled_sections(sections, scale):
+def _scaled_sections(sections, scale, descriptors=()):
     """Echo the stored geometry with every position scaled, keeping protocol
-    dtypes per section name."""
+    dtypes per section name. Attribute sections pass through untouched: they
+    describe elements, not positions."""
     out = []
     for name, values in sections.items():
+        spec = _attribute_spec(name, descriptors)
+        if spec is not None:
+            out.append((name, spec[0], values.reshape(-1)))
+            continue
         if name.endswith(".verts") or name == "pts.positions":
             arr = values.astype(np.float32).reshape(-1, 3).copy()
             arr *= scale

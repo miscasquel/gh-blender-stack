@@ -206,6 +206,46 @@ def fixture_response_error():
     return header, []
 
 
+def fixture_response_attributes():
+    """Two quads with attributes: an int face id, a float point load, a bool
+    face flag and a string point tag. Exercises i32, u8 (bool), f32 and the
+    STRING offsets section."""
+    header = {
+        "type": "response",
+        "stage": "panelize-3f9a",
+        "rid": "sha256:" + "c" * 64,
+        "out_hash": "sha256:" + "d" * 64,
+        "status": "ok",
+        "error": None,
+        "warnings": [],
+        "counts": {"meshes": 1, "subd": 0, "curves": 0, "points": 0, "approximated_curves": 0},
+        "attributes": [
+            {"group": "mesh", "name": "panel_id", "domain": "FACE", "type": "INT",
+             "components": 1, "count": 2, "section": "attr.0.values"},
+            {"group": "mesh", "name": "load", "domain": "POINT", "type": "FLOAT",
+             "components": 1, "count": 6, "section": "attr.1.values"},
+            {"group": "mesh", "name": "is_glass", "domain": "FACE", "type": "BOOLEAN",
+             "components": 1, "count": 2, "section": "attr.2.values"},
+            {"group": "mesh", "name": "part", "domain": "POINT", "type": "STRING",
+             "components": 1, "count": 6, "section": "attr.3.values",
+             "offsets": "attr.3.offsets"},
+        ],
+    }
+    tags = [b"north", b"south", b"east", b"west", b"up", b"down"]
+    sections = [
+        ("mesh.verts", "f32", [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0,
+                               0.0, 1.0, 0.0, 2.0, 0.0, 0.0, 2.0, 1.0, 0.0]),
+        ("mesh.face_counts", "u32", [4, 4]),
+        ("mesh.face_indices", "u32", [0, 1, 2, 3, 1, 4, 5, 2]),
+        ("attr.0.values", "i32", [-3, 7]),
+        ("attr.1.values", "f32", [0.5, 1.25, 2.0, 2.5, 3.0, 3.75]),
+        ("attr.2.values", "u8", [1, 0]),
+        ("attr.3.values", "u8", list(b"".join(tags))),
+        ("attr.3.offsets", "u32", [len(tag) for tag in tags]),
+    ]
+    return header, sections
+
+
 def fixture_error_ref():
     header = {
         "type": "error",
@@ -226,6 +266,7 @@ FIXTURES = {
     "request-subd": fixture_subd,
     "response-mesh": fixture_response_mesh,
     "response-mixed": fixture_response_mixed,
+    "response-attributes": fixture_response_attributes,
     "response-error": fixture_response_error,
     "error-unknown-ref": fixture_error_ref,
 }

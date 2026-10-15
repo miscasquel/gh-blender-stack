@@ -636,7 +636,7 @@ class PrefixCostTests(unittest.TestCase):
         record = stack_mod.stack_of(obj)
 
         t0 = time.perf_counter()
-        sections, _geom_hash = engine._prefix_sections(obj, record, stage)
+        sections, _geom_hash, _attributes = engine._prefix_sections(obj, record, stage)
         took_ms = (time.perf_counter() - t0) * 1000.0
         tris = (nx - 1) * (ny - 1) * 2
         print(

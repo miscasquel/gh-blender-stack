@@ -300,6 +300,11 @@ namespace GhStack.Spike.S1
                 HandleS6Check(header);
                 return;
             }
+            if (type == "request" && check == "s9")
+            {
+                HandleS9Check(header);
+                return;
+            }
             if (type == "request" && geom != null && mode == "full")
             {
                 HandleGeometry(decoded);
@@ -369,6 +374,28 @@ namespace GhStack.Spike.S1
             }
             Enqueue(FrameCodec.Encode(reply, null));
             Note("S6 checks ran");
+        }
+
+        /// <summary>S9: user-dictionary survival and graph-side block definitions
+        /// (the platform questions behind attributes and instances).</summary>
+        private static void HandleS9Check(Dictionary<string, object> header)
+        {
+            var reply = new Dictionary<string, object>();
+            reply["type"] = "response";
+            reply["check"] = "s9";
+            reply["stage"] = Json.GetString(header, "stage");
+            try
+            {
+                reply["results"] = GhStack.Spike.S9.S9Checks.Run();
+                reply["status"] = "ok";
+            }
+            catch (Exception ex)
+            {
+                reply["status"] = "error";
+                reply["error"] = ex.GetType().Name + ": " + FirstLine(ex);
+            }
+            Enqueue(FrameCodec.Encode(reply, null));
+            Note("S9 checks ran");
         }
 
         /// <summary>S3: convert the frame's geometry through a Rhino Mesh and reply

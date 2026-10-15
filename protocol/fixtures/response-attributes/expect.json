@@ -1,0 +1,193 @@
+{
+  "frame_bytes": 1546,
+  "frame_sha256": "sha256:8a920069037e16e8490066b63062c48b0922697ba1cb429516a2abd79f832db8",
+  "header": {
+    "attributes": [
+      {
+        "components": 1,
+        "count": 2,
+        "domain": "FACE",
+        "group": "mesh",
+        "name": "panel_id",
+        "section": "attr.0.values",
+        "type": "INT"
+      },
+      {
+        "components": 1,
+        "count": 6,
+        "domain": "POINT",
+        "group": "mesh",
+        "name": "load",
+        "section": "attr.1.values",
+        "type": "FLOAT"
+      },
+      {
+        "components": 1,
+        "count": 2,
+        "domain": "FACE",
+        "group": "mesh",
+        "name": "is_glass",
+        "section": "attr.2.values",
+        "type": "BOOLEAN"
+      },
+      {
+        "components": 1,
+        "count": 6,
+        "domain": "POINT",
+        "group": "mesh",
+        "name": "part",
+        "offsets": "attr.3.offsets",
+        "section": "attr.3.values",
+        "type": "STRING"
+      }
+    ],
+    "counts": {
+      "approximated_curves": 0,
+      "curves": 0,
+      "meshes": 1,
+      "points": 0,
+      "subd": 0
+    },
+    "error": null,
+    "out_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "rid": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "sections": [
+      {
+        "bytes": 72,
+        "dtype": "f32",
+        "name": "mesh.verts",
+        "shape": [
+          18
+        ]
+      },
+      {
+        "bytes": 8,
+        "dtype": "u32",
+        "name": "mesh.face_counts",
+        "shape": [
+          2
+        ]
+      },
+      {
+        "bytes": 32,
+        "dtype": "u32",
+        "name": "mesh.face_indices",
+        "shape": [
+          8
+        ]
+      },
+      {
+        "bytes": 8,
+        "dtype": "i32",
+        "name": "attr.0.values",
+        "shape": [
+          2
+        ]
+      },
+      {
+        "bytes": 24,
+        "dtype": "f32",
+        "name": "attr.1.values",
+        "shape": [
+          6
+        ]
+      },
+      {
+        "bytes": 2,
+        "dtype": "u8",
+        "name": "attr.2.values",
+        "shape": [
+          2
+        ]
+      },
+      {
+        "bytes": 24,
+        "dtype": "u8",
+        "name": "attr.3.values",
+        "shape": [
+          24
+        ]
+      },
+      {
+        "bytes": 24,
+        "dtype": "u32",
+        "name": "attr.3.offsets",
+        "shape": [
+          6
+        ]
+      }
+    ],
+    "stage": "panelize-3f9a",
+    "status": "ok",
+    "type": "response",
+    "v": 2,
+    "warnings": []
+  },
+  "sections": {
+    "attr.0.values": {
+      "bytes": 8,
+      "dtype": "i32",
+      "sha256": "sha256:689affc9f6b33163140786f841d23336b9a2b9a0eef56fc06adf51b8ee61d6ed",
+      "shape": [
+        2
+      ]
+    },
+    "attr.1.values": {
+      "bytes": 24,
+      "dtype": "f32",
+      "sha256": "sha256:8714f0ed5e0e70abf9bf2eecc2661fb3d3324188cfc5acebef6f70125ac3860d",
+      "shape": [
+        6
+      ]
+    },
+    "attr.2.values": {
+      "bytes": 2,
+      "dtype": "u8",
+      "sha256": "sha256:47dc540c94ceb704a23875c11273e16bb0b8a87aed84de911f2133568115f254",
+      "shape": [
+        2
+      ]
+    },
+    "attr.3.offsets": {
+      "bytes": 24,
+      "dtype": "u32",
+      "sha256": "sha256:2690414f5effe94eeffe06f9c6ca1bb80f9065decde7c6cd7bd46e6edc6178e2",
+      "shape": [
+        6
+      ]
+    },
+    "attr.3.values": {
+      "bytes": 24,
+      "dtype": "u8",
+      "sha256": "sha256:76c131a17587539ee64b7f7dd952361c128fbbabdeafc53aefc9ee101e256164",
+      "shape": [
+        24
+      ]
+    },
+    "mesh.face_counts": {
+      "bytes": 8,
+      "dtype": "u32",
+      "sha256": "sha256:267833806a8e9c01c5355ae70125042abfa3e90ca6708f00e944a4e6e5addd9f",
+      "shape": [
+        2
+      ]
+    },
+    "mesh.face_indices": {
+      "bytes": 32,
+      "dtype": "u32",
+      "sha256": "sha256:daca7c7ded46657bde97b365fe5538cbcd14b296aeea15f115545884cc84aaf5",
+      "shape": [
+        8
+      ]
+    },
+    "mesh.verts": {
+      "bytes": 72,
+      "dtype": "f32",
+      "sha256": "sha256:7f391cc8ee7047f342131b181877082d392691cdc6007888def6a46bac9f667c",
+      "shape": [
+        18
+      ]
+    }
+  },
+  "sections_hash": "sha256:ee259b500769c0aa52af3fcee2f15b6cc42c1928d858a6dd8f08c6f4e3d9c491"
+}

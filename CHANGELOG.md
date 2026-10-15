@@ -4,6 +4,53 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Attributes travel with the geometry, both ways.** Blender's named attributes
+  — every type it has (floats, ints, booleans, strings, vectors, 2D/4D values,
+  colours, quaternions, 4x4 matrices, `INT8`, 2D pairs) and every Mesh domain
+  (POINT, EDGE, FACE, CORNER), plus point clouds — are serialized as `attr.*`
+  sections with a descriptor each, and attached to the Rhino geometry's
+  UserDictionary, so they ride along with duplication and transforms. Stage In
+  fills them, Stage Out sends back whatever the graph attached. On the Blender
+  side the format round-trips through `mesh.attributes` / `pointcloud.attributes`
+  (layer B covers every type). The active colour attribute and edge creases keep
+  their native channels, so nothing travels twice.
+- **`Attribute Get` / `Attribute Set` components** (GH Stack → Attributes) read
+  and write attributes in a definition. Get emits native values (numbers,
+  integers, booleans, texts, vectors, colours; compound types flattened), Set
+  infers the type from the values and the domain from the element count (or takes
+  an explicit Domain).
+- **`i32` wire dtype** for Blender's signed `INT` attribute type; the codec, the
+  canonical dtypes and both fixture suites cover it.
+- **A new fixture**, `response-attributes`, pins `i32`, `f32`, `u8` and the
+  STRING offsets section through both codecs (eleven fixtures total).
+- **Spike S9** (`spikes/s9/`): the user-dictionary and graph-side block checks
+  that the attributes and instances designs rest on, run inside Rhino through the
+  spike `.gha` (`check=s9`).
+
+### Fixed
+
+- **Attribute noise no longer makes an idle scene churn.** Blender evaluates
+  modifier-generated attribute data (a Bevel's UVs, for example) with last-bit
+  float variation between evaluations. Hashing it verbatim made every evaluation
+  look like an edit, so the engine re-requested and re-applied forever. The
+  prefix memo now treats a re-read that differs only in f32 attribute payloads
+  within float noise as the same prefix; user-sized edits, topology, positions,
+  colors and creases stay exact.
+
+### Changed
+
+- **Stage In has one geometry output.** `Geometry` is now a generic list that
+  carries everything Blender sent, in order: mesh, SubD cage, curves, point
+  cloud. The separate `Curves`, `Points`, and `SubD` outputs are gone; wires
+  from them are dropped when an older document loads (re-wire from `Geometry`).
+- **Points arrive as one point cloud per stage** (the geometry that can carry
+  point colours and attributes). New **Point Cloud Points** component explodes
+  it into a point list; Stage Out accepts both the cloud and individual points.
+
 ## [0.1.3] — 2026-10-15
 
 Fourth release: the prefix memo is invalidated by Blender's depsgraph instead of a

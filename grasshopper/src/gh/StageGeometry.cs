@@ -1,0 +1,78 @@
+// The unified Stage In geometry: one frame, one list of goos.
+//
+// Stage In used to grow one typed output per geometry kind. The owner's call
+// (2026-10-15): everything leaves through `Geometry`, in a fixed order —
+// mesh, SubD cage, curves, points — so a stage's geometry is one wire and one
+// output no matter what combination Blender sent.
+//
+// The kind carried per group is decided by the section names, exactly as the
+// protocol defines them (protocol §5): `mesh.verts`, `subd.verts`, `crv.*`,
+// `pts.*`. A group that is absent contributes nothing; a group that is present
+// but empty contributes nothing either.
+//
+// This lives outside Conversion.cs because it builds Grasshopper goos, and the
+// core conversions stay RhinoCommon-only so the console tests can compile them.
+
+using System;
+using System.Collections.Generic;
+using Grasshopper.Kernel.Types;
+using GhStack.Core;
+using Rhino.Geometry;
+
+namespace GhStack
+{
+    public static class StageGeometry
+    {
+        /// <summary>Build the stage's geometry list from a decoded frame, with
+        /// every attribute the frame carries attached to its geometry's
+        /// UserDictionary (the platform <see cref="AttributeStore"/> puts them
+        /// on). <paramref name="note"/> receives conversion remarks (SubD
+        /// creases) so the component can surface them without owning the
+        /// conversion.</summary>
+        public static List<IGH_Goo> Build(DecodedFrame frame, double scale,
+                                          List<Dictionary<string, object>> attributes,
+                                          Action<string> note)
+        {
+            var geometry = new List<IGH_Goo>();
+
+            if (frame.Find("mesh.verts") != null)
+            {
+                Mesh mesh = Conversion.MeshFromSections(frame, scale);
+                if (mesh != null && mesh.Vertices.Count > 0)
+                {
+                    AttributeStore.Attach(mesh, "mesh", attributes, frame.Sections);
+                    geometry.Add(new GH_Mesh(mesh));
+                }
+            }
+
+            if (frame.Find("subd.verts") != null)
+            {
+                var notes = new List<string>();
+                SubD subd = Conversion.SubDFromSections(frame, scale, notes);
+                foreach (string line in notes)
+                    if (note != null) note(line);
+                if (subd != null)
+                {
+                    AttributeStore.Attach(subd, "subd", attributes, frame.Sections);
+                    geometry.Add(new GH_SubD(subd));
+                }
+            }
+
+            foreach (Curve curve in Conversion.CurvesFromSections(frame, scale))
+                geometry.Add(new GH_Curve(curve));
+
+            // Points travel as one point cloud item: it is the geometry kind
+            // Blender sends (`pts.*` is a point cloud), it carries point colours
+            // natively, and it is the only point-shaped geometry that can hold
+            // attributes (a GH_Point wraps a struct, which cannot).
+            PointCloud cloud = Conversion.PointCloudFromSections(frame, scale);
+            if (cloud != null)
+            {
+                AttributeStore.Attach(cloud, "pts", attributes, frame.Sections);
+                geometry.Add(new GH_PointCloud(cloud));
+            }
+
+            return geometry;
+        }
+    }
+}

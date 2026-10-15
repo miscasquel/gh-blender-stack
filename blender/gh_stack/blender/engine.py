@@ -24,6 +24,7 @@ import time
 import bpy
 import numpy as np
 
+from ..core import attributes as attributes_mod
 from ..core import cache as frame_cache
 from ..core import codec, hashing
 from . import bridge, geometry_io, helpers, nodes, prefs, props, server, stack as stack_mod
@@ -352,7 +353,7 @@ def _handle_response(header, sections):
         _forget(record.stack_id, stage.key)
         applied = False
         if rid == stage.rid and out_hash != stage.applied_out_hash:
-            _apply(obj, stage, sections)
+            _apply(obj, stage, sections, header.get("attributes"))
             stats["applies"] += 1
             _set(stage, "applied_out_hash", out_hash)
             applied = True
@@ -448,11 +449,14 @@ def _warnings_text(header):
     return "\n".join(lines)
 
 
-def _apply(obj, stage, sections):
-    """Write the response geometry into the stage's helpers, one per kind.
+def _apply(obj, stage, sections, attributes=None):
+    """Write the response geometry into the stage's helpers, one per kind, then
+    its attributes into the helpers that can hold them.
 
     A section group that is absent means "none": that helper is cleared, so a
-    definition that stops returning curves stops showing them.
+    definition that stops returning curves stops showing them. Attributes are
+    written after the geometry, because the geometry write is what fixes the
+    element counts they have to match.
     """
     nodes.ensure_group(obj, stage.key)
     groups = {"mesh": [], "curves": [], "points": []}
@@ -467,6 +471,36 @@ def _apply(obj, stage, sections):
     _apply_mesh(obj, stage, groups["mesh"])
     _apply_curves(obj, stage, groups["curves"])
     _apply_points(obj, stage, groups["points"])
+    _apply_attributes(obj, stage, sections, attributes)
+
+
+def _apply_attributes(obj, stage, sections, attributes):
+    """Write the frame's attribute sections into the helper they belong to.
+
+    mesh and subd share the mesh helper (a SubD cage is a mesh); points go to
+    the point cloud helper. Curve attributes are not transferred yet — Blender's
+    curve helper is a legacy Curve datablock, which cannot store attributes.
+    """
+    if not attributes:
+        return
+    kinds = {"mesh": "mesh", "subd": "mesh", "pts": "points"}
+    grouped = {}
+    for descriptor in attributes:
+        kind = kinds.get(descriptor.get("group"))
+        if kind is None:
+            continue
+        values = sections.get(descriptor.get("section"))
+        if values is None:
+            continue
+        offsets = sections.get(descriptor.get("offsets")) if descriptor.get("offsets") else None
+        grouped.setdefault(kind, []).append((descriptor, values, offsets))
+
+    for kind, entries in grouped.items():
+        helper = helpers.ensure_helper(obj, stage.key, kind)
+        _bump_id(helper)
+        for note in geometry_io.write_attributes(helper.data, entries):
+            print("[gh-stack] %s: %s" % (stage.key, note), flush=True)
+        helper.update_tag()
 
 
 def _apply_mesh(obj, stage, entries):
@@ -645,11 +679,25 @@ def _remember(record, stage, rid, header, sections):
 
 
 def _memory_usage(cache):
+    """Approximate bytes of a memory-cache entry set. Attribute sections get
+    their real dtype from the frame's descriptors; everything else from its
+    name. The number only drives eviction, so a small overestimate is fine —
+    a wrong *underestimate* would let the cache grow past its bound."""
     total = 0
-    for _header, sections in cache.values():
+    for header, sections in cache.values():
+        dtypes = {}
+        for descriptor in header.get("attributes") or []:
+            name = descriptor.get("section")
+            if name:
+                spec = attributes_mod.WIRE_TYPES.get(descriptor.get("type"), ("f32",))
+                dtypes[name] = spec[0]
+            offsets = descriptor.get("offsets")
+            if offsets:
+                dtypes[offsets] = "u32"
         for name, values in sections.items():
+            dtype = dtypes.get(name) or _dtype_of(name)
             try:
-                total += len(values) * (1 if _dtype_of(name) == "u8" else 4)
+                total += len(values) * (1 if dtype == "u8" else 4)
             except TypeError:
                 continue
     return total
@@ -717,7 +765,7 @@ def _process_stage(obj, record, stage):
         return "idle"
     nodes.set_modifier_visible(obj, stage.key, True)
 
-    sections, geom_hash = _prefix_sections(obj, record, stage)
+    sections, geom_hash, attributes = _prefix_sections(obj, record, stage)
     params_json = props.canonical_json(obj, stage)
     rid = hashing.request_id(stage.key, params_json, geom_hash, "m", "stack-local", stage.nonce)
 
@@ -736,7 +784,7 @@ def _process_stage(obj, record, stage):
         out_hash = header.get("out_hash") or ""
         _set(stage, "rid", rid)
         if out_hash != stage.applied_out_hash:
-            _apply(obj, stage, cached_sections)
+            _apply(obj, stage, cached_sections, header.get("attributes"))
             stats["applies"] += 1
             _set(stage, "applied_out_hash", out_hash)
             _set(stage, "warnings", _warnings_text(header))
@@ -789,6 +837,10 @@ def _process_stage(obj, record, stage):
         "units": "m",
         "space": "stack-local",
     }
+    # Descriptors describe the attribute sections, so they travel only with the
+    # sections they describe (a `ref` request carries none of either).
+    if mode == "full" and attributes:
+        header["attributes"] = attributes
     frame = codec.encode_frame(header, sections if mode == "full" else [])
     if not server.SERVER.send(frame):
         # No client socket to carry it. Recording a pending request here would
@@ -817,7 +869,9 @@ def _process_stage(obj, record, stage):
 def _prefix_sections(obj, record, stage):
     """The geometry a stage sees: everything before its own modifier in the
     stack (plan §9.1), so preceding native modifiers and earlier GH stages are
-    part of the input. Returns ``(sections, geometry hash)``.
+    part of the input. Returns ``(sections, geometry hash, attribute
+    descriptors)`` — the descriptors belong to the sections and travel with
+    them, never on their own.
 
     Both shapes are memoized against a revision of the datablocks they read (see
     :func:`_prefix_revision`): with nothing before the stage the input is the base
@@ -838,23 +892,85 @@ def _prefix_sections(obj, record, stage):
     memo = _prefix_memo.get(memo_key)
     if revision is not None and memo is not None and memo["revision"] == revision:
         stats["prefix_memo_hits"] += 1
-        return memo["sections"], memo["geom_hash"]
+        return memo["sections"], memo["geom_hash"], memo["attributes"]
 
     subd = bool(record.subd)
     if index <= 0:
         # Nothing before the stage: the base datablocks are the input.
-        sections = geometry_io.object_to_sections(obj, as_subd=subd)
+        sections, attributes = geometry_io.object_to_sections(obj, as_subd=subd)
     else:
-        sections = _clone_prefix(obj, index, subd)
+        sections, attributes = _clone_prefix(obj, index, subd)
         stats["prefix_clones"] += 1
-    geom_hash = _sections_hash(sections)
+
+    # Blender evaluates modifier-generated attribute data (a Bevel's UVs, for
+    # example) with last-bit float variation between evaluations. Hashing that
+    # verbatim makes an idle scene look changed, so the engine re-requests and
+    # re-applies forever. When the new read differs from the memoized one only in
+    # attribute floats within a tolerance, the memo wins: the stored sections,
+    # hash and revision are kept, and nothing is sent. Any user-sized edit is far
+    # above the tolerance and takes the normal path.
+    if (
+        memo is not None
+        and _same_prefix(memo["sections"], memo["attributes"], sections, attributes)
+    ):
+        stats["prefix_memo_hits"] += 1
+        sections = memo["sections"]
+        attributes = memo["attributes"]
+        geom_hash = memo["geom_hash"]
+        if revision is not None:
+            memo["revision"] = revision
+        return sections, geom_hash, attributes
+
+    geom_hash = _sections_hash(sections, attributes)
     if revision is not None:
         _prefix_memo[memo_key] = {
             "revision": revision,
             "sections": sections,
             "geom_hash": geom_hash,
+            "attributes": attributes,
         }
-    return sections, geom_hash
+    return sections, geom_hash, attributes
+
+
+def _same_prefix(old_sections, old_attributes, new_sections, new_attributes):
+    """Whether two prefix reads are the same geometry.
+
+    Exact, except that f32 attribute payloads may differ within float noise
+    (``rtol=1e-5``, which is ~80× the last-bit variation Blender shows). The
+    descriptors and every non-attribute section must match exactly: positions,
+    topology, colors and creases are authored data, and an edit to any of them
+    is a real change.
+    """
+    if old_attributes != new_attributes:
+        return False
+    old_by = {name: (dtype, values) for name, dtype, values in old_sections}
+    new_by = {name: (dtype, values) for name, dtype, values in new_sections}
+    if set(old_by) != set(new_by):
+        return False
+    floating = {
+        descriptor["section"]
+        for descriptor in new_attributes
+        if attributes_mod.wire_dtype(descriptor.get("type") or "FLOAT") == "f32"
+    }
+    for name, (dtype, values) in new_by.items():
+        old_dtype, old_values = old_by[name]
+        if dtype != old_dtype:
+            return False
+        if name in floating:
+            if not _close_enough(old_values, values):
+                return False
+        elif codec.section_bytes(name, dtype, values) != codec.section_bytes(name, dtype, old_values):
+            return False
+    return True
+
+
+def _close_enough(old_values, new_values):
+    """Element-wise float comparison with the tolerance attribute noise needs."""
+    old = np.asarray(old_values, dtype=np.float32).reshape(-1)
+    new = np.asarray(new_values, dtype=np.float32).reshape(-1)
+    if old.shape != new.shape:
+        return False
+    return bool(np.allclose(old, new, rtol=1e-5, atol=1e-9, equal_nan=True))
 
 
 def _clone_prefix(obj, index, subd):
@@ -878,16 +994,22 @@ def _clone_prefix(obj, index, subd):
             clone.modifiers.remove(later)
         depsgraph = bpy.context.evaluated_depsgraph_get()
         geometry = clone.evaluated_get(depsgraph).evaluated_geometry()
-        sections = geometry_io.geometry_set_to_sections(geometry, as_subd=subd)
+        sections, attributes = geometry_io.geometry_set_to_sections(geometry, as_subd=subd)
     finally:
         bpy.data.objects.remove(clone, do_unlink=True)
         bpy.context.view_layer.update()
         _evaluating = False
-    return sections
+    return sections, attributes
 
 
-def _sections_hash(sections):
+def _sections_hash(sections, attributes=None):
+    """The request's geometry hash. Attribute *descriptors* are hashed as one
+    extra entry: the section names are index-based, so without them a renamed
+    attribute would produce the same hash, the same request id, and a cache hit
+    that silently keeps the old name."""
     raw = {name: codec.section_bytes(name, dtype, values) for name, dtype, values in sections}
+    if attributes:
+        raw["attr.descriptors"] = codec.canonical_json(attributes).encode("utf-8")
     return hashing.geometry_hash(raw)
 
 

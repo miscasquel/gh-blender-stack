@@ -593,6 +593,31 @@ namespace GhStack.Core
             return result;
         }
 
+        /// <summary>A Rhino point cloud from pts.* sections, colours included when
+        /// the wire carries them. The wire's per-point radii have no place on a
+        /// Rhino point cloud and are dropped (they were dropped before, too).</summary>
+        public static PointCloud PointCloudFromSections(DecodedFrame frame, double scale)
+        {
+            Section positions = frame.Find("pts.positions");
+            if (positions == null) return null;
+            float[] f = positions.ToFloats();
+            int n = f.Length / 3;
+            if (n == 0) return null;
+
+            Section colors = frame.Find("pts.colors");
+            byte[] rgba = colors == null ? null : colors.Raw;
+            var cloud = new PointCloud();
+            for (int i = 0; i < n; i++)
+            {
+                var point = new Point3d(f[i * 3] * scale, f[i * 3 + 1] * scale, f[i * 3 + 2] * scale);
+                if (rgba != null && rgba.Length >= (i + 1) * 4)
+                    cloud.Add(point, Color.FromArgb(rgba[i * 4 + 3], rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]));
+                else
+                    cloud.Add(point);
+            }
+            return cloud;
+        }
+
         /// <summary>Encode points as pts.positions.</summary>
         public static List<Section> SectionsFromPoints(IList<Point3d> points, double scale)
         {
