@@ -245,9 +245,9 @@ class ModifierInputMemoTests(unittest.TestCase):
 
         record = bpy.context.object.gh_stack
         index = engine._modifier_index(self.obj, engine.nodes.modifier_for(self.obj, self.stage.key))
-        first = engine._prefix_revision(self.obj, record, self.stage, index)
+        first = engine._prefix_revision(self.obj, record, index)
         set_gn_input(self.gn, -10.0, self.obj)
-        second = engine._prefix_revision(self.obj, record, self.stage, index)
+        second = engine._prefix_revision(self.obj, record, index)
         self.assertIsNotNone(first)
         self.assertNotEqual(
             first,
@@ -255,10 +255,10 @@ class ModifierInputMemoTests(unittest.TestCase):
             "the prefix revision ignored a stored modifier input",
         )
         set_gn_input(self.gn, 10.0, self.obj)
-        self.assertEqual(
-            engine._prefix_revision(self.obj, record, self.stage, index),
-            first,
-            "moving the input back did not restore the revision",
+        self.assertNotEqual(
+            engine._prefix_revision(self.obj, record, index),
+            second,
+            "moving the input again did not move the revision: an epoch only grows",
         )
 
 
@@ -320,8 +320,186 @@ class ResetRetiresMemoTests(unittest.TestCase):
         )
         self.assertEqual(self.stage.state, "ok", self.stage.error)
 
-if __name__ == "__main__":
-    unittest.main()
+
+class ReferencedObjectTests(unittest.TestCase):
+    """A prefix that reads *another object* must follow it.
+
+    The bug this pins: the revision froze an Object reference as its name, so a
+    prefix that read another object through a node tree — an Object Info node, or
+    a modifier input of type Object or Collection — kept sending the geometry from
+    before that object moved. Blender tags the object that moved; the epoch of the
+    name it is read under is what turns that tag into a new request.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        bpy.ops.preferences.addon_enable(module="gh_stack")
+        isolate_data_root()
+        import gh_stack.blender.engine as engine
+
+        cls.engine = engine
+        engine.start_server(PORT)
+        time.sleep(0.5)
+
+        # Target: what the prefix reads. Holder: the stack object.
+        bpy.ops.mesh.primitive_cube_add(size=2.0)
+        cls.target = bpy.context.object
+        cls.target.name = "Referenced"
+        bpy.ops.mesh.primitive_plane_add(size=2.0)
+        cls.obj = bpy.context.object
+        cls.obj.name = "Holder"
+        bpy.context.view_layer.objects.active = cls.obj
+
+        cls.tree = bpy.data.node_groups.new("Reads", "GeometryNodeTree")
+        cls.tree.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+        info = cls.tree.nodes.new("GeometryNodeObjectInfo")
+        info.inputs["Object"].default_value = cls.target
+        info.transform_space = "ORIGINAL"
+        out = cls.tree.nodes.new("NodeGroupOutput")
+        cls.tree.links.new(info.outputs["Geometry"], out.inputs["Geometry"])
+        modifier = cls.obj.modifiers.new("Reads", "NODES")
+        modifier.node_group = cls.tree
+
+        bpy.ops.gh_stack.add_stage(label="Reads")
+        cls.stage = cls.obj.gh_stack.stages[0]
+        cls.report = os.path.join(tempfile.gettempdir(), "fake_gh_referenced.json")
+        if os.path.exists(cls.report):
+            os.remove(cls.report)
+        cls.fake = start_fake(cls.stage.key, cls.report)
+        pump(
+            seconds=15.0,
+            until=lambda: cls.stage.state == "ok" and report_of(cls.report).get("responses", 0) >= 1,
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        stop_fake(cls.fake)
+        bpy.ops.preferences.addon_disable(module="gh_stack")
+
+    @staticmethod
+    def _depsgraph_event():
+        """Run one real update through the handler, as a session would.
+
+        `dg.updates` is only valid inside the handler, which is why the counters
+        are moved there and not from the value side.
+        """
+        seen = []
+
+        def capture(scene, depsgraph):
+            seen.append(depsgraph)
+
+        bpy.app.handlers.depsgraph_update_post.append(capture)
+        try:
+            bpy.context.view_layer.update()
+        finally:
+            bpy.app.handlers.depsgraph_update_post.remove(capture)
+        if seen:
+            import gh_stack.blender.engine as engine
+
+            engine._bump_epochs(seen[-1])
+
+    def test_01_a_referenced_object_move_reaches_grasshopper(self):
+        self.assertEqual(self.stage.state, "ok", self.stage.error)
+        before = report_of(self.report).get("received_first") or [None]
+        self.assertIsNotNone(before[0])
+
+        # Move the referenced *geometry*, not the holder: this is the case where
+        # Blender does not tag the holder at all, so only the reference's own
+        # epoch can carry it.
+        self.target.data.vertices[0].co.x += 7.0
+        self.target.data.update()
+        self._depsgraph_event()
+
+        def followed():
+            report = report_of(self.report)
+            first = report.get("received_first") or [None]
+            return (
+                self.stage.state == "ok"
+                and first[0] is not None
+                and abs(first[0] - (before[0] + 7.0)) < 0.05
+            )
+
+        self.assertTrue(
+            pump(seconds=10.0, until=followed),
+            "the prefix kept reading the referenced object where it used to be: "
+            "an Object reference must follow the object",
+        )
+        self.assertGreaterEqual(report_of(self.report).get("full", 0), 2)
+
+    def test_02_the_reference_is_consulted_by_name(self):
+        import gh_stack.blender.engine as engine
+
+        record = self.obj.gh_stack
+        index = engine._modifier_index(
+            self.obj, engine.nodes.modifier_for(self.obj, self.stage.key)
+        )
+        references = engine._prefix_references(self.obj, index)
+        self.assertIn(("Object", "Referenced"), references)
+        self.assertIn(("Object", "Holder"), references)
+        # and the revision is built from their epochs, so it moves when one does
+        before = engine._prefix_revision(self.obj, record, index)
+        engine._epochs[("Object", "Referenced")] = engine._epochs.get(("Object", "Referenced"), 0) + 1
+        self.assertNotEqual(before, engine._prefix_revision(self.obj, record, index))
+
+
+class UpstreamOutputTests(unittest.TestCase):
+    """A GH -> GN -> GH chain: when the first stage's output is written, the
+    stage after it must re-evaluate. The write happens inside a pass, so the tag
+    it produces arrives after the next stage has already looked; the engine
+    stamps the helper itself."""
+
+    @classmethod
+    def setUpClass(cls):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        bpy.ops.preferences.addon_enable(module="gh_stack")
+        isolate_data_root()
+        import gh_stack.blender.engine as engine
+
+        cls.engine = engine
+        engine.start_server(PORT)
+        time.sleep(0.5)
+        bpy.ops.mesh.primitive_cube_add(size=2.0)
+        cls.obj = bpy.context.object
+        cls.obj.name = "Chain"
+        bpy.ops.gh_stack.add_stage(label="First")
+        cls.stage_a = cls.obj.gh_stack.stages[0]
+        # A native modifier between the two stages, so the second one's prefix is
+        # evaluated (the memo path) rather than read from the base.
+        bevel = cls.obj.modifiers.new("Mid", "BEVEL")
+        bevel.width = 0.1
+        cls.obj.modifiers.active = bevel
+        bpy.ops.gh_stack.add_stage(label="Second")
+        cls.stage_b = cls.obj.gh_stack.stages[1]
+
+    @classmethod
+    def tearDownClass(cls):
+        bpy.ops.preferences.addon_disable(module="gh_stack")
+
+    def test_the_engine_write_moves_the_downstream_revision(self):
+        import gh_stack.blender.engine as engine
+
+        record = self.obj.gh_stack
+        index = engine._modifier_index(
+            self.obj, engine.nodes.modifier_for(self.obj, self.stage_b.key)
+        )
+        before = engine._prefix_revision(self.obj, record, index)
+        # What _apply does to a helper: the write, and the stamp that stands in
+        # for the tag the depsgraph has not produced yet.
+        engine._apply(
+            self.obj,
+            self.stage_a,
+            {
+                "mesh.verts": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                "mesh.face_counts": [3],
+                "mesh.face_indices": [0, 1, 2],
+            },
+        )
+        self.assertNotEqual(
+            before,
+            engine._prefix_revision(self.obj, record, index),
+            "the downstream stage did not see the upstream write",
+        )
 
 
 class WaitingAgeTests(unittest.TestCase):
@@ -368,164 +546,5 @@ class WaitingAgeTests(unittest.TestCase):
         self.assertEqual(engine.waiting_seconds(record.stack_id, stage.key), 0.0)
 
 
-class ReferenceHashCacheTests(unittest.TestCase):
-    """A pointer property's target is hashed per pass, which handoff Item 5
-    measured at 0.6 ms (5k triangles) to 10 ms (82k) per pointer, on the memo
-    hit path. The hash is cached, and the cache must retire the moment the
-    depsgraph says that datablock changed, or the prefix keeps reading a target
-    that has moved and the premise of this file is back."""
-
-    @classmethod
-    def setUpClass(cls):
-        bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
-        isolate_data_root()
-        import gh_stack.blender.engine as engine
-
-        cls.engine = engine
-        engine.start_server(PORT)
-        time.sleep(0.5)
-
-        bpy.ops.mesh.primitive_cube_add(size=2.0)
-        cls.obj = bpy.context.object
-        cls.obj.name = "Holder"
-        cls.target = bpy.data.objects.new("Target", bpy.data.meshes.new_from_object(cls.obj))
-        bpy.context.scene.collection.objects.link(cls.target)
-        cls.array = cls.obj.modifiers.new("OffsetArray", "ARRAY")
-        cls.array.count = 2
-        cls.array.offset_object = cls.target
-        cls.obj.modifiers.active = cls.array
-        bpy.ops.gh_stack.add_stage(label="Held")
-        cls.stage = cls.obj.gh_stack.stages[0]
-
-    @classmethod
-    def tearDownClass(cls):
-        bpy.ops.preferences.addon_disable(module="gh_stack")
-
-    def _revision(self):
-        index = self.engine._modifier_index(
-            self.obj, self.engine.nodes.modifier_for(self.obj, self.stage.key)
-        )
-        return self.engine._prefix_revision(self.obj, self.obj.gh_stack, self.stage, index)
-
-    def _retire_as_the_handler_would(self):
-        """Run one real depsgraph event through the engine's retirement.
-
-        The update list is only valid inside the handler, so the depsgraph has to
-        be captured there rather than fetched afterwards.
-        """
-        seen = []
-
-        def capture(scene, depsgraph):
-            seen.append(depsgraph)
-
-        bpy.app.handlers.depsgraph_update_post.append(capture)
-        try:
-            bpy.context.view_layer.update()
-        finally:
-            bpy.app.handlers.depsgraph_update_post.remove(capture)
-        self.assertTrue(seen, "no depsgraph event was produced")
-        self.engine._retire_reference_hashes(seen[-1])
-
-    def test_a_target_vertex_move_moves_the_revision(self):
-        before = self._revision()
-        # Base geometry only: the transform stays put, so the geometry hash is
-        # the only thing that can report this change.
-        self.target.data.vertices[0].co.x += 1.5
-        self.target.data.update()
-        self._retire_as_the_handler_would()
-        self.assertNotEqual(before, self._revision(), "a moved target did not move the revision")
-
-    def test_the_hash_is_computed_once_until_something_changes(self):
-        import gh_stack.blender.geometry_io as geometry_io
-
-        self.engine._reference_hashes.clear()
-        calls = []
-        original = geometry_io.object_to_sections
-
-        def counting(obj, as_subd=False):
-            calls.append(obj.name)
-            return original(obj, as_subd=as_subd)
-
-        geometry_io.object_to_sections = counting
-        try:
-            index = self.engine._modifier_index(
-                self.obj, self.engine.nodes.modifier_for(self.obj, self.stage.key)
-            )
-            self.engine._modifier_descriptor(self.obj, index)
-            self.engine._modifier_descriptor(self.obj, index)
-        finally:
-            geometry_io.object_to_sections = original
-        self.assertEqual(len(calls), 1, "the target was hashed on every call")
-
-
-class TruncatedSignatureTests(unittest.TestCase):
-    """N3: a graph deeper than the signature walk's cap falls back to "do not
-    memoize", which is the right behavior and the most expensive one — a full
-    clone on every pass. The counter was the only witness, and it was never read,
-    so the cost was invisible. It is surfaced in the diagnostics panel now, and
-    the fallback itself is pinned here."""
-
-    @classmethod
-    def setUpClass(cls):
-        bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
-        isolate_data_root()
-        import gh_stack.blender.engine as engine
-
-        cls.engine = engine
-        engine.start_server(PORT)
-        time.sleep(0.5)
-        bpy.ops.mesh.primitive_cube_add(size=2.0)
-        cls.obj = bpy.context.object
-        cls.modifier = cls.obj.modifiers.new("Deep", "NODES")
-        cls.modifier.node_group = cls._chain(cls.engine._MAX_NODE_TREE_DEPTH)
-        bpy.ops.gh_stack.add_stage(label="Deep")
-        cls.stage = cls.obj.gh_stack.stages[0]
-
-    @classmethod
-    def tearDownClass(cls):
-        bpy.ops.preferences.addon_disable(module="gh_stack")
-
-    @staticmethod
-    def _chain(depth):
-        """`depth + 1` node groups, each holding the previous one."""
-        groups = []
-        for level in range(depth + 1):
-            tree = bpy.data.node_groups.new("deep-%02d" % level, "GeometryNodeTree")
-            tree.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
-            if groups:
-                tree.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
-                inner = tree.nodes.new("GeometryNodeGroup")
-                inner.node_tree = groups[-1]
-                source = tree.nodes.new("NodeGroupInput")
-                sink = tree.nodes.new("NodeGroupOutput")
-                tree.links.new(source.outputs["Geometry"], inner.inputs["Geometry"])
-                tree.links.new(inner.outputs["Geometry"], sink.inputs["Geometry"])
-            else:
-                tree.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
-                source = tree.nodes.new("NodeGroupInput")
-                sink = tree.nodes.new("NodeGroupOutput")
-                tree.links.new(source.outputs["Geometry"], sink.inputs["Geometry"])
-            groups.append(tree)
-        return groups[-1]
-
-    def test_the_walk_gives_up_rather_than_truncating(self):
-        signature = self.engine._node_tree_signature(self.modifier.node_group)
-        self.assertIsNone(signature, "a walk deeper than the cap must not be trusted")
-        self.assertGreater(self.engine.stats["signature_truncated"], 0)
-
-    def test_the_stage_still_settles_and_the_revision_is_unmemoizable(self):
-        record = self.obj.gh_stack
-        index = self.engine._modifier_index(
-            self.obj, self.engine.nodes.modifier_for(self.obj, self.stage.key)
-        )
-        self.assertIsNone(
-            self.engine._prefix_revision(self.obj, record, self.stage, index),
-            "a deep prefix must be re-evaluated every pass, never memoized",
-        )
-        pump(
-            seconds=15.0,
-            until=lambda: self.stage.state in ("ok", "error", "disconnected"),
-        )
-        self.assertNotEqual(self.stage.state, "error", self.stage.error)
+if __name__ == "__main__":
+    unittest.main()

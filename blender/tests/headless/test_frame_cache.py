@@ -476,6 +476,12 @@ class NoOpQuietTests(FrameCacheTestCase):
         self.assertEqual(dirty, set())
 
     def test_02_event_loop_idle_is_quiet(self):
+        # Drain first: a session evaluates continuously, `-b` does not, and `pump`
+        # leaves the reports of its own passes (the clone the engine makes, the
+        # visibility write) queued for the next evaluation. Draining them is what
+        # "idle" means; the loop below is the part that must not clone.
+        bpy.context.view_layer.update()
+        self.engine._timer()
         stats = dict(self.engine.stats)
         for _ in range(5):
             bpy.context.view_layer.update()
@@ -494,6 +500,10 @@ class NoOpQuietTests(FrameCacheTestCase):
         pre = self.obj.modifiers.get("PreBevel")
         self.assertIsNotNone(pre)
         pre.segments = 2
+        # A session evaluates after every write, and the evaluation is what
+        # carries the change to the engine now (the depsgraph is the oracle for
+        # what moved); `-b` has no loop to do it, so it is asked for.
+        bpy.context.view_layer.update()
         self.engine._mark_object_dirty(self.obj)
         self.assertTrue(
             pump(seconds=8.0, until=lambda: self.engine.stats["sends"] > sends),

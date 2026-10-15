@@ -684,6 +684,14 @@ already asserts the quiet path, and
 `TimeDrivenPrefixTests.test_03_an_unchanged_frame_still_hits_the_memo` asserts the
 memo still hits at an unchanged frame. Any change here must keep both green, and
 must keep the frame in whatever tuple gets compared.
+**Resolved 2026-10-15.** The floor is gone, and option 3's design note was written:
+the revision is built from epochs the depsgraph moves, so no geometry is read or
+hashed on the memo hit path. Measured at 50k triangles: **0.010 ms** for a prefixed
+stage (was 8.1 ms) and **0.006 ms** for a head-of-stack stage, which had no memo at
+all and re-read its base every pass (was 8.0 ms). What remains is the clone a real
+change needs — 51.9 ms at 50k, unchanged — which is P4-1's other half and the
+subject of the note below.
+
 **Update 2026-10-14.** Option 1's "8.3 ms at 50k" is still the floor and is now
 understood as two different costs: the *stack object's own base read* (the 89% the
 profile named) and *referenced targets* (`_pointer_state` hashing a second datablock,

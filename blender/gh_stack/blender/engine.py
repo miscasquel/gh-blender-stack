@@ -44,15 +44,13 @@ HOT_SECONDS = 1.0
 _cache = {}  # (stack_id, stage_key) -> {rid: (header, sections)}; the hot path
 _stores = {}  # (stack_id, stage_key) -> ResponseStore; the backing store
 _prefix_memo = {}  # (obj.as_pointer(), stage key) -> {"revision": tuple, "sections": list}
-# A referenced modifier target's geometry hash, cached across passes. Blender
-# gives no content counter for a datablock, so the hash is the only sound signal
-# a pointer property has, and computing it costs a serialize + SHA-256 of that
-# datablock: measured at 0.6 ms for 5k triangles and 10 ms for 82k, per pointer,
-# on every pass including memo hits (handoff Item 5). An entry is retired when
-# the depsgraph tags the target, and by `_apply` — the engine's own writes are
-# the one geometry change that never comes through the depsgraph. See
-# `_retire_reference_hashes` for why the match is by name.
-_reference_hashes = {}  # (as_pointer, object name, data name) -> geometry hash
+# Blender's own invalidation: one counter per datablock, (type, name) -> int, moved
+# by `_bump_epochs` for everything the depsgraph tags and by `_bump_id` for the
+# engine's own writes. The prefix revision reads the counters of the names it
+# consults, so a changed input retires the memo without anyone maintaining a
+# description of what that input *is*. Names, not pointers, because the update
+# list resolves to evaluated IDs whose addresses are not the originals'.
+_epochs = {}
 # (stack_id, stage_key) -> {rid: monotonic seconds it was sent}. At most one entry:
 # the evaluation in flight. One at a time, deliberately — a frame that arrives while
 # an answer is outstanding is not queued behind it, because Grasshopper solves in
@@ -84,7 +82,6 @@ stats = {
     "sends": 0,  # requests actually sent
     "timeouts": 0,  # requests given up on after the timeout and retried in full
     "undelivered": 0,  # requests not even sent: no client socket to carry them
-    "signature_truncated": 0,  # node-tree walks cut at the depth cap (memo disabled)
 }
 
 
@@ -114,37 +111,11 @@ def _mark_hot():
     _hot_until = time.monotonic() + HOT_SECONDS
 
 
-def _retire_reference_hashes(depsgraph):
-    """Drop the cached hash of every target the depsgraph just tagged.
-
-    The update list resolves to *evaluated* IDs, whose pointers are not the
-    originals' — a tagged mesh and the mesh it was copied from sit at different
-    addresses — so matching by pointer never matches. Names do match: a
-    datablock's name is unique for its type, the key holds the object's name and
-    its data's name, and the pointer keeps two objects that have swapped names
-    apart. Anything unrecognized clears the whole cache, because a stale hash
-    here is a wrong pointer state, and the cost of being wrong is far above the
-    cost of recomputing.
-    """
-    if depsgraph is None:
-        _reference_hashes.clear()
-        return
-    try:
-        tagged = set(update.id.name for update in depsgraph.updates)
-    except (AttributeError, RuntimeError, TypeError):
-        _reference_hashes.clear()
-        return
-    if not tagged:
-        return
-    for key in [key for key in _reference_hashes if key[1] in tagged or key[2] in tagged]:
-        del _reference_hashes[key]
-
-
 @bpy.app.handlers.persistent
 def _on_depsgraph(scene, depsgraph=None):
     if _evaluating:
         return
-    _retire_reference_hashes(depsgraph)
+    _bump_epochs(depsgraph)
     _mark_dirty_all()
     _mark_hot()
 
@@ -179,7 +150,6 @@ def _on_load(scene=None):
     _pending.clear()
     _prefix_memo.clear()
     _state_since.clear()
-    _reference_hashes.clear()  # a replaced file has other data at the same addresses
     for obj in bpy.data.objects:
         record = stack_mod.stack_of(obj)
         if record is None:
@@ -484,9 +454,6 @@ def _apply(obj, stage, sections):
     A section group that is absent means "none": that helper is cleared, so a
     definition that stops returning curves stops showing them.
     """
-    # Helpers can be a prefix modifier's target in a GH -> GN -> GH chain, and
-    # the depsgraph is not what told us this write happened.
-    _reference_hashes.clear()
     nodes.ensure_group(obj, stage.key)
     groups = {"mesh": [], "curves": [], "points": []}
     for name, values in sections.items():
@@ -510,6 +477,7 @@ def _apply_mesh(obj, stage, entries):
             mesh.clear_geometry()
             helper.update_tag()
         return
+    _bump_id(helper)
     prepared = []
     for name, values in entries:
         arr = np.asarray(values)
@@ -531,6 +499,7 @@ def _apply_curves(obj, stage, entries):
             helper.data.splines.clear()
             helper.update_tag()
         return
+    _bump_id(helper)
     prepared = []
     for name, values in entries:
         arr = np.asarray(values)
@@ -548,6 +517,7 @@ def _apply_points(obj, stage, entries):
             helper.data.resize(0)
             helper.update_tag()
         return
+    _bump_id(helper)
     prepared = []
     for name, values in entries:
         arr = np.asarray(values)
@@ -747,9 +717,7 @@ def _process_stage(obj, record, stage):
         return "idle"
     nodes.set_modifier_visible(obj, stage.key, True)
 
-    sections = _prefix_sections(obj, record, stage)
-    raw = {name: codec.section_bytes(name, dtype, values) for name, dtype, values in sections}
-    geom_hash = hashing.geometry_hash(raw)
+    sections, geom_hash = _prefix_sections(obj, record, stage)
     params_json = props.canonical_json(obj, stage)
     rid = hashing.request_id(stage.key, params_json, geom_hash, "m", "stack-local", stage.nonce)
 
@@ -849,19 +817,19 @@ def _process_stage(obj, record, stage):
 def _prefix_sections(obj, record, stage):
     """The geometry a stage sees: everything before its own modifier in the
     stack (plan §9.1), so preceding native modifiers and earlier GH stages are
-    part of the input.
+    part of the input. Returns ``(sections, geometry hash)``.
 
-    With nothing before the stage, the base datablocks are read directly: exact,
-    and no clone evaluation. Otherwise the evaluated prefix is memoized against
-    a revision of everything it depends on; when the revision is unchanged the
-    clone (which would tag the depsgraph and wake every idle stack) is skipped.
+    Both shapes are memoized against a revision of the datablocks they read (see
+    :func:`_prefix_revision`): with nothing before the stage the input is the base
+    datablocks, read directly and no clone evaluation; otherwise it is the
+    evaluated prefix, and the clone that produces it would tag the depsgraph and
+    wake every idle stack. When the revision is unchanged the read and the clone
+    are both skipped, and the stored hash means the pass does not pay for
+    re-serializing either.
     """
     modifier = nodes.modifier_for(obj, stage.key)
     index = _modifier_index(obj, modifier)
-    if index <= 0:
-        return geometry_io.object_to_sections(obj, as_subd=bool(record.subd))
-
-    revision = _prefix_revision(obj, record, stage, index)
+    revision = _prefix_revision(obj, record, index)
     # Keyed by identity, not by name: an object renamed to a name another object
     # used to hold would otherwise inherit what that object had evaluated.
     # as_pointer() is stable for the session and keeps no reference to the object,
@@ -870,8 +838,37 @@ def _prefix_sections(obj, record, stage):
     memo = _prefix_memo.get(memo_key)
     if revision is not None and memo is not None and memo["revision"] == revision:
         stats["prefix_memo_hits"] += 1
-        return memo["sections"]
+        return memo["sections"], memo["geom_hash"]
 
+    subd = bool(record.subd)
+    if index <= 0:
+        # Nothing before the stage: the base datablocks are the input.
+        sections = geometry_io.object_to_sections(obj, as_subd=subd)
+    else:
+        sections = _clone_prefix(obj, index, subd)
+        stats["prefix_clones"] += 1
+    geom_hash = _sections_hash(sections)
+    if revision is not None:
+        _prefix_memo[memo_key] = {
+            "revision": revision,
+            "sections": sections,
+            "geom_hash": geom_hash,
+        }
+    return sections, geom_hash
+
+
+def _clone_prefix(obj, index, subd):
+    """The evaluated prefix of one stage: the object as it is just before the
+    stage's own modifier, which is what everything before the stage has made.
+
+    The copy is linked, evaluated and removed, all inside the ``_evaluating``
+    guard so the engine ignores the depsgraph events it causes — including the
+    one that arrives *after* the removal: linking and unlinking a copy is our
+    change, not the scene's, and Blender reports it as a geometry update for the
+    stack object, indistinguishable from a real edit. That report is consumed
+    here, while the guard is still up; left alone it retires the memo the engine
+    is about to write, once per pass, forever.
+    """
     global _evaluating
     clone = obj.copy()
     _evaluating = True
@@ -881,273 +878,179 @@ def _prefix_sections(obj, record, stage):
             clone.modifiers.remove(later)
         depsgraph = bpy.context.evaluated_depsgraph_get()
         geometry = clone.evaluated_get(depsgraph).evaluated_geometry()
-        sections = geometry_io.geometry_set_to_sections(geometry, as_subd=bool(record.subd))
+        sections = geometry_io.geometry_set_to_sections(geometry, as_subd=subd)
     finally:
-        _evaluating = False
         bpy.data.objects.remove(clone, do_unlink=True)
-    stats["prefix_clones"] += 1
-    if revision is not None:
-        _prefix_memo[memo_key] = {"revision": revision, "sections": sections}
+        bpy.context.view_layer.update()
+        _evaluating = False
     return sections
 
 
-def _prefix_revision(obj, record, stage, index):
-    """Everything the evaluated prefix depends on, cheaply comparable.
+def _sections_hash(sections):
+    raw = {name: codec.section_bytes(name, dtype, values) for name, dtype, values in sections}
+    return hashing.geometry_hash(raw)
 
-    **This list must name every input the evaluated prefix reads.** The memo in
-    :func:`_prefix_sections` trusts it, so an input that is missing here is an
-    input whose change goes unnoticed: the stage then sends Grasshopper geometry
-    that no longer matches the scene, with nothing to show for it. Two of them are
-    read at solve time rather than stored on the modifier, which makes them easy
-    to miss:
 
-    - **the frame** (``scene.frame_float``), because anything in the prefix that
-      reads the timeline — a Scene Time node, a simulation zone, a driver
-      expression — moves with it. A prefix that moves has to produce a new
-      geometry hash, so the frame cache can key each frame separately; without
-      this the same request ID came back for every frame and the cache answered
-      them all with one frame's geometry;
-    - **the object identity**, which is in the memo key rather than the tuple
-      (see :func:`_prefix_sections`).
+def _prefix_revision(obj, record, index):
+    """What the memo compares: the epochs of every datablock the prefix reads.
 
-    A third was found later, and it is why this warning is not academic: a
-    Geometry Nodes modifier reads its group inputs from its stored input values
-    (``modifier.properties.inputs``), ID properties rather than RNA, so the
-    property walk in :func:`_modifier_descriptor` never saw them.
+    Blender's dependency graph already knows what an input is, so this revision
+    holds *names* and one counter per name (see :func:`_bump_epochs`) instead of
+    a frozen copy of every value, and it reads no geometry at all. The
+    difference that matters: a frozen value cannot follow a reference. A node
+    tree that reads another object — an Object Info node, a modifier input of
+    type Object or Collection — kept sending the geometry from before that object
+    moved, because the stored name never changed; an epoch does, because Blender
+    tagged the object that moved.
+
+    Three things a counter cannot cover, and are read directly instead:
+
+    - **the frame**, because a frame change tags nothing at all: the one case the
+      depsgraph is silent about, and the reason anything that reads the timeline
+      (a Scene Time node, a simulation zone, a driver) still moves the revision;
+    - **the SubD cage flag**, a stack property that tags nothing (it changes how
+      the sections are cut, so it has to be in the key);
+    - **the shape keys**, a handful of scalars, cheaper to read than to route
+      through a tag.
 
     ``None`` means "do not memoize": surfaces are meshed on the fly and rarely
-    used, and a truncated node-tree signature (see :func:`_node_tree_signature`)
-    must not be trusted.
+    used.
     """
     if obj.type == "SURFACE":
         return None
-    base = geometry_io.object_to_sections(obj, as_subd=False)
-    raw = {name: codec.section_bytes(name, dtype, values) for name, dtype, values in base}
-    descriptor = _modifier_descriptor(obj, index)
-    if descriptor is None:
-        return None
     return (
-        hashing.geometry_hash(raw),
-        descriptor,
-        _upstream_hashes(obj, record, stage, index),
+        tuple((key, _epochs.get(key, 0)) for key in _prefix_references(obj, index)),
         bool(record.subd),
         _shapekey_state(obj),
         bpy.context.scene.frame_float,
     )
 
 
-def _modifier_descriptor(obj, index):
-    """Settings of every modifier before the stage, plus the objects they
-    reference. Any edit that matters changes this tuple; UI-only state is left
-    out so selecting a modifier does not invalidate the memo.
+def _prefix_references(obj, index):
+    """Every datablock the evaluated prefix reads, as sorted ``(type, name)``.
 
-    ``None`` means one of them could not be described completely (a truncated
-    node-tree walk); the caller must not memoize against it."""
-    items = []
+    **This list must name every reference the prefix can read** — the same oath
+    the content revision carried, for the same reason: a reference nobody
+    consults is a reference whose changes go unnoticed. What shrank is that only
+    the *references* are enumerated now: no geometry is read, no value frozen.
+    """
+    references = set()
+    _add_reference(references, obj)
     for modifier in list(obj.modifiers)[:index]:
-        props_state = []
-        for prop in modifier.bl_rna.properties:
-            identifier = prop.identifier
-            if prop.is_readonly or identifier in _SKIP_MODIFIER_PROPS:
-                continue
+        references.update(_modifier_references(modifier))
+    return tuple(sorted(references))
+
+
+def _modifier_references(modifier):
+    """The datablocks one modifier reads: its ID pointers, the stored datablock
+    values of its group inputs, and the datablocks its node graph names."""
+    found = set()
+    for prop in modifier.bl_rna.properties:
+        if prop.type != "POINTER":
+            continue
+        try:
+            value = getattr(modifier, prop.identifier)
+        except (AttributeError, TypeError, RuntimeError):
+            continue
+        _add_reference(found, value)
+    inputs = getattr(getattr(modifier, "properties", None), "inputs", None)
+    if inputs is not None:
+        for identifier in inputs.keys():
             try:
-                value = getattr(modifier, identifier)
+                value = inputs[identifier].to_dict().get("value")
             except (AttributeError, TypeError, RuntimeError):
                 continue
-            if prop.type == "POINTER":
-                props_state.append((identifier, _pointer_state(value)))
-            elif prop.type == "COLLECTION":
-                continue
-            else:
-                props_state.append((identifier, _freeze(value)))
-        props_state.append(("inputs", _modifier_input_state(modifier)))
-        if modifier.type == "NODES" and modifier.node_group is not None:
-            signature = _node_tree_signature(modifier.node_group)
-            if signature is None:
-                # A truncated signature cannot be trusted to catch every edit;
-                # `None` bubbles up as "do not memoize" (see `_prefix_sections`).
-                return None
-            props_state.append(("node_tree", signature))
-        items.append((modifier.name, modifier.type, tuple(props_state)))
-    return tuple(items)
+            _add_reference(found, value)
+    group = getattr(modifier, "node_group", None)
+    if group is not None:
+        _node_tree_references(group, found, set())
+    return found
 
 
-def _modifier_input_state(modifier):
-    """A modifier's stored input values, which is what its evaluation reads.
+def _node_tree_references(tree, found, visited):
+    """One node tree's ID-valued socket defaults, recursively into nested groups.
 
-    A Geometry Nodes modifier holds the values of its group inputs in
-    ``modifier.properties.inputs``, an ID-property group per socket
-    (``{"value": ..., "type": ..., "attribute_name": ...}``). Those are not RNA
-    properties, so the walk in :func:`_modifier_descriptor` cannot see them: a
-    slider dragged on such a modifier moved the scene while the revision — and
-    with it the memo, the geometry hash, the request id and the frame cache —
-    stayed exactly where it was.
+    A group node keeps its body in another tree, so the walk follows it; the
+    visited set is what makes a recursive group safe. There is no depth cap: the
+    walk collects every reference and is bounded by the graph, and a cap that
+    truncated it would silently drop references instead of guarding anything.
     """
-    inputs = getattr(getattr(modifier, "properties", None), "inputs", None)
-    if inputs is None:
-        return ()
-    state = []
-    for identifier in inputs.keys():
-        try:
-            state.append((identifier, _freeze(inputs[identifier].to_dict())))
-        except (AttributeError, KeyError, TypeError, RuntimeError):
-            continue
-    return tuple(state)
-
-
-def _pointer_state(value):
-    if value is None:
-        return None
-    if getattr(value, "bl_rna", None) is not None and value.bl_rna.identifier == "Object":
-        return ("object", value.name, tuple(value.matrix_world), _object_geometry_hash(value))
-    return ("id", getattr(value, "name", None))
-
-
-def _object_geometry_hash(obj):
-    data = getattr(obj, "data", None)
-    if data is None:
-        return ""
-    key = (obj.as_pointer(), obj.name, data.name)
-    cached = _reference_hashes.get(key)
-    if cached is not None:
-        return cached
-    try:
-        sections = geometry_io.object_to_sections(obj, as_subd=False)
-    except Exception:
-        return ""
-    raw = {name: codec.section_bytes(name, dtype, values) for name, dtype, values in sections}
-    digest = hashing.geometry_hash(raw)
-    _reference_hashes[key] = digest
-    return digest
-
-
-_MAX_NODE_TREE_DEPTH = 32  # backstop for a pathological graph; a hit disables the memo
-
-
-def _node_tree_signature(tree):
-    """Node names, wiring, and every socket default reachable from one node
-    group, so an edit inside a prefix modifier's graph invalidates the memo.
-
-    Group-type nodes are walked recursively: a nested group is how a real graph
-    is organised, and the node that holds it does not change when the group's
-    body does. Blender 5.2 exposes ``node_tree`` on exactly the group node types
-    (``NodeGroup``, ``GeometryNodeGroup``, the custom variants, and the shader/
-    compositor/texture equivalents); a simulation zone keeps its body in the
-    same tree. A recursive group is legal, so every tree is visited once, keyed
-    by identity; a repeat is recorded as a reference, not re-walked.
-
-    The depth cap is a backstop: when it is hit the signature is ``None``,
-    which the revision treats as "do not memoize". A silently truncated
-    signature is the stale-geometry bug this walk exists to prevent.
-    """
-    return _tree_signature(tree, set(), 0)
-
-
-def _tree_signature(tree, visited, depth):
-    if depth >= _MAX_NODE_TREE_DEPTH:
-        stats["signature_truncated"] += 1
-        return None
     visited.add(tree.as_pointer())
-    nodes_state = []
     for node in tree.nodes:
-        sockets = []
         for socket in node.inputs:
             try:
                 value = socket.default_value
             except (AttributeError, RuntimeError):
                 continue
-            if value is None:
-                continue
-            sockets.append((socket.identifier, _freeze(value)))
+            _add_reference(found, value)
         try:
             nested = node.node_tree
         except (AttributeError, RuntimeError):
             nested = None
-        subtree = None
-        if nested is not None:
-            if nested.as_pointer() in visited:
-                subtree = ("visited", nested.name)
-            else:
-                subtree = _tree_signature(nested, visited, depth + 1)
-                if subtree is None:
-                    return None
-        nodes_state.append((node.bl_idname, node.name, tuple(sockets), subtree))
-    links = []
-    for link in tree.links:
-        try:
-            links.append(
-                (link.from_node.name, link.from_socket.identifier, link.to_node.name, link.to_socket.identifier)
-            )
-        except AttributeError:
-            continue
-    links.sort()
-    interface = []
+        if nested is not None and nested.as_pointer() not in visited:
+            _node_tree_references(nested, found, visited)
+    return found
+
+
+def _add_reference(found, value):
+    """One referenced datablock, plus an object's data with it.
+
+    An object and its mesh are separate entries in the update list, and either
+    can be the one Blender names, so both are consulted.
+    """
+    if not isinstance(value, bpy.types.ID):
+        return
+    found.add(_id_key(value))
+    data = getattr(value, "data", None)
+    if isinstance(data, bpy.types.ID):
+        found.add(_id_key(data))
+
+
+def _id_key(id_block):
+    """The identity the depsgraph speaks in: its type and its name.
+
+    Names, not pointers: the update list resolves to *evaluated* IDs, whose
+    addresses are not the originals' — a tagged mesh and the mesh it was copied
+    from sit at different addresses — so a pointer match never matches.
+    """
+    return (id_block.bl_rna.identifier, id_block.name)
+
+
+def _bump_epochs(depsgraph):
+    """Move the counter of every datablock Blender tagged, geometry and
+    transform updates only.
+
+    A shading-only entry is bookkeeping, not a change, and the engine's own
+    prefix clone produces exactly one for the stack object on the evaluation
+    after it runs: linking and unlinking the copy re-syncs the object without
+    moving it. Counting that would retire the memo the engine just filled, once
+    per pass, and the memo would never hold. Blender states which of the three
+    kinds of update each entry is; this reads it rather than guessing.
+    """
     try:
-        for item in tree.interface.items_tree:
-            if getattr(item, "item_type", "") != "SOCKET":
-                continue
-            try:
-                value = item.default_value
-            except AttributeError:
-                continue
-            if value is None:
-                continue
-            interface.append((item.identifier, _freeze(value)))
-    except (AttributeError, RuntimeError):
-        pass
-    return (tree.name, tuple(nodes_state), tuple(links), tuple(interface))
-
-
-def _freeze(value):
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return value
-    if isinstance(value, dict):
-        # From `to_dict()`: sort by key, so the mapping's own order cannot
-        # decide equality.
-        return tuple(
-            sorted(((str(key), _freeze(value[key])) for key in value), key=lambda item: item[0])
-        )
-    try:
-        if hasattr(value, "__len__") and hasattr(value, "__getitem__"):
-            return tuple(_freeze(value[i]) for i in range(len(value)))
-    except (TypeError, IndexError, RuntimeError):
-        pass
-    name = getattr(value, "name", None)
-    if name is not None:
-        return ("#", str(name))
-    return repr(value)
-
-
-_SKIP_MODIFIER_PROPS = frozenset(
-    (
-        "rna_type",
-        "name",
-        "show_expanded",
-        "is_active",
-        "is_override_data",
-        "use_pin_to_last",
-        "execution_time",
-        "persistent_uid",
-    )
-)
-
-
-def _upstream_hashes(obj, record, stage, index):
-    """The applied outputs of GH stages whose modifiers precede this stage, in
-    stack order: their helpers are what the clone evaluation reads, so a new
-    upstream output invalidates the memo."""
-    by_group = {}
-    for other in record.stages:
-        if other.key != stage.key:
-            by_group[nodes.group_name(other.key)] = other
-    hashes = []
-    for modifier in list(obj.modifiers)[:index]:
-        if modifier.type != "NODES" or modifier.node_group is None:
+        updates = list(depsgraph.updates)
+    except (AttributeError, RuntimeError, TypeError):
+        return
+    for update in updates:
+        if not (update.is_updated_geometry or update.is_updated_transform):
             continue
-        other = by_group.get(modifier.node_group.name)
-        if other is not None:
-            hashes.append((other.key, other.applied_out_hash))
-    return tuple(hashes)
+        ident = getattr(update.id.bl_rna, "identifier", None)
+        if ident is not None:
+            key = (ident, update.id.name)
+            _epochs[key] = _epochs.get(key, 0) + 1
+
+
+def _bump_id(id_block):
+    """Move a datablock's counter for the engine's own writes.
+
+    The depsgraph has not seen a write the engine just made when the next stage
+    in the same pass looks at its prefix, so the write is stamped here rather
+    than waited for. This is what the upstream-output hashes used to do.
+    """
+    for target in (id_block, getattr(id_block, "data", None)):
+        if target is not None:
+            key = _id_key(target)
+            _epochs[key] = _epochs.get(key, 0) + 1
 
 
 def _shapekey_state(obj):
@@ -1247,7 +1150,7 @@ def register():
     _pending.clear()
     _prefix_memo.clear()
     _state_since.clear()
-    _reference_hashes.clear()
+    _epochs.clear()
     _hot_until = 0.0
     for counter in stats:
         stats[counter] = 0

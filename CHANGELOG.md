@@ -6,58 +6,67 @@ Notable changes to this project, following
 
 ## [Unreleased]
 
+### Added
+
+- The Diagnostics panel reports how long a stage has been waiting, past a second
+  — the shape a sync fault takes when nothing else is visible.
+
 ### Fixed
 
-- **A slider on a prefix Geometry Nodes modifier now reaches Grasshopper.** A
-  Geometry Nodes modifier reads its group inputs from its stored input values
-  (`modifier.properties.inputs`, an ID-property group per socket), which are not
-  RNA properties, so the prefix revision's property walk could not see them.
-  Moving one changed the scene while the revision stayed the same, and with it the
-  memoized prefix, the geometry hash, the request id and the frame cache: the same
-  request id was served from the cache, the stage did nothing, and only a frame
-  change, a file reload or a Push moved it. `_modifier_descriptor` folds the stored
-  inputs into the revision.
+- **Moving geometry that a node tree references now reaches Grasshopper.** A
+  prefix that reads another object — an Object Info node, a modifier input of
+  type Object or Collection — kept sending the geometry from before that object
+  moved, because the revision stored the reference as a frozen *name* and a name
+  never changes when the thing behind it moves. Reproduced from a real file
+  (`sends +0`, the stage `ok` and stuck); the same class as the two below, and
+  the reason the memo is invalidated by the depsgraph now (see Changed).
 - **Every cache reset retires the memoized prefix** as well as the frame store.
   Before, Push — documented as the way to get past anything cached — re-sent the
   same geometry and produced the same output again.
+- **A slider on a prefix Geometry Nodes modifier reaches Grasshopper.** Its
+  stored group input values are ID properties, not RNA, so the old revision's
+  property walk could not see them and the stage kept answering with the frame
+  from before the edit. Now structural: the write tags the object Blender
+  re-evaluates.
+- **A clone no longer retires its own memo.** Linking and unlinking the prefix
+  copy is the engine's own change, and Blender reports it on the evaluation that
+  follows — one geometry-updated entry for the stack object, indistinguishable
+  from a real edit. That report is consumed while the clone guard is still up;
+  without it the memo retired itself once per pass, forever.
 
 ### Changed
 
-- **The engine runs at the fast cadence (5 ms) for a second after an edit, a
-  response or a frame change**, instead of the 50 ms idle one. Playback fills
-  frames this way: each answer re-dirties the stack and the next frame goes out on
-  the next tick. A quiet scene still idles, because `_dirty` is emptied on every
-  pass.
-- **A referenced modifier target's geometry hash is cached across passes**, taking
-  the per-pointer cost the previous release's handoff measured (0.6 ms at 5k
-  triangles, 10 ms at 82k) off the memo hit path: measured at 0.789/3.167/9.284 ms
-  for one pointer at 9.5k/39k/114k triangles, against 0.020 ms when cached. The
-  entry is retired when the depsgraph tags that target — by name, because the
-  update list resolves to evaluated IDs whose pointers are not the originals' —
-  and `_apply` clears the cache, since the engine's own writes are the one
-  geometry change that never comes through the depsgraph.
-- **The Diagnostics panel shows what a slow sync looks like**: how long a stage
-  has been waiting (only while it is, and only past a second), and how many
-  node-tree walks were truncated by the signature cap — a graph deeper than it
-  pays a full clone on every pass and had no surface at all. The panel users read
-  every day is unchanged.
+- **The prefix memo is invalidated by Blender's depsgraph, not by a description
+  of what a prefix reads.** The revision used to freeze the *values* of every
+  input — base geometry, modifier properties, node-graph wiring, referenced
+  objects, shape keys — and compare them each pass, which is also why each of
+  the three fixes above was possible to miss. It now holds the **epochs of the
+  datablocks the prefix reads**, moved by `depsgraph_update_post` for what
+  Blender tagged, so Blender's own dependency graph is the oracle for what an
+  input is. The walk that remains collects references (pointer properties,
+  ID-valued node sockets, recursively through nested groups) and reads no
+  geometry at all; the memo carries the geometry hash, so a hit skips
+  re-serializing too. Three things a tag cannot cover are read directly: the
+  frame (a frame change tags nothing), the SubD-cage flag, and the shape keys.
+  Measured on a 50k-triangle prefix: a memo hit is **0.010 ms** where it was
+  8.1 ms, and a head-of-stack stage — which had no memo at all and re-read its
+  base every pass — 0.006 ms where it was 8.0 ms. The clone a real change needs
+  is unchanged. Deleted with it: the RNA property walk, the node-tree signature
+  walk and its depth cap, referenced-object geometry hashing, the upstream-output
+  hash list and the diagnostic the cap needed.
+- The engine runs at the fast cadence (5 ms) for a second after an edit, a
+  response or a frame change, instead of the 50 ms idle one. Playback fills
+  frames this way: each answer re-dirties the stack and the next frame goes out
+  on the next tick. A quiet scene still idles, because `_dirty` is emptied on
+  every pass.
 - `GhServer.start` clears the connection error once a bind succeeds, so
   restarting the server on another port no longer leaves a stale
   "server stopped" in the panel.
-- **The plugin's `MiniWsClient.SendFrame` is serialised**: a pong written from the
-  socket thread could interleave with a large frame the sender thread was writing,
-  corrupting the stream for the rest of the connection. The server's keepalive is
-  explicit (5 s ping, 20 s timeout) instead of the library defaults, closing part
-  of the gap protocol section 2 left open (N9).
-
-### Fixed tests
-
-- Layer B gains `test_prefix_memo.py`: the stored-input round trip reaching
-  Grasshopper, the revision seeing and restoring it, Push carrying the geometry
-  the scene shows, the target-hash cache moving when its target does, the waiting
-  age, and a prefix deeper than the signature cap falling back to re-evaluate
-  rather than memoize (10 tests). 96 headless tests pass; layers A, C and D
-  unchanged.
+- The plugin's `MiniWsClient.SendFrame` is serialised: a pong written from the
+  socket thread could interleave with a large frame the sender thread was
+  writing, corrupting the stream for the rest of the connection. The server's
+  keepalive is explicit (5 s ping, 20 s timeout) instead of the library
+  defaults, closing part of the gap protocol section 2 left open (N9).
 
 ## [0.1.2] — 2026-10-12
 

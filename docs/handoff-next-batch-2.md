@@ -213,19 +213,15 @@ pass — 45 ms at 50k triangles by the plan's own P4-1 measurement — with noth
 anywhere saying why. That is the "why is it slow" report nobody can answer from the
 UI.
 
-**Done, one deviation.** The counter is shown in the Diagnostics panel (`ui.py`,
-`GHSTACK_PT_diagnostics`), which is the proposed surface and is opt-in by being a
-collapsed child panel, so nothing is added to the panel users read every day. The
-deviation: no `_warned_truncated` per-stack print-once set. The panel line is the
-surface, the console already prints the fallback's cause where it decides not to
-memoize, and a second warning channel was one more thing to keep in step.
-
-**Test.** `TruncatedSignatureTests` (layer B) builds a chain `_MAX_NODE_TREE_DEPTH`
-deep and pins both halves: `_node_tree_signature` returns `None` rather than a
-truncated signature, and `_prefix_revision` returns `None` with it, so the prefix is
-re-evaluated every pass — the fallback is a cost, not a failure, and the stage
-settles anyway. The counter assertion in it fails if the counter is ever dropped
-again.
+**Resolved 2026-10-15, by deletion.** The counter was surfaced in the Diagnostics
+panel first, then the mechanism that fed it went away: the prefix revision is built
+from the epochs Blender's depsgraph moves, and the walk that remains collects
+*references* (names), not values, so there is nothing to truncate and no depth cap.
+`_node_tree_signature`, `_MAX_NODE_TREE_DEPTH`, `signature_truncated`, the panel line
+and `TruncatedSignatureTests` are gone together. The class of failure this item was
+written about — a path that is correct but silently expensive — still exists; the
+cost it was about (~8 ms/pass) is now ~0.01 ms, which is what makes deleting the
+surface the right answer rather than a regression.
 
 ### N7 — the only way to retry a stage discards its cache
 
@@ -336,9 +332,10 @@ Put in P4-1's terms, and with the caveat that the densities are not identical:
   floor at 50k. That is why the density caveat matters: the ratio between the two
   rows is the signal, not the absolute.
 
-**Resolved.** The sound content signal P4-1 could not find does not exist, so the
-fix is not to find one but to stop asking: a referenced target's geometry hash is
-cached across passes and retired when the depsgraph tags that target. The update
+**Resolved twice, the second time properly.** First by caching a referenced
+target's geometry hash (below), which the epoch work then deleted: the revision
+holds epochs of the datablocks a prefix reads, so no geometry is hashed on the memo
+hit path at all. The table is kept as the evidence that the cost was real. The update
 list resolves to *evaluated* IDs, whose pointers are not the originals' — a tagged
 mesh and the mesh it was copied from sit at different addresses, so a pointer match
 never matches — and the cache is keyed by `(as_pointer, object name, data name)`:
