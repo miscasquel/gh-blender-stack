@@ -59,6 +59,12 @@ namespace GhStack
             p.AddTextParameter("Request ID", "R", "Request this geometry belongs to", GH_ParamAccess.item);
             p.AddTextParameter("Status", "S", "Stage status", GH_ParamAccess.item);
             p.AddTextParameter("Message", "M", "Diagnostics", GH_ParamAccess.item);
+            // The attribute vocabulary of the geometry above, so a definition can
+            // see what Blender carries instead of guessing names. Values come
+            // through `Attribute Get`.
+            p.AddTextParameter("Attributes", "A",
+                "Names of the attributes carried with this stage's geometry",
+                GH_ParamAccess.list);
         }
 
         protected override void SolveInstance(IGH_DataAccess da)
@@ -78,6 +84,7 @@ namespace GhStack
                 da.SetData("Request ID", "");
                 da.SetData("Status", "no key");
                 da.SetData("Message", "connect the stage key from Blender's GH Stack panel");
+                da.SetDataList("Attributes", new List<string>());
                 return;
             }
             GhLink.PublishStage(key, enabled);
@@ -102,6 +109,7 @@ namespace GhStack
             da.SetData("Request ID", slot.Rid);
             da.SetData("Status", status);
             da.SetData("Message", slot.Message);
+            da.SetDataList("Attributes", StageGeometry.AttributeNames(slot.Attributes));
             Message = GhLink.Connected ? status : "disconnected";
             GhLink.Publish(OnPingDocument());
         }

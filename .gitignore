@@ -28,3 +28,4 @@ spikes/results/s6-run.txt
 
 # OS
 .DS_Store
+spikes/results/*-run.txt

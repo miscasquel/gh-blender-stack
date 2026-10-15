@@ -292,9 +292,19 @@ namespace GhStack
             {
                 object raw;
                 if (AttributeStore.TryGet(geometry, name, out type, out domain, out raw))
+                {
                     values = AttributeValues.ToGoos(raw, type);
+                }
                 else
-                    AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "no attribute named " + name);
+                {
+                    // Say what the geometry does carry: a name typo is otherwise
+                    // indistinguishable from attributes never arriving.
+                    string[] names = AttributeStore.Names(geometry);
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, names.Length == 0
+                        ? "this geometry carries no attributes (is Blender running a build with attribute support?)"
+                        : "no attribute named " + name + " (this geometry carries: "
+                          + string.Join(", ", names) + ")");
+                }
             }
             da.SetDataList("Values", values);
             da.SetData("Type", type);

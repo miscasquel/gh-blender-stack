@@ -50,10 +50,12 @@ Blender                                     Rhino / Grasshopper (wine)
 - **Attributes** are Blender's named attributes (any type, any mesh domain:
   floats, ints, booleans, strings, vectors, colours, quaternions, matrices).
   They travel with the geometry both ways: put one on a base mesh (Mesh
-  properties → Attributes) and **Attribute Get** reads it in Grasshopper;
-  **Attribute Set** attaches one the graph computed, and Stage Out writes it
-  back into the helper mesh. The active colour attribute and the edge creases
-  keep their native Blender channels.
+  properties → Attributes) and Stage In lists its name on the `Attributes`
+  output, **Attribute Get** reads its values in Grasshopper; **Attribute Set**
+  attaches one the graph computed, and Stage Out writes it back into the helper
+  mesh. The active colour attribute and the edge creases keep their native
+  Blender channels. If `Attribute Get` cannot find a name it lists what the
+  geometry does carry.
 
 ## Setup
 

@@ -35,10 +35,11 @@ Blender                                          Rhino / Grasshopper (wine)
   input.
 - **Attributes.** Blender's named attributes (floats, ints, booleans, strings,
   vectors, colours, quaternions, matrices — every type, on every mesh domain)
-  travel with the geometry: Stage In attaches them to the Rhino geometry, Stage
-  Out sends back what the graph attached. **Attribute Get** and **Attribute Set**
-  read and write them in Grasshopper. The active colour attribute and edge
-  creases keep their native channels (vertex colours, SubD tags).
+  travel with the geometry: Stage In attaches them to the Rhino geometry and
+  lists their names on its `Attributes` output, Stage Out sends back what the
+  graph attached. **Attribute Get** and **Attribute Set** read and write them in
+  Grasshopper. The active colour attribute and edge creases keep their native
+  channels (vertex colours, SubD tags).
 - **Parameters.** `Param` components declare float, int, bool, vector3, colour,
   value list, and text parameters. Blender draws them in the N-panel with
   ranges, a value-list dropdown, keyframe decorators, and drivers.

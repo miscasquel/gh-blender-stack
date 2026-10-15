@@ -74,5 +74,20 @@ namespace GhStack
 
             return geometry;
         }
+
+        /// <summary>The attribute names of a frame's descriptors, in frame order.
+        /// Stage In publishes them so a definition can see what Blender carries
+        /// without guessing; the values come through Attribute Get.</summary>
+        public static List<string> AttributeNames(List<Dictionary<string, object>> attributes)
+        {
+            var names = new List<string>();
+            if (attributes == null) return names;
+            foreach (Dictionary<string, object> descriptor in attributes)
+            {
+                string name = Json.GetString(descriptor, "name");
+                if (!string.IsNullOrEmpty(name)) names.Add(name);
+            }
+            return names;
+        }
     }
 }

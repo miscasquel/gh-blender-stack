@@ -19,10 +19,11 @@ Notable changes to this project, following
   (layer B covers every type). The active colour attribute and edge creases keep
   their native channels, so nothing travels twice.
 - **`Attribute Get` / `Attribute Set` components** (GH Stack → Attributes) read
-  and write attributes in a definition. Get emits native values (numbers,
-  integers, booleans, texts, vectors, colours; compound types flattened), Set
-  infers the type from the values and the domain from the element count (or takes
-  an explicit Domain).
+  and write attributes in a definition; Stage In also lists the attribute names
+  it received on its `Attributes` output, so a graph can discover them. Get
+  emits native values (numbers, integers, booleans, texts, vectors, colours;
+  compound types flattened), Set infers the type from the values and the domain
+  from the element count (or takes an explicit Domain).
 - **`i32` wire dtype** for Blender's signed `INT` attribute type; the codec, the
   canonical dtypes and both fixture suites cover it.
 - **A new fixture**, `response-attributes`, pins `i32`, `f32`, `u8` and the
