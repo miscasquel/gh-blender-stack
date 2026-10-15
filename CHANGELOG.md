@@ -22,8 +22,14 @@ Notable changes to this project, following
   and write attributes in a definition; Stage In also lists the attribute names
   it received on its `Attributes` output, so a graph can discover them. Get
   emits native values (numbers, integers, booleans, texts, vectors, colours;
-  compound types flattened), Set infers the type from the values and the domain
-  from the element count (or takes an explicit Domain).
+  compound types flattened) and reports Blender's own type names (**Float**,
+  **Boolean**, **4x4 Matrix**, …), Set infers the type from the values and the
+  domain from the element count (or takes an explicit Domain).
+- **The attribute store has console coverage.** `GhStackAttrTests.exe` (built by
+  `grasshopper/build/build.sh`, run by `scripts/test-gha`) pins mixed types
+  keeping their own types, every wire type surviving attach → collect
+  byte-exact, prefix names like `test`/`test2` staying distinct, and the labels
+  matching Blender's vocabulary.
 - **`i32` wire dtype** for Blender's signed `INT` attribute type; the codec, the
   canonical dtypes and both fixture suites cover it.
 - **A new fixture**, `response-attributes`, pins `i32`, `f32`, `u8` and the

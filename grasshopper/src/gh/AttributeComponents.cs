@@ -294,6 +294,9 @@ namespace GhStack
                 if (AttributeStore.TryGet(geometry, name, out type, out domain, out raw))
                 {
                     values = AttributeValues.ToGoos(raw, type);
+                    // The output shows Blender's own type names (its "Store Named
+                    // Attribute" menu): "Float", "Boolean", "4x4 Matrix", ...
+                    type = AttributeStore.Label(type);
                 }
                 else
                 {

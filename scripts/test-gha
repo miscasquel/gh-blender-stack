@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Layer C, codec half: build the C# core and check it against the golden
-# fixtures under wine. No Rhino needed: the codec is pure managed code.
+# fixtures under wine, then the attribute store (which references RhinoCommon's
+# managed ArchivableDictionary; no Rhino process is involved).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -21,6 +22,11 @@ WINEPREFIX="$PREFIX" "$WINE" \
   "$(win_path "$PWD/grasshopper/build/out/GhStackCoreTests.exe")" \
   "$(win_path "$PWD/protocol/fixtures")" >"$LOG" 2>&1
 CODE=$?
+if [ -f grasshopper/build/out/GhStackAttrTests.exe ]; then
+  WINEPREFIX="$PREFIX" "$WINE" \
+    "$(win_path "$PWD/grasshopper/build/out/GhStackAttrTests.exe")" >>"$LOG" 2>&1
+  CODE=$(( CODE | $? ))
+fi
 set -e
 
 grep -vE 'fixme:|MESA-EGL|pci id|^$' "$LOG" || true

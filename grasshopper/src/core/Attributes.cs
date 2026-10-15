@@ -14,10 +14,15 @@
 // Compound values are stored as flat arrays of their elements, so the dictionary
 // holds only array types it can serialize natively: double[], int[], bool[],
 // byte[] and string[]. `components` says how many entries make one element.
+//
+// The mechanism lives on the root ArchivableDictionary, not on GeometryBase:
+// that is the part worth testing, and it runs under the console suite without
+// Rhino's native half (the geometry methods below are thin wrappers).
 
 using System;
 using System.Collections.Generic;
 using System.Text;
+using Rhino.Collections;
 using Rhino.Geometry;
 
 namespace GhStack.Core
@@ -54,6 +59,34 @@ namespace GhStack.Core
             { "STRING", 1 },
         };
 
+        // The names Blender's own UI uses for the data types (its "Store Named
+        // Attribute" menu and the mesh Attributes panel). The wire keeps the
+        // internal ids above; this is what the graph sees.
+        private static readonly Dictionary<string, string> LabelOf = new Dictionary<string, string>
+        {
+            { "FLOAT", "Float" },
+            { "INT", "Integer" },
+            { "BOOLEAN", "Boolean" },
+            { "FLOAT_VECTOR", "Vector" },
+            { "FLOAT2", "2D Vector" },
+            { "FLOAT4", "4D Vector" },
+            { "FLOAT_COLOR", "Color" },
+            { "BYTE_COLOR", "Byte Color" },
+            { "QUATERNION", "Quaternion" },
+            { "FLOAT4X4", "4x4 Matrix" },
+            { "INT8", "8-Bit Integer" },
+            { "INT16_2D", "2D Integer Vector" },
+            { "INT32_2D", "2D Integer Vector" },
+            { "STRING", "String" },
+        };
+
+        /// <summary>The Blender UI name of a wire type id ("FLOAT" -> "Float").</summary>
+        public static string Label(string type)
+        {
+            string label;
+            return LabelOf.TryGetValue(type ?? "", out label) ? label : type;
+        }
+
         /// <summary>The protocol pool a geometry object belongs to, or null when
         /// attributes cannot be attached to it.</summary>
         public static string GroupOf(GeometryBase geometry)
@@ -66,40 +99,25 @@ namespace GhStack.Core
 
         // ------------------------------------------------------------- storage
 
-        private static Rhino.Collections.ArchivableDictionary Root(GeometryBase geometry, bool create)
+        public static bool Has(ArchivableDictionary root)
         {
-            Rhino.Collections.ArchivableDictionary root;
-            if (geometry.UserDictionary.TryGetDictionary(RootKey, out root) && root != null)
-                return root;
-            if (!create) return null;
-            root = new Rhino.Collections.ArchivableDictionary();
-            geometry.UserDictionary.Set(RootKey, root);
-            return root;
-        }
-
-        public static bool Has(GeometryBase geometry)
-        {
-            Rhino.Collections.ArchivableDictionary root = Root(geometry, false);
             return root != null && root.Count > 0;
         }
 
-        public static string[] Names(GeometryBase geometry)
+        public static string[] Names(ArchivableDictionary root)
         {
-            Rhino.Collections.ArchivableDictionary root = Root(geometry, false);
-            if (root == null) return new string[0];
-            return root.Keys;
+            return root == null ? new string[0] : root.Keys;
         }
 
         /// <summary>One attribute's metadata and flat values, or false.</summary>
-        public static bool TryGet(GeometryBase geometry, string name,
+        public static bool TryGet(ArchivableDictionary root, string name,
                                   out string type, out string domain, out object values)
         {
             type = null;
             domain = null;
             values = null;
-            Rhino.Collections.ArchivableDictionary root = Root(geometry, false);
             if (root == null) return false;
-            Rhino.Collections.ArchivableDictionary record;
+            ArchivableDictionary record;
             if (!root.TryGetDictionary(name, out record) || record == null) return false;
             type = record.GetString("type", "");
             domain = record.GetString("domain", "");
@@ -107,19 +125,19 @@ namespace GhStack.Core
         }
 
         /// <summary>Store one attribute (values as a flat native array).</summary>
-        public static void Set(GeometryBase geometry, string name, string type, string domain, object values)
+        public static void Set(ArchivableDictionary root, string name, string type, string domain, object values)
         {
             if (!KindOf.ContainsKey(type))
                 throw new FrameException("bad_attribute", "unknown attribute type " + type);
-            var record = new Rhino.Collections.ArchivableDictionary();
+            var record = new ArchivableDictionary();
             record.Set("type", type);
             record.Set("domain", domain ?? "");
             record.Set("components", ComponentsOf[type]);
             SetValues(record, values);
-            Root(geometry, true).Set(name, record);
+            root.Set(name, record);
         }
 
-        private static void SetValues(Rhino.Collections.ArchivableDictionary record, object values)
+        private static void SetValues(ArchivableDictionary record, object values)
         {
             var doubles = values as double[];
             if (doubles != null) { record.Set("values", doubles); return; }
@@ -139,10 +157,10 @@ namespace GhStack.Core
         /// <summary>Attach every descriptor of one group from a decoded frame.
         /// Descriptors naming sections the frame does not carry are skipped: a
         /// truncated frame must not take the stage down.</summary>
-        public static void Attach(GeometryBase geometry, string group,
+        public static void Attach(ArchivableDictionary root, string group,
                                   List<Dictionary<string, object>> descriptors, List<Section> sections)
         {
-            if (descriptors == null || sections == null) return;
+            if (root == null || descriptors == null || sections == null) return;
             foreach (Dictionary<string, object> descriptor in descriptors)
             {
                 if (Json.GetString(descriptor, "group") != group) continue;
@@ -156,7 +174,7 @@ namespace GhStack.Core
 
                 object flat = Decode(type, values, Find(sections, Json.GetString(descriptor, "offsets")));
                 if (flat != null)
-                    Set(geometry, name, type, domain, flat);
+                    Set(root, name, type, domain, flat);
             }
         }
 
@@ -204,17 +222,16 @@ namespace GhStack.Core
 
         // ------------------------------------------------- dictionary -> wire
 
-        /// <summary>Append every attribute on a geometry object as wire sections
-        /// plus descriptors. The attribute index continues from the descriptor
-        /// list, so several groups can be collected into one frame.</summary>
-        public static void Collect(GeometryBase geometry, string group,
+        /// <summary>Append every attribute under a root as wire sections plus
+        /// descriptors. The attribute index continues from the descriptor list,
+        /// so several groups can be collected into one frame.</summary>
+        public static void Collect(ArchivableDictionary root, string group,
                                    List<Section> sections, List<Dictionary<string, object>> descriptors)
         {
-            Rhino.Collections.ArchivableDictionary root = Root(geometry, false);
             if (root == null) return;
             foreach (string name in root.Keys)
             {
-                Rhino.Collections.ArchivableDictionary record;
+                ArchivableDictionary record;
                 if (!root.TryGetDictionary(name, out record) || record == null) continue;
                 string type = record.GetString("type", "");
                 if (!KindOf.ContainsKey(type)) continue;
@@ -299,6 +316,54 @@ namespace GhStack.Core
             foreach (Section section in sections)
                 if (section.Name == name) return section;
             return null;
+        }
+
+        // ------------------------------------------------------- geometry glue
+
+        private static ArchivableDictionary Root(GeometryBase geometry, bool create)
+        {
+            ArchivableDictionary root;
+            if (geometry.UserDictionary.TryGetDictionary(RootKey, out root) && root != null)
+                return root;
+            if (!create) return null;
+            root = new ArchivableDictionary();
+            geometry.UserDictionary.Set(RootKey, root);
+            return root;
+        }
+
+        public static void Attach(GeometryBase geometry, string group,
+                                  List<Dictionary<string, object>> descriptors, List<Section> sections)
+        {
+            ArchivableDictionary existing = Root(geometry, false);
+            if (existing == null && (descriptors == null || descriptors.Count == 0)) return;
+            Attach(Root(geometry, true), group, descriptors, sections);
+        }
+
+        public static void Collect(GeometryBase geometry, string group,
+                                   List<Section> sections, List<Dictionary<string, object>> descriptors)
+        {
+            Collect(Root(geometry, false), group, sections, descriptors);
+        }
+
+        public static bool TryGet(GeometryBase geometry, string name,
+                                  out string type, out string domain, out object values)
+        {
+            return TryGet(Root(geometry, false), name, out type, out domain, out values);
+        }
+
+        public static void Set(GeometryBase geometry, string name, string type, string domain, object values)
+        {
+            Set(Root(geometry, true), name, type, domain, values);
+        }
+
+        public static string[] Names(GeometryBase geometry)
+        {
+            return Names(Root(geometry, false));
+        }
+
+        public static bool Has(GeometryBase geometry)
+        {
+            return Has(Root(geometry, false));
         }
     }
 }

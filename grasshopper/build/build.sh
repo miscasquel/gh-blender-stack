@@ -39,3 +39,27 @@ WINEPREFIX="$PREFIX" "$WINE" "$CSC" \
 
 [ -f "$OUT" ] || { echo "build failed: $OUT not produced" >&2; exit 1; }
 echo "built $OUT ($(stat -c%s "$OUT") bytes)"
+
+# The attribute-store tests reference RhinoCommon (a managed assembly: the
+# ArchivableDictionary runs without a Rhino process, but the types must be
+# present). They build only where the Rhino install is; the codec tests above
+# need nothing from Rhino.
+RC_DLL="${RHINO:-$PREFIX/drive_c/Program Files/Rhino 8}/System/RhinoCommon.dll"
+ATTR_OUT="$OUT_DIR/GhStackAttrTests.exe"
+if [ -f "$RC_DLL" ]; then
+  cp -f "$RC_DLL" "$OUT_DIR/"
+  rm -f "$ATTR_OUT"
+  WINEPREFIX="$PREFIX" "$WINE" "$CSC" \
+    /nologo /target:exe \
+    /out:"$(win_path "$ATTR_OUT")" \
+    /r:"$(win_path "$RC_DLL")" \
+    "$(win_path "$REPO/grasshopper/src/core/Json.cs")" \
+    "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
+    "$(win_path "$REPO/grasshopper/src/core/Attributes.cs")" \
+    "$(win_path "$REPO/grasshopper/tests/console/AttrTests.cs")" \
+    2>&1 | grep -vE 'fixme:|MESA-EGL|pci id|^$' || true
+  [ -f "$ATTR_OUT" ] || { echo "build failed: $ATTR_OUT not produced" >&2; exit 1; }
+  echo "built $ATTR_OUT ($(stat -c%s "$ATTR_OUT") bytes)"
+else
+  echo "note: no RhinoCommon.dll under the prefix; attribute tests not built" >&2
+fi
