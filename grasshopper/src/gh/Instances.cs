@@ -186,6 +186,18 @@ namespace GhStack
                         return null;
                     }
 
+                    // Attributes ride on the definition's own geometry, exactly
+                    // as they do on the frame's — and they are attached before
+                    // the definition is added: the table stores its own copy of
+                    // the geometry, so a later write to the local objects never
+                    // reaches the document.
+                    foreach (GeometryBase source in sources)
+                    {
+                        string group = AttributeStore.GroupOf(source);
+                        if (group != null)
+                            AttributeStore.Attach(source, group, _attributes, _frame.Sections, index);
+                    }
+
                     string name = DefinitionPrefix + ContentHash(prefix, nestedNames);
                     InstanceDefinition existing = _doc.InstanceDefinitions.Find(name);
                     InstanceDefinition definition;
@@ -206,15 +218,6 @@ namespace GhStack
                             return null;
                         }
                         definition = _doc.InstanceDefinitions[added];
-                    }
-
-                    // Attributes ride on the definition's own geometry, exactly
-                    // as they do on the frame's.
-                    foreach (GeometryBase source in sources)
-                    {
-                        string group = AttributeStore.GroupOf(source);
-                        if (group != null)
-                            AttributeStore.Attach(source, group, _attributes, _frame.Sections, index);
                     }
 
                     _done[index] = definition;

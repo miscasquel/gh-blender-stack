@@ -216,6 +216,26 @@ namespace GhStack.Spike.S9
                 r["instances_document"] = "no active document";
                 return;
             }
+            // Leave no leftovers from an earlier run: unreferenced `GHStack *`
+            // definitions in the open document are this product's (or this
+            // check's), and a reused one would hide the attribute check below.
+            var stale = new List<InstanceDefinition>();
+            foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false))
+                if (idef.Name != null && idef.Name.StartsWith(Instances.DefinitionPrefix, StringComparison.Ordinal)
+                    && idef.UseCount() == 0)
+                    stale.Add(idef);
+            foreach (InstanceDefinition idef in stale)
+                doc.InstanceDefinitions.Delete(idef.Index, true, false);
+            r["instances_preclean"] = stale.Count == 0
+                ? "none"
+                : stale.Count + " stale definition(s) removed";
+
+            // The check owns whatever definition Build adds; the table is
+            // diffed rather than trusting an id accessor (ModelInstanceDefinition.Id
+            // is not populated for document-backed definitions, probed 2026-10-16).
+            var before = new HashSet<Guid>();
+            foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false)) before.Add(idef.Id);
+            InstanceDefinition added = null;
 
             var header = new Dictionary<string, object>();
             var table = new List<object>();
@@ -277,7 +297,6 @@ namespace GhStack.Spike.S9
                 : "got " + geometry.Count + (notes.Count > 0 ? " (" + notes[0] + ")" : "");
 
             var references = new List<GH_InstanceReference>();
-            Guid definitionId = Guid.Empty;
             foreach (IGH_Goo goo in geometry)
             {
                 GH_InstanceReference reference = goo as GH_InstanceReference;
@@ -289,20 +308,22 @@ namespace GhStack.Spike.S9
                 r["instances_valid"] = first.IsValid.ToString();
                 BoundingBox box = first.GetBoundingBox(Transform.Identity);
                 r["instances_bbox"] = box.IsValid ? "valid" : "invalid";
-                if (first.InstanceDefinition != null && first.InstanceDefinition.Id != null)
-                    definitionId = first.InstanceDefinition.Id.Value;
+                r["instances_reference_id"] = first.Value != null
+                    && first.Value.ParentIdefId != Guid.Empty
+                    && !before.Contains(first.Value.ParentIdefId)
+                    ? "names a definition this check added"
+                    : "does not match an added definition";
             }
 
             // The definition is in the document, content-hash named, and its
             // geometry carries the per-definition attribute.
-            int index = definitionId == Guid.Empty ? -1 : doc.InstanceDefinitions.InstanceDefinitionIndex(definitionId, true);
-            if (index >= 0)
+            InstanceDefinition definition = Newest(doc, before);
+            added = definition;
+            if (definition != null)
             {
-                InstanceDefinition definition = doc.InstanceDefinitions[index];
                 RhinoObject[] objects = definition.GetObjects();
-                r["instances_definition"] = index >= 0
-                    ? "document definition '" + definition.Name + "', objects=" + objects.Length
-                    : "missing";
+                r["instances_definition"] = "document definition '" + definition.Name
+                    + "', objects=" + objects.Length;
                 if (objects.Length > 0)
                 {
                     string type, domain;
@@ -345,20 +366,16 @@ namespace GhStack.Spike.S9
                 : "missing";
 
             // Cleanup: the check added the definition; put the document back.
-            if (index >= 0)
-            {
-                doc.InstanceDefinitions.Delete(index, true, false);
-                // A reused definition from a previous run can also be sitting
-                // there under its content-hash name (and no references).
-                InstanceDefinition leftover = doc.InstanceDefinitions.Find(definitionId, true);
-                if (leftover != null)
-                {
-                    int leftoverIndex = doc.InstanceDefinitions.InstanceDefinitionIndex(
-                        leftover.Id, true);
-                    if (leftoverIndex >= 0)
-                        doc.InstanceDefinitions.Delete(leftoverIndex, true, false);
-                }
-            }
+            if (added != null)
+                doc.InstanceDefinitions.Delete(added.Index, true, false);
+        }
+
+        /// <summary>The definition that appeared since \p before, or null.</summary>
+        private static InstanceDefinition Newest(RhinoDoc doc, HashSet<Guid> before)
+        {
+            foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false))
+                if (!before.Contains(idef.Id)) return idef;
+            return null;
         }
 
         private static Section Find(List<Section> sections, string name)
