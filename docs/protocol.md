@@ -194,6 +194,43 @@ attribute contributes one `attr.<i>.values` section plus one entry in the frame'
   geometry object (UserDictionary), so it rides along with duplication and
   transforms.
 
+### 5.2 Instances
+
+Instances are Blender's instance rows (a `GeometrySet`'s instances component) and
+Rhino's block instances. A frame's rows reference *definitions* — reusable
+geometry — carried in the same frame, so one definition crosses once however
+many rows use it. Nesting is a DAG: a definition's own rows reference other
+definitions in the same table by index.
+
+The header carries the definition table, one entry per definition, in index
+order:
+
+```json
+"definitions": [{"name":"Tree"}, {"name":""}]
+```
+
+- `name` is a display name and may be empty. It is not identity: definition
+  identity is content-based on each side, and the whole list partakes in the
+  geometry and output hashes as `definitions` (§6.1, §6.3), so a rename is not
+  silent.
+- Definition `i`'s geometry is a complete §5 section group prefixed
+  `idef.<i>.`: `idef.0.mesh.verts`, `idef.0.crv.points`, and so on, with the
+  same names and dtypes. Attribute descriptors for definition `i` carry
+  `"definition": i` and their sections are prefixed too:
+  `idef.<i>.attr.<j>.values` (with `.<j>.offsets` for STRING).
+- Rows are `inst.ref_def` (u32, `[R]`) and `inst.transforms` (f32, `[R,16]`):
+  one definition index and one 4x4 matrix per row. Both sections are
+  all-or-nothing; `inst.ref_def` length is `R` and `inst.transforms` length is
+  `R*16`.
+- Definition `i`'s own nested rows are `idef.<i>.inst.ref_def` /
+  `idef.<i>.inst.transforms`, referencing other definitions in the table.
+- The matrices are row-major (`m[row][col]`); a point transforms as a row vector
+  (Rhino's `Transform` convention), so the translation sits in the last row —
+  elements 12, 13, 14. Blender transposes on read and write.
+- Absent `definitions` means no instances. A definition with no geometry
+  sections is a legal empty definition and still occupies its index.
+- A definition index outside the table is a `bad_frame` on decode.
+
 ## 6. Identifiers, hashes, and apply rules
 
 ### 6.1 Geometry hash (Blender only)
@@ -208,6 +245,8 @@ for section in [sections in the order of §5 table, only those present]:
 Prefixed with `sha256:` and hex-encoded. Computed with numpy on the Blender side. Never a hash of a file.
 
 **Attributes take part.** When the frame carries attributes, their descriptor list (§5.1) is hashed as one extra entry named `attr.descriptors`, holding the canonical JSON of the list. Section names are index-based (`attr.0.values`), so without the descriptors a renamed attribute would hash identically and a cache hit would silently keep the old name.
+
+**Instances take part.** Definition sections (`idef.<i>.*`) hash in definition-index order, each definition after the other, so the hash does not depend on section order; `inst.ref_def` / `inst.transforms` hash in the §5-order after the geometry sections. The `definitions` header list is hashed as one extra entry named `definitions`, canonical JSON, for the same reason as the attribute descriptors: a rename alone must not look like a cache hit.
 
 ### 6.2 Request ID (Blender only)
 
@@ -225,7 +264,7 @@ Prefixed with `sha256:`. GH never computes or validates request IDs. It echoes t
 
 ### 6.3 Output hash (GH only)
 
-SHA-256 over the response sections, in header order: name (UTF-8), 0x00, raw bytes. Prefixed with `sha256:`. Blender treats it as an opaque string. Attribute descriptors take part the same way as in the geometry hash: one extra entry named `attr.descriptors` after the sections, holding the canonical JSON of the list.
+SHA-256 over the response sections, in header order: name (UTF-8), 0x00, raw bytes. Prefixed with `sha256:`. Blender treats it as an opaque string. Attribute descriptors take part the same way as in the geometry hash: one extra entry named `attr.descriptors` after the sections, holding the canonical JSON of the list. The `definitions` list takes part as one extra entry named `definitions`, canonical JSON, so a renamed definition is not a silent no-op.
 
 ### 6.4 Apply rules (Blender)
 
@@ -267,7 +306,7 @@ Both the Python and C# codecs must decode every fixture to the same values, and 
 - C# under wine: `scripts/test-gha`, via `grasshopper/tests/console/GhStackCoreTests.exe`.
 - Regenerate with `python3 scripts/make-fixtures`.
 
-Eleven fixtures, covering `ping`, `hello`, `schema`, a `ref` request, a mesh request, a SubD request, a mesh response, a mixed mesh/curve/point response, a response with attributes (`i32`, `f32`, `u8` and a STRING offsets section), an error response, and the `error` message. Floats in fixtures are exactly representable in f32, so both codecs agree byte for byte without a tolerance.
+Twelve fixtures, covering `ping`, `hello`, `schema`, a `ref` request, a mesh request, a SubD request, a request with a definition table, nested instance rows and a per-definition attribute, a mesh response, a mixed mesh/curve/point response, a response with attributes (`i32`, `f32`, `u8` and a STRING offsets section), an error response, and the `error` message. Floats in fixtures are exactly representable in f32, so both codecs agree byte for byte without a tolerance.
 
 ## 10. Changes from plan rev 2
 
@@ -293,3 +332,8 @@ Eleven fixtures, covering `ping`, `hello`, `schema`, a `ref` request, a mesh req
   list in as `attr.descriptors` so a rename invalidates the cache. The
   `response-attributes` fixture pins i32, `f32`, `u8` and the STRING offsets
   section through both codecs. Additive inside v2.
+- 2026-10-16: instances add §5.2 (`idef.<i>.*` groups, an `inst.*` row pair and
+  a `definitions` header list); the geometry hash orders definition sections by
+  definition index and folds the list in as `definitions`, and the output hash
+  folds it in the same way. The `request-instances` fixture pins nested rows and
+  a per-definition attribute through both codecs. Additive inside v2.

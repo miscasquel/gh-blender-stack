@@ -33,6 +33,8 @@ HASH_SECTION_ORDER = (
     "pts.positions",
     "pts.radii",
     "pts.colors",
+    "inst.ref_def",
+    "inst.transforms",
 )
 
 RID_DOMAIN = b"gh-stack/rid/v2"
@@ -48,19 +50,42 @@ def _update_section(digest, name, raw):
     digest.update(raw)
 
 
+def ordered_names(names):
+    """The canonical §6.1 order for a set of section names.
+
+    Base sections follow the §5 table order; `idef.<i>.*` groups follow, one
+    definition after the other in index order, each definition ordered the same
+    way; anything else is last, sorted, so an unknown name stays deterministic.
+    """
+    base = []
+    groups = {}
+    extra = []
+    for name in names:
+        parts = name.split(".", 2)
+        if len(parts) == 3 and parts[0] == "idef" and parts[1].isdigit():
+            groups.setdefault(int(parts[1]), []).append(parts[2])
+        elif name in HASH_SECTION_ORDER:
+            base.append(name)
+        else:
+            extra.append(name)
+    ordered = [name for name in HASH_SECTION_ORDER if name in base]
+    for index in sorted(groups):
+        for inner in ordered_names(groups[index]):
+            ordered.append("idef.%d.%s" % (index, inner))
+    ordered += sorted(extra)
+    return ordered
+
+
 def geometry_hash(section_renderers):
     """SHA-256 over the canonical section list.
 
     ``section_renderers`` maps a section name to any ``len()``able sequence of raw
-    bytes (a numpy ``ndarray`` works, via ``bytes()``). Sections are hashed in the
-    order of :data:`HASH_SECTION_ORDER`; unknown names are hashed last, sorted, so
-    the result stays deterministic even if a caller adds names.
+    bytes (a numpy ``ndarray`` works, via ``bytes()``). Sections are hashed in
+    :func:`ordered_names` order.
     """
     digest = hashlib.sha256()
     by_name = dict(section_renderers)
-    known = [name for name in HASH_SECTION_ORDER if name in by_name]
-    extra = sorted(name for name in by_name if name not in HASH_SECTION_ORDER)
-    for name in known + extra:
+    for name in ordered_names(by_name):
         _update_section(digest, name, bytes(by_name[name]))
     return _prefixed(digest)
 

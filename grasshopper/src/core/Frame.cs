@@ -124,6 +124,7 @@ namespace GhStack.Core
             "crv.points", "crv.counts", "crv.types", "crv.orders",
             "crv.knots_mode", "crv.cyclic",
             "pts.positions", "pts.radii", "pts.colors",
+            "inst.ref_def", "inst.transforms",
         };
 
         // -------------------------------------------------------------- encode
@@ -272,39 +273,74 @@ namespace GhStack.Core
             }
         }
 
-        /// <summary>Geometry hash: sections in the fixed order above (protocol §6.1).</summary>
+        /// <summary>Geometry hash: sections in canonical order (protocol §6.1) —
+        /// the §5 table order, then definitions in index order, then anything
+        /// unknown, sorted.</summary>
         public static string GeometryHash(IList<Section> sections)
         {
             var byName = new Dictionary<string, Section>();
             foreach (Section s in sections)
                 if (!byName.ContainsKey(s.Name)) byName[s.Name] = s;
 
-            var known = new List<Section>();
-            foreach (string name in HashSectionOrder)
-            {
-                Section s;
-                if (byName.TryGetValue(name, out s)) known.Add(s);
-            }
-            var extraNames = new List<string>();
-            foreach (string name in byName.Keys)
-                if (Array.IndexOf(HashSectionOrder, name) < 0) extraNames.Add(name);
-            extraNames.Sort(StringComparer.Ordinal);
-
             using (var sha = SHA256.Create())
             {
-                foreach (Section s in known) UpdateSection(sha, s);
-                foreach (string name in extraNames) UpdateSection(sha, byName[name]);
+                foreach (string name in OrderedNames(byName.Keys))
+                    UpdateSection(sha, byName[name]);
                 sha.TransformFinalBlock(new byte[0], 0, 0);
                 return "sha256:" + ToHex(sha.Hash);
             }
+        }
+
+        /// <summary>The canonical section-name order of protocol §6.1. Base
+        /// sections follow the §5 table order; `idef.&lt;i&gt;.*` groups follow,
+        /// one definition after the other in index order, each definition
+        /// ordered the same way; anything else is last, sorted.</summary>
+        public static List<string> OrderedNames(IEnumerable<string> names)
+        {
+            var baseNames = new List<string>();
+            var groups = new SortedDictionary<int, List<string>>();
+            var extra = new List<string>();
+            foreach (string name in names)
+            {
+                string[] parts = name.Split(new char[] { '.' }, 3);
+                if (parts.Length == 3 && parts[0] == "idef")
+                {
+                    int index;
+                    if (int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out index))
+                    {
+                        List<string> inner;
+                        if (!groups.TryGetValue(index, out inner))
+                        {
+                            inner = new List<string>();
+                            groups[index] = inner;
+                        }
+                        inner.Add(parts[2]);
+                        continue;
+                    }
+                }
+                if (Array.IndexOf(HashSectionOrder, name) >= 0) baseNames.Add(name);
+                else extra.Add(name);
+            }
+
+            var ordered = new List<string>();
+            foreach (string name in HashSectionOrder)
+                if (baseNames.Contains(name)) ordered.Add(name);
+            foreach (KeyValuePair<int, List<string>> entry in groups)
+                foreach (string inner in OrderedNames(entry.Value))
+                    ordered.Add("idef." + entry.Key.ToString(CultureInfo.InvariantCulture) + "." + inner);
+            extra.Sort(StringComparer.Ordinal);
+            ordered.AddRange(extra);
+            return ordered;
         }
 
         /// <summary>Output hash: sections in the given (header) order (protocol
         /// §6.3). Attribute descriptors take part as one synthetic entry named
         /// `attr.descriptors` (canonical JSON): section names are index-based,
         /// so without it a renamed attribute would hash identically and Blender
-        /// would skip the apply.</summary>
-        public static string OutputHash(IList<Section> sections, string attributesJson = null)
+        /// would skip the apply. The definitions list takes part the same way as
+        /// the synthetic entry `definitions`.</summary>
+        public static string OutputHash(IList<Section> sections, string attributesJson = null,
+                                        string definitionsJson = null)
         {
             using (var sha = SHA256.Create())
             {
@@ -313,6 +349,12 @@ namespace GhStack.Core
                 {
                     byte[] json = Encoding.UTF8.GetBytes(attributesJson);
                     var synthetic = new Section("attr.descriptors", "u8", json);
+                    UpdateSection(sha, synthetic);
+                }
+                if (!string.IsNullOrEmpty(definitionsJson))
+                {
+                    byte[] json = Encoding.UTF8.GetBytes(definitionsJson);
+                    var synthetic = new Section("definitions", "u8", json);
                     UpdateSection(sha, synthetic);
                 }
                 sha.TransformFinalBlock(new byte[0], 0, 0);

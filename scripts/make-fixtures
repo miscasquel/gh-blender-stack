@@ -246,6 +246,59 @@ def fixture_response_attributes():
     return header, sections
 
 
+def fixture_request_instances():
+    """A frame with a definition table: two definitions (one nested), three
+    instance rows and a per-definition attribute. Exercises `idef.<i>.*`
+    groups, the `inst.*` row pair and the `definitions` header list."""
+    header = {
+        "type": "request",
+        "stage": "panelize-3f9a",
+        "rid": "sha256:" + "e" * 64,
+        "nonce": 10,
+        "params": {},
+        "geom": {"mode": "full", "hash": "sha256:" + "f" * 64, "subd": False},
+        "units": "m",
+        "space": "stack-local",
+        "definitions": [{"name": "Panel"}, {"name": "Cluster"}],
+        "attributes": [
+            {"group": "mesh", "name": "load", "domain": "POINT", "type": "FLOAT",
+             "components": 1, "count": 4, "definition": 0,
+             "section": "idef.0.attr.0.values"},
+        ],
+    }
+    sections = [
+        # Definition 0: one quad with a point load attribute.
+        ("idef.0.mesh.verts", "f32", [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0]),
+        ("idef.0.mesh.face_counts", "u32", [4]),
+        ("idef.0.mesh.face_indices", "u32", [0, 1, 2, 3]),
+        ("idef.0.attr.0.values", "f32", [0.5, 1.0, 1.5, 2.0]),
+        # Definition 1: one triangle, itself instancing definition 0 once.
+        ("idef.1.mesh.verts", "f32", [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+        ("idef.1.mesh.face_counts", "u32", [3]),
+        ("idef.1.mesh.face_indices", "u32", [0, 1, 2]),
+        ("idef.1.inst.ref_def", "u32", [0]),
+        ("idef.1.inst.transforms", "f32", [
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 1.0, 1.0,
+        ]),
+        # Top level: two rows, definition 0 translated, definition 1 scaled.
+        ("inst.ref_def", "u32", [0, 1]),
+        ("inst.transforms", "f32", [
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            5.0, 0.0, 0.0, 1.0,
+            2.0, 0.0, 0.0, 0.0,
+            0.0, 2.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 3.0, 0.0, 1.0,
+        ]),
+    ]
+    return header, sections
+
+
 def fixture_error_ref():
     header = {
         "type": "error",
@@ -264,6 +317,7 @@ FIXTURES = {
     "request-ref": fixture_request_ref,
     "request-mesh": fixture_request_mesh,
     "request-subd": fixture_subd,
+    "request-instances": fixture_request_instances,
     "response-mesh": fixture_response_mesh,
     "response-mixed": fixture_response_mixed,
     "response-attributes": fixture_response_attributes,

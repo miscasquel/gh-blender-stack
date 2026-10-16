@@ -41,8 +41,8 @@ class GoldenFrameTests(unittest.TestCase):
         names = fixture_names()
         for required in (
             "ping", "hello", "schema", "request-ref", "request-mesh", "request-subd",
-            "response-mesh", "response-mixed", "response-attributes", "response-error",
-            "error-unknown-ref",
+            "request-instances", "response-mesh", "response-mixed",
+            "response-attributes", "response-error", "error-unknown-ref",
         ):
             self.assertIn(required, names)
 

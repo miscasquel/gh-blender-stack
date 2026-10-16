@@ -147,6 +147,19 @@ class GeometryHashTests(unittest.TestCase):
         )
         self.assertNotEqual(only_mesh, explicit_gaps)
 
+    def test_definition_sections_are_order_independent(self):
+        a = hashing.geometry_hash({"idef.1.mesh.verts": b"ab", "idef.0.mesh.verts": b"cd"})
+        b = hashing.geometry_hash({"idef.0.mesh.verts": b"cd", "idef.1.mesh.verts": b"ab"})
+        self.assertEqual(a, b)
+
+    def test_definition_index_order_is_numeric_not_lexicographic(self):
+        names = hashing.ordered_names(
+            ["idef.10.mesh.verts", "idef.2.mesh.verts", "mesh.verts"]
+        )
+        self.assertEqual(
+            names, ["mesh.verts", "idef.2.mesh.verts", "idef.10.mesh.verts"]
+        )
+
     def test_output_hash_uses_header_order(self):
         a = hashing.output_hash([("mesh.verts", b"ab"), ("crv.counts", b"cd")])
         b = hashing.output_hash([("crv.counts", b"cd"), ("mesh.verts", b"ab")])

@@ -1,0 +1,220 @@
+{
+  "frame_bytes": 1617,
+  "frame_sha256": "sha256:c11a2ac5a7460b41131175c2fece726bb49cb9049096ac33c2d16d3d90a58a5d",
+  "header": {
+    "attributes": [
+      {
+        "components": 1,
+        "count": 4,
+        "definition": 0,
+        "domain": "POINT",
+        "group": "mesh",
+        "name": "load",
+        "section": "idef.0.attr.0.values",
+        "type": "FLOAT"
+      }
+    ],
+    "definitions": [
+      {
+        "name": "Panel"
+      },
+      {
+        "name": "Cluster"
+      }
+    ],
+    "geom": {
+      "hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "mode": "full",
+      "subd": false
+    },
+    "nonce": 10,
+    "params": {},
+    "rid": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "sections": [
+      {
+        "bytes": 48,
+        "dtype": "f32",
+        "name": "idef.0.mesh.verts",
+        "shape": [
+          12
+        ]
+      },
+      {
+        "bytes": 4,
+        "dtype": "u32",
+        "name": "idef.0.mesh.face_counts",
+        "shape": [
+          1
+        ]
+      },
+      {
+        "bytes": 16,
+        "dtype": "u32",
+        "name": "idef.0.mesh.face_indices",
+        "shape": [
+          4
+        ]
+      },
+      {
+        "bytes": 16,
+        "dtype": "f32",
+        "name": "idef.0.attr.0.values",
+        "shape": [
+          4
+        ]
+      },
+      {
+        "bytes": 36,
+        "dtype": "f32",
+        "name": "idef.1.mesh.verts",
+        "shape": [
+          9
+        ]
+      },
+      {
+        "bytes": 4,
+        "dtype": "u32",
+        "name": "idef.1.mesh.face_counts",
+        "shape": [
+          1
+        ]
+      },
+      {
+        "bytes": 12,
+        "dtype": "u32",
+        "name": "idef.1.mesh.face_indices",
+        "shape": [
+          3
+        ]
+      },
+      {
+        "bytes": 4,
+        "dtype": "u32",
+        "name": "idef.1.inst.ref_def",
+        "shape": [
+          1
+        ]
+      },
+      {
+        "bytes": 64,
+        "dtype": "f32",
+        "name": "idef.1.inst.transforms",
+        "shape": [
+          16
+        ]
+      },
+      {
+        "bytes": 8,
+        "dtype": "u32",
+        "name": "inst.ref_def",
+        "shape": [
+          2
+        ]
+      },
+      {
+        "bytes": 128,
+        "dtype": "f32",
+        "name": "inst.transforms",
+        "shape": [
+          32
+        ]
+      }
+    ],
+    "space": "stack-local",
+    "stage": "panelize-3f9a",
+    "type": "request",
+    "units": "m",
+    "v": 2
+  },
+  "sections": {
+    "idef.0.attr.0.values": {
+      "bytes": 16,
+      "dtype": "f32",
+      "sha256": "sha256:dbe2c839f4852bd22f1dda03bf584b563623bc76b88ac3da14144ac88d1dc3ad",
+      "shape": [
+        4
+      ]
+    },
+    "idef.0.mesh.face_counts": {
+      "bytes": 4,
+      "dtype": "u32",
+      "sha256": "sha256:fb5e512425fc9449316ec95969ebe71e2d576dbab833d61e2a5b9330fd70ee02",
+      "shape": [
+        1
+      ]
+    },
+    "idef.0.mesh.face_indices": {
+      "bytes": 16,
+      "dtype": "u32",
+      "sha256": "sha256:baed642339816affb3fe8719792d0e4ce82f12db72b7373d244eaa65445800fe",
+      "shape": [
+        4
+      ]
+    },
+    "idef.0.mesh.verts": {
+      "bytes": 48,
+      "dtype": "f32",
+      "sha256": "sha256:38312f51e206e6fbdf6e650b42ce605c35dff6644cc8fefab3c204d69cd762b9",
+      "shape": [
+        12
+      ]
+    },
+    "idef.1.inst.ref_def": {
+      "bytes": 4,
+      "dtype": "u32",
+      "sha256": "sha256:df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119",
+      "shape": [
+        1
+      ]
+    },
+    "idef.1.inst.transforms": {
+      "bytes": 64,
+      "dtype": "f32",
+      "sha256": "sha256:c6e853a2ec5fbe3ca2a6fde43aca1e6ede23ca67f8c6044ff5c5fa5fc615bc22",
+      "shape": [
+        16
+      ]
+    },
+    "idef.1.mesh.face_counts": {
+      "bytes": 4,
+      "dtype": "u32",
+      "sha256": "sha256:9d9f290527a6be626a8f5985b26e19b237b44872b03631811df4416fc1713178",
+      "shape": [
+        1
+      ]
+    },
+    "idef.1.mesh.face_indices": {
+      "bytes": 12,
+      "dtype": "u32",
+      "sha256": "sha256:ad5dc1478de06a4c2728ea528bd9361a4b945e92a414bf4d180cedaaeaa5f4cc",
+      "shape": [
+        3
+      ]
+    },
+    "idef.1.mesh.verts": {
+      "bytes": 36,
+      "dtype": "f32",
+      "sha256": "sha256:d8b87038ed2ace74ed183166f6b0a541eab77f7184d50e65edc4bca5ccb5445a",
+      "shape": [
+        9
+      ]
+    },
+    "inst.ref_def": {
+      "bytes": 8,
+      "dtype": "u32",
+      "sha256": "sha256:01acecb507abfe1a354aa8064f4af5d3f1acd019e37db3c11c97523b71c76e9d",
+      "shape": [
+        2
+      ]
+    },
+    "inst.transforms": {
+      "bytes": 128,
+      "dtype": "f32",
+      "sha256": "sha256:dc13b1315303e230f57cada21c435f10f5525f9bc677a12465b97d8c64dda2f4",
+      "shape": [
+        32
+      ]
+    }
+  },
+  "sections_hash": "sha256:f1266a3877115830537795bab99ce45368365695e01fef387bae05743a94c7d9"
+}
