@@ -5,6 +5,9 @@ measured evidence behind the bigger items lives in `polish-plan.md`, which is a
 record of one review rather than a plan. If something is not here, it is either
 done or was judged not worth doing — it is not missing.
 
+**Next session:** read `docs/handoff-2026-10-16.md` first — it carries the state,
+the S9 round-2 run recipe, the instances design, and the open questions.
+
 Each item says what it is, where, and why it matters. Effort is not estimated:
 the last three batches each looked like an afternoon and were not.
 
