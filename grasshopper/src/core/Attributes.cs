@@ -87,6 +87,14 @@ namespace GhStack.Core
             return LabelOf.TryGetValue(type ?? "", out label) ? label : type;
         }
 
+        /// <summary>The domain as a display word ("POINT" -> "Point"). The wire
+        /// and the dictionary keep the protocol's upper-case names.</summary>
+        public static string DomainLabel(string domain)
+        {
+            if (string.IsNullOrEmpty(domain)) return "";
+            return char.ToUpperInvariant(domain[0]) + domain.Substring(1).ToLowerInvariant();
+        }
+
         /// <summary>The protocol pool a geometry object belongs to, or null when
         /// attributes cannot be attached to it.</summary>
         public static string GroupOf(GeometryBase geometry)

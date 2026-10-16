@@ -219,6 +219,24 @@ namespace GhStack.Tests.Console
                     first = pair[0] + " -> " + got + ", expected " + pair[1];
             }
             Check("labels match Blender's vocabulary", first == null, first ?? "");
+
+            string[][] domains = new string[][]
+            {
+                new string[] { "POINT", "Point" },
+                new string[] { "EDGE", "Edge" },
+                new string[] { "FACE", "Face" },
+                new string[] { "CORNER", "Corner" },
+                new string[] { "CURVE", "Curve" },
+                new string[] { "INSTANCE", "Instance" },
+            };
+            string firstDomain = null;
+            foreach (string[] pair in domains)
+            {
+                string got = AttributeStore.DomainLabel(pair[0]);
+                if (got != pair[1] && firstDomain == null)
+                    firstDomain = pair[0] + " -> " + got + ", expected " + pair[1];
+            }
+            Check("domains read as words", firstDomain == null, firstDomain ?? "");
         }
 
         // -------------------------------------------------------------- helpers

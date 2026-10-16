@@ -294,9 +294,11 @@ namespace GhStack
                 if (AttributeStore.TryGet(geometry, name, out type, out domain, out raw))
                 {
                     values = AttributeValues.ToGoos(raw, type);
-                    // The output shows Blender's own type names (its "Store Named
-                    // Attribute" menu): "Float", "Boolean", "4x4 Matrix", ...
+                    // The outputs show Blender's own vocabulary: its data type
+                    // names ("Float", "4x4 Matrix", ...) and the domain as a
+                    // word ("Point", "Face", ...).
                     type = AttributeStore.Label(type);
+                    domain = AttributeStore.DomainLabel(domain);
                 }
                 else
                 {
@@ -341,7 +343,7 @@ namespace GhStack
             p.AddGenericParameter("Geometry", "G", "Geometry to attach the attribute to", GH_ParamAccess.item);
             p.AddTextParameter("Name", "N", "Attribute name", GH_ParamAccess.item);
             p.AddGenericParameter("Values", "V", "One value per element: numbers, integers, booleans, texts, vectors/points or colours", GH_ParamAccess.list);
-            p.AddTextParameter("Domain", "D", "POINT, EDGE, FACE or CORNER. Empty infers it from the value count.", GH_ParamAccess.item);
+            p.AddTextParameter("Domain", "D", "Point, Edge, Face or Corner (any case). Empty infers it from the value count.", GH_ParamAccess.item);
             p[3].Optional = true;
         }
 
