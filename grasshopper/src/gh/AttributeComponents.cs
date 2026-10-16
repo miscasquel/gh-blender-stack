@@ -265,8 +265,8 @@ namespace GhStack
         protected override void RegisterOutputParams(GH_OutputParamManager p)
         {
             p.AddGenericParameter("Values", "V", "The values, one item per element (compound types flattened)", GH_ParamAccess.list);
-            p.AddTextParameter("Type", "T", "Data type (Float, Integer, Vector, 4x4 Matrix, ...)", GH_ParamAccess.item);
-            p.AddTextParameter("Domain", "D", "Where the values live (Point, Edge, Face, Corner, ...)", GH_ParamAccess.item);
+            p.AddTextParameter("Type", "T", "Attribute type (Float, Integer, Vector, 4x4 Matrix, ...)", GH_ParamAccess.item);
+            p.AddTextParameter("Domain", "D", "Attribute domain (Point, Edge, Face, Corner, ...)", GH_ParamAccess.item);
         }
 
         protected override void SolveInstance(IGH_DataAccess da)
