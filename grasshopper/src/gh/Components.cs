@@ -54,16 +54,16 @@ namespace GhStack
             // mesh components the way it always did, and mixed outputs no longer
             // require the user to pick the right typed output.
             p.AddGenericParameter("Geometry", "G",
-                "Everything received from Blender: meshes, SubD cages, curves, points, in that order",
+                "Everything Blender sent, in order: mesh, SubD cage, curves, point cloud",
                 GH_ParamAccess.list);
-            p.AddTextParameter("Request ID", "R", "Request this geometry belongs to", GH_ParamAccess.item);
+            p.AddTextParameter("Request ID", "R", "The request this geometry answers", GH_ParamAccess.item);
             p.AddTextParameter("Status", "S", "Stage status", GH_ParamAccess.item);
-            p.AddTextParameter("Message", "M", "Diagnostics", GH_ParamAccess.item);
+            p.AddTextParameter("Message", "M", "Diagnostics from the stage", GH_ParamAccess.item);
             // The attribute vocabulary of the geometry above, so a definition can
             // see what Blender carries instead of guessing names. Values come
             // through `Attribute Get`.
             p.AddTextParameter("Attributes", "A",
-                "Names of the attributes carried with this stage's geometry",
+                "Attribute names carried with this geometry",
                 GH_ParamAccess.list);
         }
 
@@ -79,11 +79,11 @@ namespace GhStack
             if (string.IsNullOrEmpty(key))
             {
                 // Unconfigured components stay quiet: no key, nothing to do.
-                Message = "no key";
+                Message = "No key";
                 da.SetDataList("Geometry", new List<IGH_Goo>());
                 da.SetData("Request ID", "");
-                da.SetData("Status", "no key");
-                da.SetData("Message", "connect the stage key from Blender's GH Stack panel");
+                da.SetData("Status", "No key");
+                da.SetData("Message", "Connect the stage key from the GH Stack panel in Blender");
                 da.SetDataList("Attributes", new List<string>());
                 return;
             }
@@ -180,10 +180,10 @@ namespace GhStack
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, note);
             if (string.IsNullOrEmpty(key))
             {
-                Message = "no key";
+                Message = "No key";
                 da.SetData("Sent", false);
                 da.SetData("Output hash", "");
-                da.SetData("Status", "no key");
+                da.SetData("Status", "No key");
                 return;
             }
             GhLink.PublishStage(key, enabled);
@@ -207,7 +207,7 @@ namespace GhStack
                     GooDispatch.Collect(goos, meshes, curves, points, subds, breps, ignored, sources);
                     foreach (string typeName in ignored)
                         AddRuntimeMessage(GH_RuntimeMessageLevel.Remark,
-                            "ignored unsupported geometry: " + typeName);
+                            "Ignored unsupported geometry: " + typeName);
 
                     var warnings = new List<string>();
                     Dictionary<string, object> counts;
@@ -335,7 +335,7 @@ namespace GhStack
         {
             p.AddTextParameter("Key", "K", "Stage key this parameter belongs to", GH_ParamAccess.item);
             p.AddTextParameter("Label", "L", "Display label", GH_ParamAccess.item);
-            p.AddIntegerParameter("Type", "T", "0 float, 1 int, 2 bool, 3 vector3, 4 color, 5 value list, 6 text", GH_ParamAccess.item);
+            p.AddIntegerParameter("Type", "T", "Type index: 0 float, 1 int, 2 bool, 3 vector3, 4 color, 5 value list, 6 text", GH_ParamAccess.item);
             p.AddTextParameter("Default", "D", "Default value as text", GH_ParamAccess.item);
             p.AddNumberParameter("Min", "m", "Minimum", GH_ParamAccess.item);
             p.AddNumberParameter("Max", "M", "Maximum", GH_ParamAccess.item);
@@ -378,7 +378,7 @@ namespace GhStack
 
             if (string.IsNullOrEmpty(key))
             {
-                Message = "no key";
+                Message = "No key";
                 da.SetData("Value", null);
                 return;
             }

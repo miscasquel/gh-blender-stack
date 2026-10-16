@@ -241,7 +241,7 @@ namespace GhStack
     {
         public AttributeGetComponent()
             : base("Attribute Get", "Attr Get",
-                   "Reads one attribute of a geometry. Attributes travel with the geometry: Stage In attaches what Blender sent, and this reads them as values.",
+                   "Reads one attribute carried by a geometry.",
                    "GH Stack", "Attributes")
         {
         }
@@ -258,15 +258,15 @@ namespace GhStack
 
         protected override void RegisterInputParams(GH_InputParamManager p)
         {
-            p.AddGenericParameter("Geometry", "G", "Geometry carrying attributes", GH_ParamAccess.item);
+            p.AddGenericParameter("Geometry", "G", "Geometry to read from", GH_ParamAccess.item);
             p.AddTextParameter("Name", "N", "Attribute name", GH_ParamAccess.item);
         }
 
         protected override void RegisterOutputParams(GH_OutputParamManager p)
         {
-            p.AddGenericParameter("Values", "V", "The attribute's values, one item per element (compound types come out flattened)", GH_ParamAccess.list);
-            p.AddTextParameter("Type", "T", "Attribute type (FLOAT, INT, BOOLEAN, STRING, FLOAT_VECTOR, FLOAT_COLOR, ...)", GH_ParamAccess.item);
-            p.AddTextParameter("Domain", "D", "Attribute domain (POINT, EDGE, FACE, CORNER, ...)", GH_ParamAccess.item);
+            p.AddGenericParameter("Values", "V", "The values, one item per element (compound types flattened)", GH_ParamAccess.list);
+            p.AddTextParameter("Type", "T", "Data type (Float, Integer, Vector, 4x4 Matrix, ...)", GH_ParamAccess.item);
+            p.AddTextParameter("Domain", "D", "Where the values live (Point, Edge, Face, Corner, ...)", GH_ParamAccess.item);
         }
 
         protected override void SolveInstance(IGH_DataAccess da)
@@ -282,11 +282,11 @@ namespace GhStack
             GeometryBase geometry = AttributeValues.GeometryOf(goo);
             if (geometry == null)
             {
-                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "geometry cannot carry attributes");
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "Geometry cannot carry attributes");
             }
             else if (string.IsNullOrEmpty(name))
             {
-                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "give the attribute a name");
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "Give the attribute a name");
             }
             else
             {
@@ -306,9 +306,9 @@ namespace GhStack
                     // indistinguishable from attributes never arriving.
                     string[] names = AttributeStore.Names(geometry);
                     AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, names.Length == 0
-                        ? "this geometry carries no attributes"
-                        : "no attribute named " + name + " (this geometry carries: "
-                          + string.Join(", ", names) + ")");
+                        ? "This geometry carries no attributes"
+                        : "No attribute named " + name + ". This geometry carries: "
+                          + string.Join(", ", names));
                 }
             }
             da.SetDataList("Values", values);
@@ -323,7 +323,7 @@ namespace GhStack
     {
         public AttributeSetComponent()
             : base("Attribute Set", "Attr Set",
-                   "Attaches an attribute to a geometry. The attribute rides on the geometry, so Stage Out sends it to Blender.",
+                   "Attaches an attribute to a geometry; Stage Out sends it to Blender.",
                    "GH Stack", "Attributes")
         {
         }
@@ -342,7 +342,7 @@ namespace GhStack
         {
             p.AddGenericParameter("Geometry", "G", "Geometry to attach the attribute to", GH_ParamAccess.item);
             p.AddTextParameter("Name", "N", "Attribute name", GH_ParamAccess.item);
-            p.AddGenericParameter("Values", "V", "One value per element: numbers, integers, booleans, texts, vectors/points or colours", GH_ParamAccess.list);
+            p.AddGenericParameter("Values", "V", "One value per element: numbers, integers, booleans, texts, vectors or colours", GH_ParamAccess.list);
             p.AddTextParameter("Domain", "D", "Point, Edge, Face or Corner (any case). Empty infers it from the value count.", GH_ParamAccess.item);
             p[3].Optional = true;
         }
@@ -367,11 +367,11 @@ namespace GhStack
             if (geometry == null || string.IsNullOrEmpty(name) || values.Count == 0)
             {
                 if (goo != null && geometry == null)
-                    AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "geometry cannot carry attributes");
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "Geometry cannot carry attributes");
                 else if (string.IsNullOrEmpty(name))
-                    AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "give the attribute a name");
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "Give the attribute a name");
                 else if (values.Count == 0)
-                    AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "give the attribute values");
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "Give the attribute values");
                 da.SetData("Geometry", goo);
                 return;
             }
@@ -381,7 +381,7 @@ namespace GhStack
             if (flat == null)
             {
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Warning,
-                    "values must all be numbers, integers, booleans, texts, vectors or colours");
+                    "Values must all be numbers, integers, booleans, texts, vectors or colours");
                 da.SetData("Geometry", goo);
                 return;
             }
@@ -414,7 +414,7 @@ namespace GhStack
                     else
                     {
                         AddRuntimeMessage(GH_RuntimeMessageLevel.Warning,
-                            "the count matches " + string.Join("/", matches.ToArray())
+                            "The count matches " + string.Join("/", matches.ToArray())
                             + "; set Domain explicitly");
                         da.SetData("Geometry", goo);
                         return;

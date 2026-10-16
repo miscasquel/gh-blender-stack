@@ -366,7 +366,7 @@ namespace GhStack
                 lock (Gate)
                 {
                     slot.Status = "unknown_ref";
-                    slot.Message = "not holding this geometry; asking Blender to resend it";
+                    slot.Message = "Not holding this geometry; asking Blender to resend it";
                 }
                 Enqueue(FrameCodec.Encode(refusal, null));
                 return;

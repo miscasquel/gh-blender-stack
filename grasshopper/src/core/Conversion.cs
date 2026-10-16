@@ -283,7 +283,7 @@ namespace GhStack.Core
             }
             if (maxDeviation > DeviationBudgetMeters * Math.Abs(scale))
             {
-                warnings.Add("curve approximation deviation "
+                warnings.Add("Curve approximation deviation "
                     + (maxDeviation / Math.Abs(scale) * 1000.0).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)
                     + " mm exceeds the 0.1 mm budget");
             }
@@ -708,7 +708,7 @@ namespace GhStack.Core
                 sections.Add(Section.Floats("subd.crease_values", creaseValues.ToArray()));
             }
 
-            warnings.Add("creases transferred as tags; semi-sharp and vertex creases are not available from RhinoCommon");
+            warnings.Add("Creases transferred as tags; semi-sharp and vertex creases are not available from RhinoCommon");
             return sections;
         }
 
@@ -770,7 +770,7 @@ namespace GhStack.Core
                 {
                     SubD[] joined = SubD.JoinSubDs(subds, RhinoMath.ZeroTolerance, false);
                     if (joined != null && joined.Length == 1) subd = joined[0];
-                    else warnings.Add("several SubDs arrived; only the first was sent");
+                    else warnings.Add("Several SubDs arrived; only the first was sent");
                 }
                 sections.AddRange(SectionsFromSubD(subd, scale, warnings));
                 subdCount = 1;
