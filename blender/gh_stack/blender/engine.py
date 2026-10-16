@@ -765,7 +765,7 @@ def _process_stage(obj, record, stage):
         return "idle"
     nodes.set_modifier_visible(obj, stage.key, True)
 
-    sections, geom_hash, attributes = _prefix_sections(obj, record, stage)
+    sections, geom_hash, attributes, definitions = _prefix_sections(obj, record, stage)
     params_json = props.canonical_json(obj, stage)
     rid = hashing.request_id(stage.key, params_json, geom_hash, "m", "stack-local", stage.nonce)
 
@@ -838,9 +838,13 @@ def _process_stage(obj, record, stage):
         "space": "stack-local",
     }
     # Descriptors describe the attribute sections, so they travel only with the
-    # sections they describe (a `ref` request carries none of either).
+    # sections they describe (a `ref` request carries none of either). The
+    # definition table is identity-relevant (it is hashed into the request), so
+    # it follows the same rule.
     if mode == "full" and attributes:
         header["attributes"] = attributes
+    if mode == "full" and definitions:
+        header["definitions"] = definitions
     frame = codec.encode_frame(header, sections if mode == "full" else [])
     if not server.SERVER.send(frame):
         # No client socket to carry it. Recording a pending request here would
@@ -870,8 +874,8 @@ def _prefix_sections(obj, record, stage):
     """The geometry a stage sees: everything before its own modifier in the
     stack (plan §9.1), so preceding native modifiers and earlier GH stages are
     part of the input. Returns ``(sections, geometry hash, attribute
-    descriptors)`` — the descriptors belong to the sections and travel with
-    them, never on their own.
+    descriptors, definitions)`` — the descriptors and the definition table
+    belong to the sections and travel with them, never on their own.
 
     Both shapes are memoized against a revision of the datablocks they read (see
     :func:`_prefix_revision`): with nothing before the stage the input is the base
@@ -892,14 +896,15 @@ def _prefix_sections(obj, record, stage):
     memo = _prefix_memo.get(memo_key)
     if revision is not None and memo is not None and memo["revision"] == revision:
         stats["prefix_memo_hits"] += 1
-        return memo["sections"], memo["geom_hash"], memo["attributes"]
+        return memo["sections"], memo["geom_hash"], memo["attributes"], memo["definitions"]
 
     subd = bool(record.subd)
     if index <= 0:
         # Nothing before the stage: the base datablocks are the input.
         sections, attributes = geometry_io.object_to_sections(obj, as_subd=subd)
+        definitions = []
     else:
-        sections, attributes = _clone_prefix(obj, index, subd)
+        sections, attributes, definitions = _clone_prefix(obj, index, subd)
         stats["prefix_clones"] += 1
 
     # Blender evaluates modifier-generated attribute data (a Bevel's UVs, for
@@ -911,37 +916,43 @@ def _prefix_sections(obj, record, stage):
     # above the tolerance and takes the normal path.
     if (
         memo is not None
-        and _same_prefix(memo["sections"], memo["attributes"], sections, attributes)
+        and _same_prefix(
+            memo["sections"], memo["attributes"], memo["definitions"],
+            sections, attributes, definitions,
+        )
     ):
         stats["prefix_memo_hits"] += 1
         sections = memo["sections"]
         attributes = memo["attributes"]
+        definitions = memo["definitions"]
         geom_hash = memo["geom_hash"]
         if revision is not None:
             memo["revision"] = revision
-        return sections, geom_hash, attributes
+        return sections, geom_hash, attributes, definitions
 
-    geom_hash = _sections_hash(sections, attributes)
+    geom_hash = _sections_hash(sections, attributes, definitions)
     if revision is not None:
         _prefix_memo[memo_key] = {
             "revision": revision,
             "sections": sections,
             "geom_hash": geom_hash,
             "attributes": attributes,
+            "definitions": definitions,
         }
-    return sections, geom_hash, attributes
+    return sections, geom_hash, attributes, definitions
 
 
-def _same_prefix(old_sections, old_attributes, new_sections, new_attributes):
+def _same_prefix(old_sections, old_attributes, old_definitions,
+                 new_sections, new_attributes, new_definitions):
     """Whether two prefix reads are the same geometry.
 
     Exact, except that f32 attribute payloads may differ within float noise
     (``rtol=1e-5``, which is ~80× the last-bit variation Blender shows). The
-    descriptors and every non-attribute section must match exactly: positions,
-    topology, colors and creases are authored data, and an edit to any of them
-    is a real change.
+    descriptors, the definition table and every non-attribute section must match
+    exactly: positions, topology, colors and creases are authored data, and an
+    edit to any of them is a real change.
     """
-    if old_attributes != new_attributes:
+    if old_attributes != new_attributes or old_definitions != new_definitions:
         return False
     old_by = {name: (dtype, values) for name, dtype, values in old_sections}
     new_by = {name: (dtype, values) for name, dtype, values in new_sections}
@@ -994,22 +1005,27 @@ def _clone_prefix(obj, index, subd):
             clone.modifiers.remove(later)
         depsgraph = bpy.context.evaluated_depsgraph_get()
         geometry = clone.evaluated_get(depsgraph).evaluated_geometry()
-        sections, attributes = geometry_io.geometry_set_to_sections(geometry, as_subd=subd)
+        sections, attributes, definitions = geometry_io.geometry_set_to_sections(
+            geometry, as_subd=subd
+        )
     finally:
         bpy.data.objects.remove(clone, do_unlink=True)
         bpy.context.view_layer.update()
         _evaluating = False
-    return sections, attributes
+    return sections, attributes, definitions
 
 
-def _sections_hash(sections, attributes=None):
+def _sections_hash(sections, attributes=None, definitions=None):
     """The request's geometry hash. Attribute *descriptors* are hashed as one
-    extra entry: the section names are index-based, so without them a renamed
-    attribute would produce the same hash, the same request id, and a cache hit
-    that silently keeps the old name."""
+    extra entry, and the instance *definitions* table as another: the section
+    names are index-based, so without them a renamed attribute or definition
+    would produce the same hash, the same request id, and a cache hit that
+    silently keeps the old name."""
     raw = {name: codec.section_bytes(name, dtype, values) for name, dtype, values in sections}
     if attributes:
         raw["attr.descriptors"] = codec.canonical_json(attributes).encode("utf-8")
+    if definitions:
+        raw["definitions"] = codec.canonical_json(definitions).encode("utf-8")
     return hashing.geometry_hash(raw)
 
 

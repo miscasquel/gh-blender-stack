@@ -52,14 +52,20 @@ def components(type_name):
     return WIRE_TYPES[type_name][1]
 
 
-def section_names(index):
-    """(values section, offsets section or None) for attribute ``index``."""
-    return "attr.%d.values" % index, "attr.%d.offsets" % index
+def section_names(index, prefix=""):
+    """(values section, offsets section or None) for attribute ``index``.
+
+    ``prefix`` namespaces the sections of one instance definition
+    (``idef.0.``), protocol §5.2.
+    """
+    return prefix + "attr.%d.values" % index, prefix + "attr.%d.offsets" % index
 
 
-def descriptor(group, name, domain, type_name, count, index):
-    """The header entry for one attribute section."""
-    section, offsets = section_names(index)
+def descriptor(group, name, domain, type_name, count, index, prefix="", definition=None):
+    """The header entry for one attribute section. ``definition`` is the
+    instance-definition index the attribute belongs to, when it is not the
+    frame's own geometry (§5.2)."""
+    section, offsets = section_names(index, prefix)
     entry = {
         "group": group,
         "name": name,
@@ -69,6 +75,8 @@ def descriptor(group, name, domain, type_name, count, index):
         "count": int(count),
         "section": section,
     }
+    if definition is not None:
+        entry["definition"] = int(definition)
     if type_name == "STRING":
         entry["offsets"] = offsets
     return entry

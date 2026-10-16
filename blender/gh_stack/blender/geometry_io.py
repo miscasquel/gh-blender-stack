@@ -76,12 +76,15 @@ class GeometryIOError(Exception):
 # --------------------------------------------------------------------- read
 
 
-def mesh_to_sections(mesh, as_subd=False):
+def mesh_to_sections(mesh, as_subd=False, prefix=""):
     """Read ``mesh`` into a list of ``(name, dtype, numpy array)`` sections.
 
     ``as_subd`` selects the ``subd.*`` names and omits colours (protocol §5).
+    ``prefix`` namespaces the sections of one instance definition (§5.2),
+    e.g. ``"idef.0."``.
     """
-    prefix = "subd" if as_subd else "mesh"
+    group = "subd" if as_subd else "mesh"
+    name = prefix + group
     n_verts = len(mesh.vertices)
     n_loops = len(mesh.loops)
     n_polys = len(mesh.polygons)
@@ -96,21 +99,21 @@ def mesh_to_sections(mesh, as_subd=False):
     mesh.loops.foreach_get("vertex_index", indices)
 
     sections = [
-        (prefix + ".verts", "f32", verts.reshape(-1, 3)),
-        (prefix + ".face_counts", "u32", counts),
-        (prefix + ".face_indices", "u32", indices),
+        (name + ".verts", "f32", verts.reshape(-1, 3)),
+        (name + ".face_counts", "u32", counts),
+        (name + ".face_indices", "u32", indices),
     ]
 
     if not as_subd:
         colors = read_colors(mesh)
         if colors is not None:
-            sections.append(("mesh.colors", "u8", colors))
+            sections.append((name + ".colors", "u8", colors))
 
     creases = read_creases(mesh)
     if creases is not None:
         edges, values = creases
-        sections.append((prefix + ".crease_edges", "u32", edges.reshape(-1, 2)))
-        sections.append((prefix + ".crease_values", "f32", values))
+        sections.append((name + ".crease_edges", "u32", edges.reshape(-1, 2)))
+        sections.append((name + ".crease_values", "f32", values))
 
     return sections
 
@@ -199,7 +202,7 @@ _FOREACH = {
 }
 
 
-def read_attributes(owner, group, index0=0, skip=()):
+def read_attributes(owner, group, index0=0, skip=(), prefix="", definition=None):
     """Every transportable attribute of one geometry data owner, as
     ``(sections, descriptors)``.
 
@@ -208,7 +211,8 @@ def read_attributes(owner, group, index0=0, skip=()):
     itself (``position``) are skipped, as is anything in ``skip`` — the names
     the caller already carries through a native channel (``mesh.colors``,
     ``crease_edge``), so nothing travels twice. ``index0`` is the running
-    attribute count of the frame: the sections are named from it.
+    attribute count of the frame: the sections are named from it. ``prefix``
+    and ``definition`` namespace a definition's attributes (§5.2).
     """
     sections = []
     descriptors = []
@@ -224,7 +228,7 @@ def read_attributes(owner, group, index0=0, skip=()):
         if type_name not in attr_mod.WIRE_TYPES:
             continue
         index = index0 + len(descriptors)
-        value_section, offsets_section = attr_mod.section_names(index)
+        value_section, offsets_section = attr_mod.section_names(index, prefix)
         n = len(attr.data)
         comps = attr_mod.components(type_name)
 
@@ -252,12 +256,15 @@ def read_attributes(owner, group, index0=0, skip=()):
             sections.append((value_section, attr_mod.wire_dtype(type_name), values))
 
         descriptors.append(
-            attr_mod.descriptor(group, name, attr.domain, type_name, n, index)
+            attr_mod.descriptor(
+                group, name, attr.domain, type_name, n, index,
+                prefix=prefix, definition=definition,
+            )
         )
     return sections, descriptors
 
 
-def mesh_attributes(mesh, as_subd=False, index0=0):
+def mesh_attributes(mesh, as_subd=False, index0=0, prefix="", definition=None):
     """The generic attributes of a mesh (or SubD cage). The active colour
     attribute is excluded only when the native ``mesh.colors`` channel carries
     it, so a SubD cage's colours travel as an ordinary attribute."""
@@ -266,17 +273,23 @@ def mesh_attributes(mesh, as_subd=False, index0=0):
         color = _active_color(mesh)
         if color is not None:
             skip.append(color.name)
-    return read_attributes(mesh, "subd" if as_subd else "mesh", index0=index0, skip=skip)
+    return read_attributes(
+        mesh, "subd" if as_subd else "mesh", index0=index0, skip=skip,
+        prefix=prefix, definition=definition,
+    )
 
 
-def points_attributes(cloud, index0=0):
+def points_attributes(cloud, index0=0, prefix="", definition=None):
     """The generic attributes of a point cloud. The native ``pts.colors``
     channel carries the active colour attribute; everything else travels."""
     skip = []
     color = _active_color(cloud)
     if color is not None:
         skip.append(color.name)
-    return read_attributes(cloud, "pts", index0=index0, skip=skip)
+    return read_attributes(
+        cloud, "pts", index0=index0, skip=skip,
+        prefix=prefix, definition=definition,
+    )
 
 
 def write_attributes(owner, entries):
@@ -397,13 +410,14 @@ def _decode_strings(values, offsets):
 # ------------------------------------------------------------ curves and points
 
 
-def curve_to_sections(curve):
+def curve_to_sections(curve, prefix=""):
     """Read a Blender Curve datablock into ``crv.*`` sections (protocol §5).
 
     A Bezier spline travels as a degree-3 NURBS in Bezier knot mode, using the
     control net co0, handle_right0, handle_left1, co1, ... — the representation
     the GH side rebuilds exactly. A cyclic Bezier spline wraps the closing
     segment, so its net ends where it starts instead of carrying the cyclic flag.
+    ``prefix`` namespaces a definition's sections (§5.2).
     """
     points = []
     counts = []
@@ -449,13 +463,14 @@ def curve_to_sections(curve):
     if not counts:
         return []
     flat = np.asarray(points, dtype=np.float32).reshape(-1, 4)
+    name = prefix + "crv"
     return [
-        ("crv.points", "f32", flat),
-        ("crv.counts", "u32", np.asarray(counts, dtype=np.uint32)),
-        ("crv.types", "u8", np.asarray(types, dtype=np.uint8)),
-        ("crv.orders", "u8", np.asarray(orders, dtype=np.uint8)),
-        ("crv.knots_mode", "u8", np.asarray(knots_mode, dtype=np.uint8)),
-        ("crv.cyclic", "u8", np.asarray(cyclic, dtype=np.uint8)),
+        (name + ".points", "f32", flat),
+        (name + ".counts", "u32", np.asarray(counts, dtype=np.uint32)),
+        (name + ".types", "u8", np.asarray(types, dtype=np.uint8)),
+        (name + ".orders", "u8", np.asarray(orders, dtype=np.uint8)),
+        (name + ".knots_mode", "u8", np.asarray(knots_mode, dtype=np.uint8)),
+        (name + ".cyclic", "u8", np.asarray(cyclic, dtype=np.uint8)),
     ]
 
 
@@ -481,23 +496,25 @@ def _bezier_net(spline):
     return net
 
 
-def points_to_sections(cloud):
-    """Read a point cloud into ``pts.*`` sections."""
+def points_to_sections(cloud, prefix=""):
+    """Read a point cloud into ``pts.*`` sections. ``prefix`` namespaces a
+    definition's sections (§5.2)."""
     n = len(cloud.points)
     if n == 0:
         return []
+    name = prefix + "pts"
     positions = np.empty(n * 3, dtype=np.float32)
     cloud.points.foreach_get("co", positions)
-    sections = [("pts.positions", "f32", positions.reshape(-1, 3))]
+    sections = [(name + ".positions", "f32", positions.reshape(-1, 3))]
 
     radii = np.empty(n, dtype=np.float32)
     cloud.points.foreach_get("radius", radii)
     if radii.any():
-        sections.append(("pts.radii", "f32", radii))
+        sections.append((name + ".radii", "f32", radii))
 
     colors = read_point_colors(cloud)
     if colors is not None:
-        sections.append(("pts.colors", "u8", colors))
+        sections.append((name + ".colors", "u8", colors))
     return sections
 
 
@@ -529,11 +546,17 @@ CURVE_TYPE_NURBS = 3
 
 def geometry_set_to_sections(geometry, as_subd=False):
     """Protocol sections and attribute descriptors for an evaluated
-    ``GeometrySet`` (a stage's prefix). Returns ``(sections, attributes)``.
+    ``GeometrySet`` (a stage's prefix). Returns ``(sections, attributes,
+    definitions)``.
 
     A stage's prefix is everything before its own modifier in the stack, so it
-    can hold a mesh, curves, and points at once. The geometry set must stay
-    referenced while the components are read: its datablocks die with it.
+    can hold a mesh, curves, points, and instances at once. The geometry set must
+    stay referenced while the components are read: its datablocks die with it.
+
+    Instances become a definition table (protocol §5.2): each referenced
+    geometry set is serialized once, prefixed ``idef.<i>.``, and the instance
+    rows become ``inst.ref_def`` / ``inst.transforms``. A referenced geometry set
+    that itself holds instances recurses into the same flat table.
 
     Curves carry no attributes yet: Blender's curve helper is a legacy Curve
     datablock, which cannot store attributes, so a read-only channel would be
@@ -542,24 +565,247 @@ def geometry_set_to_sections(geometry, as_subd=False):
     """
     sections = []
     attributes = []
+    definitions = []
+    _serialize_geometry(geometry, sections, attributes, prefix="", as_subd=as_subd)
+    rows = _serialize_instances(geometry, sections, attributes, definitions, depth=0)
+    if rows is not None:
+        ref_def, transforms = rows
+        sections.append(("inst.ref_def", "u32", np.asarray(ref_def, dtype=np.uint32)))
+        sections.append(
+            ("inst.transforms", "f32", np.asarray(transforms, dtype=np.float32).reshape(-1))
+        )
+    return sections, attributes, definitions
+
+
+# The recursion guard for instance nesting. Blender cannot evaluate a cyclic
+# instance graph, but an eagerly built GeometrySet could still arrive deep or
+# malformed; a cap keeps a broken scene from hanging the engine.
+MAX_INSTANCE_DEPTH = 32
+
+_IDENTITY = (
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    0.0, 0.0, 0.0, 1.0,
+)
+
+
+def _serialize_geometry(geometry, sections, attributes, prefix="", as_subd=False,
+                        definition=None):
+    """Append one GeometrySet's geometry (mesh, curves, point cloud) to
+    ``sections`` / ``attributes``, under an optional definition prefix."""
     mesh = geometry.mesh
     if mesh is not None and len(mesh.vertices):
-        sections += mesh_to_sections(mesh, as_subd=as_subd)
-        attribute_sections, attributes = mesh_attributes(mesh, as_subd=as_subd)
+        sections += mesh_to_sections(mesh, as_subd=as_subd, prefix=prefix)
+        attribute_sections, mesh_attributes_ = mesh_attributes(
+            mesh, as_subd=as_subd, index0=len(attributes),
+            prefix=prefix, definition=definition,
+        )
         sections += attribute_sections
+        attributes += mesh_attributes_
     curves = geometry.curves
     if curves is not None and len(curves.points):
-        sections += curves_component_to_sections(curves)
+        sections += curves_component_to_sections(curves, prefix=prefix)
     cloud = geometry.pointcloud
     if cloud is not None and len(cloud.points):
-        sections += points_to_sections(cloud)
-        attribute_sections, point_attributes = points_attributes(cloud, index0=len(attributes))
+        sections += points_to_sections(cloud, prefix=prefix)
+        attribute_sections, point_attributes_ = points_attributes(
+            cloud, index0=len(attributes), prefix=prefix, definition=definition,
+        )
         sections += attribute_sections
-        attributes += point_attributes
-    return sections, attributes
+        attributes += point_attributes_
 
 
-def curves_component_to_sections(curves):
+def _has_components(geometry):
+    """Whether a GeometrySet carries geometry of its own (as opposed to only
+    instance references)."""
+    mesh = geometry.mesh
+    if mesh is not None and len(mesh.vertices):
+        return True
+    curves = geometry.curves
+    if curves is not None and len(curves.points):
+        return True
+    cloud = geometry.pointcloud
+    if cloud is not None and len(cloud.points):
+        return True
+    return False
+
+
+def _instance_rows(geometry):
+    """The rows of a GeometrySet's instances component as
+    ``[(reference, 16 floats)]``, or None when it has none.
+
+    ``reference`` may be a GeometrySet (node-built geometry), a Collection or an
+    Object (the shapes Blender's instance references take).
+    """
+    try:
+        refs = list(geometry.instance_references())
+    except AttributeError:
+        return None
+    if not refs:
+        return None
+    cloud = geometry.instances_pointcloud()
+    if cloud is None or not len(cloud.points):
+        return None
+    index_attr = cloud.attributes.get(".reference_index")
+    transform_attr = cloud.attributes.get("instance_transform")
+    if index_attr is None or transform_attr is None:
+        print("[gh-stack] instances skipped: no reference_index/instance_transform", flush=True)
+        return None
+
+    n = len(cloud.points)
+    indices = np.empty(n, dtype=np.int32)
+    index_attr.data.foreach_get("value", indices)
+    matrices = np.empty(n * 16, dtype=np.float32)
+    transform_attr.data.foreach_get("value", matrices)
+
+    rows = []
+    for row in range(n):
+        slot = int(indices[row])
+        if 0 <= slot < len(refs):
+            rows.append((refs[slot], matrices[row * 16:(row + 1) * 16]))
+        else:
+            print(
+                "[gh-stack] instance row %d skipped: reference index %d out of range" % (row, slot),
+                flush=True,
+            )
+    return rows or None
+
+
+def _evaluated_units(reference):
+    """GeometrySet sources for a raw Collection or Object reference: the
+    evaluated objects, with their modifiers applied."""
+    import bpy
+
+    if reference is None:
+        return []
+    try:
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        evaluated = reference.evaluated_get(depsgraph)
+    except Exception as ex:
+        print("[gh-stack] instance reference not evaluable: %r" % (ex,), flush=True)
+        return []
+    objects = getattr(evaluated, "objects", None)
+    if objects is None:
+        objects = [evaluated]
+    units = []
+    for obj in objects:
+        try:
+            units.append(bpy.types.GeometrySet.from_evaluated_object(obj))
+        except Exception as ex:
+            print(
+                "[gh-stack] instance reference %r not readable: %r"
+                % (getattr(reference, "name", reference), ex),
+                flush=True,
+            )
+    return units
+
+
+def _definition_parts(reference, depth):
+    """Split one instance reference into ``(units, nested_rows)``.
+
+    ``units`` are GeometrySet sources whose geometry belongs to the definition
+    itself; ``nested_rows`` are ``(reference, 16 floats)`` placements that become
+    the definition's own instance rows (nested blocks).
+
+    A GeometrySet contributes its own components plus its rows. A set with no
+    components at all whose rows are all identity placements — Blender's shape
+    for Collection Info with separate children off — is *hoisted*: its
+    references become this definition's content instead of an extra nesting
+    level. A Collection or Object reference contributes its evaluated objects.
+    """
+    if not hasattr(reference, "instance_references"):
+        return _evaluated_units(reference), []
+
+    rows = _instance_rows(reference) or []
+    if _has_components(reference):
+        return [reference], rows
+    if not rows:
+        return [], []
+    if depth < MAX_INSTANCE_DEPTH and all(_is_identity(matrix) for _ref, matrix in rows):
+        units = []
+        nested = []
+        for sub_reference, _matrix in rows:
+            sub_units, sub_rows = _definition_parts(sub_reference, depth + 1)
+            units.extend(sub_units)
+            nested.extend(sub_rows)
+        return units, nested
+    return [], rows
+
+
+def _is_identity(matrix):
+    return all(float(matrix[i]) == _IDENTITY[i] for i in range(16))
+
+
+def _serialize_definition(reference, sections, attributes, definitions, depth):
+    """Serialize one definition into the flat table, resolving the reference of
+    its content. Returns the definition's index."""
+    index = len(definitions)
+    definitions.append({"name": _reference_name(reference)})
+    prefix = "idef.%d." % index
+    units, nested = _definition_parts(reference, depth)
+    for unit in units:
+        _serialize_geometry(unit, sections, attributes, prefix=prefix, definition=index)
+
+    if nested:
+        sub_index = {}
+        ref_def = []
+        transforms = []
+        for sub_reference, matrix in nested:
+            sub = sub_index.get(id(sub_reference))
+            if sub is None:
+                sub = _serialize_definition(
+                    sub_reference, sections, attributes, definitions, depth + 1
+                )
+                sub_index[id(sub_reference)] = sub
+            ref_def.append(sub)
+            transforms.extend(matrix)
+        sections.append((prefix + "inst.ref_def", "u32", np.asarray(ref_def, dtype=np.uint32)))
+        sections.append(
+            (prefix + "inst.transforms", "f32",
+             np.asarray(transforms, dtype=np.float32).reshape(-1))
+        )
+    return index
+
+
+def _serialize_instances(geometry, sections, attributes, definitions, depth):
+    """Serialize a GeometrySet's instances component.
+
+    Returns ``(ref_def, transforms)`` — the definition index per row and the
+    flat row-major matrices — or None when the set has no instances. The
+    definitions the rows reference are appended to the shared flat table
+    (``definitions``); a definition that holds instances of its own recurses.
+    """
+    rows = _instance_rows(geometry)
+    if not rows:
+        return None
+    if depth >= MAX_INSTANCE_DEPTH:
+        print("[gh-stack] instance nesting deeper than %d skipped" % MAX_INSTANCE_DEPTH, flush=True)
+        return None
+
+    local = {}
+    ref_def = []
+    transforms = []
+    for reference, matrix in rows:
+        index = local.get(id(reference))
+        if index is None:
+            index = _serialize_definition(
+                reference, sections, attributes, definitions, depth + 1
+            )
+            local[id(reference)] = index
+        ref_def.append(index)
+        transforms.extend(matrix)
+    return ref_def, transforms
+
+
+def _reference_name(reference):
+    """The display name of one instance reference (a GeometrySet, an Object or a
+    Collection), or ""."""
+    name = getattr(reference, "name", None)
+    return name if isinstance(name, str) else ""
+
+
+def curves_component_to_sections(curves, prefix=""):
     """Read a GeometrySet's curve component into ``crv.*`` sections.
 
     The component is the new Curves type: per-curve attributes carry the kind
@@ -567,6 +813,7 @@ def curves_component_to_sections(curves):
     per-point attributes carry the position, the NURBS weight, and the Bezier
     handles. NURBS and Bezier curves map to the same wire forms the legacy
     datablock reader produces, so a prefix curve is as exact as a base one.
+    ``prefix`` namespaces a definition's sections (§5.2).
 
     Catmull-Rom components have no wire representation (our protocol has poly,
     Bezier, and NURBS); they are skipped with a log line. They can only come
@@ -643,13 +890,14 @@ def curves_component_to_sections(curves):
     if not counts:
         return []
     flat = np.asarray(points, dtype=np.float32).reshape(-1, 4)
+    name = prefix + "crv"
     return [
-        ("crv.points", "f32", flat),
-        ("crv.counts", "u32", np.asarray(counts, dtype=np.uint32)),
-        ("crv.types", "u8", np.asarray(types, dtype=np.uint8)),
-        ("crv.orders", "u8", np.asarray(orders, dtype=np.uint8)),
-        ("crv.knots_mode", "u8", np.asarray(modes, dtype=np.uint8)),
-        ("crv.cyclic", "u8", np.asarray(cyclic, dtype=np.uint8)),
+        (name + ".points", "f32", flat),
+        (name + ".counts", "u32", np.asarray(counts, dtype=np.uint32)),
+        (name + ".types", "u8", np.asarray(types, dtype=np.uint8)),
+        (name + ".orders", "u8", np.asarray(orders, dtype=np.uint8)),
+        (name + ".knots_mode", "u8", np.asarray(modes, dtype=np.uint8)),
+        (name + ".cyclic", "u8", np.asarray(cyclic, dtype=np.uint8)),
     ]
 
 

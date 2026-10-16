@@ -328,18 +328,18 @@ class AttributeEngineTests(unittest.TestCase):
             ("mesh.verts", "f32", vertices),
             ("attr.0.values", "f32", np.array((0.25, 0.50000006), dtype=np.float32)),
         ]
-        self.assertTrue(engine._same_prefix(a, descriptors, noisy, descriptors))
+        self.assertTrue(engine._same_prefix(a, descriptors, [], noisy, descriptors, []))
 
         # A user-sized edit: a real change.
         edited = [
             ("mesh.verts", "f32", vertices),
             ("attr.0.values", "f32", np.array((0.25, 0.5001), dtype=np.float32)),
         ]
-        self.assertFalse(engine._same_prefix(a, descriptors, edited, descriptors))
+        self.assertFalse(engine._same_prefix(a, descriptors, [], edited, descriptors, []))
 
         # Positions are never toleranced.
         moved = [
             ("mesh.verts", "f32", np.array((0.0, 0.0, 1e-6), dtype=np.float32).reshape(-1, 3)),
             ("attr.0.values", "f32", np.array((0.25, 0.5), dtype=np.float32)),
         ]
-        self.assertFalse(engine._same_prefix(a, descriptors, moved, descriptors))
+        self.assertFalse(engine._same_prefix(a, descriptors, [], moved, descriptors, []))
