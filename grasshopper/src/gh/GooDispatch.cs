@@ -22,16 +22,27 @@ namespace GhStack
         /// named in <paramref name="ignored"/>. Geometry that can carry
         /// attributes is also appended to <paramref name="sources"/> (when the
         /// caller passes a list): Stage Out harvests the dictionaries from
-        /// there, because a flattened point cloud otherwise loses them.</summary>
+        /// there, because a flattened point cloud otherwise loses them.
+        /// Instance references go to <paramref name="instances"/> when the
+        /// caller collects them (protocol §5.2); otherwise they are ignored.</summary>
         public static void Collect(
             IEnumerable<IGH_Goo> goos,
             List<Mesh> meshes, List<Curve> curves, List<Point3d> points,
             List<SubD> subds, List<Brep> breps, List<string> ignored,
-            List<Rhino.Geometry.GeometryBase> sources = null)
+            List<Rhino.Geometry.GeometryBase> sources = null,
+            List<GH_InstanceReference> instances = null)
         {
             foreach (IGH_Goo goo in goos)
             {
                 if (goo == null) continue;
+
+                GH_InstanceReference instance = goo as GH_InstanceReference;
+                if (instance != null)
+                {
+                    if (instances != null) instances.Add(instance);
+                    else ignored.Add(goo.TypeName);
+                    continue;
+                }
 
                 // GH_Surface derives from GH_Brep, so surfaces land here too.
                 GH_Brep brepGoo = goo as GH_Brep;

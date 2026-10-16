@@ -204,7 +204,8 @@ namespace GhStack
                     var breps = new List<Brep>();
                     var ignored = new List<string>();
                     var sources = new List<GeometryBase>();
-                    GooDispatch.Collect(goos, meshes, curves, points, subds, breps, ignored, sources);
+                    var instances = new List<GH_InstanceReference>();
+                    GooDispatch.Collect(goos, meshes, curves, points, subds, breps, ignored, sources, instances);
                     foreach (string typeName in ignored)
                         AddRuntimeMessage(GH_RuntimeMessageLevel.Remark,
                             "Ignored unsupported geometry: " + typeName);
@@ -225,6 +226,12 @@ namespace GhStack
                             AttributeStore.Collect(source, group, sections, attributes);
                     }
 
+                    // Blocks: one definition table entry per unique definition the
+                    // instance references name, plus the inst.* row pair (§5.2).
+                    var definitions = new List<Dictionary<string, object>>();
+                    Instances.Emit(instances, GhLink.DocumentScale(), sections, attributes,
+                                   definitions, warnings);
+
                     var warningList = new List<object>();
                     foreach (string w in warnings)
                     {
@@ -235,7 +242,9 @@ namespace GhStack
                     }
 
                     outHash = FrameCodec.OutputHash(
-                        sections, attributes.Count > 0 ? Json.WriteCanonical(attributes) : null);
+                        sections,
+                        attributes.Count > 0 ? Json.WriteCanonical(attributes) : null,
+                        definitions.Count > 0 ? Json.WriteCanonical(definitions) : null);
                     var header = new Dictionary<string, object>();
                     header["type"] = "response";
                     header["stage"] = key;
@@ -246,6 +255,8 @@ namespace GhStack
                     header["counts"] = counts;
                     if (attributes.Count > 0)
                         header["attributes"] = attributes;
+                    if (definitions.Count > 0)
+                        header["definitions"] = definitions;
                     GhLink.Enqueue(FrameCodec.Encode(header, sections));
                     sent = true;
                     status = "ok";

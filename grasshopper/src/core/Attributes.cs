@@ -164,14 +164,18 @@ namespace GhStack.Core
 
         /// <summary>Attach every descriptor of one group from a decoded frame.
         /// Descriptors naming sections the frame does not carry are skipped: a
-        /// truncated frame must not take the stage down.</summary>
+        /// truncated frame must not take the stage down. When ``definition`` is
+        /// given, only that definition's descriptors attach; otherwise only the
+        /// frame's own (the ones without a definition marker).</summary>
         public static void Attach(ArchivableDictionary root, string group,
-                                  List<Dictionary<string, object>> descriptors, List<Section> sections)
+                                  List<Dictionary<string, object>> descriptors, List<Section> sections,
+                                  long? definition = null)
         {
             if (root == null || descriptors == null || sections == null) return;
             foreach (Dictionary<string, object> descriptor in descriptors)
             {
                 if (Json.GetString(descriptor, "group") != group) continue;
+                if (DefinitionOf(descriptor) != (definition ?? -1)) continue;
                 string type = Json.GetString(descriptor, "type");
                 string name = Json.GetString(descriptor, "name");
                 string domain = Json.GetString(descriptor, "domain");
@@ -184,6 +188,14 @@ namespace GhStack.Core
                 if (flat != null)
                     Set(root, name, type, domain, flat);
             }
+        }
+
+        /// <summary>The descriptor's definition index, or -1 for the frame's own
+        /// geometry.</summary>
+        private static long DefinitionOf(Dictionary<string, object> descriptor)
+        {
+            object marker = Json.Get(descriptor, "definition");
+            return marker == null ? -1 : Json.GetLong(descriptor, "definition");
         }
 
         private static object Decode(string type, Section values, Section offsets)
@@ -232,9 +244,11 @@ namespace GhStack.Core
 
         /// <summary>Append every attribute under a root as wire sections plus
         /// descriptors. The attribute index continues from the descriptor list,
-        /// so several groups can be collected into one frame.</summary>
+        /// so several groups can be collected into one frame. ``prefix`` and
+        /// ``definition`` namespace a definition's attributes (§5.2).</summary>
         public static void Collect(ArchivableDictionary root, string group,
-                                   List<Section> sections, List<Dictionary<string, object>> descriptors)
+                                   List<Section> sections, List<Dictionary<string, object>> descriptors,
+                                   string prefix = "", long? definition = null)
         {
             if (root == null) return;
             foreach (string name in root.Keys)
@@ -248,7 +262,7 @@ namespace GhStack.Core
                 int components = ComponentsOf[type];
                 int count = ElementCount(values, components);
                 int index = descriptors.Count;
-                string sectionName = "attr." + index + ".values";
+                string sectionName = prefix + "attr." + index + ".values";
 
                 var entry = new Dictionary<string, object>();
                 entry["group"] = group;
@@ -258,8 +272,9 @@ namespace GhStack.Core
                 entry["components"] = (long)components;
                 entry["count"] = (long)count;
                 entry["section"] = sectionName;
+                if (definition.HasValue) entry["definition"] = definition.Value;
 
-                string offsetsName = "attr." + index + ".offsets";
+                string offsetsName = prefix + "attr." + index + ".offsets";
                 Section valueSection = Encode(type, values, sectionName);
                 if (valueSection == null) continue;
                 sections.Add(valueSection);
@@ -340,17 +355,19 @@ namespace GhStack.Core
         }
 
         public static void Attach(GeometryBase geometry, string group,
-                                  List<Dictionary<string, object>> descriptors, List<Section> sections)
+                                  List<Dictionary<string, object>> descriptors, List<Section> sections,
+                                  long? definition = null)
         {
             ArchivableDictionary existing = Root(geometry, false);
             if (existing == null && (descriptors == null || descriptors.Count == 0)) return;
-            Attach(Root(geometry, true), group, descriptors, sections);
+            Attach(Root(geometry, true), group, descriptors, sections, definition);
         }
 
         public static void Collect(GeometryBase geometry, string group,
-                                   List<Section> sections, List<Dictionary<string, object>> descriptors)
+                                   List<Section> sections, List<Dictionary<string, object>> descriptors,
+                                   string prefix = "", long? definition = null)
         {
-            Collect(Root(geometry, false), group, sections, descriptors);
+            Collect(Root(geometry, false), group, sections, descriptors, prefix, definition);
         }
 
         public static bool TryGet(GeometryBase geometry, string name,

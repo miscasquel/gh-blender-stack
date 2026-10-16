@@ -72,6 +72,10 @@ namespace GhStack
                 geometry.Add(new GH_PointCloud(cloud));
             }
 
+            // Blocks last: the document definitions they need are built from the
+            // frame's definition groups, and each row becomes a reference goo.
+            Instances.Build(frame, scale, attributes, geometry, note);
+
             return geometry;
         }
 

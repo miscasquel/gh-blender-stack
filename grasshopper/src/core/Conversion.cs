@@ -27,12 +27,13 @@ namespace GhStack.Core
         // ------------------------------------------------------- sections -> mesh
 
         /// <summary>Build a Rhino mesh from mesh.* or subd.* sections.
-        /// Returns null when the frame carries no mesh.</summary>
-        public static Mesh MeshFromSections(DecodedFrame frame, double scale)
+        /// Returns null when the frame carries no mesh. ``prefix`` namespaces a
+        /// definition group (``idef.&lt;i&gt;.``, protocol §5.2).</summary>
+        public static Mesh MeshFromSections(DecodedFrame frame, double scale, string prefix = "")
         {
-            Section verts = frame.Find("mesh.verts") ?? frame.Find("subd.verts");
-            Section counts = frame.Find("mesh.face_counts") ?? frame.Find("subd.face_counts");
-            Section indices = frame.Find("mesh.face_indices") ?? frame.Find("subd.face_indices");
+            Section verts = frame.Find(prefix + "mesh.verts") ?? frame.Find(prefix + "subd.verts");
+            Section counts = frame.Find(prefix + "mesh.face_counts") ?? frame.Find(prefix + "subd.face_counts");
+            Section indices = frame.Find(prefix + "mesh.face_indices") ?? frame.Find(prefix + "subd.face_indices");
             if (verts == null || counts == null || indices == null) return null;
 
             var mesh = new Mesh();
@@ -51,7 +52,7 @@ namespace GhStack.Core
 
             AddFaces(mesh, counts.ToU32(), indices.ToU32());
 
-            Section colors = frame.Find("mesh.colors");
+            Section colors = frame.Find(prefix + "mesh.colors");
             if (colors != null) SetMeshColors(mesh, colors);
 
             mesh.Normals.ComputeNormals();
@@ -440,20 +441,21 @@ namespace GhStack.Core
 
         // ------------------------------------------------------- wire -> curves
 
-        /// <summary>Rebuild curves from crv.* sections.</summary>
-        public static List<Curve> CurvesFromSections(DecodedFrame frame, double scale)
+        /// <summary>Rebuild curves from crv.* sections. ``prefix`` namespaces a
+        /// definition group (protocol §5.2).</summary>
+        public static List<Curve> CurvesFromSections(DecodedFrame frame, double scale, string prefix = "")
         {
             var curves = new List<Curve>();
-            Section points = frame.Find("crv.points");
-            Section counts = frame.Find("crv.counts");
+            Section points = frame.Find(prefix + "crv.points");
+            Section counts = frame.Find(prefix + "crv.counts");
             if (points == null || counts == null) return curves;
 
             float[] raw = points.ToFloats();
             uint[] cnt = counts.ToU32();
-            byte[] types = BytesOf(frame.Find("crv.types"));
-            byte[] orders = BytesOf(frame.Find("crv.orders"));
-            byte[] modes = BytesOf(frame.Find("crv.knots_mode"));
-            byte[] cyclic = BytesOf(frame.Find("crv.cyclic"));
+            byte[] types = BytesOf(frame.Find(prefix + "crv.types"));
+            byte[] orders = BytesOf(frame.Find(prefix + "crv.orders"));
+            byte[] modes = BytesOf(frame.Find(prefix + "crv.knots_mode"));
+            byte[] cyclic = BytesOf(frame.Find(prefix + "crv.cyclic"));
 
             int at = 0;
             for (int i = 0; i < cnt.Length; i++)
@@ -595,16 +597,17 @@ namespace GhStack.Core
 
         /// <summary>A Rhino point cloud from pts.* sections, colours included when
         /// the wire carries them. The wire's per-point radii have no place on a
-        /// Rhino point cloud and are dropped (they were dropped before, too).</summary>
-        public static PointCloud PointCloudFromSections(DecodedFrame frame, double scale)
+        /// Rhino point cloud and are dropped (they were dropped before, too).
+        /// ``prefix`` namespaces a definition group (protocol §5.2).</summary>
+        public static PointCloud PointCloudFromSections(DecodedFrame frame, double scale, string prefix = "")
         {
-            Section positions = frame.Find("pts.positions");
+            Section positions = frame.Find(prefix + "pts.positions");
             if (positions == null) return null;
             float[] f = positions.ToFloats();
             int n = f.Length / 3;
             if (n == 0) return null;
 
-            Section colors = frame.Find("pts.colors");
+            Section colors = frame.Find(prefix + "pts.colors");
             byte[] rgba = colors == null ? null : colors.Raw;
             var cloud = new PointCloud();
             for (int i = 0; i < n; i++)
@@ -790,6 +793,44 @@ namespace GhStack.Core
             counts["points"] = (long)points.Count;
             counts["approximated_curves"] = (long)approximated;
             return sections;
+        }
+
+        // ----------------------------------------------------------- instances
+
+        /// <summary>A Transform from the wire's 16 floats: row-major
+        /// (``m[row*4+col]``), translation in the fourth column — elements 3, 7,
+        /// 11 (protocol §5.2).</summary>
+        public static Transform TransformFromWire(float[] m)
+        {
+            if (m == null || m.Length < 16)
+                throw new FrameException("bad_frame", "a transform needs 16 floats");
+            var t = new Transform(1.0);
+            for (int row = 0; row < 4; row++)
+                for (int col = 0; col < 4; col++)
+                    t[row, col] = m[row * 4 + col];
+            return t;
+        }
+
+        /// <summary>The wire form of a Transform (the inverse of
+        /// <see cref="TransformFromWire"/>).</summary>
+        public static float[] TransformToWire(Transform t)
+        {
+            var m = new float[16];
+            for (int row = 0; row < 4; row++)
+                for (int col = 0; col < 4; col++)
+                    m[row * 4 + col] = (float)t[row, col];
+            return m;
+        }
+
+        /// <summary>The same sections under a definition prefix
+        /// (``idef.&lt;i&gt;.``, protocol §5.2).</summary>
+        public static List<Section> PrefixSections(IList<Section> sections, string prefix)
+        {
+            var result = new List<Section>();
+            if (sections == null) return result;
+            foreach (Section s in sections)
+                result.Add(new Section(prefix + s.Name, s.Dtype, s.Raw));
+            return result;
         }
     }
 }
