@@ -1,5 +1,11 @@
 # Changelog
 
+<!-- Release posts are assembled from the version's section below, so write it for
+     the person upgrading: what changed since the previous version, in their terms,
+     and nothing else. No release ordinals; no internal churn that landed and was
+     replaced inside the same unreleased window; no inventories of deleted code;
+     and the post ends where this version's section ends — older sections are not
+     repeated. The commits carry the engineering record. -->
 Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -60,71 +66,47 @@ Notable changes to this project, following
 
 ## [0.1.3] — 2026-10-15
 
-Fourth release: the prefix memo is invalidated by Blender's depsgraph instead of a
-description of its inputs, a saved port is the port the server listens on, and the
-stale plans are replaced by one live backlog.
-
-### Added
-
-- The Diagnostics panel reports how long a stage has been waiting, past a second
-  — the shape a sync fault takes when nothing else is visible.
+Geometry that a stage reads through a node graph now follows it, and the prefix
+memo follows Blender's depsgraph instead of a description of what a prefix reads.
 
 ### Fixed
 
-- **Moving geometry that a node tree references now reaches Grasshopper.** A
-  prefix that reads another object — an Object Info node, a modifier input of
-  type Object or Collection — kept sending the geometry from before that object
-  moved, because the revision stored the reference as a frozen *name* and a name
-  never changes when the thing behind it moves. Reproduced from a real file
-  (`sends +0`, the stage `ok` and stuck); the same class as the two below, and
-  the reason the memo is invalidated by the depsgraph now (see Changed).
-- **Every cache reset retires the memoized prefix** as well as the frame store.
-  Before, Push — documented as the way to get past anything cached — re-sent the
-  same geometry and produced the same output again.
-- **A slider on a prefix Geometry Nodes modifier reaches Grasshopper.** Its
-  stored group input values are ID properties, not RNA, so the old revision's
-  property walk could not see them and the stage kept answering with the frame
-  from before the edit. Now structural: the write tags the object Blender
-  re-evaluates.
-- **A clone no longer retires its own memo.** Linking and unlinking the prefix
-  copy is the engine's own change, and Blender reports it on the evaluation that
-  follows — one geometry-updated entry for the stack object, indistinguishable
-  from a real edit. That report is consumed while the clone guard is still up;
-  without it the memo retired itself once per pass, forever.
+- **Geometry a node graph references now reaches Grasshopper.** A prefix that
+  reads another object — an Object Info node, a modifier input of type Object or
+  Collection — kept sending the geometry from before that object moved: the stage
+  looked stuck, and only Push, a frame change or a file reload shook it loose.
+- **A slider on a prefix Geometry Nodes modifier reaches Grasshopper.** Its stored
+  group input values are ID properties rather than RNA, so the revision could not
+  see them move.
+- **Push clears the memoized prefix along with the frame cache.** The manual
+  recovery dropped the cached frames but kept serving the geometry from before the
+  change, so the next request produced the same output again.
+- **The panel reports the port the server is bound to**, and restarting on another
+  port no longer leaves a stale "server stopped" error behind a running server.
 
 ### Changed
 
-- **The prefix memo is invalidated by Blender's depsgraph, not by a description
-  of what a prefix reads.** The revision used to freeze the *values* of every
-  input — base geometry, modifier properties, node-graph wiring, referenced
-  objects, shape keys — and compare them each pass, which is also why each of
-  the three fixes above was possible to miss. It now holds the **epochs of the
-  datablocks the prefix reads**, moved by `depsgraph_update_post` for what
-  Blender tagged, so Blender's own dependency graph is the oracle for what an
-  input is. The walk that remains collects references (pointer properties,
-  ID-valued node sockets, recursively through nested groups) and reads no
-  geometry at all; the memo carries the geometry hash, so a hit skips
-  re-serializing too. Three things a tag cannot cover are read directly: the
-  frame (a frame change tags nothing), the SubD-cage flag, and the shape keys.
-  Measured on a 50k-triangle prefix: a memo hit is **0.010 ms** where it was
-  8.1 ms, and a head-of-stack stage — which had no memo at all and re-read its
-  base every pass — 0.006 ms where it was 8.0 ms. The clone a real change needs
-  is unchanged. Deleted with it: the RNA property walk, the node-tree signature
-  walk and its depth cap, referenced-object geometry hashing, the upstream-output
-  hash list and the diagnostic the cap needed.
-- The engine runs at the fast cadence (5 ms) for a second after an edit, a
-  response or a frame change, instead of the 50 ms idle one. Playback fills
-  frames this way: each answer re-dirties the stack and the next frame goes out
-  on the next tick. A quiet scene still idles, because `_dirty` is emptied on
-  every pass.
-- `GhServer.start` clears the connection error once a bind succeeds, so
-  restarting the server on another port no longer leaves a stale
-  "server stopped" in the panel.
-- The plugin's `MiniWsClient.SendFrame` is serialised: a pong written from the
-  socket thread could interleave with a large frame the sender thread was
-  writing, corrupting the stream for the rest of the connection. The server's
-  keepalive is explicit (5 s ping, 20 s timeout) instead of the library
-  defaults, closing part of the gap protocol section 2 left open (N9).
+- **The prefix memo is invalidated by Blender's depsgraph.** The revision used to
+  freeze the values of everything a prefix reads — base geometry, modifier
+  settings, node-graph wiring, referenced objects, shape keys — and compare them
+  on every pass. A frozen value cannot follow a reference, which is why each of
+  the three fixes above was possible to miss; now what Blender tags is what
+  retires the memo, so the class of failure is gone rather than the instances.
+  Measured on a 50k-triangle prefix: a memo hit costs 0.010 ms where it cost
+  8.1 ms, and a stage at the head of the stack — which had no memo at all — 0.006
+  ms where it re-read its base on every pass.
+- **Reactions are immediate.** The engine runs at its fast cadence for a second
+  after an edit, a response or a frame change instead of waiting up to an idle
+  interval, so playback fills frames as each answer arrives. A quiet scene still
+  idles.
+- **The Diagnostics panel reports how long a stage has been waiting**, past a
+  second — the shape a sync fault takes when nothing else is visible.
+- **A saved port is the port the server binds.** The preferences class registered
+  after the engine, so the server started before the port was known and silently
+  used the default.
+- **The plugin writes frames under a lock**, so a keepalive pong can no longer
+  interleave with a large frame and corrupt the connection, and the server's
+  keepalive is explicit (5 s ping, 20 s timeout) rather than the library defaults.
 
 ## [0.1.2] — 2026-10-12
 
