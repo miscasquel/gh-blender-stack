@@ -138,7 +138,7 @@ The "invalid block instance" dialog that appeared during every run was the
 probe's own round-1 `bake_reference` call on the invalid doc-less reference.
 That bake is now **skipped for invalid references** (the finding is recorded
 above), so a warning-free run is the standing control that nothing else raises
-it.
+it — **confirmed by the owner's next run, same day**.
 
 ## Note on timing
 
