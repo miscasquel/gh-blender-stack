@@ -333,10 +333,24 @@ namespace GhStack
 
             /// <summary>The table index for one instance's definition, writing
             /// the definition on first use. <paramref name="referenceId"/> is the
-            /// doument id the instance names; it identifies the definition when
-            /// the paired object carries none.</summary>
+            /// document id the instance names.
+            ///
+            /// The document's own copy is preferred when the id names one: its
+            /// geometry types are definitive — a nested block is an
+            /// InstanceReferenceGeometry there, no cast guessing — and the
+            /// content is exactly what Stage In wrote. The paired objects remain
+            /// the fallback for definitions with no document identity
+            /// (graph-side ones, which do not preview anyway). Both routes share
+            /// one key format, so an id never lands in the table twice.</summary>
             public int Definition(ModelInstanceDefinition paired, Guid referenceId)
             {
+                if (referenceId != Guid.Empty)
+                {
+                    RhinoDoc document = RhinoDoc.ActiveDoc;
+                    if (document != null && document.InstanceDefinitions.Find(referenceId, true) != null)
+                        return DefinitionFromDocument(referenceId);
+                }
+
                 string key = Key(paired, referenceId);
                 int known;
                 if (key != null && _byKey.TryGetValue(key, out known)) return known;

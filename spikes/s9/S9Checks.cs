@@ -67,6 +67,14 @@ namespace GhStack.Spike.S9
                     {
                         results["instances_failure"] = Describe(ex);
                     }
+                    try
+                    {
+                        NestedInstanceChecks(results);
+                    }
+                    catch (Exception ex)
+                    {
+                        results["nested_failure"] = Describe(ex);
+                    }
                 });
             }
             catch (Exception ex)
@@ -376,6 +384,165 @@ namespace GhStack.Spike.S9
             foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false))
                 if (!before.Contains(idef.Id)) return idef;
             return null;
+        }
+
+        /// <summary>Round 3b: nesting. A parent definition holds a triangle plus
+        /// one row of the child quad; the top level holds one row of the parent.
+        /// Checks the document build, the bake through the nested reference, and
+        /// the emit path back to the wire (parent + child groups and the nested
+        /// row pair).</summary>
+        private static void NestedInstanceChecks(Dictionary<string, object> r)
+        {
+            RhinoDoc doc = RhinoDoc.ActiveDoc;
+            if (doc == null)
+            {
+                r["nested_document"] = "no active document";
+                return;
+            }
+            var stale = new List<InstanceDefinition>();
+            foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false))
+                if (idef.Name != null && idef.Name.StartsWith(Instances.DefinitionPrefix, StringComparison.Ordinal)
+                    && idef.UseCount() == 0)
+                    stale.Add(idef);
+            foreach (InstanceDefinition idef in stale)
+                doc.InstanceDefinitions.Delete(idef.Index, true, false);
+
+            var before = new HashSet<Guid>();
+            foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false)) before.Add(idef.Id);
+
+            var header = new Dictionary<string, object>();
+            var table = new List<object>();
+            var child = new Dictionary<string, object>();
+            child["name"] = "S9 Child";
+            table.Add(child);
+            var parent = new Dictionary<string, object>();
+            parent["name"] = "S9 Parent";
+            table.Add(parent);
+            header["definitions"] = table;
+
+            var sections = new List<Section>
+            {
+                // Child: a quad.
+                Section.Floats("idef.0.mesh.verts", new float[]
+                {
+                    0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0,
+                }),
+                Section.U32("idef.0.mesh.face_counts", new uint[] { 4 }),
+                Section.U32("idef.0.mesh.face_indices", new uint[] { 0, 1, 2, 3 }),
+                // Parent: a triangle plus one row of the child, 2 up.
+                Section.Floats("idef.1.mesh.verts", new float[]
+                {
+                    0, 0, 0, 1, 0, 0, 0, 1, 0,
+                }),
+                Section.U32("idef.1.mesh.face_counts", new uint[] { 3 }),
+                Section.U32("idef.1.mesh.face_indices", new uint[] { 0, 1, 2 }),
+                Section.U32("idef.1.inst.ref_def", new uint[] { 0 }),
+                Section.Floats("idef.1.inst.transforms", new float[]
+                {
+                    1, 0, 0, 0,
+                    0, 1, 0, 0,
+                    0, 0, 1, 0,
+                    0, 0, 2, 1,
+                }),
+                // Top level: one row of the parent.
+                Section.U32("inst.ref_def", new uint[] { 1 }),
+                Section.Floats("inst.transforms", new float[]
+                {
+                    1, 0, 0, 0,
+                    0, 1, 0, 0,
+                    0, 0, 1, 0,
+                    0, 0, 0, 1,
+                }),
+            };
+
+            var frame = new DecodedFrame(header, sections);
+            List<IGH_Goo> geometry = StageGeometry.Build(frame, 1.0, null, null);
+            r["nested_build"] = geometry.Count == 1 ? "1 reference" : "got " + geometry.Count;
+            GH_InstanceReference reference = geometry.Count > 0 ? geometry[0] as GH_InstanceReference : null;
+            if (reference == null)
+            {
+                r["nested_valid"] = "no reference";
+                return;
+            }
+            r["nested_valid"] = reference.IsValid.ToString();
+            BoundingBox box = reference.GetBoundingBox(Transform.Identity);
+            r["nested_bbox"] = box.IsValid
+                ? Round(box.Min) + " .. " + Round(box.Max)
+                : "invalid";
+
+            // What the pair carries, for the record: the document path no longer
+            // depends on these casts, but their shape explains the fallback.
+            var pairedShapes = new List<string>();
+            if (reference.InstanceDefinition != null && reference.InstanceDefinition.Objects != null)
+            {
+                foreach (ModelObject obj in reference.InstanceDefinition.Objects)
+                {
+                    InstanceReferenceGeometry asReference;
+                    bool isReference = obj.CastTo<InstanceReferenceGeometry>(out asReference)
+                        && asReference != null;
+                    pairedShapes.Add(obj.TypeName + "/" + obj.ObjectType
+                        + (isReference ? "/casts-to-reference" : ""));
+                }
+            }
+            r["nested_paired_objects"] = pairedShapes.Count == 0
+                ? "none"
+                : string.Join(", ", pairedShapes.ToArray());
+
+            var added = new List<InstanceDefinition>();
+            foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false))
+                if (!before.Contains(idef.Id)) added.Add(idef);
+            var shapes = new List<string>();
+            foreach (InstanceDefinition idef in added)
+                shapes.Add("'" + idef.Name + "' objects=" + idef.GetObjects().Length);
+            r["nested_definitions"] = added.Count + " added: " + string.Join(", ", shapes.ToArray());
+
+            // Bake the nested reference: Rhino resolves the parent's content.
+            Guid bakedId = Guid.Empty;
+            try
+            {
+                bool baked = reference.BakeGeometry(doc, new ObjectAttributes(), ref bakedId);
+                r["nested_bake"] = "baked=" + baked
+                    + ", object=" + (bakedId == Guid.Empty ? "none" : "yes");
+                if (bakedId != Guid.Empty) doc.Objects.Delete(bakedId, true);
+            }
+            catch (Exception ex)
+            {
+                r["nested_bake"] = Describe(ex);
+                if (bakedId != Guid.Empty) doc.Objects.Delete(bakedId, true);
+            }
+
+            // Back out: the parent is index 0, the child 1, and the parent's own
+            // row pair must name the child.
+            var outSections = new List<Section>();
+            var outDescriptors = new List<Dictionary<string, object>>();
+            var definitions = new List<Dictionary<string, object>>();
+            var warnings = new List<string>();
+            Instances.Emit(new List<GH_InstanceReference> { reference }, 1.0,
+                outSections, outDescriptors, definitions, warnings);
+            var names = new List<string>();
+            foreach (Dictionary<string, object> definition in definitions)
+                names.Add(Json.GetString(definition, "name") ?? "");
+            r["nested_emit_table"] = definitions.Count + " definition(s): " + string.Join(", ", names.ToArray());
+            var found = new List<string>();
+            foreach (Section section in outSections)
+                if (section.Name.EndsWith(".mesh.verts", StringComparison.Ordinal))
+                    found.Add(section.Name);
+            r["nested_emit_geometry"] = found.Count == 0
+                ? "none"
+                : string.Join(", ", found.ToArray());
+            Section nestedRows = Find(outSections, "idef.0.inst.ref_def");
+            r["nested_emit_rows"] = nestedRows != null && nestedRows.ToU32().Length == 1
+                && nestedRows.ToU32()[0] == 1
+                ? "parent row names the child"
+                : "missing";
+
+            // Cleanup, parent first, by id: deleting one shifts the other's index.
+            foreach (InstanceDefinition idef in added)
+            {
+                int index = doc.InstanceDefinitions.InstanceDefinitionIndex(idef.Id, true);
+                if (index >= 0)
+                    doc.InstanceDefinitions.Delete(index, true, false);
+            }
         }
 
         private static Section Find(List<Section> sections, string name)
