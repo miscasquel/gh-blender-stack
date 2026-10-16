@@ -277,6 +277,86 @@ namespace GhStack.Spike.S9
                 r["bake_reference"] = Describe(ex);
                 if (bakedId != Guid.Empty) doc.Objects.Delete(bakedId, true);
             }
+
+            // Round 1 (2026-10-16): a definition assembled from Attributes alone
+            // is invalid (no Id), its reference does not preview, and baking it
+            // is a no-op — baking it from the canvas raises Rhino's "invalid
+            // block instance" warning. These probes try the ways out: ask the
+            // public Cast for an identity, and fall back to a document
+            // definition. (Attribs and IsValidWhyNot are not public, so the
+            // constructor route cannot carry the objects.)
+            var withObjects = new ModelInstanceDefinition.Attributes();
+            withObjects.Objects = objects;
+            try
+            {
+                // The public ways to a definition: Cast from the Attributes, from
+                // the object list, or from one object. Report which, if any,
+                // yields a valid definition with content.
+                ModelInstanceDefinition cast = ModelInstanceDefinition.Cast(withObjects);
+                string source = "attributes";
+                if (cast == null)
+                {
+                    cast = ModelInstanceDefinition.Cast(objects);
+                    source = "objects";
+                }
+                if (cast == null && modelObject != null)
+                {
+                    cast = ModelInstanceDefinition.Cast(modelObject);
+                    source = "object";
+                }
+                r["definition_cast"] = cast == null ? "null (attributes, objects, object all failed)"
+                    : "from " + source + ": IsValid=" + cast.IsValid
+                      + ", Objects=" + (cast.Objects == null ? "null" : cast.Objects.Count.ToString())
+                      + ", Id=" + (cast.Id == null ? "(none)" : "yes");
+                if (cast != null)
+                {
+                    Guid castId = cast.Id == null ? Guid.NewGuid() : cast.Id.Value;
+                    var castReference = new GH_InstanceReference(
+                        new InstanceReferenceGeometry(castId, Transform.Translation(5, 0, 0)), cast);
+                    r["reference_cast"] = "IsValid=" + castReference.IsValid
+                        + ", whyNot=" + castReference.IsValidWhyNot;
+                    BoundingBox box = castReference.GetBoundingBox(Transform.Identity);
+                    r["reference_cast_bbox"] = box.IsValid ? "valid" : "invalid";
+                }
+            }
+            catch (Exception ex)
+            {
+                r["definition_cast"] = Describe(ex);
+            }
+
+            // A document definition is the fallback: build one, reference it,
+            // preview it, bake it, then put the document back as it was.
+            try
+            {
+                int docIndex = doc.InstanceDefinitions.Add("GHStack S9 probe", "spike probe",
+                    Point3d.Origin, new GeometryBase[] { mesh });
+                if (docIndex < 0)
+                {
+                    r["doc_definition"] = "InstanceDefinitions.Add returned " + docIndex;
+                }
+                else
+                {
+                    InstanceDefinition docDef = doc.InstanceDefinitions[docIndex];
+                    var docReference = new GH_InstanceReference(
+                        new InstanceReferenceGeometry(docDef.Id, Transform.Translation(5, 0, 0)),
+                        new ModelInstanceDefinition(docDef));
+                    r["doc_reference_valid"] = docReference.IsValid;
+                    BoundingBox box = docReference.GetBoundingBox(Transform.Identity);
+                    r["doc_reference_bbox"] = box.IsValid
+                        ? "valid: " + Round(box.Min) + " .. " + Round(box.Max)
+                        : "invalid";
+                    Guid docBaked = Guid.Empty;
+                    bool docOk = docReference.BakeGeometry(doc, new ObjectAttributes(), ref docBaked);
+                    r["doc_reference_bake"] = "baked=" + docOk
+                        + ", object=" + (docBaked == Guid.Empty ? "none" : "yes");
+                    if (docBaked != Guid.Empty) doc.Objects.Delete(docBaked, true);
+                    doc.InstanceDefinitions.Delete(docIndex, true, false);
+                }
+            }
+            catch (Exception ex)
+            {
+                r["doc_definition"] = Describe(ex);
+            }
         }
 
         private static string Round(Point3d p)

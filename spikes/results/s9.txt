@@ -1,0 +1,63 @@
+# S9 — attributes ride the geometry; blocks need a decision
+
+2026-10-16, live in Rhino 8 under wine via the spike `.gha` (`check=s9`).
+Driver: `spikes/s9/driver.py` (raw transcript in `spikes/results/s9-run.txt`);
+checks: `spikes/s9/S9Checks.cs`.
+
+**Result: the attribute question is answered — yes, definitively. The block
+question opened a second probe round.**
+
+## A. Attributes — PASS on every check
+
+| Check | What it proves |
+|---|---|
+| `dict_roundtrip: ok` | The geometry `UserDictionary` holds every value kind the wire uses (double/int/bool/byte/string arrays, vectors, points, colours, nested dictionaries) and reads them back. |
+| `duplicate: ok` | `Mesh.DuplicateMesh()` carries the dictionary — the operation GH performs when data passes between components. |
+| `transform: ok` | A transform keeps it. |
+| `goo_duplicate: ok` | `GH_Mesh.DuplicateGeometry()` keeps it — the goo path, not just the geometry path. |
+| `curve: ok`, `pointcloud: ok`, `subd: ok` | Duplication carries it for every geometry kind attributes can attach to (the curve case with a transform as well). |
+| `bake: ok` | Writing the mesh into the document and reading it back keeps it — the attribute survives a bake round trip. |
+
+So the design's premise holds: an attribute attached to the geometry rides along
+with GH's own operations and with the document. The "attributes lost / converted"
+reports from the first live sessions are explained by the builds they ran (the
+Blender extension predated the attribute code; the plugin could not encode the
+response until the `Json` list fix), not by the mechanism. The store is also
+pinned by `GhStackAttrTests.exe` in `scripts/test-gha`.
+
+## B. Blocks — construction works, validity does not (without an identity)
+
+`ModelObject.Cast(GH_Mesh)` works graph-side (`IsValid=True`, `Model Mesh`), and
+the paired `InstanceDefinition` survives on the reference
+(`reference_idef=True`, `reference_duplicate: ok, idef=True`). But a definition
+assembled from `ModelInstanceDefinition.Attributes { Objects = ... }` comes back
+`IsValid=False` with no `Id`, and its `GH_InstanceReference` is invalid:
+
+- `reference_valid: False`, `reference_bbox: invalid` — no preview geometry;
+- `bake_reference: baked=False, object=none, definitions added=0` — baking the
+  doc-less reference is a no-op through the API;
+- and baking such a reference from the canvas is what raises Rhino's
+  **"You are about to bake an invalid block instance"** warning (seen live,
+  2026-10-16).
+
+The remaining public levers are narrow: `Attribs` and `ReferenceID` are not
+public on the definition, so a graph-side definition cannot be given an identity
+or content through the constructor path. Round 2 (`definition_cast` +
+`doc_reference_*` probes, deployed 2026-10-16) checks whether
+`ModelInstanceDefinition.Cast` accepts the attributes/objects form, and verifies
+the fallback end to end: a definition added to the document
+(`InstanceDefinitionTable.Add`, cleaned up afterwards) that previews with a
+valid bounding box and bakes to a real object.
+
+**Decision input:** if `Cast` yields a valid definition, Stage In can hand
+Blender's instances over as graph-side blocks with no document write. If it does
+not, the choice is the document fallback (content-hash-named definitions written
+to the open document) or realized geometry — the trade the earlier plan
+described.
+
+## Note on timing
+
+The reply took 37.8 s: the checks run on the Rhino UI thread
+(`RhinoApp.InvokeAndWait`), and that call queued behind an active Grasshopper
+solve on the user's canvas (the S9 run happened while a live loop was solving).
+Not a defect in the checks; the probe is UI-thread-bound by design.

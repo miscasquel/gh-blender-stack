@@ -42,7 +42,12 @@ Notable changes to this project, following
   STRING offsets section through both codecs (eleven fixtures total).
 - **Spike S9** (`spikes/s9/`): the user-dictionary and graph-side block checks
   that the attributes and instances designs rest on, run inside Rhino through the
-  spike `.gha` (`check=s9`).
+  spike `.gha` (`check=s9`). **Round 1 passed 2026-10-16** (`spikes/results/s9.txt`):
+  the attribute store survives duplication, transforms, goo duplication and bake
+  for every geometry kind — the design's premise holds live. Blocks: a
+  graph-side definition without an identity is invalid, does not preview and
+  does not bake; round 2 (deployed) probes `ModelInstanceDefinition.Cast` and
+  the document-definition fallback.
 
 ### Fixed
 

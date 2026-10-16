@@ -41,6 +41,16 @@ Raw transcript: `spikes/results/s9-run.txt`. The curated report is
 
 ## Status
 
-**Checks written and compiled; the live run is pending** (2026-10-15). The
-results decide one fallback, so treat the attributes and blocks designs as
-API-backed but not yet behaviour-confirmed until `s9.txt` exists.
+**Round 1 ran 2026-10-16 and passed.** Attributes: the `UserDictionary` survives
+every operation GH performs (duplicate, transform, goo duplication, bake) for
+mesh, curve, point cloud and SubD — the design's premise holds. Blocks: a
+graph-side definition built from `Attributes` is invalid without an identity,
+does not preview, and cannot be baked (Rhino raises its "invalid block instance"
+warning from the canvas) — the public constructor path cannot supply an Id or
+content, so round 2 tries `ModelInstanceDefinition.Cast` and verifies the
+document-definition fallback. Full report: `spikes/results/s9.txt`.
+
+The checks are in `spikes/s9/S9Checks.cs`; the deployed spike `.gha` carries
+round 2's probes (`definition_cast`, `doc_reference_valid`, `doc_reference_bbox`,
+`doc_reference_bake`). To re-run: restart Rhino (Libraries load at start), then
+the driver, then drop the **S1 Spike** component.
