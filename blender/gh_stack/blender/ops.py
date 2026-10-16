@@ -52,6 +52,8 @@ class GHSTACK_OT_remove_stage(bpy.types.Operator):
         stage = record.stages[self.index]
         nodes.remove_modifier(obj, stage.key)
         helpers.remove_helper(obj, stage.key)
+        for index in list(helpers.definition_collections(obj, stage.key)):
+            helpers.remove_definition(obj, stage.key, index)
         stack_mod.clear_stage_params(obj, stage.key)
         record.stages.remove(self.index)
         obj.update_tag()

@@ -27,11 +27,13 @@ def group_name(stage_key):
 
 
 def ensure_group(stack_obj, stage_key):
-    """The node group for one stage, wired to all of its helpers. Returns the group."""
+    """The node group for one stage, wired to all of its helpers and block
+    definitions. Returns the group."""
     helpers_map = helpers.ensure_helpers(stack_obj, stage_key)
+    definitions = _definitions(stack_obj, stage_key)
     name = group_name(stage_key)
     group = bpy.data.node_groups.get(name)
-    if group is not None and _group_matches(group, helpers_map):
+    if group is not None and _group_matches(group, helpers_map, definitions):
         return group
     if group is None:
         group = bpy.data.node_groups.new(name, "GeometryNodeTree")
@@ -42,7 +44,7 @@ def ensure_group(stack_obj, stage_key):
     join.location = (0.0, 0.0)
 
     output = group.nodes.new("NodeGroupOutput")
-    output.location = (200.0, 0.0)
+    output.location = (400.0, 0.0)
     group.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
 
     y = -100.0
@@ -56,12 +58,65 @@ def ensure_group(stack_obj, stage_key):
         group.links.new(info.outputs["Geometry"], join.inputs["Geometry"])
         y += 100.0
 
+    y -= 100.0
+    for index in sorted(definitions):
+        collection, cloud = definitions[index]
+        if cloud is None:
+            # A definition only its parent instances: no own chain.
+            continue
+        chain_x = -500.0
+        cinfo = group.nodes.new("GeometryNodeCollectionInfo")
+        cinfo.location = (chain_x, y)
+        cinfo.inputs["Collection"].default_value = collection
+        cinfo.inputs["Separate Children"].default_value = False
+        cinfo.inputs["Reset Children"].default_value = False
+
+        iono = group.nodes.new("GeometryNodeInstanceOnPoints")
+        iono.location = (chain_x + 300.0, y)
+        group.links.new(cinfo.outputs["Instances"], iono.inputs["Instance"])
+
+        pinfo = group.nodes.new("GeometryNodeObjectInfo")
+        pinfo.location = (chain_x, y - 200.0)
+        pinfo.inputs["Object"].default_value = cloud
+        pinfo.transform_space = "ORIGINAL"
+        group.links.new(pinfo.outputs["Geometry"], iono.inputs["Points"])
+
+        # The implicit attribute fallback does not fire for datablock-backed
+        # attributes (probed 2026-10-16), so rotation and scale are linked by
+        # name explicitly. Both attributes are written with the rows, so a
+        # missing-attribute default can never degenerate the transform.
+        rotation = group.nodes.new("GeometryNodeInputNamedAttribute")
+        rotation.location = (chain_x + 100.0, y - 200.0)
+        rotation.data_type = "QUATERNION"
+        rotation.inputs["Name"].default_value = "rotation"
+        group.links.new(rotation.outputs["Attribute"], iono.inputs["Rotation"])
+
+        scale = group.nodes.new("GeometryNodeInputNamedAttribute")
+        scale.location = (chain_x + 100.0, y - 300.0)
+        scale.data_type = "FLOAT_VECTOR"
+        scale.inputs["Name"].default_value = "scale"
+        group.links.new(scale.outputs["Attribute"], iono.inputs["Scale"])
+
+        group.links.new(iono.outputs["Instances"], join.inputs["Geometry"])
+        y -= 300.0
+
     group.links.new(join.outputs["Geometry"], output.inputs["Geometry"])
     return group
 
 
-def _group_matches(group, helpers_map):
-    """Whether the group already reads exactly this helper set."""
+def _definitions(stack_obj, stage_key):
+    """The stage's block definitions: index -> (prototype collection, row cloud
+    or None). A definition without rows is a prototype a parent block nests."""
+    clouds = helpers.instance_clouds(stack_obj, stage_key)
+    return {
+        index: (coll, clouds.get(index))
+        for index, coll in helpers.definition_collections(stack_obj, stage_key).items()
+    }
+
+
+def _group_matches(group, helpers_map, definitions):
+    """Whether the group already reads exactly this helper set and definition
+    set."""
     wanted = list(helpers_map.values())
     seen = 0
     for node in group.nodes:
@@ -71,7 +126,28 @@ def _group_matches(group, helpers_map):
             if node.inputs["Object"].default_value == helper:
                 seen += 1
                 break
-    return seen == len(wanted)
+    if seen != len(wanted):
+        return False
+
+    wanted_collections = set()
+    wanted_clouds = set()
+    for collection, cloud in definitions.values():
+        if cloud is None:
+            continue
+        wanted_collections.add(collection)
+        wanted_clouds.add(cloud)
+    seen_collections = set()
+    seen_clouds = set()
+    for node in group.nodes:
+        if node.bl_idname == "GeometryNodeCollectionInfo":
+            seen_collections.add(node.inputs["Collection"].default_value)
+    for node in group.nodes:
+        if node.bl_idname != "GeometryNodeObjectInfo":
+            continue
+        obj = node.inputs["Object"].default_value
+        if obj is not None and obj.type == "POINTCLOUD":
+            seen_clouds.add(obj)
+    return seen_collections == wanted_collections and seen_clouds == wanted_clouds
 
 
 def ensure_modifier(stack_obj, stage):

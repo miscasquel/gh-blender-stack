@@ -157,9 +157,9 @@ class InstanceReadTests(unittest.TestCase):
         self.assertEqual(list(by_name["inst.ref_def"]), [0, 0])
         transforms = by_name["inst.transforms"].reshape(-1, 16)
         self.assertEqual(transforms.shape, (2, 16))
-        # Row-major, translation in the last row (protocol §5.2).
-        self.assertEqual(list(transforms[0][12:15]), [0.0, 0.0, 0.0])
-        self.assertEqual(list(transforms[1][12:15]), [3.0, 0.0, 0.0])
+        # Row-major, translation in the fourth column (protocol §5.2).
+        self.assertEqual([transforms[0][3], transforms[0][7], transforms[0][11]], [0.0, 0.0, 0.0])
+        self.assertEqual([transforms[1][3], transforms[1][7], transforms[1][11]], [3.0, 0.0, 0.0])
         np.testing.assert_allclose(transforms[0].reshape(4, 4), np.eye(4), atol=1e-6)
 
     def test_rotation_and_scale_ride_the_row_transform(self):
@@ -202,7 +202,7 @@ class InstanceReadTests(unittest.TestCase):
         # The outer definition is pure nesting: its rows carry the inner rows.
         self.assertEqual(list(by_name["idef.0.inst.ref_def"]), [1, 1])
         nested = by_name["idef.0.inst.transforms"].reshape(-1, 16)
-        self.assertEqual(list(nested[1][12:15]), [2.0, 0.0, 0.0])
+        self.assertEqual([nested[1][3], nested[1][7], nested[1][11]], [2.0, 0.0, 0.0])
         # Definition 1 is the quad itself.
         self.assertEqual(by_name["idef.1.mesh.verts"].shape, (4, 3))
 
@@ -245,6 +245,151 @@ class InstanceReadTests(unittest.TestCase):
         self.assertEqual(decoded_header["definitions"], [{"name": "FrameColl"}])
         self.assertIn("idef.0.mesh.verts", decoded_sections)
         self.assertEqual(list(decoded_sections["inst.ref_def"]), [0])
+
+
+class InstanceApplyTests(unittest.TestCase):
+    """The GH -> Blender half: a response with definitions and rows lands as
+    prototype collections + row clouds, and the stage's node group realizes the
+    blocks through Instance on Points."""
+
+    def setUp(self):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        bpy.ops.preferences.addon_enable(module="gh_stack")
+
+    def _stage(self):
+        bpy.ops.mesh.primitive_cube_add(size=2.0)
+        obj = bpy.context.object
+        obj.name = "Blocks"
+        bpy.ops.gh_stack.add_stage(label="Blocks")
+        return obj, obj.gh_stack.stages[0]
+
+    @staticmethod
+    def _quad_sections(prefix=""):
+        verts = np.array(
+            [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)], dtype=np.float32
+        ).reshape(-1)
+        return {
+            prefix + "mesh.verts": verts,
+            prefix + "mesh.face_counts": np.array([4], dtype=np.uint32),
+            prefix + "mesh.face_indices": np.array([0, 1, 2, 3], dtype=np.uint32),
+        }
+
+    @staticmethod
+    def _wire_transform(translation):
+        m = np.eye(4, dtype=np.float32)
+        m[0, 3], m[1, 3], m[2, 3] = translation
+        return m.reshape(-1)
+
+    def _realized_mesh(self, obj):
+        # The stage's output is instances; a native modifier after the stage is
+        # what realizes them for an object mesh (to_mesh alone shows the empty
+        # object mesh, because instancing is not part of it). A Realize Instances
+        # group stands in for what the renderer, or the next native modifier,
+        # actually sees.
+        group = bpy.data.node_groups.new("RealizeProbe", "GeometryNodeTree")
+        group.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+        group.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+        source = group.nodes.new("NodeGroupInput")
+        destination = group.nodes.new("NodeGroupOutput")
+        realize = group.nodes.new("GeometryNodeRealizeInstances")
+        group.links.new(source.outputs["Geometry"], realize.inputs["Geometry"])
+        group.links.new(realize.outputs["Geometry"], destination.inputs["Geometry"])
+        modifier = obj.modifiers.new("RealizeProbe", "NODES")
+        modifier.node_group = group
+        bpy.context.view_layer.update()
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        evaluated = obj.evaluated_get(depsgraph)
+        return evaluated, evaluated.to_mesh()
+
+    def test_apply_realizes_block_instances(self):
+        from blender.gh_stack.blender import engine
+
+        obj, stage = self._stage()
+        sections = dict(self._quad_sections("idef.0."))
+        sections["inst.ref_def"] = np.array([0, 0], dtype=np.uint32)
+        sections["inst.transforms"] = np.concatenate([
+            self._wire_transform((0, 0, 0)),
+            self._wire_transform((5, 0, 0)),
+        ])
+
+        engine._apply(obj, stage, sections, None)
+
+        evaluated, mesh = self._realized_mesh(obj)
+        try:
+            self.assertEqual(len(mesh.vertices), 8)
+            self.assertEqual(len(mesh.polygons), 2)
+            xs = sorted(round(v.co.x, 3) for v in mesh.vertices)
+            self.assertIn(5.0, xs)
+        finally:
+            evaluated.to_mesh_clear()
+
+    def test_apply_rotates_and_scales_rows(self):
+        from blender.gh_stack.blender import engine
+
+        obj, stage = self._stage()
+        sections = dict(self._quad_sections("idef.0."))
+        sections["inst.ref_def"] = np.array([0], dtype=np.uint32)
+        # 180° about Z with scale 2: x and y flip and double.
+        m = np.zeros((4, 4), dtype=np.float32)
+        m[0, 0] = -2.0
+        m[1, 1] = -2.0
+        m[2, 2] = 2.0
+        m[3, 3] = 1.0
+        sections["inst.transforms"] = m.reshape(-1)
+
+        engine._apply(obj, stage, sections, None)
+
+        evaluated, mesh = self._realized_mesh(obj)
+        try:
+            self.assertEqual(len(mesh.vertices), 4)
+            xs = sorted(round(v.co.x, 3) for v in mesh.vertices)
+            # The quad spans (0,0)..(1,1); -2× puts it at (-2,0)..(0,-2).
+            self.assertEqual(xs, [-2.0, -2.0, 0.0, 0.0])
+        finally:
+            evaluated.to_mesh_clear()
+
+    def test_apply_nests_definitions(self):
+        from blender.gh_stack.blender import engine
+
+        obj, stage = self._stage()
+        sections = dict(self._quad_sections("idef.0."))
+        # Definition 1 is pure nesting: one row of definition 0, pushed in Z.
+        sections["idef.1.inst.ref_def"] = np.array([0], dtype=np.uint32)
+        sections["idef.1.inst.transforms"] = self._wire_transform((0, 0, 3))
+        sections["inst.ref_def"] = np.array([1], dtype=np.uint32)
+        sections["inst.transforms"] = self._wire_transform((0, 0, 0))
+
+        engine._apply(obj, stage, sections, None)
+
+        evaluated, mesh = self._realized_mesh(obj)
+        try:
+            self.assertEqual(len(mesh.vertices), 4)
+            zs = sorted(round(v.co.z, 3) for v in mesh.vertices)
+            self.assertEqual(zs, [3.0, 3.0, 3.0, 3.0])
+        finally:
+            evaluated.to_mesh_clear()
+
+    def test_apply_clears_definitions_that_go_away(self):
+        from blender.gh_stack.blender import engine
+
+        obj, stage = self._stage()
+        sections = dict(self._quad_sections("idef.0."))
+        sections["inst.ref_def"] = np.array([0], dtype=np.uint32)
+        sections["inst.transforms"] = self._wire_transform((0, 0, 0))
+        engine._apply(obj, stage, sections, None)
+
+        # A later response without blocks removes the prototype and its cloud.
+        from blender.gh_stack.blender import helpers
+
+        engine._apply(obj, stage, {}, None)
+        self.assertEqual(helpers.definition_collections(obj, stage.key), {})
+        self.assertEqual(helpers.instance_clouds(obj, stage.key), {})
+
+        evaluated, mesh = self._realized_mesh(obj)
+        try:
+            self.assertEqual(len(mesh.vertices), 0)
+        finally:
+            evaluated.to_mesh_clear()
 
 
 if __name__ == "__main__":

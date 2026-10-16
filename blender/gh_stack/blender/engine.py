@@ -457,29 +457,223 @@ def _apply(obj, stage, sections, attributes=None):
     definition that stops returning curves stops showing them. Attributes are
     written after the geometry, because the geometry write is what fixes the
     element counts they have to match.
-    """
-    nodes.ensure_group(obj, stage.key)
-    groups = {"mesh": [], "curves": [], "points": []}
-    for name, values in sections.items():
-        if name.startswith("mesh.") or name.startswith("subd."):
-            groups["mesh"].append((name, values))
-        elif name.startswith("crv."):
-            groups["curves"].append((name, values))
-        elif name.startswith("pts."):
-            groups["points"].append((name, values))
 
-    _apply_mesh(obj, stage, groups["mesh"])
-    _apply_curves(obj, stage, groups["curves"])
-    _apply_points(obj, stage, groups["points"])
+    Instance definitions (protocol §5.2) are the same rule one level up: each
+    `idef.<i>.*` group fills definition i's prototype collection (created on
+    first sight, removed when the response stops carrying it), the top-level
+    `inst.*` rows fill each definition's row cloud, and a definition's own rows
+    become nested placement empties inside its collection.
+    """
+    base = {"mesh": [], "curves": [], "points": []}
+    definitions = {}
+
+    for name, values in sections.items():
+        index, rest = _definition_split(name)
+        if index is not None:
+            if rest.startswith("inst."):
+                continue  # handled with the other row pairs below
+            bucket = _kind_of(rest)
+            if bucket is not None:
+                entry = definitions.setdefault(index, {"mesh": [], "curves": [], "points": []})
+                entry[bucket].append((rest, values))
+            continue
+        if name.startswith("inst."):
+            continue
+        bucket = _kind_of(name)
+        if bucket is not None:
+            base[bucket].append((name, values))
+
+    top_rows = _rows_of(sections, "")
+    nested_scopes = {}
+    for name in sections:
+        index, rest = _definition_split(name)
+        if index is not None and rest.startswith("inst."):
+            nested_scopes.setdefault(index, None)
+    keep = set(definitions) | set(nested_scopes)
+    for index, _matrix in top_rows:
+        keep.add(index)
+    nested_rows = {}
+    for index in nested_scopes:
+        nested_rows[index] = _rows_of(sections, "idef.%d." % index)
+        for target, _matrix in nested_rows[index]:
+            keep.add(target)
+    for index in keep:
+        definitions.setdefault(index, {"mesh": [], "curves": [], "points": []})
+
+    # Definitions the response no longer carries go away whole: collection,
+    # helpers, nested empties and row cloud.
+    for index in list(helpers.definition_collections(obj, stage.key)):
+        if index not in keep:
+            helpers.remove_definition(obj, stage.key, index)
+
+    # Data first, wiring after: the node group reads the final definition set.
+    for index in sorted(definitions):
+        _collection, objects = helpers.ensure_definition(obj, stage.key, index)
+        _apply_mesh(objects["mesh"], definitions[index]["mesh"])
+        _apply_curves(objects["curves"], definitions[index]["curves"])
+        _apply_points(objects["points"], definitions[index]["points"])
+
+    _apply_mesh(helpers.ensure_helper(obj, stage.key, "mesh"), base["mesh"])
+    _apply_curves(helpers.ensure_helper(obj, stage.key, "curves"), base["curves"])
+    _apply_points(helpers.ensure_helper(obj, stage.key, "points"), base["points"])
     _apply_attributes(obj, stage, sections, attributes)
+    _apply_instance_rows(obj, stage, definitions, top_rows, nested_rows)
+
+    nodes.ensure_group(obj, stage.key)
+
+
+def _definition_split(name):
+    """``(index, rest)`` when a section name is inside a definition group
+    (``idef.<i>.mesh.verts``), else ``(None, name)``."""
+    if not name.startswith("idef."):
+        return None, name
+    parts = name.split(".", 2)
+    if len(parts) != 3 or not parts[1].isdigit():
+        return None, name
+    return int(parts[1]), parts[2]
+
+
+def _kind_of(name):
+    if name.startswith("mesh.") or name.startswith("subd."):
+        return "mesh"
+    if name.startswith("crv."):
+        return "curves"
+    if name.startswith("pts."):
+        return "points"
+    return None
+
+
+def _rows_of(sections, prefix):
+    """The decoded row pairs of one scope as ``[(definition index, matrix 4x4)]``.
+
+    Both halves are all-or-nothing (protocol §5.2); a mismatched pair keeps the
+    shorter side rather than failing the whole response.
+    """
+    refs = sections.get(prefix + "inst.ref_def")
+    mats = sections.get(prefix + "inst.transforms")
+    if refs is None and mats is None:
+        return []
+    if refs is None or mats is None or len(mats) < 16:
+        return []
+    matrices = np.asarray(mats, dtype=np.float32).reshape(-1, 16)
+    count = min(len(refs), len(matrices))
+    return [(int(refs[row]), matrices[row]) for row in range(count)]
+
+
+def _apply_instance_rows(obj, stage, definitions, top_rows, nested_rows):
+    """The row pairs: each definition's top-level rows fill its row cloud
+    (position/rotation/scale, read by the node group), and a definition's own
+    rows become nested placement empties inside its collection."""
+    import mathutils
+
+    # Nested placements: replace the empties of every scope this response owns.
+    for index in sorted(definitions):
+        collection, _objects = helpers.ensure_definition(obj, stage.key, index)
+        for child in list(collection.objects):
+            if child.type == "EMPTY":
+                bpy.data.collections[collection.name].objects.unlink(child)
+                bpy.data.objects.remove(child, do_unlink=True)
+
+    for index, rows in sorted(nested_rows.items()):
+        collection, _objects = helpers.ensure_definition(obj, stage.key, index)
+        if not rows:
+            continue
+        for row, (target, matrix) in enumerate(rows):
+            target_coll = helpers.definition_collections(obj, stage.key).get(target)
+            if target_coll is None:
+                print(
+                    "[gh-stack] %s: block %d nests definition %d, which the response does not carry"
+                    % (stage.key, index, target),
+                    flush=True,
+                )
+                continue
+            empty = bpy.data.objects.new(
+                helpers.nested_name(obj, stage.key, index, row), None
+            )
+            empty.instance_type = "COLLECTION"
+            empty.instance_collection = target_coll
+            empty.matrix_world = _matrix_of(matrix)
+            empty.hide_viewport = True
+            empty.hide_render = True
+            collection.objects.link(empty)
+
+    # Top-level rows: one cloud per definition, or none when it has no rows.
+    clouds = {}
+    for target, matrix in top_rows:
+        clouds.setdefault(target, []).append(matrix)
+    for index in sorted(definitions):
+        matrices = clouds.get(index, [])
+        existing = helpers.instance_clouds(obj, stage.key).get(index)
+        if not matrices:
+            if existing is not None:
+                data = existing.data
+                bpy.data.objects.remove(existing, do_unlink=True)
+                if data is not None and data.users == 0:
+                    bpy.data.pointclouds.remove(data)
+            continue
+        cloud = helpers.ensure_instance_cloud(obj, stage.key, index)
+        data = cloud.data
+        n = len(matrices)
+        if len(data.points) != n:
+            data.resize(n)
+        positions = np.empty(n * 3, dtype=np.float32)
+        rotation = data.attributes.get("rotation")
+        if rotation is None:
+            rotation = data.attributes.new("rotation", "QUATERNION", "POINT")
+        scale = data.attributes.get("scale")
+        if scale is None:
+            scale = data.attributes.new("scale", "FLOAT_VECTOR", "POINT")
+        warned_shear = False
+        for row, matrix in enumerate(matrices):
+            local = _matrix_of(matrix)
+            position = local.to_translation()
+            positions[row * 3:row * 3 + 3] = position
+            quaternion = local.to_quaternion()
+            scale_value = local.to_scale()
+            rotation.data[row].value = quaternion
+            scale.data[row].vector = scale_value
+            if not warned_shear and not _decomposes_cleanly(local, position, quaternion, scale_value):
+                # A shear (or a non-uniform basis Blender cannot rebuild from
+                # position/rotation/scale) is the one shape the point-cloud
+                # channel cannot carry; the transform is applied lossily.
+                print(
+                    "[gh-stack] %s: instance transform %d has shear; "
+                    "Blender can only carry position, rotation and scale" % (stage.key, row),
+                    flush=True,
+                )
+                warned_shear = True
+        data.points.foreach_set("co", positions)
+        data.points.update()
+        cloud.update_tag()
+
+
+def _matrix_of(matrix):
+    """A mathutils Matrix from the wire's row-major 16 floats (translation in
+    the fourth column, protocol §5.2)."""
+    import mathutils
+
+    m = np.asarray(matrix, dtype=np.float32).reshape(4, 4)
+    return mathutils.Matrix((tuple(m[0]), tuple(m[1]), tuple(m[2]), tuple(m[3])))
+
+
+def _decomposes_cleanly(matrix, position, quaternion, scale):
+    import mathutils
+
+    rebuilt = mathutils.Matrix.LocRotScale(position, quaternion, scale)
+    difference = np.abs(
+        np.asarray(rebuilt, dtype=np.float32) - np.asarray(matrix, dtype=np.float32)
+    )
+    return float(difference.max()) < 1e-4
 
 
 def _apply_attributes(obj, stage, sections, attributes):
     """Write the frame's attribute sections into the helper they belong to.
 
     mesh and subd share the mesh helper (a SubD cage is a mesh); points go to
-    the point cloud helper. Curve attributes are not transferred yet — Blender's
-    curve helper is a legacy Curve datablock, which cannot store attributes.
+    the point cloud helper. A descriptor with a ``definition`` index targets
+    that definition's helper instead (protocol §5.2). Curve attributes are not
+    transferred yet — Blender's curve helper is a legacy Curve datablock, which
+    cannot store attributes.
     """
     if not attributes:
         return
@@ -493,18 +687,22 @@ def _apply_attributes(obj, stage, sections, attributes):
         if values is None:
             continue
         offsets = sections.get(descriptor.get("offsets")) if descriptor.get("offsets") else None
-        grouped.setdefault(kind, []).append((descriptor, values, offsets))
+        definition = descriptor.get("definition")
+        grouped.setdefault((definition, kind), []).append((descriptor, values, offsets))
 
-    for kind, entries in grouped.items():
-        helper = helpers.ensure_helper(obj, stage.key, kind)
+    for (definition, kind), entries in grouped.items():
+        if definition is None:
+            helper = helpers.ensure_helper(obj, stage.key, kind)
+        else:
+            _collection, objects = helpers.ensure_definition(obj, stage.key, int(definition))
+            helper = objects[kind]
         _bump_id(helper)
         for note in geometry_io.write_attributes(helper.data, entries):
             print("[gh-stack] %s: %s" % (stage.key, note), flush=True)
         helper.update_tag()
 
 
-def _apply_mesh(obj, stage, entries):
-    helper = helpers.ensure_helper(obj, stage.key, "mesh")
+def _apply_mesh(helper, entries):
     mesh = helper.data
     if not entries:
         if len(mesh.vertices) or len(mesh.polygons):
@@ -526,8 +724,7 @@ def _apply_mesh(obj, stage, entries):
     helper.update_tag()
 
 
-def _apply_curves(obj, stage, entries):
-    helper = helpers.ensure_helper(obj, stage.key, "curves")
+def _apply_curves(helper, entries):
     if not entries:
         if len(helper.data.splines):
             helper.data.splines.clear()
@@ -537,15 +734,14 @@ def _apply_curves(obj, stage, entries):
     prepared = []
     for name, values in entries:
         arr = np.asarray(values)
-        if name == "crv.points":
+        if name.endswith(".points"):
             arr = arr.reshape(-1, 4)
         prepared.append((name, _dtype_of(name), arr))
     geometry_io.sections_to_curve(helper.data, prepared)
     helper.update_tag()
 
 
-def _apply_points(obj, stage, entries):
-    helper = helpers.ensure_helper(obj, stage.key, "points")
+def _apply_points(helper, entries):
     if not entries:
         if len(helper.data.points):
             helper.data.resize(0)
@@ -555,9 +751,9 @@ def _apply_points(obj, stage, entries):
     prepared = []
     for name, values in entries:
         arr = np.asarray(values)
-        if name == "pts.positions":
+        if name.endswith(".positions"):
             arr = arr.reshape(-1, 3)
-        elif name == "pts.colors":
+        elif name.endswith(".colors"):
             arr = arr.reshape(-1, 4)
         prepared.append((name, _dtype_of(name), arr))
     geometry_io.sections_to_points(helper.data, prepared)

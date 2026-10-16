@@ -656,8 +656,11 @@ def _instance_rows(geometry):
     n = len(cloud.points)
     indices = np.empty(n, dtype=np.int32)
     index_attr.data.foreach_get("value", indices)
-    matrices = np.empty(n * 16, dtype=np.float32)
-    transform_attr.data.foreach_get("value", matrices)
+    # instance_transform reads column-major (Blender's memory layout); the wire
+    # is row-major with the translation in the fourth column (protocol §5.2).
+    memory = np.empty(n * 16, dtype=np.float32)
+    transform_attr.data.foreach_get("value", memory)
+    matrices = memory.reshape(n, 4, 4).transpose(0, 2, 1).reshape(-1)
 
     rows = []
     for row in range(n):

@@ -409,6 +409,7 @@ def _is_f32(name):
         or name.endswith(".points")
         or name.endswith(".positions")
         or name.endswith(".radii")
+        or name.endswith("inst.transforms")
     )
 
 
