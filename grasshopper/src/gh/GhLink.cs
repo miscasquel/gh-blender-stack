@@ -31,6 +31,10 @@ namespace GhStack
         /// <summary>Attribute descriptors of the held sections (protocol §5).
         /// Written under Gate together with Sections; read during a solve.</summary>
         public List<Dictionary<string, object>> Attributes = new List<Dictionary<string, object>>();
+        /// <summary>Instance-definition table of the held sections (protocol
+        /// §5.2). It lives in the frame header, so holding only Sections would
+        /// drop it: Stage In rebuilds the frame from this on every solve.</summary>
+        public List<Dictionary<string, object>> Definitions = new List<Dictionary<string, object>>();
         /// <summary>The `geom.hash` the held sections were sent for. A `ref` for
         /// any other hash cannot be served and must be refused.</summary>
         public string GeometryHash = "";
@@ -341,6 +345,7 @@ namespace GhStack
                 {
                     slot.Sections = decoded.Sections;
                     slot.Attributes = AttributeList(header);
+                    slot.Definitions = HeaderList(header, "definitions");
                     slot.GeometryHash = hash ?? "";
                 }
                 // A ref is servable only for the geometry we actually hold. A
@@ -379,8 +384,16 @@ namespace GhStack
         /// frame that carries none (or a malformed list).</summary>
         private static List<Dictionary<string, object>> AttributeList(Dictionary<string, object> header)
         {
+            return HeaderList(header, "attributes");
+        }
+
+        /// <summary>One header list of objects as dictionaries, empty when the
+        /// header does not carry it.</summary>
+        private static List<Dictionary<string, object>> HeaderList(
+            Dictionary<string, object> header, string key)
+        {
             var list = new List<Dictionary<string, object>>();
-            var raw = Json.Get(header, "attributes") as List<object>;
+            var raw = Json.Get(header, key) as List<object>;
             if (raw == null) return list;
             foreach (object entry in raw)
             {

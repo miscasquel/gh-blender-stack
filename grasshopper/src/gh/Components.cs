@@ -94,7 +94,15 @@ namespace GhStack
             string status = slot.Status;
             if (slot.Sections != null && slot.Sections.Count > 0)
             {
-                var frame = new DecodedFrame(new Dictionary<string, object>(), slot.Sections);
+                // The frame header carries the instance-definition table
+                // (protocol §5.2). The slot holds it beside the sections; a stage
+                // that rebuilt the frame from Sections alone silently dropped
+                // every block (found live, 2026-10-16: the owner's plane with an
+                // Instance-on-Elements modifier crossed as mesh only).
+                var frameHeader = new Dictionary<string, object>();
+                if (slot.Definitions != null && slot.Definitions.Count > 0)
+                    frameHeader["definitions"] = slot.Definitions;
+                var frame = new DecodedFrame(frameHeader, slot.Sections);
                 double scale = GhLink.DocumentScale();
                 geometry = StageGeometry.Build(frame, scale, slot.Attributes, delegate(string note)
                 {
@@ -111,6 +119,14 @@ namespace GhStack
             da.SetData("Message", slot.Message);
             da.SetDataList("Attributes", StageGeometry.AttributeNames(slot.Attributes));
             Message = GhLink.Connected ? status : "disconnected";
+            // Blocks on the output at a glance: an instance row that never made
+            // it into Geometry is otherwise invisible (the live "no instances"
+            // report, 2026-10-16).
+            int blocks = 0;
+            foreach (IGH_Goo goo in geometry)
+                if (goo is GH_InstanceReference) blocks++;
+            if (blocks > 0)
+                Message = Message + " · " + blocks + (blocks == 1 ? " block" : " blocks");
             GhLink.Publish(OnPingDocument());
         }
 
