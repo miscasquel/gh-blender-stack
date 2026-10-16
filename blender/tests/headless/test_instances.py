@@ -348,12 +348,16 @@ class InstanceApplyTests(unittest.TestCase):
         finally:
             evaluated.to_mesh_clear()
 
-    def test_apply_nests_definitions(self):
-        from blender.gh_stack.blender import engine
+    def test_apply_nested_rows_are_accepted_but_not_drawn(self):
+        # Nested placements are a known Blender-side limitation: the prototype
+        # chain instances a prototype's own geometry, so a nested reference
+        # would have to be baked into the parent prototype first. The wire and
+        # the GH side keep the data; this side accepts it, warns, and draws
+        # nothing (no silent corruption, no leftover empties).
+        from blender.gh_stack.blender import engine, helpers
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
-        # Definition 1 is pure nesting: one row of definition 0, pushed in Z.
         sections["idef.1.inst.ref_def"] = np.array([0], dtype=np.uint32)
         sections["idef.1.inst.transforms"] = self._wire_transform((0, 0, 3))
         sections["inst.ref_def"] = np.array([1], dtype=np.uint32)
@@ -361,13 +365,98 @@ class InstanceApplyTests(unittest.TestCase):
 
         engine._apply(obj, stage, sections, None)
 
+        collections = helpers.definition_collections(obj, stage.key)
+        self.assertIn(0, collections)
+        self.assertIn(1, collections)
+        # Definition 1 is the top-level one (it has a row cloud); definition 0
+        # is nested-only, so it has none.
+        self.assertEqual(list(helpers.instance_clouds(obj, stage.key)), [1])
+        for collection in collections.values():
+            self.assertEqual([o for o in collection.objects if o.type == "EMPTY"], [])
+
         evaluated, mesh = self._realized_mesh(obj)
         try:
-            self.assertEqual(len(mesh.vertices), 4)
-            zs = sorted(round(v.co.z, 3) for v in mesh.vertices)
-            self.assertEqual(zs, [3.0, 3.0, 3.0, 3.0])
+            self.assertEqual(len(mesh.vertices), 0)
         finally:
             evaluated.to_mesh_clear()
+
+    def test_apply_combined_base_and_blocks(self):
+        # The live shape: base mesh + definition geometry + a definition-marked
+        # attribute + four rows, all in one response. The base mesh draws as
+        # real geometry, the four quads as instances, and each attribute lands
+        # on its own helper.
+        from blender.gh_stack.blender import engine
+
+        obj, stage = self._stage()
+        sections = dict(self._quad_sections())
+        sections.update(self._quad_sections("idef.0."))
+        sections["inst.ref_def"] = np.array([0, 0, 0, 0], dtype=np.uint32)
+        sections["inst.transforms"] = np.concatenate([
+            self._wire_transform((0, 0, 0)),
+            self._wire_transform((3, 0, 0)),
+            self._wire_transform((3, 3, 0)),
+            self._wire_transform((0, 3, 0)),
+        ])
+        attributes = [
+            {
+                "group": "mesh", "name": "base_load", "domain": "POINT", "type": "FLOAT",
+                "components": 1, "count": 4, "section": "attr.0.values",
+            },
+            {
+                "group": "mesh", "name": "def_load", "domain": "POINT", "type": "FLOAT",
+                "components": 1, "count": 4, "definition": 0,
+                "section": "idef.0.attr.1.values",
+            },
+        ]
+        sections["attr.0.values"] = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
+        sections["idef.0.attr.1.values"] = np.array([5.0, 6.0, 7.0, 8.0], dtype=np.float32)
+
+        engine._apply(obj, stage, sections, attributes)
+
+        evaluated, mesh = self._realized_mesh(obj)
+        try:
+            # 4 base vertices + 4 quads of 4.
+            self.assertEqual(len(mesh.vertices), 20)
+            self.assertEqual(len(mesh.polygons), 5)
+        finally:
+            evaluated.to_mesh_clear()
+
+        from blender.gh_stack.blender import helpers
+
+        base = helpers.helper_for(obj, stage.key, "mesh")
+        definition = helpers.definition_name(obj, stage.key, 0)
+        definition_object = bpy.data.objects[definition]
+        self.assertIsNotNone(base.data.attributes.get("base_load"))
+        self.assertIsNone(base.data.attributes.get("def_load"))
+        self.assertIsNotNone(definition_object.data.attributes.get("def_load"))
+        self.assertIsNone(definition_object.data.attributes.get("base_load"))
+
+    def test_the_group_is_reused_when_nothing_changed(self):
+        # The rebuild check must agree with the wiring it just produced (it
+        # used to count the base points helper as a row cloud and rebuild on
+        # every apply — churn, caught by the 2026-10-16 audit).
+        from blender.gh_stack.blender import engine, helpers, nodes
+
+        obj, stage = self._stage()
+        sections = dict(self._quad_sections("idef.0."))
+        sections["inst.ref_def"] = np.array([0], dtype=np.uint32)
+        sections["inst.transforms"] = self._wire_transform((0, 0, 0))
+        engine._apply(obj, stage, sections, None)
+
+        group = bpy.data.node_groups[nodes.group_name(stage.key)]
+        helpers_map = helpers.ensure_helpers(obj, stage.key)
+        definitions = nodes._definitions(obj, stage.key)
+        self.assertTrue(nodes._group_matches(group, helpers_map, definitions))
+        self.assertFalse(any(n.bl_idname == "GeometryNodeCollectionInfo" for n in group.nodes))
+
+        # A definition leaving the *expected* set must make the current group
+        # stale, so the next ensure_group rebuilds instead of drawing a ghost.
+        self.assertFalse(nodes._group_matches(group, helpers_map, {}))
+
+        # And a response without blocks must actually remove it.
+        engine._apply(obj, stage, {}, None)
+        self.assertEqual(helpers.definition_collections(obj, stage.key), {})
+        self.assertEqual(helpers.instance_clouds(obj, stage.key), {})
 
     def test_apply_clears_definitions_that_go_away(self):
         from blender.gh_stack.blender import engine

@@ -60,20 +60,31 @@ def ensure_group(stack_obj, stage_key):
 
     y -= 100.0
     for index in sorted(definitions):
-        collection, cloud = definitions[index]
+        objects, cloud = definitions[index]
         if cloud is None:
             # A definition only its parent instances: no own chain.
             continue
-        chain_x = -500.0
-        cinfo = group.nodes.new("GeometryNodeCollectionInfo")
-        cinfo.location = (chain_x, y)
-        cinfo.inputs["Collection"].default_value = collection
-        cinfo.inputs["Separate Children"].default_value = False
-        cinfo.inputs["Reset Children"].default_value = False
+        chain_x = -600.0
+
+        # The prototype geometry is read with Object Info (originals), NOT
+        # Collection Info: instances that reference a datablock are not drawn
+        # while that datablock is viewport-hidden, and the prototypes must stay
+        # hidden (probed with A/B/A renders, 2026-10-16 — the evaluated
+        # geometry was right, the viewport drew only the base mesh). Object
+        # Info copies the geometry into the graph, exactly like the base
+        # helpers, so the instances are drawn.
+        proto = group.nodes.new("GeometryNodeJoinGeometry")
+        proto.location = (chain_x, y)
+        for kind in helpers.KINDS:
+            info = group.nodes.new("GeometryNodeObjectInfo")
+            info.location = (chain_x - 200.0, y)
+            info.inputs["Object"].default_value = objects[kind]
+            info.transform_space = "ORIGINAL"
+            group.links.new(info.outputs["Geometry"], proto.inputs["Geometry"])
 
         iono = group.nodes.new("GeometryNodeInstanceOnPoints")
         iono.location = (chain_x + 300.0, y)
-        group.links.new(cinfo.outputs["Instances"], iono.inputs["Instance"])
+        group.links.new(proto.outputs["Geometry"], iono.inputs["Instance"])
 
         pinfo = group.nodes.new("GeometryNodeObjectInfo")
         pinfo.location = (chain_x, y - 200.0)
@@ -105,49 +116,32 @@ def ensure_group(stack_obj, stage_key):
 
 
 def _definitions(stack_obj, stage_key):
-    """The stage's block definitions: index -> (prototype collection, row cloud
-    or None). A definition without rows is a prototype a parent block nests."""
+    """The stage's block definitions: index -> (prototype objects by kind, row
+    cloud or None). A definition without rows is a prototype a parent nests."""
     clouds = helpers.instance_clouds(stack_obj, stage_key)
-    return {
-        index: (coll, clouds.get(index))
-        for index, coll in helpers.definition_collections(stack_obj, stage_key).items()
-    }
+    definitions = {}
+    for index in helpers.definition_collections(stack_obj, stage_key):
+        _collection, objects = helpers.ensure_definition(stack_obj, stage_key, index)
+        definitions[index] = (objects, clouds.get(index))
+    return definitions
 
 
 def _group_matches(group, helpers_map, definitions):
-    """Whether the group already reads exactly this helper set and definition
-    set."""
-    wanted = list(helpers_map.values())
-    seen = 0
-    for node in group.nodes:
-        if node.bl_idname != "GeometryNodeObjectInfo":
-            continue
-        for helper in wanted:
-            if node.inputs["Object"].default_value == helper:
-                seen += 1
-                break
-    if seen != len(wanted):
-        return False
-
-    wanted_collections = set()
-    wanted_clouds = set()
-    for collection, cloud in definitions.values():
-        if cloud is None:
-            continue
-        wanted_collections.add(collection)
-        wanted_clouds.add(cloud)
-    seen_collections = set()
-    seen_clouds = set()
-    for node in group.nodes:
-        if node.bl_idname == "GeometryNodeCollectionInfo":
-            seen_collections.add(node.inputs["Collection"].default_value)
+    """Whether the group already reads exactly this set of objects: the base
+    helpers, every prototype object, and every row cloud."""
+    expected = set(helpers_map.values())
+    for objects, cloud in definitions.values():
+        expected.update(objects.values())
+        if cloud is not None:
+            expected.add(cloud)
+    referenced = set()
     for node in group.nodes:
         if node.bl_idname != "GeometryNodeObjectInfo":
             continue
         obj = node.inputs["Object"].default_value
-        if obj is not None and obj.type == "POINTCLOUD":
-            seen_clouds.add(obj)
-    return seen_collections == wanted_collections and seen_clouds == wanted_clouds
+        if obj is not None:
+            referenced.add(obj)
+    return referenced == expected
 
 
 def ensure_modifier(stack_obj, stage):

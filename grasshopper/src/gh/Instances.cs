@@ -68,10 +68,21 @@ namespace GhStack
             return rows > 0;
         }
 
+        /// <summary>The definitions table of a frame header, or null. Read
+        /// through non-generic IList: a frame decoded from bytes carries
+        /// List&lt;object&gt;, one rebuilt in memory from a StageSlot carries
+        /// List&lt;Dictionary&lt;string,object&gt;&gt;, and a C# List&lt;T&gt;
+        /// never casts across (invariance) — a plain `as List&lt;object&gt;`
+        /// silently drops the whole table for one of the two shapes.</summary>
+        private static System.Collections.IList DefinitionTable(DecodedFrame frame)
+        {
+            return Json.Get(frame.Header, "definitions") as System.Collections.IList;
+        }
+
         /// <summary>The display name of a definition table entry, or "".</summary>
         private static string NameOf(DecodedFrame frame, long index)
         {
-            var table = Json.Get(frame.Header, "definitions") as List<object>;
+            var table = DefinitionTable(frame);
             if (table == null || index < 0 || index >= table.Count) return "";
             var entry = table[(int)index] as Dictionary<string, object>;
             return entry == null ? "" : (Json.GetString(entry, "name") ?? "");
@@ -149,7 +160,7 @@ namespace GhStack
             {
                 ModelInstanceDefinition cached;
                 if (_done.TryGetValue(index, out cached)) return cached;
-                var table = Json.Get(_frame.Header, "definitions") as List<object>;
+                var table = DefinitionTable(_frame);
                 if (table == null || index < 0 || index >= table.Count)
                 {
                     Note("instance row references definition " + index + ", which the frame does not carry");

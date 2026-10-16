@@ -98,10 +98,13 @@ namespace GhStack
                 // (protocol §5.2). The slot holds it beside the sections; a stage
                 // that rebuilt the frame from Sections alone silently dropped
                 // every block (found live, 2026-10-16: the owner's plane with an
-                // Instance-on-Elements modifier crossed as mesh only).
+                // Instance-on-Elements modifier crossed as mesh only). The list
+                // is copied into the wire shape (List<object>) on purpose:
+                // readers of rebuilt headers cast to that, and a typed
+                // List<Dictionary<...>> never casts across (invariance).
                 var frameHeader = new Dictionary<string, object>();
                 if (slot.Definitions != null && slot.Definitions.Count > 0)
-                    frameHeader["definitions"] = slot.Definitions;
+                    frameHeader["definitions"] = new List<object>(slot.Definitions);
                 var frame = new DecodedFrame(frameHeader, slot.Sections);
                 double scale = GhLink.DocumentScale();
                 geometry = StageGeometry.Build(frame, scale, slot.Attributes, delegate(string note)

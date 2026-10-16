@@ -562,40 +562,41 @@ def _rows_of(sections, prefix):
 
 def _apply_instance_rows(obj, stage, definitions, top_rows, nested_rows):
     """The row pairs: each definition's top-level rows fill its row cloud
-    (position/rotation/scale, read by the node group), and a definition's own
-    rows become nested placement empties inside its collection."""
+    (position/rotation/scale, read by the node group). A definition's own rows
+    are nested placements; the wire and the GH side keep them, but this side
+    does not draw them yet (see below)."""
     import mathutils
 
-    # Nested placements: replace the empties of every scope this response owns.
+    # Nested placements are not drawn on the Blender side yet: the prototype
+    # chain feeds Instance on Points with the prototype's *own* geometry, so a
+    # nested reference would have to be baked into the parent's prototype
+    # (transformed and joined at apply time). Empties with a collection
+    # instance used to stand in for them, but a datablock-referenced instance
+    # is not drawn while the prototype is viewport-hidden, which is why the
+    # Collection Info route was retired (probed 2026-10-16). Remove any
+    # leftovers and say so, once per scope.
     for index in sorted(definitions):
         collection, _objects = helpers.ensure_definition(obj, stage.key, index)
         for child in list(collection.objects):
             if child.type == "EMPTY":
                 bpy.data.collections[collection.name].objects.unlink(child)
                 bpy.data.objects.remove(child, do_unlink=True)
-
     for index, rows in sorted(nested_rows.items()):
-        collection, _objects = helpers.ensure_definition(obj, stage.key, index)
         if not rows:
             continue
-        for row, (target, matrix) in enumerate(rows):
-            target_coll = helpers.definition_collections(obj, stage.key).get(target)
-            if target_coll is None:
-                print(
-                    "[gh-stack] %s: block %d nests definition %d, which the response does not carry"
-                    % (stage.key, index, target),
-                    flush=True,
-                )
-                continue
-            empty = bpy.data.objects.new(
-                helpers.nested_name(obj, stage.key, index, row), None
+        known = helpers.definition_collections(obj, stage.key)
+        missing = [target for target, _matrix in rows if target not in known]
+        if missing:
+            print(
+                "[gh-stack] %s: block %d nests definition %d, which the response does not carry"
+                % (stage.key, index, missing[0]),
+                flush=True,
             )
-            empty.instance_type = "COLLECTION"
-            empty.instance_collection = target_coll
-            empty.matrix_world = _matrix_of(matrix)
-            empty.hide_viewport = True
-            empty.hide_render = True
-            collection.objects.link(empty)
+        print(
+            "[gh-stack] %s: block %d nests %d placement(s); nested blocks are "
+            "not drawn on the Blender side yet" % (stage.key, index, len(rows)),
+            flush=True,
+        )
 
     # Top-level rows: one cloud per definition, or none when it has no rows.
     clouds = {}
@@ -769,6 +770,7 @@ def _dtype_of(name):
         or name.endswith(".points")
         or name.endswith(".positions")
         or name.endswith(".radii")
+        or name.endswith("inst.transforms")
     ):
         return "f32"
     return "u32"

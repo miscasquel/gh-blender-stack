@@ -79,12 +79,6 @@ def instance_name(stack_obj, stage_key, index):
     return "%s%s.%s.inst%d" % (HELPER_PREFIX, stack_obj.name, stage_key, index)
 
 
-def nested_name(stack_obj, stage_key, index, row):
-    """One nested placement inside a definition (an Empty that instances the
-    child definition's collection)."""
-    return "%s%s.%s.def%d.nested%d" % (HELPER_PREFIX, stack_obj.name, stage_key, index, row)
-
-
 def ensure_definition(stack_obj, stage_key, index):
     """One definition's prototype collection plus its per-kind helper objects.
     Returns ``(collection, {kind: object})``.
