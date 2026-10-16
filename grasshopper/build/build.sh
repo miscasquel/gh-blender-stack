@@ -55,6 +55,7 @@ if [ -f "$RC_DLL" ]; then
     /r:"$(win_path "$RC_DLL")" \
     "$(win_path "$REPO/grasshopper/src/core/Json.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
+    "$(win_path "$REPO/grasshopper/src/core/Conversion.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Attributes.cs")" \
     "$(win_path "$REPO/grasshopper/tests/console/AttrTests.cs")" \
     2>&1 | grep -vE 'fixme:|MESA-EGL|pci id|^$' || true

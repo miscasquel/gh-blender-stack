@@ -27,6 +27,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using Grasshopper.Kernel.Types;
 using Grasshopper.Rhinoceros.Model;
+using GhStack.Core;
 using Rhino;
 using Rhino.DocObjects;
 using Rhino.Geometry;
@@ -57,6 +58,14 @@ namespace GhStack.Spike.S9
                     catch (Exception ex)
                     {
                         results["blocks_failure"] = Describe(ex);
+                    }
+                    try
+                    {
+                        InstanceChecks(results);
+                    }
+                    catch (Exception ex)
+                    {
+                        results["instances_failure"] = Describe(ex);
                     }
                 });
             }
@@ -190,6 +199,173 @@ namespace GhStack.Spike.S9
             mesh.Faces.AddFace(0, 1, 2, 3);
             mesh.Normals.ComputeNormals();
             return mesh;
+        }
+
+        // ------------------------------------------------------------- instances
+
+        /// <summary>Round 3 (2026-10-16): the instances path end to end inside a
+        /// live Rhino. A synthetic frame goes through StageGeometry.Build (the
+        /// definitions become document definitions, the rows become
+        /// GH_InstanceReference items) and straight back out through
+        /// Instances.Emit; the check then cleans the definitions it added.</summary>
+        private static void InstanceChecks(Dictionary<string, object> r)
+        {
+            RhinoDoc doc = RhinoDoc.ActiveDoc;
+            if (doc == null)
+            {
+                r["instances_document"] = "no active document";
+                return;
+            }
+
+            var header = new Dictionary<string, object>();
+            var table = new List<object>();
+            var entry = new Dictionary<string, object>();
+            entry["name"] = "S9 Quad";
+            table.Add(entry);
+            header["definitions"] = table;
+
+            var attributes = new List<Dictionary<string, object>>();
+            var load = new Dictionary<string, object>();
+            load["group"] = "mesh";
+            load["name"] = "load";
+            load["domain"] = "POINT";
+            load["type"] = "FLOAT";
+            load["components"] = (long)1;
+            load["count"] = (long)4;
+            load["section"] = "idef.0.attr.0.values";
+            load["definition"] = (long)0;
+            attributes.Add(load);
+            header["attributes"] = attributes;
+
+            float[] rowA = new float[]
+            {
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1,
+            };
+            float[] rowB = new float[]
+            {
+                1, 0, 0, 5,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1,
+            };
+            var transforms = new float[32];
+            Array.Copy(rowA, 0, transforms, 0, 16);
+            Array.Copy(rowB, 0, transforms, 16, 16);
+
+            var sections = new List<Section>
+            {
+                Section.Floats("idef.0.mesh.verts", new float[]
+                {
+                    0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0,
+                }),
+                Section.U32("idef.0.mesh.face_counts", new uint[] { 4 }),
+                Section.U32("idef.0.mesh.face_indices", new uint[] { 0, 1, 2, 3 }),
+                Section.Floats("idef.0.attr.0.values", new float[] { 0.5f, 1.0f, 1.5f, 2.0f }),
+                Section.U32("inst.ref_def", new uint[] { 0, 0 }),
+                Section.Floats("inst.transforms", transforms),
+            };
+
+            var notes = new List<string>();
+            var frame = new DecodedFrame(header, sections);
+            List<IGH_Goo> geometry = StageGeometry.Build(frame, 1.0, attributes,
+                delegate(string note) { notes.Add(note); });
+            r["instances_build"] = geometry.Count == 2
+                ? "2 references"
+                : "got " + geometry.Count + (notes.Count > 0 ? " (" + notes[0] + ")" : "");
+
+            var references = new List<GH_InstanceReference>();
+            Guid definitionId = Guid.Empty;
+            foreach (IGH_Goo goo in geometry)
+            {
+                GH_InstanceReference reference = goo as GH_InstanceReference;
+                if (reference != null) references.Add(reference);
+            }
+            if (references.Count > 0)
+            {
+                GH_InstanceReference first = references[0];
+                r["instances_valid"] = first.IsValid.ToString();
+                BoundingBox box = first.GetBoundingBox(Transform.Identity);
+                r["instances_bbox"] = box.IsValid ? "valid" : "invalid";
+                if (first.InstanceDefinition != null && first.InstanceDefinition.Id != null)
+                    definitionId = first.InstanceDefinition.Id.Value;
+            }
+
+            // The definition is in the document, content-hash named, and its
+            // geometry carries the per-definition attribute.
+            int index = definitionId == Guid.Empty ? -1 : doc.InstanceDefinitions.InstanceDefinitionIndex(definitionId, true);
+            if (index >= 0)
+            {
+                InstanceDefinition definition = doc.InstanceDefinitions[index];
+                RhinoObject[] objects = definition.GetObjects();
+                r["instances_definition"] = index >= 0
+                    ? "document definition '" + definition.Name + "', objects=" + objects.Length
+                    : "missing";
+                if (objects.Length > 0)
+                {
+                    string type, domain;
+                    object values;
+                    bool has = AttributeStore.TryGet(objects[0].Geometry, "load", out type, out domain, out values);
+                    r["instances_attribute"] = has ? "load=" + type + "/" + domain : "missing";
+                }
+            }
+            else
+            {
+                r["instances_definition"] = "missing";
+            }
+
+            // Straight back out: the same items become the wire's table and rows.
+            var outSections = new List<Section>();
+            var outDescriptors = new List<Dictionary<string, object>>();
+            var definitions = new List<Dictionary<string, object>>();
+            var warnings = new List<string>();
+            Instances.Emit(references, 1.0, outSections, outDescriptors, definitions, warnings);
+            r["instances_emit_table"] = definitions.Count == 1
+                ? "1 definition"
+                : "got " + definitions.Count;
+            Section refDef = Find(outSections, "inst.ref_def");
+            r["instances_emit_rows"] = refDef != null && refDef.ToU32().Length == 2
+                ? "2 rows"
+                : "missing";
+            Section outTransforms = Find(outSections, "inst.transforms");
+            if (outTransforms != null && outTransforms.ToFloats().Length >= 16)
+            {
+                float[] back = outTransforms.ToFloats();
+                bool translated = Math.Abs(back[16 + 3] - 5f) < 1e-6f;
+                r["instances_emit_transform"] = translated ? "5,0,0 preserved" : "mismatch";
+            }
+            r["instances_emit_geometry"] = Find(outSections, "idef.0.mesh.verts") != null
+                ? "idef.0.mesh.verts"
+                : "missing";
+            r["instances_emit_attribute"] = outDescriptors.Count == 1
+                && Json.GetLong(outDescriptors[0], "definition") == 0
+                ? "definition-tagged"
+                : "missing";
+
+            // Cleanup: the check added the definition; put the document back.
+            if (index >= 0)
+            {
+                doc.InstanceDefinitions.Delete(index, true, false);
+                // A reused definition from a previous run can also be sitting
+                // there under its content-hash name (and no references).
+                InstanceDefinition leftover = doc.InstanceDefinitions.Find(definitionId, true);
+                if (leftover != null)
+                {
+                    int leftoverIndex = doc.InstanceDefinitions.InstanceDefinitionIndex(
+                        leftover.Id, true);
+                    if (leftoverIndex >= 0)
+                        doc.InstanceDefinitions.Delete(leftoverIndex, true, false);
+                }
+            }
+        }
+
+        private static Section Find(List<Section> sections, string name)
+        {
+            foreach (Section section in sections)
+                if (section.Name == name) return section;
+            return null;
         }
 
         // ---------------------------------------------------------------- blocks

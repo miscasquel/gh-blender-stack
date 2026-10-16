@@ -52,6 +52,7 @@ WINEPREFIX="$PREFIX" "$WINE" "$CSC" \
   "$(win_path "$HERE/../s6/S6Checks.cs")" \
   "$(win_path "$HERE/../s9/S9Checks.cs")" \
   "$(win_path "$REPO/grasshopper/src/gh/GooDispatch.cs")" \
+  "$(win_path "$REPO/grasshopper/src/gh/Instances.cs")" \
   "$(win_path "$REPO/grasshopper/src/gh/StageGeometry.cs")" \
   "$(win_path "$REPO/grasshopper/src/gh/Icons.cs")" \
   "/resource:$(win_path "$REPO/grasshopper/src/gh/icons/geometry_nodes.png"),GhStack.icons.geometry_nodes.png" \

@@ -35,6 +35,8 @@ namespace GhStack.Tests.Console
             CheckPrefixNamesStayDistinct();
             CheckEveryTypeRoundTrips();
             CheckLabelsMatchBlender();
+            CheckDefinitionAttributes();
+            CheckWireTransforms();
 
             System.Console.WriteLine();
             if (_failures == 0)
@@ -237,6 +239,87 @@ namespace GhStack.Tests.Console
                     firstDomain = pair[0] + " -> " + got + ", expected " + pair[1];
             }
             Check("domains read as words", firstDomain == null, firstDomain ?? "");
+        }
+
+        private static void CheckDefinitionAttributes()
+        {
+            // One base attribute and one definition-0 attribute, attached to the
+            // right roots only (protocol §5.2).
+            var sections = new List<Section>();
+            var descriptors = new List<Dictionary<string, object>>();
+            AddAttribute(sections, descriptors, "mesh", "base_load", "POINT", "FLOAT",
+                Section.Floats("attr.0.values", new float[] { 1.0f }));
+            AddAttribute(sections, descriptors, "mesh", "def_load", "POINT", "FLOAT",
+                Section.Floats("attr.1.values", new float[] { 2.0f }));
+            descriptors[1]["definition"] = (long)0;
+            descriptors[1]["section"] = "idef.0.attr.1.values";
+            sections.Add(new Section("idef.0.attr.1.values", "f32", sections[1].Raw));
+            sections.RemoveAt(1);
+
+            var baseRoot = new ArchivableDictionary();
+            AttributeStore.Attach(baseRoot, "mesh", descriptors, sections);
+            string type, domain;
+            object values;
+            Check("definition: base root skips definition descriptors",
+                AttributeStore.TryGet(baseRoot, "base_load", out type, out domain, out values)
+                && !AttributeStore.TryGet(baseRoot, "def_load", out type, out domain, out values),
+                DescribeRoot(baseRoot));
+
+            var definitionRoot = new ArchivableDictionary();
+            AttributeStore.Attach(definitionRoot, "mesh", descriptors, sections, 0);
+            Check("definition: definition root takes its own descriptors",
+                AttributeStore.TryGet(definitionRoot, "def_load", out type, out domain, out values)
+                && !AttributeStore.TryGet(definitionRoot, "base_load", out type, out domain, out values),
+                DescribeRoot(definitionRoot));
+
+            // Collecting from a definition geometry namespaces the sections and
+            // marks the descriptor.
+            var outSections = new List<Section>();
+            var outDescriptors = new List<Dictionary<string, object>>();
+            AttributeStore.Collect(definitionRoot, "mesh", outSections, outDescriptors, "idef.0.", 0);
+            Section prefixed = Find(outSections, "idef.0.attr.0.values");
+            Check("definition: collect prefixes the section and marks the descriptor",
+                prefixed != null && prefixed.Raw.Length == 4 && outDescriptors.Count == 1
+                && Json.GetLong(outDescriptors[0], "definition") == 0
+                && (string)outDescriptors[0]["section"] == "idef.0.attr.0.values",
+                Describe(outDescriptors));
+        }
+
+        private static void CheckWireTransforms()
+        {
+            // Row-major wire, translation in the fourth column (protocol §5.2).
+            var m = new float[]
+            {
+                1, 0, 0, 5,
+                0, 1, 0, 4,
+                0, 0, 1, 3,
+                0, 0, 0, 1,
+            };
+            Rhino.Geometry.Transform t = Conversion.TransformFromWire(m);
+            Rhino.Geometry.Point3d moved = t * new Rhino.Geometry.Point3d(1, 2, 3);
+            Check("transforms: wire translation applies",
+                Math.Abs(moved.X - 6) < 1e-6 && Math.Abs(moved.Y - 6) < 1e-6 && Math.Abs(moved.Z - 6) < 1e-6,
+                moved.ToString());
+
+            float[] back = Conversion.TransformToWire(t);
+            bool same = back.Length == 16;
+            for (int i = 0; same && i < 16; i++)
+                same = Math.Abs(back[i] - m[i]) < 1e-6f;
+            Check("transforms: round trip is byte-stable", same, string.Join(", ", Array.ConvertAll(back, v => v.ToString())));
+
+            var prefixed = Conversion.PrefixSections(new List<Section>
+            {
+                Section.Floats("mesh.verts", new float[] { 1, 2, 3 }),
+            }, "idef.2.");
+            Check("transforms: prefixing keeps dtype and bytes",
+                prefixed.Count == 1 && prefixed[0].Name == "idef.2.mesh.verts"
+                && prefixed[0].Dtype == "f32" && prefixed[0].Raw.Length == 12,
+                prefixed.Count == 1 ? prefixed[0].Name : "none");
+        }
+
+        private static string DescribeRoot(ArchivableDictionary root)
+        {
+            return string.Join(", ", AttributeStore.Names(root));
         }
 
         // -------------------------------------------------------------- helpers

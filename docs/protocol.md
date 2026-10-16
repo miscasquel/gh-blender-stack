@@ -225,8 +225,10 @@ order:
 - Definition `i`'s own nested rows are `idef.<i>.inst.ref_def` /
   `idef.<i>.inst.transforms`, referencing other definitions in the table.
 - The matrices are row-major (`m[row][col]`); a point transforms as a row vector
-  (Rhino's `Transform` convention), so the translation sits in the last row —
-  elements 12, 13, 14. Blender transposes on read and write.
+  (Rhino's `Transform` convention), so the translation sits in the fourth column
+  — elements 3, 7 and 11, as in `[1,0,0,tx, 0,1,0,ty, 0,0,1,tz, 0,0,0,1]`.
+  Blender's matrices are column-major in memory, so Blender transposes each
+  matrix on read and write.
 - Absent `definitions` means no instances. A definition with no geometry
   sections is a legal empty definition and still occupies its index.
 - A definition index outside the table is a `bad_frame` on decode.

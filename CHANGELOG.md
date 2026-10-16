@@ -40,6 +40,17 @@ Notable changes to this project, following
   canonical dtypes and both fixture suites cover it.
 - **A new fixture**, `response-attributes`, pins `i32`, `f32`, `u8` and the
   STRING offsets section through both codecs (eleven fixtures total).
+- **Instances travel as blocks, both ways.** Blender's instanced geometry
+  crosses as a definition table (`definitions`, `idef.<i>.*` groups and the
+  `inst.ref_def` / `inst.transforms` rows, protocol §5.2). Stage In writes each
+  definition into the open document under a content-hash name (`GHStack <hash>`,
+  reused across solves) and hands the graph real `GH_InstanceReference` items,
+  nested blocks included; Stage Out takes those items back, reading a
+  definition's geometry from its paired definition or the document. On the
+  Blender side each definition becomes a hidden prototype collection instanced
+  through `Instance on Points`, driven by a per-definition point cloud carrying
+  position, rotation and scale; a shear the point-cloud channel cannot carry is
+  applied lossily and logged.
 - **Spike S9** (`spikes/s9/`): the user-dictionary and graph-side block checks
   that the attributes and instances designs rest on, run inside Rhino through the
   spike `.gha` (`check=s9`). **Both rounds passed 2026-10-16**
