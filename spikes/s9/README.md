@@ -41,19 +41,23 @@ Raw transcript: `spikes/results/s9-run.txt`. The curated report is
 
 ## Status
 
-**Both rounds ran 2026-10-16.** Round 1: attributes pass — the `UserDictionary`
-survives every operation GH performs (duplicate, transform, goo duplication,
-bake) for mesh, curve, point cloud and SubD, so the design's premise holds.
-Round 2 decided the blocks question: a graph-side definition built from
-`ModelInstanceDefinition.Attributes`, and the public `ModelInstanceDefinition.Cast`
-route, both come back invalid with no `Id` — no preview, no bake. The document
-fallback works end to end: `InstanceDefinitionTable.Add` yields a valid
-definition that previews with a valid bounding box and bakes to a real object.
-**Decision: Stage In writes content-hash-named definitions into the open
-document** and references them per instance. Full report:
-`spikes/results/s9.txt` (§C).
+**All rounds ran 2026-10-16.** Round 1: attributes pass — the store survives
+every operation GH performs. Round 2: no graph-side identity through the
+constructor or `Cast` — which round 3d traced to the missing **Name**. Round 3
+(3–3f): the instances path live, first through document definitions, then, on
+the owner's pointer to the Model Block Definition component, as **named
+graph-side definitions**: valid, previewing and baking with no document write at
+solve time, nested blocks included; Rhino materializes the blocks at bake and
+reuses them. The report (`spikes/results/s9.txt` §D) records the two product
+bugs the rounds caught (attribute attach order against the document copy; a
+block-instance `ModelObject` refusing the geometry cast) and the probe bug (a
+matrix written in the wrong layout, which twice looked like a bbox limitation).
 
-The checks are in `spikes/s9/S9Checks.cs`; the deployed spike `.gha` carries the
-round-2 probes (`definition_cast`, `doc_reference_valid`, `doc_reference_bbox`,
-`doc_reference_bake`). To re-run: restart Rhino (Libraries load at start), then
-the driver, then drop the **S1 Spike** component.
+The dialog that appeared during every run was the probe's own bake of the
+round-1 invalid reference; those bakes are now skipped for invalid references,
+so a warning-free run is the control that nothing else raises it.
+
+The checks are in `spikes/s9/S9Checks.cs`; the deployed spike `.gha` carries
+rounds 3 through 3f (`checks_revision: 3f …`). To re-run: restart Rhino
+(Libraries load at start), then the driver, then drop the **S1 Spike**
+component.

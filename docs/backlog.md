@@ -81,11 +81,14 @@ worth doing together.
 
 Settled by evidence; the code that rests on them must not drift from them.
 
-- **Instances are document-defined.** S9 round 2 (`spikes/results/s9.txt` §C):
-  no graph-side definition can preview or bake, so Stage In writes
-  content-hash-named definitions (`GHStack <hash>`) into the open document and
-  references them. Watch definition reuse and cleanup as the instances work
-  lands; with no open document the fallback is realized geometry.
+- **Instances are graph-side named blocks.** Probed live 2026-10-16
+  (`spikes/results/s9.txt` §D): a `ModelInstanceDefinition` from Attributes is
+  valid only with a Name set; named, it previews and bakes with no document
+  write, and Rhino materializes the blocks at bake, reusing them across bakes.
+  Stage In builds them children-first; Stage Out reads a definition through its
+  paired objects, and reaches a nested block through the `GH_InstanceReference`
+  goo cast (`CastTo<InstanceReferenceGeometry>` refuses a block-instance
+  ModelObject). Do not reintroduce the document write at solve time.
 - **Curve attributes are read-only** (the legacy Curve helper cannot store them;
   also in `docs/plan.md` §6, README and code). Revisit only if curves matter — it
   means changing the curve helper representation.

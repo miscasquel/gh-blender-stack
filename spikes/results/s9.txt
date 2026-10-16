@@ -71,6 +71,10 @@ cannot mint an identity, and even a doc-less reference cannot bake (round 1's
 `bake_reference: baked=False`). Realized geometry remains the fallback when
 there is no open document.
 
+*(Superseded by §D, same day: the graph-side route only needs a **Name**. A
+named attributes-built definition is valid, previews and bakes, and that is the
+route the product now uses.)*
+
 Two footnotes for the record:
 
 - The probe only tries `Cast(objects)` / `Cast(object)` when `Cast(attributes)`
@@ -81,6 +85,60 @@ Two footnotes for the record:
   during the run comes from the probe itself: `bake_reference` bakes the invalid
   doc-less reference through GH's bake path, which raises the warning and then
   declines (`baked=False, object=none`). No product component is involved.
+
+## D. Round 3 — instances, live, graph-side (the route the components use)
+
+Rounds 3 and 3b–3f ran the instances path through the spike checks
+(2026-10-16). Two product bugs, one probe bug and one design change came out:
+
+- **Round 3, document route**: `StageGeometry.Build` wrote document definitions
+  and every check passed except `instances_attribute` /
+  `instances_emit_attribute`: attributes were attached *after*
+  `InstanceDefinitions.Add`, which stores its own copy of the geometry. Fixed:
+  attach first (still true for the document fallback).
+- **Round 3b, nested**: the emit path read nothing for a nested block because a
+  block-instance `ModelObject` refuses `CastTo<InstanceReferenceGeometry>`. The
+  document copy worked; it was later replaced by the goo route below.
+- **Round 3d (owner's pointer)**: a definition built from
+  `ModelInstanceDefinition.Attributes` **with a Name** is valid, previews
+  (`named_reference_bbox: (5,0,0)..(6,1,0)`) and bakes (`named_bake: baked=True`)
+  with **no document write** (`named_document_added: none`). Round 2 set
+  `Objects` only, hence the earlier "graph-side is dead". `ToModelData()`
+  returns the definition itself (`named_model_data: ModelInstanceDefinition`).
+- **Round 3e, graph-side facts**: `ModelObject.Cast(GH_InstanceReference)` makes
+  the "Model Block Instance" object that the Block Definition component takes
+  through its `Objects` input — nesting works graph-side; the parent previews
+  and bakes with the child in place (`graph_reference_bbox` / `graph_bake`
+  `(0,0,0)..(1,1,2)`); the bake materializes parent and child once, so repeat
+  bakes reuse them (`graph_bake_twice: definitions added=2` after two bakes).
+  `nested_child_transform` must read `Value.Xform`; `ModelTransform` is a
+  display accessor and read `z=0` here even though the bake honored the offset.
+- **Round 3f, product switch**: Stage In/Out now build **named graph-side
+  definitions**. Final run, flat and nested: `instances_document_added: none
+  (materialized at bake)`, `instances_definition: 'S9 Quad', IsValid=True`,
+  `instances_attribute: load=FLOAT/POINT`, `instances_bake`/`nested_bake:
+  baked=True`, `nested_bbox`/`nested_bake` `(0,0,0)..(1,1,2)`,
+  `nested_baked_definitions: 'S9 Parent', 'S9 Child'`, and the emit round trip
+  unchanged (`instances_emit_rows: 2 rows`, `instances_emit_transform: 5,0,0
+  preserved`, `nested_emit_rows: parent row names the child`).
+
+The probe bug: the nested synthetic frame wrote its matrix with the translation
+in the last row; the wire pins it in the fourth column (elements 3, 7, 11), so
+the check placed nothing and two runs looked like a product bbox limitation.
+Fixed; `checks_revision: 3f` marks the build that carries the trace keys
+(`nested_row_transform`, `nested_child_transform`).
+
+**Decision (supersedes §C's document route): definitions are named graph-side
+`ModelInstanceDefinition`s**, exactly as GH's Model Block Definition/Instance
+components build them. No document definitions are created at solve time; Rhino
+materializes the blocks on first bake and reuses them. `GHStack <hash>` remains
+only as the fallback name for a definition Blender did not name.
+
+The "invalid block instance" dialog that appeared during every run was the
+probe's own round-1 `bake_reference` call on the invalid doc-less reference.
+That bake is now **skipped for invalid references** (the finding is recorded
+above), so a warning-free run is the standing control that nothing else raises
+it.
 
 ## Note on timing
 

@@ -39,6 +39,7 @@ namespace GhStack.Spike.S9
         public static Dictionary<string, object> Run()
         {
             var results = new Dictionary<string, object>();
+            results["checks_revision"] = "3f (graph-side, transform trace)";
             try
             {
                 RhinoApp.InvokeAndWait(delegate()
@@ -74,6 +75,22 @@ namespace GhStack.Spike.S9
                     catch (Exception ex)
                     {
                         results["nested_failure"] = Describe(ex);
+                    }
+                    try
+                    {
+                        NamedDefinitionChecks(results);
+                    }
+                    catch (Exception ex)
+                    {
+                        results["named_failure"] = Describe(ex);
+                    }
+                    try
+                    {
+                        GraphDefinitionChecks(results);
+                    }
+                    catch (Exception ex)
+                    {
+                        results["graph_failure"] = Describe(ex);
                     }
                 });
             }
@@ -211,11 +228,12 @@ namespace GhStack.Spike.S9
 
         // ------------------------------------------------------------- instances
 
-        /// <summary>Round 3 (2026-10-16): the instances path end to end inside a
-        /// live Rhino. A synthetic frame goes through StageGeometry.Build (the
-        /// definitions become document definitions, the rows become
-        /// GH_InstanceReference items) and straight back out through
-        /// Instances.Emit; the check then cleans the definitions it added.</summary>
+        /// <summary>Round 3 (2026-10-16, re-run for the graph-side route): the
+        /// instances path end to end inside a live Rhino. A synthetic frame goes
+        /// through StageGeometry.Build — named graph-side definitions, no
+        /// document write — and straight back out through Instances.Emit; a bake
+        /// proves the document block materializes, and the check cleans up
+        /// everything it created.</summary>
         private static void InstanceChecks(Dictionary<string, object> r)
         {
             RhinoDoc doc = RhinoDoc.ActiveDoc;
@@ -224,26 +242,10 @@ namespace GhStack.Spike.S9
                 r["instances_document"] = "no active document";
                 return;
             }
-            // Leave no leftovers from an earlier run: unreferenced `GHStack *`
-            // definitions in the open document are this product's (or this
-            // check's), and a reused one would hide the attribute check below.
-            var stale = new List<InstanceDefinition>();
-            foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false))
-                if (idef.Name != null && idef.Name.StartsWith(Instances.DefinitionPrefix, StringComparison.Ordinal)
-                    && idef.UseCount() == 0)
-                    stale.Add(idef);
-            foreach (InstanceDefinition idef in stale)
-                doc.InstanceDefinitions.Delete(idef.Index, true, false);
-            r["instances_preclean"] = stale.Count == 0
-                ? "none"
-                : stale.Count + " stale definition(s) removed";
-
-            // The check owns whatever definition Build adds; the table is
-            // diffed rather than trusting an id accessor (ModelInstanceDefinition.Id
-            // is not populated for document-backed definitions, probed 2026-10-16).
+            // Nothing is expected in the document until a bake; the table is
+            // diffed around the build and the bake separately.
             var before = new HashSet<Guid>();
             foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false)) before.Add(idef.Id);
-            InstanceDefinition added = null;
 
             var header = new Dictionary<string, object>();
             var table = new List<object>();
@@ -316,34 +318,57 @@ namespace GhStack.Spike.S9
                 r["instances_valid"] = first.IsValid.ToString();
                 BoundingBox box = first.GetBoundingBox(Transform.Identity);
                 r["instances_bbox"] = box.IsValid ? "valid" : "invalid";
-                r["instances_reference_id"] = first.Value != null
-                    && first.Value.ParentIdefId != Guid.Empty
-                    && !before.Contains(first.Value.ParentIdefId)
-                    ? "names a definition this check added"
-                    : "does not match an added definition";
+                r["instances_reference_id"] = first.Value != null && first.Value.ParentIdefId != Guid.Empty
+                    ? "set"
+                    : "empty";
+                if (references.Count > 1)
+                    r["instances_reference_shared_id"] = references[1].Value != null
+                        && references[1].Value.ParentIdefId == first.Value.ParentIdefId
+                        ? "both rows share the definition's id"
+                        : "rows carry different ids";
             }
 
-            // The definition is in the document, content-hash named, and its
-            // geometry carries the per-definition attribute.
-            InstanceDefinition definition = Newest(doc, before);
-            added = definition;
-            if (definition != null)
+            // The definition is graph-side and named, and its geometry carries
+            // the per-definition attribute. The document does not change until
+            // someone bakes.
+            if (references.Count > 0 && references[0].InstanceDefinition != null)
             {
-                RhinoObject[] objects = definition.GetObjects();
-                r["instances_definition"] = "document definition '" + definition.Name
-                    + "', objects=" + objects.Length;
-                if (objects.Length > 0)
+                ModelInstanceDefinition definition = references[0].InstanceDefinition;
+                r["instances_definition"] = "'" + DefinitionName(definition) + "', IsValid="
+                    + definition.IsValid + ", Objects="
+                    + (definition.Objects == null ? "null" : definition.Objects.Count.ToString());
+                Mesh definitionMesh = null;
+                if (definition.Objects != null)
+                {
+                    foreach (ModelObject obj in definition.Objects)
+                    {
+                        Mesh mesh;
+                        if (obj.CastTo<Mesh>(out mesh) && mesh != null)
+                        {
+                            definitionMesh = mesh;
+                            break;
+                        }
+                    }
+                }
+                if (definitionMesh != null)
                 {
                     string type, domain;
                     object values;
-                    bool has = AttributeStore.TryGet(objects[0].Geometry, "load", out type, out domain, out values);
+                    bool has = AttributeStore.TryGet(definitionMesh, "load", out type, out domain, out values);
                     r["instances_attribute"] = has ? "load=" + type + "/" + domain : "missing";
+                }
+                else
+                {
+                    r["instances_attribute"] = "no mesh in the definition";
                 }
             }
             else
             {
                 r["instances_definition"] = "missing";
             }
+            r["instances_document_added"] = Added(doc, before).Count == 0
+                ? "none (materialized at bake)"
+                : Added(doc, before).Count + " at solve time";
 
             // Straight back out: the same items become the wire's table and rows.
             var outSections = new List<Section>();
@@ -373,24 +398,59 @@ namespace GhStack.Spike.S9
                 ? "definition-tagged"
                 : "missing";
 
-            // Cleanup: the check added the definition; put the document back.
-            if (added != null)
-                doc.InstanceDefinitions.Delete(added.Index, true, false);
+            // Baking materializes the document block; the object goes away after
+            // the check, and so do the definitions the bake added.
+            if (references.Count > 0)
+            {
+                Guid baked = Guid.Empty;
+                try
+                {
+                    bool ok = references[0].BakeGeometry(doc, new ObjectAttributes(), ref baked);
+                    r["instances_bake"] = "baked=" + ok
+                        + ", object=" + (baked == Guid.Empty ? "none" : "yes");
+                    if (baked != Guid.Empty) doc.Objects.Delete(baked, true);
+                }
+                catch (Exception ex)
+                {
+                    r["instances_bake"] = Describe(ex);
+                    if (baked != Guid.Empty) doc.Objects.Delete(baked, true);
+                }
+                foreach (InstanceDefinition idef in Added(doc, before))
+                {
+                    int index = doc.InstanceDefinitions.InstanceDefinitionIndex(idef.Id, true);
+                    if (index >= 0)
+                        doc.InstanceDefinitions.Delete(index, true, false);
+                }
+            }
         }
 
-        /// <summary>The definition that appeared since \p before, or null.</summary>
-        private static InstanceDefinition Newest(RhinoDoc doc, HashSet<Guid> before)
+        /// <summary>Every document definition that appeared since \p before.</summary>
+        private static List<InstanceDefinition> Added(RhinoDoc doc, HashSet<Guid> before)
         {
+            var added = new List<InstanceDefinition>();
             foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false))
-                if (!before.Contains(idef.Id)) return idef;
-            return null;
+                if (!before.Contains(idef.Id)) added.Add(idef);
+            return added;
         }
 
-        /// <summary>Round 3b: nesting. A parent definition holds a triangle plus
-        /// one row of the child quad; the top level holds one row of the parent.
-        /// Checks the document build, the bake through the nested reference, and
-        /// the emit path back to the wire (parent + child groups and the nested
-        /// row pair).</summary>
+        /// <summary>A ModelInstanceDefinition's name as a string.</summary>
+        private static string DefinitionName(ModelInstanceDefinition definition)
+        {
+            object rawName = definition.Name;
+            if (rawName != null)
+            {
+                string name = rawName.ToString();
+                if (!string.IsNullOrEmpty(name)) return name;
+            }
+            return definition.DisplayName ?? "";
+        }
+
+        /// <summary>Round 3b (2026-10-16, re-run for the graph-side route):
+        /// nesting. A parent definition holds a triangle plus one row of the
+        /// child quad; the top level holds one row of the parent. Checks the
+        /// graph-side build, the bake (which materializes both blocks), and the
+        /// emit path back to the wire (parent + child groups and the nested row
+        /// pair).</summary>
         private static void NestedInstanceChecks(Dictionary<string, object> r)
         {
             RhinoDoc doc = RhinoDoc.ActiveDoc;
@@ -399,14 +459,6 @@ namespace GhStack.Spike.S9
                 r["nested_document"] = "no active document";
                 return;
             }
-            var stale = new List<InstanceDefinition>();
-            foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false))
-                if (idef.Name != null && idef.Name.StartsWith(Instances.DefinitionPrefix, StringComparison.Ordinal)
-                    && idef.UseCount() == 0)
-                    stale.Add(idef);
-            foreach (InstanceDefinition idef in stale)
-                doc.InstanceDefinitions.Delete(idef.Index, true, false);
-
             var before = new HashSet<Guid>();
             foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false)) before.Add(idef.Id);
 
@@ -437,12 +489,14 @@ namespace GhStack.Spike.S9
                 Section.U32("idef.1.mesh.face_counts", new uint[] { 3 }),
                 Section.U32("idef.1.mesh.face_indices", new uint[] { 0, 1, 2 }),
                 Section.U32("idef.1.inst.ref_def", new uint[] { 0 }),
+                // Row-major, translation in the fourth column (protocol §5.2):
+                // the child sits 2 up.
                 Section.Floats("idef.1.inst.transforms", new float[]
                 {
                     1, 0, 0, 0,
                     0, 1, 0, 0,
-                    0, 0, 1, 0,
-                    0, 0, 2, 1,
+                    0, 0, 1, 2,
+                    0, 0, 0, 1,
                 }),
                 // Top level: one row of the parent.
                 Section.U32("inst.ref_def", new uint[] { 1 }),
@@ -470,8 +524,27 @@ namespace GhStack.Spike.S9
                 ? Round(box.Min) + " .. " + Round(box.Max)
                 : "invalid";
 
-            // What the pair carries, for the record: the document path no longer
-            // depends on these casts, but their shape explains the fallback.
+            // Where the row transform goes: parsed row, then the goo it becomes.
+            long[] parsedRefs;
+            List<Transform> parsedTransforms;
+            if (Instances.ReadRows(frame, "idef.1.", out parsedRefs, out parsedTransforms))
+                r["nested_row_transform"] = "def=" + parsedRefs[0]
+                    + ", z=" + parsedTransforms[0].M23.ToString("0.###");
+            if (reference.InstanceDefinition != null && reference.InstanceDefinition.Objects != null
+                && reference.InstanceDefinition.Objects.Count > 1)
+            {
+                GH_InstanceReference childGoo;
+                bool childCast = reference.InstanceDefinition.Objects[1]
+                    .CastTo<GH_InstanceReference>(out childGoo) && childGoo != null && childGoo.Value != null;
+                r["nested_child_transform"] = childCast
+                    ? "z=" + childGoo.Value.Xform.M23.ToString("0.###")
+                      + ", definition=" + (childGoo.InstanceDefinition == null ? "none" : "yes")
+                    : "cast failed";
+            }
+
+            // What the pair carries, for the record: Stage Out reaches the child
+            // through the goo cast, because CastTo<InstanceReferenceGeometry>
+            // refuses a block-instance ModelObject (probed 2026-10-16).
             var pairedShapes = new List<string>();
             if (reference.InstanceDefinition != null && reference.InstanceDefinition.Objects != null)
             {
@@ -488,21 +561,28 @@ namespace GhStack.Spike.S9
                 ? "none"
                 : string.Join(", ", pairedShapes.ToArray());
 
-            var added = new List<InstanceDefinition>();
-            foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false))
-                if (!before.Contains(idef.Id)) added.Add(idef);
-            var shapes = new List<string>();
-            foreach (InstanceDefinition idef in added)
-                shapes.Add("'" + idef.Name + "' objects=" + idef.GetObjects().Length);
-            r["nested_definitions"] = added.Count + " added: " + string.Join(", ", shapes.ToArray());
+            r["nested_document_added"] = Added(doc, before).Count == 0
+                ? "none (materialized at bake)"
+                : Added(doc, before).Count + " at solve time";
 
-            // Bake the nested reference: Rhino resolves the parent's content.
+            // Bake the nested reference: Rhino materializes parent and child.
             Guid bakedId = Guid.Empty;
             try
             {
                 bool baked = reference.BakeGeometry(doc, new ObjectAttributes(), ref bakedId);
-                r["nested_bake"] = "baked=" + baked
+                string detail = "baked=" + baked
                     + ", object=" + (bakedId == Guid.Empty ? "none" : "yes");
+                if (bakedId != Guid.Empty)
+                {
+                    RhinoObject obj = doc.Objects.FindId(bakedId);
+                    BoundingBox objectBox = obj == null || obj.Geometry == null
+                        ? BoundingBox.Unset
+                        : obj.Geometry.GetBoundingBox(true);
+                    detail += objectBox.IsValid
+                        ? ", bbox=" + Round(objectBox.Min) + " .. " + Round(objectBox.Max)
+                        : ", bbox=invalid";
+                }
+                r["nested_bake"] = detail;
                 if (bakedId != Guid.Empty) doc.Objects.Delete(bakedId, true);
             }
             catch (Exception ex)
@@ -510,6 +590,12 @@ namespace GhStack.Spike.S9
                 r["nested_bake"] = Describe(ex);
                 if (bakedId != Guid.Empty) doc.Objects.Delete(bakedId, true);
             }
+            var bakedDefinitions = new List<string>();
+            foreach (InstanceDefinition idef in Added(doc, before))
+                bakedDefinitions.Add("'" + idef.Name + "'");
+            r["nested_baked_definitions"] = bakedDefinitions.Count == 0
+                ? "none"
+                : string.Join(", ", bakedDefinitions.ToArray());
 
             // Back out: the parent is index 0, the child 1, and the parent's own
             // row pair must name the child.
@@ -536,12 +622,264 @@ namespace GhStack.Spike.S9
                 ? "parent row names the child"
                 : "missing";
 
-            // Cleanup, parent first, by id: deleting one shifts the other's index.
+            // Cleanup: everything that appeared over the whole check (the bake's
+            // blocks included), by id — deleting one shifts the others' indexes.
+            foreach (InstanceDefinition idef in Added(doc, before))
+            {
+                int index = doc.InstanceDefinitions.InstanceDefinitionIndex(idef.Id, true);
+                if (index >= 0)
+                    doc.InstanceDefinitions.Delete(index, true, false);
+            }
+        }
+
+        /// <summary>Round 3d (owner's pointer, 2026-10-16): GH's own "Model Block
+        /// Definition" component builds a definition through
+        /// ModelInstanceDefinition.Attributes with a Name set; our round-2 probe
+        /// set Objects only. This checks what a Name changes: validity, identity,
+        /// whether the document gains a definition by itself, and whether a
+        /// reference built from it previews and bakes with no document write at
+        /// solve time. Everything it adds is cleaned up.</summary>
+        private static void NamedDefinitionChecks(Dictionary<string, object> r)
+        {
+            RhinoDoc doc = RhinoDoc.ActiveDoc;
+            if (doc == null)
+            {
+                r["named_document"] = "no active document";
+                return;
+            }
+            var before = new HashSet<Guid>();
+            foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false)) before.Add(idef.Id);
+
+            var modelMesh = Quad();
+            var goo = new GH_Mesh(modelMesh);
+            ModelObject modelObject = ModelObject.Cast(goo);
+            if (modelObject == null)
+            {
+                r["named_model_object"] = "cast failed";
+                return;
+            }
+            var objects = new List<ModelObject>();
+            objects.Add(modelObject);
+
+            ModelInstanceDefinition definition = null;
+            var attributes = new ModelInstanceDefinition.Attributes();
+            attributes.Objects = objects;
+            attributes.Name = "S9 Named Block";
+
+            try
+            {
+                var constructed = new ModelInstanceDefinition(attributes);
+                r["named_ctor"] = "IsValid=" + constructed.IsValid
+                    + ", Id=" + (constructed.Id == null ? "(none)" : "yes")
+                    + ", Objects=" + (constructed.Objects == null ? "null" : constructed.Objects.Count.ToString());
+                definition = constructed;
+            }
+            catch (Exception ex)
+            {
+                r["named_ctor"] = Describe(ex);
+            }
+            try
+            {
+                ModelInstanceDefinition cast = ModelInstanceDefinition.Cast(attributes);
+                r["named_cast"] = cast == null
+                    ? "null"
+                    : "IsValid=" + cast.IsValid
+                      + ", Id=" + (cast.Id == null ? "(none)" : "yes");
+                if (definition == null) definition = cast;
+            }
+            catch (Exception ex)
+            {
+                r["named_cast"] = Describe(ex);
+            }
+            try
+            {
+                object data = attributes.ToModelData();
+                r["named_model_data"] = data == null ? "null" : data.GetType().Name;
+                ModelInstanceDefinition cast = ModelInstanceDefinition.Cast(data);
+                if (cast != null)
+                {
+                    r["named_model_data_cast"] = "IsValid=" + cast.IsValid
+                        + ", Id=" + (cast.Id == null ? "(none)" : "yes");
+                    if (definition == null) definition = cast;
+                }
+            }
+            catch (Exception ex)
+            {
+                r["named_model_data"] = Describe(ex);
+            }
+
+            // Did any of that create a document definition by itself?
+            var added = new List<InstanceDefinition>();
+            foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false))
+                if (!before.Contains(idef.Id)) added.Add(idef);
+            r["named_document_added"] = added.Count == 0
+                ? "none"
+                : added.Count + " (" + added[0].Name + ")";
+
+            if (definition != null)
+            {
+                Guid id = definition.Id == null ? Guid.NewGuid() : definition.Id.Value;
+                var reference = new GH_InstanceReference(
+                    new InstanceReferenceGeometry(id, Transform.Translation(5, 0, 0)),
+                    definition);
+                r["named_reference_valid"] = reference.IsValid.ToString()
+                    + " (" + reference.IsValidWhyNot + ")";
+                try
+                {
+                    BoundingBox box = reference.GetBoundingBox(Transform.Identity);
+                    r["named_reference_bbox"] = box.IsValid
+                        ? Round(box.Min) + " .. " + Round(box.Max)
+                        : "invalid";
+                }
+                catch (Exception ex)
+                {
+                    r["named_reference_bbox"] = Describe(ex);
+                }
+                Guid baked = Guid.Empty;
+                try
+                {
+                    bool ok = reference.BakeGeometry(doc, new ObjectAttributes(), ref baked);
+                    r["named_bake"] = "baked=" + ok
+                        + ", object=" + (baked == Guid.Empty ? "none" : "yes");
+                    if (baked != Guid.Empty) doc.Objects.Delete(baked, true);
+                }
+                catch (Exception ex)
+                {
+                    r["named_bake"] = Describe(ex);
+                    if (baked != Guid.Empty) doc.Objects.Delete(baked, true);
+                }
+            }
+
+            // Cleanup: anything the named path added to the document.
             foreach (InstanceDefinition idef in added)
             {
                 int index = doc.InstanceDefinitions.InstanceDefinitionIndex(idef.Id, true);
                 if (index >= 0)
                     doc.InstanceDefinitions.Delete(index, true, false);
+            }
+        }
+
+        /// <summary>Round 3e (2026-10-16): the graph-side route the Model Block
+        /// Definition component uses, for a switch of Stage In. Pins: does a
+        /// GH_InstanceReference become a ModelObject (the component wires Block
+        /// Instance into Block Definition's Objects for nesting)? Can that
+        /// ModelObject come back as a GH_InstanceReference (transform and
+        /// definition intact) for Stage Out? Does a graph-side parent nest and
+        /// bake? And does baking two references of one definition make one
+        /// document block or two?</summary>
+        private static void GraphDefinitionChecks(Dictionary<string, object> r)
+        {
+            RhinoDoc doc = RhinoDoc.ActiveDoc;
+            if (doc == null)
+            {
+                r["graph_document"] = "no active document";
+                return;
+            }
+
+            var modelMesh = Quad();
+            var meshGoo = new GH_Mesh(modelMesh);
+            ModelObject meshObject = ModelObject.Cast(meshGoo);
+            if (meshObject == null)
+            {
+                r["graph_model_object"] = "mesh cast failed";
+                return;
+            }
+
+            // Child definition, graph-side: a quad named "S9 Graph Child".
+            var childAttributes = new ModelInstanceDefinition.Attributes();
+            childAttributes.Objects = new List<ModelObject> { meshObject };
+            childAttributes.Name = "S9 Graph Child";
+            var child = new ModelInstanceDefinition(childAttributes);
+
+            // The nested placement, as a goo wrapped into a ModelObject.
+            var nestedGoo = new GH_InstanceReference(new InstanceReferenceGeometry(Guid.NewGuid(), Transform.Translation(0, 0, 2)));
+            nestedGoo.InstanceDefinition = child;
+            ModelObject nestedObject = ModelObject.Cast(nestedGoo);
+            r["graph_nested_object"] = nestedObject == null
+                ? "cast null"
+                : nestedObject.TypeName + "/" + nestedObject.ObjectType;
+
+            // The round trip Stage Out needs: object -> goo, transform intact.
+            if (nestedObject != null)
+            {
+                GH_InstanceReference back;
+                bool cast = nestedObject.CastTo<GH_InstanceReference>(out back) && back != null;
+                r["graph_nested_cast"] = cast
+                    ? "transform.z=" + back.ModelTransform.M03.ToString("0.###")
+                      + ", definition=" + (back.InstanceDefinition == null ? "none" : "yes")
+                    : "cast failed";
+            }
+
+            // Parent definition, graph-side: a triangle plus the nested child.
+            var triangle = new Mesh();
+            triangle.Vertices.Add(0, 0, 0);
+            triangle.Vertices.Add(1, 0, 0);
+            triangle.Vertices.Add(0, 1, 0);
+            triangle.Faces.AddFace(0, 1, 2);
+            triangle.Normals.ComputeNormals();
+            ModelObject triangleObject = ModelObject.Cast(new GH_Mesh(triangle));
+            var parentAttributes = new ModelInstanceDefinition.Attributes();
+            var parentObjects = new List<ModelObject>();
+            parentObjects.Add(triangleObject);
+            if (nestedObject != null) parentObjects.Add(nestedObject);
+            parentAttributes.Objects = parentObjects;
+            parentAttributes.Name = "S9 Graph Parent";
+            var parent = new ModelInstanceDefinition(parentAttributes);
+            r["graph_parent"] = "IsValid=" + parent.IsValid
+                + ", Objects=" + (parent.Objects == null ? "null" : parent.Objects.Count.ToString())
+                + ", Id=" + (parent.Id == null ? "(none)" : "yes");
+
+            var reference = new GH_InstanceReference(
+                new InstanceReferenceGeometry(Guid.NewGuid(), Transform.Identity), parent);
+            r["graph_reference_valid"] = reference.IsValid + " (" + reference.IsValidWhyNot + ")";
+            BoundingBox box = reference.GetBoundingBox(Transform.Identity);
+            r["graph_reference_bbox"] = box.IsValid
+                ? Round(box.Min) + " .. " + Round(box.Max)
+                : "invalid";
+
+            // Does the nested content bake, placed 2 up?
+            var before = new HashSet<Guid>();
+            foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false)) before.Add(idef.Id);
+            Guid baked = Guid.Empty;
+            try
+            {
+                bool ok = reference.BakeGeometry(doc, new ObjectAttributes(), ref baked);
+                string detail = "baked=" + ok + ", object=" + (baked == Guid.Empty ? "none" : "yes");
+                if (baked != Guid.Empty)
+                {
+                    RhinoObject obj = doc.Objects.FindId(baked);
+                    BoundingBox objectBox = obj == null || obj.Geometry == null
+                        ? BoundingBox.Unset
+                        : obj.Geometry.GetBoundingBox(true);
+                    detail += objectBox.IsValid ? ", bbox=" + Round(objectBox.Min) + " .. " + Round(objectBox.Max) : ", bbox=invalid";
+                }
+                r["graph_bake"] = detail;
+                // A second bake of the same graph-side definition: one block or two?
+                Guid again = Guid.Empty;
+                bool okAgain = reference.BakeGeometry(doc, new ObjectAttributes(), ref again);
+                var added = new List<InstanceDefinition>();
+                foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false))
+                    if (!before.Contains(idef.Id)) added.Add(idef);
+                r["graph_bake_twice"] = "baked=" + okAgain
+                    + ", definitions added=" + added.Count
+                    + (added.Count > 0 ? " ('" + added[0].Name + "')" : "");
+                if (again != Guid.Empty) doc.Objects.Delete(again, true);
+
+                // Cleanup: the objects and definitions this check created.
+                foreach (InstanceDefinition idef in added)
+                {
+                    int index = doc.InstanceDefinitions.InstanceDefinitionIndex(idef.Id, true);
+                    if (index >= 0)
+                        doc.InstanceDefinitions.Delete(index, true, false);
+                }
+            }
+            catch (Exception ex)
+            {
+                r["graph_bake"] = Describe(ex);
+            }
+            finally
+            {
+                if (baked != Guid.Empty) doc.Objects.Delete(baked, true);
             }
         }
 
@@ -609,33 +947,45 @@ namespace GhStack.Spike.S9
             r["reference_duplicate"] = duplicate == null ? "null" : "ok, idef=" + (duplicate.InstanceDefinition != null);
 
             // The "under the hood" question: baking a reference whose definition
-            // is not in the document. Record what the document gains, then undo.
+            // is not in the document. Round 1 answered it (baked=False, and that
+            // attempt is what raised Rhino's "about to bake an invalid block
+            // instance" warning). The bake is therefore only attempted while the
+            // reference is valid — the warning was the probe's own doing, and a
+            // warning-free run is the controlled check that nothing else raises
+            // it (owner's question, 2026-10-16).
             RhinoDoc doc = RhinoDoc.ActiveDoc;
             if (doc == null)
             {
                 r["bake_reference"] = "no active document";
                 return;
             }
-            var before = new HashSet<Guid>();
-            foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false)) before.Add(idef.Id);
-            Guid bakedId = Guid.Empty;
-            try
+            if (!ghReference.IsValid)
             {
-                bool ok = ghReference.BakeGeometry(doc, new ObjectAttributes(), ref bakedId);
-                var added = new List<InstanceDefinition>();
-                foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false))
-                    if (!before.Contains(idef.Id)) added.Add(idef);
-                r["bake_reference"] = "baked=" + ok
-                    + ", object=" + (bakedId == Guid.Empty ? "none" : "yes")
-                    + ", definitions added=" + added.Count;
-                if (bakedId != Guid.Empty) doc.Objects.Delete(bakedId, true);
-                foreach (InstanceDefinition idef in added)
-                    doc.InstanceDefinitions.Delete(idef.Index, true, false);
+                r["bake_reference"] = "skipped (invalid reference; round 1 recorded the warning)";
             }
-            catch (Exception ex)
+            else
             {
-                r["bake_reference"] = Describe(ex);
-                if (bakedId != Guid.Empty) doc.Objects.Delete(bakedId, true);
+                var before = new HashSet<Guid>();
+                foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false)) before.Add(idef.Id);
+                Guid bakedId = Guid.Empty;
+                try
+                {
+                    bool ok = ghReference.BakeGeometry(doc, new ObjectAttributes(), ref bakedId);
+                    var added = new List<InstanceDefinition>();
+                    foreach (InstanceDefinition idef in doc.InstanceDefinitions.GetList(false))
+                        if (!before.Contains(idef.Id)) added.Add(idef);
+                    r["bake_reference"] = "baked=" + ok
+                        + ", object=" + (bakedId == Guid.Empty ? "none" : "yes")
+                        + ", definitions added=" + added.Count;
+                    if (bakedId != Guid.Empty) doc.Objects.Delete(bakedId, true);
+                    foreach (InstanceDefinition idef in added)
+                        doc.InstanceDefinitions.Delete(idef.Index, true, false);
+                }
+                catch (Exception ex)
+                {
+                    r["bake_reference"] = Describe(ex);
+                    if (bakedId != Guid.Empty) doc.Objects.Delete(bakedId, true);
+                }
             }
 
             // Round 1 (2026-10-16): a definition assembled from Attributes alone

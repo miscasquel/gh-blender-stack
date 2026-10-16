@@ -633,8 +633,9 @@ attributes travel with the geometry as `attr.*` sections (§5.1 of the protocol)
 stage in and out carry them, `Attribute Get`/`Set` read and write them, and the
 attribute store has console coverage. **S9 answered both of its questions**
 (`spikes/results/s9.txt`): attributes ride on the geometry through Rhino's own
-operations, and instances will arrive as content-hash-named definitions written
-into the open document, because no graph-side definition can preview or bake.
+operations, and instances cross as named graph-side block definitions — valid,
+previewing and baking without a document write at solve time, the route
+Grasshopper's own Model Block Definition components use.
 Next: instances as blocks (item 3, in flight), then W3/W4 (operators and
 persistence), the S6 display half and S7 in the GUI, and finally the acceptance
 pass A1–A10 (M5–M7).

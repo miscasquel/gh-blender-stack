@@ -42,25 +42,27 @@ Notable changes to this project, following
   STRING offsets section through both codecs (eleven fixtures total).
 - **Instances travel as blocks, both ways.** Blender's instanced geometry
   crosses as a definition table (`definitions`, `idef.<i>.*` groups and the
-  `inst.ref_def` / `inst.transforms` rows, protocol §5.2). Stage In writes each
-  definition into the open document under a content-hash name (`GHStack <hash>`,
-  reused across solves) and hands the graph real `GH_InstanceReference` items,
-  nested blocks included; Stage Out takes those items back, reading a
-  definition's geometry from its paired definition or the document. On the
-  Blender side each definition becomes a hidden prototype collection instanced
-  through `Instance on Points`, driven by a per-definition point cloud carrying
-  position, rotation and scale; a shear the point-cloud channel cannot carry is
-  applied lossily and logged.
-- **Spike S9** (`spikes/s9/`): the user-dictionary and graph-side block checks
-  that the attributes and instances designs rest on, run inside Rhino through the
-  spike `.gha` (`check=s9`). **Both rounds passed 2026-10-16**
-  (`spikes/results/s9.txt`): the attribute store survives duplication,
-  transforms, goo duplication and bake for every geometry kind — the design's
-  premise holds live. Blocks: no graph-side route can mint a valid definition
-  (the constructor and `ModelInstanceDefinition.Cast` both come back invalid,
-  with no `Id`, no preview and no bake), so Blender's instances will arrive as
-  content-hash-named definitions written into the open document — the fallback
-  probe previews with a valid bounding box and bakes to a real object.
+  `inst.ref_def` / `inst.transforms` rows, protocol §5.2). Stage In builds each
+  definition as a **named graph-side block** — the route Grasshopper's own Model
+  Block Definition/Instance components use — so nothing is written to the
+  document at solve time; Rhino materializes the blocks when the user bakes and
+  reuses them, nested blocks included. Stage Out turns the graph's
+  `GH_InstanceReference` items back into the same table and rows, reading
+  definition geometry from the paired definition (or the document, for a
+  reference that names one). On the Blender side each definition becomes a
+  hidden prototype collection instanced through `Instance on Points`, driven by
+  a per-definition point cloud carrying position, rotation and scale; a shear
+  the point-cloud channel cannot carry is applied lossily and logged.
+- **Spike S9** (`spikes/s9/`): the user-dictionary and block checks that the
+  attributes and instances designs rest on, run inside Rhino through the spike
+  `.gha` (`check=s9`). **All rounds passed 2026-10-16** (`spikes/results/s9.txt`):
+  the attribute store survives duplication, transforms, goo duplication and bake
+  for every geometry kind. Blocks: a graph-side definition needs a **Name** to
+  be valid — named, it previews and bakes with no document write, nested blocks
+  included, and repeated bakes materialize the blocks once. The rounds caught
+  two product bugs (definition attributes attached after the document copy was
+  taken; a block-instance `ModelObject` refusing the geometry cast) and a probe
+  bug (a matrix written in the wrong layout).
 
 ### Fixed
 

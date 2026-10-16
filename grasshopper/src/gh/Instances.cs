@@ -1,17 +1,26 @@
 // Instances: Blender's instance rows <-> Rhino block instances (protocol §5.2).
 //
-// Stage In: a frame's `definitions` table and `idef.<i>.*` groups become
-// document instance definitions; the frame's `inst.*` rows become
-// GH_InstanceReference items. S9 round 2 (spikes/results/s9.txt §C) is the
-// evidence for the document write: no graph-side definition can preview or
-// bake, while a document definition does both. Names are content hashes
-// (`GHStack <hash>`), so an unchanged definition is found and reused on the
-// next solve instead of piling up.
+// Both directions work graph-side, the way Grasshopper's own Model Block
+// Definition/Instance components do (probed live, 2026-10-16):
+//
+// - A definition is a `ModelInstanceDefinition` built from Attributes with a
+//   Name set. Anonymous attributes-built definitions are invalid; a named one
+//   is valid, previews, and bakes. No document write happens at solve time:
+//   Rhino materializes the blocks on first bake, and later bakes reuse them.
+// - A nested placement is a `GH_InstanceReference` (paired with the child
+//   definition) wrapped by `ModelObject.Cast`, which is exactly what the
+//   component workflow does when a Block Instance feeds a Block Definition's
+//   Objects input.
+// - References to one definition share a stable id for the solve, so Stage Out
+//   collapses the rows back into one definition table entry.
+//
+// Stage In: a frame's `definitions` table and `idef.<i>.*` groups become those
+// definitions; the `inst.*` rows become GH_InstanceReference items.
 //
 // Stage Out: GH_InstanceReference items become the same table and rows. A
 // definition's geometry comes from its paired ModelInstanceDefinition.Objects;
-// a nested reference whose pairing is missing falls back to the document
-// definition by id.
+// a reference with no pairing (a document block by id) falls back to the
+// document definition table.
 //
 // Definition geometry is read and written through the same Conversion and
 // AttributeStore code as the frame's own geometry, under the `idef.<i>.`
@@ -31,9 +40,7 @@ namespace GhStack
 {
     public static class Instances
     {
-        /// <summary>The name prefix of every document definition this side
-        /// creates. The rest is the content hash, so the same definition is
-        /// found again across solves and sessions.</summary>
+        /// <summary>The name given to definitions Blender did not name.</summary>
         public const string DefinitionPrefix = "GHStack ";
 
         /// <summary>Definition rows and transforms, decoded (protocol §5.2).
@@ -71,26 +78,19 @@ namespace GhStack
         }
 
         // ==================================================================
-        //  Stage In: frame -> document definitions + GH_InstanceReference
+        //  Stage In: frame -> graph-side named definitions + references
         // ==================================================================
 
-        /// <summary>Append the frame's instances to the stage geometry, building
-        /// the document definitions they reference. Silently does nothing when
-        /// the frame carries no definitions.</summary>
+        /// <summary>Append the frame's instances to the stage geometry as
+        /// GH_InstanceReference items. Silently does nothing when the frame
+        /// carries no definitions.</summary>
         public static void Build(DecodedFrame frame, double scale,
                                  List<Dictionary<string, object>> attributes,
                                  List<IGH_Goo> geometry, Action<string> note)
         {
             if (Json.Get(frame.Header, "definitions") == null) return;
 
-            RhinoDoc doc = RhinoDoc.ActiveDoc;
-            if (doc == null)
-            {
-                if (note != null) note("instances skipped: no open document to hold the block definitions");
-                return;
-            }
-
-            var builder = new DefinitionBuilder(frame, scale, attributes, doc, note);
+            var builder = new DefinitionBuilder(frame, scale, attributes, note);
             long[] refDef;
             List<Transform> transforms;
             if (!ReadRows(frame, "", out refDef, out transforms))
@@ -101,37 +101,53 @@ namespace GhStack
 
             for (int row = 0; row < refDef.Length; row++)
             {
-                InstanceDefinition idef = builder.Definition(refDef[row]);
-                if (idef == null) continue;
-                var reference = new InstanceReferenceGeometry(idef.Id, transforms[row]);
-                geometry.Add(new GH_InstanceReference(reference, new ModelInstanceDefinition(idef)));
+                ModelInstanceDefinition definition = builder.Definition(refDef[row]);
+                if (definition == null) continue;
+                var reference = new InstanceReferenceGeometry(
+                    builder.ReferenceId(refDef[row]), transforms[row]);
+                geometry.Add(new GH_InstanceReference(reference, definition));
             }
         }
 
+        /// <summary>Builds the frame's definitions graph-side, children first
+        /// (a parent's Objects hold the child references). No document is
+        /// touched: Rhino materializes the blocks when the user bakes.</summary>
         private class DefinitionBuilder
         {
             private readonly DecodedFrame _frame;
             private readonly double _scale;
             private readonly List<Dictionary<string, object>> _attributes;
-            private readonly RhinoDoc _doc;
             private readonly Action<string> _note;
-            private readonly Dictionary<long, InstanceDefinition> _done = new Dictionary<long, InstanceDefinition>();
+            private readonly Dictionary<long, ModelInstanceDefinition> _done = new Dictionary<long, ModelInstanceDefinition>();
+            private readonly Dictionary<long, Guid> _referenceIds = new Dictionary<long, Guid>();
             private readonly HashSet<long> _visiting = new HashSet<long>();
 
             public DefinitionBuilder(DecodedFrame frame, double scale,
                                      List<Dictionary<string, object>> attributes,
-                                     RhinoDoc doc, Action<string> note)
+                                     Action<string> note)
             {
                 _frame = frame;
                 _scale = scale;
                 _attributes = attributes;
-                _doc = doc;
                 _note = note;
             }
 
-            public InstanceDefinition Definition(long index)
+            /// <summary>The id every reference to one definition shares for this
+            /// solve, so Stage Out can collapse the rows back to one entry.</summary>
+            public Guid ReferenceId(long index)
             {
-                InstanceDefinition cached;
+                Guid id;
+                if (!_referenceIds.TryGetValue(index, out id))
+                {
+                    id = Guid.NewGuid();
+                    _referenceIds[index] = id;
+                }
+                return id;
+            }
+
+            public ModelInstanceDefinition Definition(long index)
+            {
+                ModelInstanceDefinition cached;
                 if (_done.TryGetValue(index, out cached)) return cached;
                 var table = Json.Get(_frame.Header, "definitions") as List<object>;
                 if (table == null || index < 0 || index >= table.Count)
@@ -148,35 +164,37 @@ namespace GhStack
                 try
                 {
                     string prefix = "idef." + index + ".";
-                    var objects = new List<GeometryBase>();
-                    var sources = new List<GeometryBase>();
+                    var objects = new List<ModelObject>();
+                    var childNames = new List<string>();
 
                     Mesh mesh = Conversion.MeshFromSections(_frame, _scale, prefix);
                     if (mesh != null && mesh.Vertices.Count > 0)
                     {
-                        objects.Add(mesh);
-                        sources.Add(mesh);
+                        AttributeStore.Attach(mesh, "mesh", _attributes, _frame.Sections, index);
+                        AddObject(objects, new GH_Mesh(mesh), "mesh");
                     }
                     foreach (Curve curve in Conversion.CurvesFromSections(_frame, _scale, prefix))
-                        objects.Add(curve);
+                        AddObject(objects, new GH_Curve(curve), "curve");
                     PointCloud cloud = Conversion.PointCloudFromSections(_frame, _scale, prefix);
                     if (cloud != null)
                     {
-                        objects.Add(cloud);
-                        sources.Add(cloud);
+                        AttributeStore.Attach(cloud, "pts", _attributes, _frame.Sections, index);
+                        AddObject(objects, new GH_PointCloud(cloud), "point cloud");
                     }
 
                     long[] nested;
                     List<Transform> nestedTransforms;
-                    var nestedNames = new List<string>();
                     if (ReadRows(_frame, prefix, out nested, out nestedTransforms))
                     {
                         for (int row = 0; row < nested.Length; row++)
                         {
-                            InstanceDefinition child = Definition(nested[row]);
+                            ModelInstanceDefinition child = Definition(nested[row]);
                             if (child == null) continue;
-                            objects.Add(new InstanceReferenceGeometry(child.Id, nestedTransforms[row]));
-                            nestedNames.Add(child.Name ?? "");
+                            var nestedGoo = new GH_InstanceReference(new InstanceReferenceGeometry(
+                                ReferenceId(nested[row]), nestedTransforms[row]));
+                            nestedGoo.InstanceDefinition = child;
+                            if (!AddObject(objects, nestedGoo, "nested block")) continue;
+                            childNames.Add(ChildName(child));
                         }
                     }
 
@@ -186,38 +204,17 @@ namespace GhStack
                         return null;
                     }
 
-                    // Attributes ride on the definition's own geometry, exactly
-                    // as they do on the frame's — and they are attached before
-                    // the definition is added: the table stores its own copy of
-                    // the geometry, so a later write to the local objects never
-                    // reaches the document.
-                    foreach (GeometryBase source in sources)
+                    string from = NameOf(_frame, index);
+                    var definitionAttributes = new ModelInstanceDefinition.Attributes();
+                    definitionAttributes.Objects = objects;
+                    definitionAttributes.Name = string.IsNullOrEmpty(from)
+                        ? DefinitionPrefix + ContentHash(prefix, childNames)
+                        : from;
+                    var definition = new ModelInstanceDefinition(definitionAttributes);
+                    if (!definition.IsValid)
                     {
-                        string group = AttributeStore.GroupOf(source);
-                        if (group != null)
-                            AttributeStore.Attach(source, group, _attributes, _frame.Sections, index);
-                    }
-
-                    string name = DefinitionPrefix + ContentHash(prefix, nestedNames);
-                    InstanceDefinition existing = _doc.InstanceDefinitions.Find(name);
-                    InstanceDefinition definition;
-                    if (existing != null)
-                    {
-                        definition = existing;
-                    }
-                    else
-                    {
-                        string from = NameOf(_frame, index);
-                        string description = string.IsNullOrEmpty(from)
-                            ? "Instance definitions sent from Blender"
-                            : "Blender definition \"" + from + "\"";
-                        int added = _doc.InstanceDefinitions.Add(name, description, Point3d.Origin, objects);
-                        if (added < 0)
-                        {
-                            Note("could not add block definition " + name + " to the document");
-                            return null;
-                        }
-                        definition = _doc.InstanceDefinitions[added];
+                        Note("definition " + index + " (" + definitionAttributes.Name + ") came back invalid");
+                        return null;
                     }
 
                     _done[index] = definition;
@@ -229,11 +226,36 @@ namespace GhStack
                 }
             }
 
-            /// <summary>The canonical content hash of one definition: its own
-            /// sections in protocol order, then one entry per nested row
-            /// (the child's content-hash name and its transform), so two
-            /// definitions with equal geometry but different children differ.</summary>
-            private string ContentHash(string prefix, List<string> nestedNames)
+            private bool AddObject(List<ModelObject> objects, IGH_Goo goo, string kind)
+            {
+                ModelObject modelObject = ModelObject.Cast(goo);
+                if (modelObject == null || !modelObject.IsValid)
+                {
+                    Note("a definition " + kind + " has no model form and was skipped");
+                    return false;
+                }
+                objects.Add(modelObject);
+                return true;
+            }
+
+            /// <summary>A child definition's name as a string, for the fallback
+            /// content hash.</summary>
+            private static string ChildName(ModelInstanceDefinition definition)
+            {
+                object rawName = definition.Name;
+                if (rawName != null)
+                {
+                    string name = rawName.ToString();
+                    if (!string.IsNullOrEmpty(name)) return name;
+                }
+                return definition.DisplayName ?? "";
+            }
+
+            /// <summary>A stable fallback name for an unnamed definition: the
+            /// sections in protocol order, then one entry per nested row (the
+            /// child's name and its transform), so equal content shares a name
+            /// and a rename alone is a real change.</summary>
+            private string ContentHash(string prefix, List<string> childNames)
             {
                 var byName = new Dictionary<string, Section>();
                 foreach (Section section in _frame.Sections)
@@ -250,7 +272,7 @@ namespace GhStack
                         Update(sha, name, byName[name].Raw);
                     if (nested != null)
                     {
-                        for (int i = 0; i < nested.Length && i < nestedNames.Count; i++)
+                        for (int i = 0; i < nested.Length && i < childNames.Count; i++)
                         {
                             Update(sha, "inst.ref_def", BitConverter.GetBytes((uint)nested[i]));
                             var m = Conversion.TransformToWire(nestedTransforms[i]);
@@ -258,13 +280,11 @@ namespace GhStack
                             Buffer.BlockCopy(m, 0, raw, 0, raw.Length);
                             Update(sha, "inst.transforms", raw);
                         }
-                        // The child names take part: the transform rows alone
-                        // cannot tell two children with equal placement apart.
-                        foreach (string childName in nestedNames)
+                        foreach (string childName in childNames)
                             Update(sha, "inst.name", System.Text.Encoding.UTF8.GetBytes(childName));
                     }
                     sha.TransformFinalBlock(new byte[0], 0, 0);
-                    return Hex(sha.Hash, 16);
+                    return Hex(sha.Hash, 12);
                 }
             }
 
@@ -318,6 +338,7 @@ namespace GhStack
             private readonly List<Dictionary<string, object>> _definitions;
             private readonly List<string> _warnings;
             private readonly Dictionary<string, int> _byKey = new Dictionary<string, int>();
+            private readonly HashSet<string> _visiting = new HashSet<string>();
 
             public DefinitionWriter(double scale, List<Section> sections,
                                     List<Dictionary<string, object>> attributes,
@@ -332,18 +353,19 @@ namespace GhStack
             }
 
             /// <summary>The table index for one instance's definition, writing
-            /// the definition on first use. <paramref name="referenceId"/> is the
-            /// document id the instance names.
+            /// the definition on first use.
             ///
-            /// The document's own copy is preferred when the id names one: its
-            /// geometry types are definitive — a nested block is an
-            /// InstanceReferenceGeometry there, no cast guessing — and the
-            /// content is exactly what Stage In wrote. The paired objects remain
-            /// the fallback for definitions with no document identity
-            /// (graph-side ones, which do not preview anyway). Both routes share
-            /// one key format, so an id never lands in the table twice.</summary>
+            /// The paired definition is preferred: graph-side definitions (the
+            /// ones Stage In builds, and the Model components') carry their
+            /// content and their nested references as ModelObjects. A reference
+            /// with no pairing names a document definition and is read from the
+            /// table by id. Both routes share one key, so an id never lands in
+            /// the table twice.</summary>
             public int Definition(ModelInstanceDefinition paired, Guid referenceId)
             {
+                if (paired != null && paired.Objects != null && paired.Objects.Count > 0)
+                    return WriteDefinition(paired, Key(paired, referenceId));
+
                 if (referenceId != Guid.Empty)
                 {
                     RhinoDoc document = RhinoDoc.ActiveDoc;
@@ -351,7 +373,11 @@ namespace GhStack
                         return DefinitionFromDocument(referenceId);
                 }
 
-                string key = Key(paired, referenceId);
+                return WriteDefinition(paired, Key(paired, referenceId));
+            }
+
+            private int WriteDefinition(ModelInstanceDefinition paired, string key)
+            {
                 int known;
                 if (key != null && _byKey.TryGetValue(key, out known)) return known;
 
@@ -361,13 +387,12 @@ namespace GhStack
                 _definitions.Add(entry);
                 if (key != null) _byKey[key] = index;
 
-                string prefix = "idef." + index + ".";
                 var meshes = new List<Mesh>();
                 var curves = new List<Curve>();
                 var points = new List<Point3d>();
                 var subds = new List<SubD>();
                 var breps = new List<Brep>();
-                var nested = new List<InstanceReferenceGeometry>();
+                var nested = new List<GH_InstanceReference>();
                 var sources = new List<GeometryBase>();
 
                 if (paired != null && paired.Objects != null)
@@ -376,11 +401,12 @@ namespace GhStack
                         CollectObject(obj, meshes, curves, points, subds, breps, nested, sources);
                 }
 
-                WriteGeometry(index, prefix, meshes, curves, points, subds, breps, nested, sources);
+                string prefix = "idef." + index + ".";
+                WriteGeometry(prefix, meshes, curves, points, subds, breps, nested, sources, index);
                 return index;
             }
 
-            /// <summary>A document definition by id, for a nested reference whose
+            /// <summary>A document definition by id, for a reference whose
             /// pairing is gone (a definition another document object owns).</summary>
             private int DefinitionFromDocument(Guid id)
             {
@@ -395,33 +421,44 @@ namespace GhStack
                     _warnings.Add("A nested block (" + key + ") is not in the document and was skipped");
                     return -1;
                 }
+                if (!_visiting.Add(key))
+                {
+                    _warnings.Add("A block definition nests inside itself and was skipped");
+                    return -1;
+                }
+                try
+                {
+                    int index = _definitions.Count;
+                    var entry = new Dictionary<string, object>();
+                    entry["name"] = docDef.Name ?? "";
+                    _definitions.Add(entry);
+                    _byKey[key] = index;
 
-                int index = _definitions.Count;
-                var entry = new Dictionary<string, object>();
-                entry["name"] = docDef.Name ?? "";
-                _definitions.Add(entry);
-                _byKey[key] = index;
+                    var meshes = new List<Mesh>();
+                    var curves = new List<Curve>();
+                    var points = new List<Point3d>();
+                    var subds = new List<SubD>();
+                    var breps = new List<Brep>();
+                    var nested = new List<GH_InstanceReference>();
+                    var sources = new List<GeometryBase>();
+                    foreach (RhinoObject obj in docDef.GetObjects())
+                        CollectGeometry(obj.Geometry, meshes, curves, points, subds, breps, nested, sources);
 
-                string prefix = "idef." + index + ".";
-                var meshes = new List<Mesh>();
-                var curves = new List<Curve>();
-                var points = new List<Point3d>();
-                var subds = new List<SubD>();
-                var breps = new List<Brep>();
-                var nested = new List<InstanceReferenceGeometry>();
-                var sources = new List<GeometryBase>();
-                foreach (RhinoObject obj in docDef.GetObjects())
-                    CollectGeometry(obj.Geometry, meshes, curves, points, subds, breps, nested, sources);
-
-                WriteGeometry(index, prefix, meshes, curves, points, subds, breps, nested, sources);
-                return index;
+                    string prefix = "idef." + index + ".";
+                    WriteGeometry(prefix, meshes, curves, points, subds, breps, nested, sources, index);
+                    return index;
+                }
+                finally
+                {
+                    _visiting.Remove(key);
+                }
             }
 
-            private void WriteGeometry(int index, string prefix,
+            private void WriteGeometry(string prefix,
                                        List<Mesh> meshes, List<Curve> curves, List<Point3d> points,
                                        List<SubD> subds, List<Brep> breps,
-                                       List<InstanceReferenceGeometry> nested,
-                                       List<GeometryBase> sources)
+                                       List<GH_InstanceReference> nested,
+                                       List<GeometryBase> sources, int index)
             {
                 if (meshes.Count > 0 || curves.Count > 0 || points.Count > 0
                     || subds.Count > 0 || breps.Count > 0)
@@ -442,12 +479,13 @@ namespace GhStack
                 {
                     var refDef = new List<uint>();
                     var transforms = new List<float>();
-                    foreach (InstanceReferenceGeometry reference in nested)
+                    foreach (GH_InstanceReference goo in nested)
                     {
-                        int child = DefinitionFromDocument(reference.ParentIdefId);
+                        if (goo == null || goo.Value == null) continue;
+                        int child = Definition(goo.InstanceDefinition, goo.Value.ParentIdefId);
                         if (child < 0) continue;
                         refDef.Add((uint)child);
-                        transforms.AddRange(Conversion.TransformToWire(reference.Xform));
+                        transforms.AddRange(Conversion.TransformToWire(goo.Value.Xform));
                     }
                     if (refDef.Count > 0)
                     {
@@ -459,17 +497,27 @@ namespace GhStack
 
             private void CollectObject(ModelObject obj, List<Mesh> meshes, List<Curve> curves,
                                        List<Point3d> points, List<SubD> subds, List<Brep> breps,
-                                       List<InstanceReferenceGeometry> nested,
+                                       List<GH_InstanceReference> nested,
                                        List<GeometryBase> sources)
             {
+                // A block instance ModelObject (graph-side or document-backed) is
+                // the one definitive way to reach the child definition and its
+                // transform: CastTo<InstanceReferenceGeometry> refuses it, the
+                // goo cast does not.
+                GH_InstanceReference goo;
+                if (obj.CastTo<GH_InstanceReference>(out goo) && goo != null && goo.Value != null)
+                {
+                    nested.Add(goo);
+                    return;
+                }
+
                 GeometryBase geometry = GeometryOf(obj, nested);
                 if (geometry != null)
                     CollectGeometry(geometry, meshes, curves, points, subds, breps, nested, sources);
             }
 
-            /// <summary>One geometry out of a ModelObject, or null. Nested
-            /// references go to ``nested`` instead of the geometry lists.</summary>
-            private GeometryBase GeometryOf(ModelObject obj, List<InstanceReferenceGeometry> nested)
+            /// <summary>One geometry out of a ModelObject, or null.</summary>
+            private GeometryBase GeometryOf(ModelObject obj, List<GH_InstanceReference> nested)
             {
                 // ObjectType first: a cast chain would happily mesh a Brep or
                 // edge-ify a mesh (GH_Convert Secondary), which is the lossy
@@ -480,7 +528,7 @@ namespace GhStack
                     InstanceReferenceGeometry reference;
                     if (obj.CastTo<InstanceReferenceGeometry>(out reference) && reference != null)
                     {
-                        nested.Add(reference);
+                        nested.Add(new GH_InstanceReference(reference));
                         return null;
                     }
                 }
@@ -520,7 +568,7 @@ namespace GhStack
 
             private void CollectGeometry(GeometryBase geometry, List<Mesh> meshes, List<Curve> curves,
                                          List<Point3d> points, List<SubD> subds, List<Brep> breps,
-                                         List<InstanceReferenceGeometry> nested,
+                                         List<GH_InstanceReference> nested,
                                          List<GeometryBase> sources)
             {
                 if (geometry == null) return;
@@ -540,7 +588,7 @@ namespace GhStack
                 Curve curve = geometry as Curve;
                 if (curve != null) { curves.Add(curve); return; }
                 InstanceReferenceGeometry reference = geometry as InstanceReferenceGeometry;
-                if (reference != null) { nested.Add(reference); return; }
+                if (reference != null) { nested.Add(new GH_InstanceReference(reference)); return; }
                 if (geometry is Point) { points.Add(((Point)geometry).Location); return; }
                 _warnings.Add("A block definition object (" + geometry.ObjectType + ") has no wire form and was skipped");
             }
