@@ -58,9 +58,11 @@ worth doing together.
 - **A SubD crease that cannot be mapped is dropped silently**
   (`Conversion.cs`). Silent loss is the tier this repository treats as
   unforgivable.
-- **The plugin has no behavioural coverage.** Layer C is the codec only, so
-  every fix above is verified by hand. One round-trip test against the real
-  `GhLink` (not the codec) would pay for itself in the next batch.
+- **The plugin has no behavioural coverage beyond the attribute store.**
+  Layer C is the codec plus `GhStackAttrTests.exe`; the components and
+  `GhLink` are uncovered, so every fix above is verified by hand. One round-trip
+  test against the real `GhLink` (not the codec) would pay for itself in the
+  next batch.
 - **Error recovery when the client re-sends on its own.** The errored-stage path
   is covered by a scene change; a GH-side fix arriving for the same `rid` is a
   different way through the same code.
@@ -72,6 +74,27 @@ worth doing together.
   silently does nothing is worse than no knob.
 - **A duplicated lookup and an undefined literal** in `engine`/`nodes`
   (`polish-plan.md` P4-6 has the details).
+
+---
+
+## Design constraints
+
+Settled by evidence; the code that rests on them must not drift from them.
+
+- **Instances are document-defined.** S9 round 2 (`spikes/results/s9.txt` §C):
+  no graph-side definition can preview or bake, so Stage In writes
+  content-hash-named definitions (`GHStack <hash>`) into the open document and
+  references them. Watch definition reuse and cleanup as the instances work
+  lands; with no open document the fallback is realized geometry.
+- **Curve attributes are read-only** (the legacy Curve helper cannot store them;
+  also in `docs/plan.md` §6, README and code). Revisit only if curves matter — it
+  means changing the curve helper representation.
+- **`sharp_face`/`UVMap` travel as generic attributes now.** Measure the added
+  payload and time at 100k with UVs against the §13 budgets; if it bites, decide
+  whether to skip Blender's shading attributes.
+- **The prefix memo tolerates last-bit float noise in attribute payloads only**
+  (`engine._same_prefix`, rtol 1e-5); an exact hash there reintroduces the
+  churn. The CHANGELOG explains why; the code is the reference.
 
 ---
 

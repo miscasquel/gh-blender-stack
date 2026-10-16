@@ -1,11 +1,14 @@
-# S9 — attributes ride the geometry; blocks need a decision
+# S9 — attributes ride the geometry; blocks resolve to document definitions
 
 2026-10-16, live in Rhino 8 under wine via the spike `.gha` (`check=s9`).
 Driver: `spikes/s9/driver.py` (raw transcript in `spikes/results/s9-run.txt`);
 checks: `spikes/s9/S9Checks.cs`.
 
-**Result: the attribute question is answered — yes, definitively. The block
-question opened a second probe round.**
+**Result: both questions are answered.** Attributes ride the geometry (every
+check passed, §A). Blocks: no graph-side route can mint a definition with an
+identity or an identity-bearing preview, so Stage In will write content-hash-named
+definitions into the open document — the fallback probe previews with a valid
+bounding box and bakes a real object (§C).
 
 ## A. Attributes — PASS on every check
 
@@ -36,28 +39,53 @@ assembled from `ModelInstanceDefinition.Attributes { Objects = ... }` comes back
 - `reference_valid: False`, `reference_bbox: invalid` — no preview geometry;
 - `bake_reference: baked=False, object=none, definitions added=0` — baking the
   doc-less reference is a no-op through the API;
-- and baking such a reference from the canvas is what raises Rhino's
-  **"You are about to bake an invalid block instance"** warning (seen live,
-  2026-10-16).
+- and attempting to bake such a reference raises Rhino's
+  **"You are about to bake an invalid block instance"** warning (seen while this
+  check ran; §C traces it to the probe's own `bake_reference` call).
 
 The remaining public levers are narrow: `Attribs` and `ReferenceID` are not
 public on the definition, so a graph-side definition cannot be given an identity
-or content through the constructor path. Round 2 (`definition_cast` +
-`doc_reference_*` probes, deployed 2026-10-16) checks whether
-`ModelInstanceDefinition.Cast` accepts the attributes/objects form, and verifies
-the fallback end to end: a definition added to the document
-(`InstanceDefinitionTable.Add`, cleaned up afterwards) that previews with a
-valid bounding box and bakes to a real object.
+or content through the constructor path. Round 2 ran `definition_cast` and the
+`doc_reference_*` probes 2026-10-16; §C below carries the result and the
+decision.
 
-**Decision input:** if `Cast` yields a valid definition, Stage In can hand
-Blender's instances over as graph-side blocks with no document write. If it does
-not, the choice is the document fallback (content-hash-named definitions written
-to the open document) or realized geometry — the trade the earlier plan
-described.
+## C. Round 2 — the cast route is dead; the document fallback works
+
+Run 2026-10-16, same driver and `check=s9` (`spikes/results/s9-run.txt`):
+
+- `definition_cast: from attributes: IsValid=False, Objects=1, Id=(none)` — the
+  public `Cast` from a `ModelInstanceDefinition.Attributes` returns a definition
+  that is still invalid and has no identity.
+- `reference_cast: IsValid=False, whyNot=Instance Definition is not valid`;
+  `reference_cast_bbox: invalid` — no preview.
+- The document fallback passes everything: `doc_reference_valid: True`,
+  `doc_reference_bbox: valid: (5, 0, 0) .. (6, 1, 0)`,
+  `doc_reference_bake: baked=True, object=yes` — a definition added through
+  `InstanceDefinitionTable.Add`, referenced by a `GH_InstanceReference`, previews
+  with a valid bounding box and bakes to a real object.
+
+**Decision: Stage In writes content-hash-named definitions into the open
+document** (for example `GHStack <hash>`), reuses them across solves, and
+references them per instance. The graph-side route is dead for the product: it
+cannot mint an identity, and even a doc-less reference cannot bake (round 1's
+`bake_reference: baked=False`). Realized geometry remains the fallback when
+there is no open document.
+
+Two footnotes for the record:
+
+- The probe only tries `Cast(objects)` / `Cast(object)` when `Cast(attributes)`
+  returns null; it returned non-null-but-invalid, so those two forms were never
+  exercised. They would not change the decision — a graph-side definition still
+  cannot bake.
+- The "You are about to bake an invalid block instance" dialog that appears
+  during the run comes from the probe itself: `bake_reference` bakes the invalid
+  doc-less reference through GH's bake path, which raises the warning and then
+  declines (`baked=False, object=none`). No product component is involved.
 
 ## Note on timing
 
-The reply took 37.8 s: the checks run on the Rhino UI thread
+Round 1's reply took 37.8 s: the checks run on the Rhino UI thread
 (`RhinoApp.InvokeAndWait`), and that call queued behind an active Grasshopper
 solve on the user's canvas (the S9 run happened while a live loop was solving).
-Not a defect in the checks; the probe is UI-thread-bound by design.
+Round 2, with the canvas idle, replied in 8.4 s. Not a defect in the checks; the
+probe is UI-thread-bound by design.

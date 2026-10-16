@@ -41,16 +41,19 @@ Raw transcript: `spikes/results/s9-run.txt`. The curated report is
 
 ## Status
 
-**Round 1 ran 2026-10-16 and passed.** Attributes: the `UserDictionary` survives
-every operation GH performs (duplicate, transform, goo duplication, bake) for
-mesh, curve, point cloud and SubD — the design's premise holds. Blocks: a
-graph-side definition built from `Attributes` is invalid without an identity,
-does not preview, and cannot be baked (Rhino raises its "invalid block instance"
-warning from the canvas) — the public constructor path cannot supply an Id or
-content, so round 2 tries `ModelInstanceDefinition.Cast` and verifies the
-document-definition fallback. Full report: `spikes/results/s9.txt`.
+**Both rounds ran 2026-10-16.** Round 1: attributes pass — the `UserDictionary`
+survives every operation GH performs (duplicate, transform, goo duplication,
+bake) for mesh, curve, point cloud and SubD, so the design's premise holds.
+Round 2 decided the blocks question: a graph-side definition built from
+`ModelInstanceDefinition.Attributes`, and the public `ModelInstanceDefinition.Cast`
+route, both come back invalid with no `Id` — no preview, no bake. The document
+fallback works end to end: `InstanceDefinitionTable.Add` yields a valid
+definition that previews with a valid bounding box and bakes to a real object.
+**Decision: Stage In writes content-hash-named definitions into the open
+document** and references them per instance. Full report:
+`spikes/results/s9.txt` (§C).
 
-The checks are in `spikes/s9/S9Checks.cs`; the deployed spike `.gha` carries
-round 2's probes (`definition_cast`, `doc_reference_valid`, `doc_reference_bbox`,
+The checks are in `spikes/s9/S9Checks.cs`; the deployed spike `.gha` carries the
+round-2 probes (`definition_cast`, `doc_reference_valid`, `doc_reference_bbox`,
 `doc_reference_bake`). To re-run: restart Rhino (Libraries load at start), then
 the driver, then drop the **S1 Spike** component.
