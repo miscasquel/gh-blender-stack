@@ -392,5 +392,89 @@ class InstanceApplyTests(unittest.TestCase):
             evaluated.to_mesh_clear()
 
 
+class EnginePrefixTests(unittest.TestCase):
+    """The product's prefix path end to end: a real stack object, a real
+    Instance-on-Points modifier, a real stage added through the operator.
+    Locks the setup the live loop depends on and the two semantics that are
+    easy to trip over."""
+
+    def setUp(self):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        bpy.ops.preferences.addon_enable(module="gh_stack")
+
+    def _instance_group(self, name, points_obj, source_obj):
+        group = bpy.data.node_groups.new(name, "GeometryNodeTree")
+        group.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+        output = group.nodes.new("NodeGroupOutput")
+        iono = group.nodes.new("GeometryNodeInstanceOnPoints")
+        source = group.nodes.new("GeometryNodeObjectInfo")
+        source.inputs["Object"].default_value = source_obj
+        source.transform_space = "ORIGINAL"
+        points = group.nodes.new("GeometryNodeObjectInfo")
+        points.inputs["Object"].default_value = points_obj
+        points.transform_space = "ORIGINAL"
+        group.links.new(source.outputs["Geometry"], iono.inputs["Instance"])
+        group.links.new(points.outputs["Geometry"], iono.inputs["Points"])
+        group.links.new(iono.outputs["Instances"], output.inputs["Geometry"])
+        return group
+
+    def _scene(self):
+        from blender.gh_stack.blender import stack as stack_mod
+
+        source = _quad("prefix-source")
+        points = _points("prefix-points", [(0, 0, 0), (3, 0, 0)])
+        holder = _quad("prefix-holder")
+        group = self._instance_group("prefix-IoP", points, source)
+        modifier = holder.modifiers.new("GN", "NODES")
+        modifier.node_group = group
+        bpy.context.view_layer.objects.active = holder
+        holder.modifiers.active = modifier
+        bpy.ops.gh_stack.add_stage(label="Prefix")
+        stage = holder.gh_stack.stages[-1]
+        return holder, stage, group, modifier, stack_mod
+
+    @staticmethod
+    def _prefix(holder, stage, stack_mod):
+        from blender.gh_stack.blender import engine
+
+        return engine._prefix_sections(holder, stack_mod.stack_of(holder), stage)
+
+    def test_stage_after_the_instance_modifier_ships_definitions(self):
+        holder, stage, _group, _modifier, stack_mod = self._scene()
+        sections, _hash, _attributes, definitions = self._prefix(holder, stage, stack_mod)
+        names = [name for name, _dtype, _values in sections]
+        self.assertEqual(definitions, [{"name": "prefix-source"}])
+        self.assertIn("idef.0.mesh.verts", names)
+        self.assertIn("inst.ref_def", names)
+        self.assertEqual(list(dict((n, v) for n, _d, v in sections)["inst.ref_def"]), [0, 0])
+
+    def test_stage_before_the_instance_modifier_ships_none(self):
+        holder, stage, _group, _modifier, stack_mod = self._scene()
+        order = [m.name for m in holder.modifiers]
+        holder.modifiers.move(order.index("GH · Prefix"), 0)
+        sections, _hash, _attributes, definitions = self._prefix(holder, stage, stack_mod)
+        self.assertEqual(definitions, [])
+        self.assertFalse(any(name == "inst.ref_def" for name, _d, _v in sections))
+
+    def test_graph_edit_after_the_first_read_is_seen(self):
+        # The memo follows edits inside the node group: a graph that stops
+        # creating instances stops shipping definitions, and one that starts
+        # again ships them (the epoch rule, exercised from the product side).
+        holder, stage, group, modifier, stack_mod = self._scene()
+        _sections, _hash, _attributes, definitions = self._prefix(holder, stage, stack_mod)
+        self.assertEqual(len(definitions), 1)
+
+        group.nodes.clear()
+        group.interface.clear()
+        _sections, _hash, _attributes, definitions = self._prefix(holder, stage, stack_mod)
+        self.assertEqual(definitions, [])
+
+        points = bpy.data.objects["prefix-points"]
+        source = bpy.data.objects["prefix-source"]
+        modifier.node_group = self._instance_group("prefix-IoP2", points, source)
+        _sections, _hash, _attributes, definitions = self._prefix(holder, stage, stack_mod)
+        self.assertEqual(len(definitions), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
