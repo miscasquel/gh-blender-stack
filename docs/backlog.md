@@ -74,6 +74,11 @@ worth doing together.
 
 ### Blender engine — smaller
 
+- **`NestedGroupPrefixTests.test_02` flaked once** (2026-10-17, during the
+  0.2.0 release verification): the edit inside the nested group did not reach
+  `fake_gh` within the 10 s pump, then passed in isolation and in two later
+  full runs. Either load-sensitive timing in the pump or a real memo miss
+  under load — capture the fake_gh report the next time it fires.
 - **`log_level` is a preference that does nothing.** Defined and drawn in
   `prefs.py`, read by no code. Either implement it or remove it; a knob that
   silently does nothing is worse than no knob.
