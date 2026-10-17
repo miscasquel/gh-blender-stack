@@ -18,8 +18,14 @@
 - Library on the Blender side: `websockets` 17.2 (pure Python). The server runs on a background thread. Blender's main thread reads a queue.
 - Library on the GH side: `System.Net.WebSockets.ClientWebSocket`, on a background thread.
 - Loopback only. No authentication in v2. Connections from non-loopback addresses are refused.
-- Maximum message size: 512 MiB. Maximum header size: 1 MiB.
-- Keepalive: `ping` every 2 s from Blender. No `pong` within 6 s means `disconnected`.
+- Maximum message size: 512 MiB. Maximum header size: 1 MiB. A frame over
+  either cap is answered with `error` code `too_large` when a message can still
+  be sent, and dropped.
+- Keepalive: the WebSocket layer's own ping — every 5 s from Blender, a peer
+  that does not pong within 20 s is dropped. There is no application-level
+  `ping`/`pong` in v2 (the message types are reserved, §4.5). A dropped socket
+  shows as `disconnected`; the stage keeps its last good output until the client
+  reconnects with `hello` (protocol §8.8).
 
 ## 3. Frame
 
@@ -37,14 +43,14 @@
 
 ## 4. Message types
 
-Every message carries `"v": 2`. A message with a different `v` is answered with `error` code `proto_mismatch` and the connection is closed.
+Every message carries `"v": 2`. A message with a different `v` is answered with `error` code `proto_mismatch` and dropped; the server additionally closes the connection (a client answers, so the diagnosis travels before the close).
 
 ### 4.1 `hello` (GH → Blender)
 
 Sent once per connection, first.
 
 ```json
-{"type":"hello","v":2,"client":"GhStack 0.2.0","doc":"Panels.gh",
+{"type":"hello","v":2,"client":"GhStack 0.2.1","doc":"Panels.gh",
  "doc_units":"Millimeters",
  "stages":[{"key":"panelize-3f9a","enabled":true}]}
 ```
@@ -104,6 +110,9 @@ Sent after `hello`, and again whenever a Param component's declaration changes.
 
 ### 4.5 `ping` / `pong`
 
+Reserved for a future application-level keepalive; not sent or answered in v2.
+Liveness is the WebSocket layer's keepalive (§2).
+
 ```json
 {"type":"ping","v":2,"t":1234.5}
 {"type":"pong","v":2,"t":1234.5}
@@ -123,7 +132,7 @@ Sent after `hello`, and again whenever a Param component's declaration changes.
 
 | Code | Meaning | Sender's recovery |
 |---|---|---|
-| `proto_mismatch` | `v` differs | Close the connection |
+| `proto_mismatch` | `v` differs | Answer, drop the frame; the server closes the connection |
 | `bad_frame` | Header or sections inconsistent | Drop the message, log |
 | `unknown_stage` | Stage key not present in the document | Show error on the stage |
 | `unknown_ref` | `ref` for geometry GH does not hold | Blender resends `full` |
@@ -339,3 +348,12 @@ Twelve fixtures, covering `ping`, `hello`, `schema`, a `ref` request, a mesh req
   definition index and folds the list in as `definitions`, and the output hash
   folds it in the same way. The `request-instances` fixture pins nested rows and
   a per-definition attribute through both codecs. Additive inside v2.
+- 2026-10-17: the keepalive statement in §2 matched no implementation. It now
+  describes what runs — the WebSocket layer's 5 s ping / 20 s timeout — and the
+  `ping`/`pong` messages are marked reserved (§4.5). A frame over the size or
+  header cap, and a version mismatch, are now actually answered with the `error`
+  codes §4.6 defines (`too_large`, `proto_mismatch`); a version mismatch is
+  answered and dropped, the server additionally closes. Both decoders reject
+  `NaN`/`Infinity` (Python-only JSON extensions), a header over the cap is
+  `too_large` on both sides, and numeric validation is pinned by the
+  `decoder-boundary` console cases.

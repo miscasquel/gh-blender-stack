@@ -10,6 +10,70 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-10-17
+
+A hygiene patch: the add-on is extension-platform ready (online access,
+permissions, licence, packaging), the plugin's threading and key registry are
+made safe, and both codecs now agree on exactly what they accept.
+
+### Added
+
+- **Behavioural coverage for the plugin.** `GhStackLinkTests.exe` drives the
+  real `GhLink` against a scripted fake server — hello content, stage and
+  parameter publishing, slot bookkeeping, error answers, unowned-key pruning,
+  teardown — and runs with layer C. The solve half still needs Rhino.
+- **`unknown_stage` answers.** A request for a key no component owns is
+  answered with the protocol's error instead of being left to the timeout, and
+  the stage shows it.
+- **Instance counts.** The response header's `counts` now carries
+  `definitions` and `instances`, so a definition mismatch is visible without
+  decoding sections.
+
+### Fixed
+
+- **The plugin's thread-safety cluster.** `Stop()` actually stops the socket
+  thread and runs when the last component leaves; `slot.Params` is published as
+  a snapshot (the torn read is gone); the heartbeat timestamp and the
+  hello-per-connection flag are atomic; slots and stage parameters are bounded
+  to keys the document's components own, reconciled at solve end. A SubD crease
+  that cannot be mapped now warns, and every conversion warning carries a real
+  code instead of a blanket `"conversion"`.
+- **The decoders are total and symmetric.** The C# `Decode` no longer throws on
+  a numeric section `name`, a string, negative or overflowing `bytes`, a
+  non-array `sections`, or 1000-deep nesting; `NaN`/`Infinity` are rejected on
+  both sides (Python accepts them by default); a header over the cap is
+  `too_large` on both sides; the `v` boundary is pinned by console cases.
+  `proto_mismatch` and `too_large` are actually sent now — an error frame
+  precedes the drop — and `FormatDouble`'s claim matches its behaviour.
+- **Cache eviction is linear.** The index found the oldest entry with a scan
+  and re-summed the total per removal — quadratic in the structure every
+  response touches. A lazy heap and a running total replace it.
+- **Unnamed block definitions can no longer collide.** The graph-side fallback
+  name is a content identity (own sections, nested rows, recursive children),
+  so two different contents never share `GHStack <hash>`.
+- **An `int` parameter rounds like Python does** (banker's rounding, overflow
+  to the neutral value) in defaults and in the wire cast.
+- **The `log_level` preference works**: `Quiet` silences the `[gh-stack]`
+  console diagnostics, `Info` (the default) prints them; stage states stay in
+  the panel either way.
+
+### Changed
+
+- **Extension-platform hygiene.** The server is gated on Blender's Online
+  Access (the `network` permission contract) and says so in the panel when it
+  is off; the add-on no longer touches `sys.path` (the development install
+  places `websockets` on Blender's addons path instead); `files` and
+  `clipboard` permissions are declared; the licence and copyright read
+  GPL-3.0-or-later everywhere; `bl_info` is generated from the manifest by
+  `scripts/install-addon`, so the version has one owner; `build-extension`
+  pins the wheel's SHA-256, validates the built zip and refuses to ship
+  platform-specific files; a pinned `ruff.toml` defines the lint scope; and
+  the README's Requirements section explains what to do with Blender alone
+  (`tools/fake_gh`).
+- **Keepalive described as it is.** Protocol §2 documents the transport's 5 s
+  ping / 20 s timeout and marks the application-level `ping`/`pong` messages
+  reserved; §4.6's `proto_mismatch` row matches both sides' behaviour.
+
 ## [0.2.0] — 2026-10-17
 
 Fifth release: named attributes travel with the geometry both ways, Grasshopper

@@ -587,6 +587,7 @@ Facts this plan relies on, and how each was checked. Scratch scripts live in `/t
 - `stack.copy()` copies modifiers with the same UIDs and evaluates a prefix.
 - Hidden helpers and helpers in an excluded collection still resolve through Object Info (checked by vertex count).
 - Helpers, definitions and row clouds owned by a separate `GH Stage` scene still resolve through Object Info from the user's scene: evaluation, instance references, a Cycles render (lit pixels counted) and save/reload all checked (2026-10-17).
+- `sharp_face` and `UVMap` stay in the generic attribute path (measured 2026-10-17, 100k triangles): UVMap adds 1.61 MB per frame (1.61 → 3.22 MB) and ~0.9 ms (hash + encode + read: 8.2 → 9.1 ms against the 16 ms tick budget); `sharp_face` adds ~50 KB and ~0.02 ms. A triangulated 100k (301k loops) leaves ~2 ms tick headroom; the round-trip figure is extrapolated, not measured. Decision: keep both.
 - GN PLY import caches by path. Rewriting the same path leaves stale geometry.
 - Setting an object-typed modifier input from Python hung headless evaluation.
 - Blender ships Python 3.14.7 with numpy.

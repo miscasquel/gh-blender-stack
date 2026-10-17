@@ -26,6 +26,21 @@ hour, **M** ≈ half a day, **L** ≈ a day or more.
 `bl_info` version sync); `S8`/packaging touch P7-1 and P7-2. Do them in one pass
 so both documents close together.
 
+**Progress (0.2.1, 2026-10-17).** Phase 0 landed: `bpy.app.online_access` gates
+the server (with a panel notice), the `sys.path` fallback is gone (the dev
+install places `websockets` on Blender's addons path), `files`/`clipboard` are
+declared, the licence/copyright texts agree, and `bl_info` is generated from the
+manifest by `scripts/install-addon` (P8-4 retired — the version lives in the
+manifest, the plugin's hello string, the protocol example, the README and the
+CHANGELOG). `log_level` works, ruff is green under the pinned `ruff.toml`
+(classic `E4`/`E7`/`E9`/`F`; newer ruff defaults swept in style rules this tree
+does not follow), the wheel digest is pinned and verified, `build-extension`
+validates the built zip and refuses platform-specific files, and the README's
+Requirements section now answers "what does a reviewer with only Blender see"
+with the `fake_gh` path. S4/S6's remaining bits and the Phase 1 items (G7
+pre-ask, S1 floor, S2 tags, S9 data root, support URL, screenshots) are the
+upload batch.
+
 ---
 
 ## 0. Verdict

@@ -5,7 +5,7 @@ native Geometry Nodes modifiers, in one visible object per stack. Geometry and
 parameters can flow through the stack, so parameters can be keyframed, driven,
 and played back.
 
-That is the v1 goal. **v0.2.0 is a working demo**: geometry (meshes, curves,
+That is the v1 goal. **v0.2.1 is a working demo**: geometry (meshes, curves,
 points, SubD cages) driven by a real Grasshopper definition, with named
 attributes and Grasshopper blocks (instances) travelling both ways, parameters
 you can edit and keyframe in Blender, packaged as a Blender extension.
@@ -75,14 +75,27 @@ The authoritative roadmap and scope are in [docs/plan.md](docs/plan.md).
 
 ## Requirements
 
-Development and testing happen on one Linux machine; Rhino 8 and Grasshopper
-run under wine there.
+- Blender 5.2 (Python 3.14). The add-on declares the `network` permission — it
+  listens on localhost — so Blender's **Online Access** must be on
+  (Preferences > System); with it off the panel says so and nothing listens.
+- **Rhino 8 with Grasshopper** to run real definitions, under wine or Windows
+  (mac needs testing). Development and testing happen on one Linux machine; the
+  build scripts assume `~/.local/share/wine-rhino` and a `rhino8` wine prefix,
+  both overridable with the `WINE` and `WINEPREFIX` environment variables.
+  Mono's `csc.exe` (ships with wine) builds the plugin.
 
-- Blender 5.2 (Python 3.14).
-- Rhino 8 with Grasshopper under wine or windows (mac needs testing). The build scripts assume
-  `~/.local/share/wine-rhino` and a `rhino8` wine prefix; both are overridable
-  with the `WINE` and `WINEPREFIX` environment variables.
-- Mono's `csc.exe` (ships with wine) to build the plugin.
+The Grasshopper half is built from this same repository (`grasshopper/`,
+GPL-3.0-or-later), so no closed component is required. **Without Rhino** the
+Blender half still runs and is inspectable: install the add-on, add a stage,
+then answer the loop with the bundled stand-in —
+
+```
+python3 tools/fake_gh/fake_gh.py --stage <stage key from the panel>
+```
+
+It connects like the plugin, echoes the geometry back, and (with `--report`)
+writes what it received and sent to a JSON file. `scripts/test-blender` drives
+the same tool across the whole engine surface.
 
 ## Install
 
@@ -147,4 +160,4 @@ docs/
 
 ## Licence
 
-GPL-3.0. See [LICENSE](LICENSE).
+GPL-3.0-or-later. See [LICENSE](LICENSE).

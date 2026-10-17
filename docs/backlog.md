@@ -5,13 +5,14 @@ measured evidence behind the bigger items lives in `polish-plan.md`, which is a
 record of one review rather than a plan. If something is not here, it is either
 done or was judged not worth doing — it is not missing.
 
-**Next session:** the Blender-side instance graph rebuild is done — nested
-placements are true instances (one `Instance on Points` per distinct child,
-fed by per-definition placement clouds; `GROUP_FORMAT` 3; no repeat zone,
-which Blender 5.2 cannot use for recursion). `docs/handoff-2026-10-17-instancing.md`
-keeps the ask and the status; `docs/handoff-2026-10-17.md` carries the batch's
-state, the debug recipes and the open debts. The open work is the live
-verification of nesting in both directions, the instances debts, then W3/W4.
+**Next session:** 0.2.1 cleared the reliability and polish backlog and the
+compliance platform's Phase 0 (see `docs/extensions-compliance.md`). The next
+release is 0.3.0: **W3/W4** — the operators and persistence work in
+`docs/plan.md` §9.7/§9.8 (Pull, Recompute from here, Freeze, Preview, Key all,
+Clear keys, Purge orphans; the `frozen`/`unbound` states; undo-safe stage
+lifecycle and parameter-orphan handling) — then the S6 display half and S7 in
+the GUI, then the acceptance pass A1–A10. The portal upload is its own batch
+(compliance Phase 1, G7 pre-ask included) and is independent.
 
 Each item says what it is, where, and why it matters. Effort is not estimated:
 the last three batches each looked like an afternoon and were not.
@@ -20,70 +21,14 @@ the last three batches each looked like an afternoon and were not.
 
 ## Reliability
 
-### Blender engine — the one silence in the epoch design
-
-`engine._bump_epochs` takes its signal from `depsgraph_update_post`, so a change
-that never tags the depsgraph is **permanently** invisible rather than caught by
-a later pass: a script writing data directly is verified to tag nothing
-(`PointCloud.resize()` fires no event at all). The same shape is a **rebake
-finishing**, which is unverified. Either measure it and handle it, or write the
-accepted risk down next to `_bump_epochs` so nobody re-derives it.
-
-### Protocol and codec
-
-- **`Decode`'s contract is not total.** The `decoder-boundary` group in
-  `grasshopper/tests/console/Program.cs` pins the contract, and inputs remain
-  that break it (`grasshopper/src/core/Frame.cs`, `Json.cs`).
-- **`v` accepts a string, and `int` casting differs between C# and Python.**
-  `Frame.cs` vs `core/codec.py`: a protocol that means one thing on each side is
-  a bug waiting for a mixed-version pair.
-- **`FormatDouble`'s documented claim is false** (`Conversion.cs`).
-- **`too_large` and `proto_mismatch` are defined and never sent**
-  (`docs/protocol.md` §4). A codec that can only fail in one direction is half a
-  codec.
-- **Protocol §2 promises a 2 s ping and a 6 s `disconnected` verdict; nothing
-  sends either.** The transport keepalive is now explicit (5 s ping, 20 s
-  timeout) and covers liveness. Decide: implement the application-level ping, or
-  amend §2 and say what liveness is now.
-
-### Plugin (`.gha`)
-
-One wine build + deploy + Rhino restart covers a whole batch here, so these are
-worth doing together.
-
-- **`GhLink.Stop()` is dead and ineffective** — no caller, and it does not stop
-  the socket thread it names.
-- **`slot.Params` is read torn.** The dictionary is published in one assignment
-  under the lock, but the UI thread reads the field outside it.
-- **`_lastPublishAt` is not volatile, and the `publishedThisConnection` flag
-  races** with the sender thread's heartbeat.
-- **`Slots` and `StageParams` grow without bound** — `Slot()` creates an entry
-  for any key a frame names, including a key from another stack that no component
-  owns.
-- **A SubD crease that cannot be mapped is dropped silently**
-  (`Conversion.cs`). Silent loss is the tier this repository treats as
-  unforgivable.
-- **The plugin has no behavioural coverage beyond the attribute store.**
-  Layer C is the codec plus `GhStackAttrTests.exe`; the components and
-  `GhLink` are uncovered, so every fix above is verified by hand. One round-trip
-  test against the real `GhLink` (not the codec) would pay for itself in the
-  next batch.
-- **Error recovery when the client re-sends on its own.** The errored-stage path
-  is covered by a scene change; a GH-side fix arriving for the same `rid` is a
-  different way through the same code.
-
 ### Blender engine — smaller
 
-- **`NestedGroupPrefixTests.test_02` flaked once** (2026-10-17, during the
-  0.2.0 release verification): the edit inside the nested group did not reach
-  `fake_gh` within the 10 s pump, then passed in isolation and in two later
-  full runs. Either load-sensitive timing in the pump or a real memo miss
-  under load — capture the fake_gh report the next time it fires.
-- **`log_level` is a preference that does nothing.** Defined and drawn in
-  `prefs.py`, read by no code. Either implement it or remove it; a knob that
-  silently does nothing is worse than no knob.
-- **A duplicated lookup and an undefined literal** in `engine`/`nodes`
-  (`polish-plan.md` P4-6 has the details).
+- **`NestedGroupPrefixTests.test_02` flaked once** (2026-10-17, during the 0.2.0
+  release run): the edit inside the nested group did not reach `fake_gh` within
+  the 10 s pump. It passed in isolation and in every later full run, and its
+  failure message now carries the fake's report, the stage state and both rids,
+  so the next occurrence is diagnosable. Remove this item once a reason is found
+  or a release cycle passes without it.
 
 ---
 
@@ -102,9 +47,11 @@ Settled by evidence; the code that rests on them must not drift from them.
 - **Curve attributes are read-only** (the legacy Curve helper cannot store them;
   also in `docs/plan.md` §6, README and code). Revisit only if curves matter — it
   means changing the curve helper representation.
-- **`sharp_face`/`UVMap` travel as generic attributes now.** Measure the added
-  payload and time at 100k with UVs against the §13 budgets; if it bites, decide
-  whether to skip Blender's shading attributes.
+- **`sharp_face`/`UVMap` stay in the generic attribute path.** Measured
+  2026-10-17 at 100k triangles: UVMap adds 1.61 MB per frame and ~0.9 ms
+  (tick 9.1 ms of the 16 ms budget), `sharp_face` ~50 KB and ~0.02 ms; a
+  triangulated 100k leaves ~2 ms headroom. Both are real user data; keep them
+  (`docs/plan.md` §19).
 - **The prefix memo tolerates last-bit float noise in attribute payloads only**
   (`engine._same_prefix`, rtol 1e-5); an exact hash there reintroduces the
   churn. The CHANGELOG explains why; the code is the reference.
@@ -113,29 +60,11 @@ Settled by evidence; the code that rests on them must not drift from them.
 
 ## Polish
 
-- **Cache eviction is quadratic.** `core/cache.py::CacheIndex._evict` calls
-  `min()` over all entries and `total_size()` (another full scan) once per
-  removal. A heap or an ordered dict makes it linear; the frame cache is the one
-  structure every response touches.
-- **The C# conversion pass**, all of it cosmetic or warning-shaped:
-  every warning carries the code `"conversion"` even when nothing was converted;
-  the SubD crease warning fires when there are no creases; `counts["curves"]`
-  over-reports; the SubD cage is converted twice per solve; the point-scaling
-  loop is duplicated four times; `MeshSections` hardcodes `"mesh.colors"` while
-  parameterising the prefix; `Icons.Get` disposes the stream behind the returned
-  `Bitmap`; `Program.cs` dereferences unguarded; a hand-built `DecodedFrame` is
-  used as an adapter.
-- **Build and vendoring:** three build scripts duplicate the same boilerplate
-  (`grasshopper/build/*.sh`); the wheel and `vendor/websockets` are two copies of
-  the same library, and the vendored speedups build is undecided. `scripts/
-  build-extension` is the only one the release path enforces.
-- **`spikes/`** stays as evidence; its binaries do not belong in the index (the
-  tracked `probe_api.exe` was removed in this batch and is ignored).
-
----
-
-## Publishing
-
-`docs/extensions-compliance.md` holds the gaps (G1–G7) and an order of work. It
-is the gate for submitting to extensions.blender.org, and it is independent of
-everything above: G7 is an argument to write, not a patch to land.
+- **Build scripts share a strain of boilerplate.** `grasshopper/build/*.sh`
+  repeat the same wine/`csc.exe` setup; one shared helper would keep the wine
+  trap handling (match whichever wineserver owns the prefix) in one place.
+- **The vendored wheel.** `blender/gh_stack/vendor/websockets` is now
+  development- and test-only (the shipped zip carries the official wheel from
+  PyPI, digest-pinned in `scripts/build-extension`). The Linux-only speedups
+  build stays out of the repo on purpose; both facts are easy to re-derive from
+  the scripts.
