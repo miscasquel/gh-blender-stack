@@ -5,9 +5,10 @@ native Geometry Nodes modifiers, in one visible object per stack. Geometry and
 parameters can flow through the stack, so parameters can be keyframed, driven,
 and played back.
 
-That is the v1 goal. **v0.1.3 is a working demo**: geometry (meshes, curves,
-points, SubD cages) driven by a real Grasshopper definition, with parameters you
-can edit and keyframe in Blender, packaged as a Blender extension.
+That is the v1 goal. **v0.2.0 is a working demo**: geometry (meshes, curves,
+points, SubD cages) driven by a real Grasshopper definition, with named
+attributes and Grasshopper blocks (instances) travelling both ways, parameters
+you can edit and keyframe in Blender, packaged as a Blender extension.
 [DEMO.md](DEMO.md) walks through the loop.
 
 ```
@@ -40,6 +41,12 @@ Blender                                          Rhino / Grasshopper (wine)
   graph attached. **Attribute Get** and **Attribute Set** read and write them in
   Grasshopper. The active colour attribute and edge creases keep their native
   channels (vertex colours, SubD tags).
+- **Blocks (instances).** Blender's instanced geometry crosses as Grasshopper
+  block definitions and instances, built graph-side with no document write;
+  nested blocks work both ways. On the Blender side each definition is drawn
+  through `Instance on Points` — nested placements are true instances, one per
+  placement — and all of the helper data lives in a dedicated `GH Stage`
+  scene, so your own scene and outliner stay clean.
 - **Parameters.** `Param` components declare float, int, bool, vector3, colour,
   value list, and text parameters. Blender draws them in the N-panel with
   ranges, a value-list dropdown, keyframe decorators, and drivers.

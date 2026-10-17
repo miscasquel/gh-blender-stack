@@ -10,7 +10,11 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] — 2026-10-17
+
+Fifth release: named attributes travel with the geometry both ways, Grasshopper
+blocks cross as Blender instances and back — nested blocks included — and the
+helper data moves into a dedicated `GH Stage` scene so the outliner stays yours.
 
 ### Added
 
@@ -418,3 +422,4 @@ First public release: a working demo of the Blender ↔ Grasshopper loop.
 [0.1.1]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.1.1
 [0.1.2]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.1.2
 [0.1.3]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.1.3
+[0.2.0]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.2.0

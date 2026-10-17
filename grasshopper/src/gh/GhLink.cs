@@ -569,7 +569,7 @@ namespace GhStack
                 // Keep in sync with blender_manifest.toml (the release path
                 // enforces that one), bl_info in gh_stack/__init__.py and the
                 // example in docs/protocol.md. N6: six places, two checked.
-                hello["client"] = "GhStack 0.1.3";
+                hello["client"] = "GhStack 0.2.0";
                 hello["doc"] = _lastDocName;
                 hello["doc_units"] = UnitsName();
                 hello["stages"] = list;
