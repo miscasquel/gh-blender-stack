@@ -565,5 +565,141 @@ class EnginePrefixTests(unittest.TestCase):
         self.assertEqual(len(definitions), 1)
 
 
+class EngineUpdateTests(unittest.TestCase):
+    """A geometry edit the prefix reads must ship a new full frame with the new
+    definition. The depsgraph handler cannot fire under ``-b``, so these tests
+    bump the epoch keys it would name (its exact behavior in a session) and
+    capture what the engine would send.
+
+    Regression for the live report "updating the instance geometry does not
+    update the blocks": instancing a *collection* left its members out of the
+    reference list, so editing one never moved the revision."""
+
+    def setUp(self):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        bpy.ops.preferences.addon_enable(module="gh_stack")
+        from blender.gh_stack.blender import bridge, server
+
+        self.server = server
+        self.bridge = bridge
+        self._original_send = server.SERVER.send
+        self._original_connected = bridge.state.get("connected", False)
+        self.frames = []
+        server.SERVER.send = lambda frame: self.frames.append(frame) or True
+        bridge.state["connected"] = True
+
+    def tearDown(self):
+        self.server.SERVER.send = self._original_send
+        self.bridge.state["connected"] = self._original_connected
+
+    def _capture(self, obj, record, stage):
+        from blender.gh_stack.blender import engine
+        from blender.gh_stack.core import codec
+
+        engine._process_stage(obj, record, stage)
+        header, sections = codec.decode_frame(self.frames[-1])
+        return header, sections
+
+    @staticmethod
+    def _edit(owner, object_name):
+        from blender.gh_stack.blender import engine
+
+        owner.data.vertices[0].co.x += 0.5
+        owner.data.update()
+        for key in (("Mesh", owner.data.name), ("Object", object_name)):
+            engine._epochs[key] = engine._epochs.get(key, 0) + 1
+
+    def _collection_scene(self):
+        from blender.gh_stack.blender import stack as stack_mod
+
+        member = _quad("update-member")
+        collection = bpy.data.collections.new("update-coll")
+        bpy.context.scene.collection.children.link(collection)
+        collection.objects.link(member)
+        points = _points("update-points", [(0, 0, 0), (1, 0, 0)])
+        holder = _quad("update-holder")
+
+        group = bpy.data.node_groups.new("update-IoP", "GeometryNodeTree")
+        group.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+        output = group.nodes.new("NodeGroupOutput")
+        iono = group.nodes.new("GeometryNodeInstanceOnPoints")
+        cinfo = group.nodes.new("GeometryNodeCollectionInfo")
+        cinfo.inputs["Collection"].default_value = collection
+        cinfo.inputs["Separate Children"].default_value = False
+        cinfo.inputs["Reset Children"].default_value = False
+        pinfo = group.nodes.new("GeometryNodeObjectInfo")
+        pinfo.inputs["Object"].default_value = points
+        pinfo.transform_space = "ORIGINAL"
+        group.links.new(cinfo.outputs["Instances"], iono.inputs["Instance"])
+        group.links.new(pinfo.outputs["Geometry"], iono.inputs["Points"])
+        group.links.new(iono.outputs["Instances"], output.inputs["Geometry"])
+
+        modifier = holder.modifiers.new("GN", "NODES")
+        modifier.node_group = group
+        bpy.context.view_layer.objects.active = holder
+        holder.modifiers.active = modifier
+        bpy.ops.gh_stack.add_stage(label="Update")
+        stage = holder.gh_stack.stages[-1]
+        return holder, member, stage, stack_mod.stack_of(holder)
+
+    def test_a_collection_members_edit_ships_a_new_definition(self):
+        from blender.gh_stack.blender import engine
+
+        holder, member, stage, record = self._collection_scene()
+        header, sections = self._capture(holder, record, stage)
+        self.assertEqual((header.get("geom") or {}).get("mode"), "full")
+        self.assertEqual(header.get("definitions"), [{"name": "update-coll"}])
+        before = np.asarray(sections["idef.0.mesh.verts"], dtype=np.float32)
+
+        self._edit(member, "update-member")
+        engine._pending_of(record.stack_id, stage.key).clear()
+        header, sections = self._capture(holder, record, stage)
+
+        self.assertEqual((header.get("geom") or {}).get("mode"), "full")
+        after = np.asarray(sections["idef.0.mesh.verts"], dtype=np.float32)
+        self.assertFalse(np.array_equal(before, after))
+
+    def test_an_object_sources_edit_ships_a_new_definition(self):
+        from blender.gh_stack.blender import engine
+
+        source = _quad("update-source")
+        points = _points("update-opoints", [(0, 0, 0), (1, 0, 0)])
+        holder = _quad("update-oholder")
+        group = bpy.data.node_groups.new("update-oIoP", "GeometryNodeTree")
+        group.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+        output = group.nodes.new("NodeGroupOutput")
+        iono = group.nodes.new("GeometryNodeInstanceOnPoints")
+        src = group.nodes.new("GeometryNodeObjectInfo")
+        src.inputs["Object"].default_value = source
+        src.transform_space = "ORIGINAL"
+        pinfo = group.nodes.new("GeometryNodeObjectInfo")
+        pinfo.inputs["Object"].default_value = points
+        pinfo.transform_space = "ORIGINAL"
+        group.links.new(src.outputs["Geometry"], iono.inputs["Instance"])
+        group.links.new(pinfo.outputs["Geometry"], iono.inputs["Points"])
+        group.links.new(iono.outputs["Instances"], output.inputs["Geometry"])
+        modifier = holder.modifiers.new("GN", "NODES")
+        modifier.node_group = group
+        bpy.context.view_layer.objects.active = holder
+        holder.modifiers.active = modifier
+        bpy.ops.gh_stack.add_stage(label="UpdateO")
+        stage = holder.gh_stack.stages[-1]
+        from blender.gh_stack.blender import stack as stack_mod
+
+        record = stack_mod.stack_of(holder)
+
+        header, sections = self._capture(holder, record, stage)
+        self.assertEqual(header.get("definitions"), [{"name": "update-source"}])
+        before = np.asarray(sections["idef.0.mesh.verts"], dtype=np.float32)
+
+        self._edit(source, "update-source")
+        engine._pending_of(record.stack_id, stage.key).clear()
+        header, sections = self._capture(holder, record, stage)
+
+        self.assertEqual((header.get("geom") or {}).get("mode"), "full")
+        after = np.asarray(sections["idef.0.mesh.verts"], dtype=np.float32)
+        self.assertFalse(np.array_equal(before, after))
+
+
 if __name__ == "__main__":
     unittest.main()

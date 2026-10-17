@@ -1328,18 +1328,33 @@ def _node_tree_references(tree, found, visited):
     return found
 
 
-def _add_reference(found, value):
-    """One referenced datablock, plus an object's data with it.
+def _add_reference(found, value, visited=None):
+    """One referenced datablock, plus everything whose change alters what it
+    contributes: an object's data, and a collection's members (an instanced
+    collection *is* its objects — editing one of them must move the revision).
 
-    An object and its mesh are separate entries in the update list, and either
-    can be the one Blender names, so both are consulted.
+    ``visited`` guards the recursion: a collection can nest another, and an
+    object can name a collection (object-level instancing), so a walk without
+    it would not terminate on a cycle.
     """
     if not isinstance(value, bpy.types.ID):
         return
-    found.add(_id_key(value))
+    if visited is None:
+        visited = set()
+    key = _id_key(value)
+    if key in visited:
+        return
+    visited.add(key)
+    found.add(key)
     data = getattr(value, "data", None)
     if isinstance(data, bpy.types.ID):
-        found.add(_id_key(data))
+        _add_reference(found, data, visited)
+    if isinstance(value, bpy.types.Collection):
+        for member in value.all_objects:
+            _add_reference(found, member, visited)
+    instance_collection = getattr(value, "instance_collection", None)
+    if isinstance(instance_collection, bpy.types.ID):
+        _add_reference(found, instance_collection, visited)
 
 
 def _id_key(id_block):
