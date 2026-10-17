@@ -51,8 +51,12 @@ Notable changes to this project, following
   definition geometry from the paired definition (or the document, for a
   reference that names one). On the Blender side each definition becomes a
   hidden prototype collection instanced through `Instance on Points`, driven by
-  a per-definition point cloud carrying position, rotation and scale; a shear
-  the point-cloud channel cannot carry is applied lossily and logged.
+  a per-definition point cloud carrying position, rotation and scale; nested
+  placements instance the child's prototype chain at the parent's placement
+  points, so a child placed at many nested rows costs one instance per
+  placement, never baked copies, and moving a placement updates the drawing
+  without rebuilding the graph. A shear the point-cloud channel cannot carry is
+  applied lossily and logged.
 - **Spike S9** (`spikes/s9/`): the user-dictionary and block checks that the
   attributes and instances designs rest on, run inside Rhino through the spike
   `.gha` (`check=s9`). **All rounds passed 2026-10-16** (`spikes/results/s9.txt`):

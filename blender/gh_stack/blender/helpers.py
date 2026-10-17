@@ -9,8 +9,9 @@ A SubD cage is a mesh, so it shares the mesh helper.
 
 Instance definitions (§5.2) are the same idea one level up: each definition is
 a small hidden collection holding its own per-kind helpers, read by the stage's
-node group through Collection Info, and each definition's rows are a hidden
-point cloud (position/rotation/scale) fed into Instance on Points.
+node group through Object Info, and each definition's rows are hidden point
+clouds (position/rotation/scale) fed into Instance on Points: one cloud for the
+definition's top-level rows, and one for the placements nested inside it.
 """
 
 import bpy
@@ -76,8 +77,14 @@ def definition_name(stack_obj, stage_key, index, kind="mesh"):
 
 
 def instance_name(stack_obj, stage_key, index):
-    """The row point cloud of one definition."""
+    """The top-level row point cloud of one definition."""
     return "%s%s.%s.inst%d" % (HELPER_PREFIX, stack_obj.name, stage_key, index)
+
+
+def nested_name(stack_obj, stage_key, index):
+    """The nested placement point cloud of one definition: the placements of
+    child definitions inside it (``idef.<i>.inst.*``)."""
+    return "%s%s.%s.nest%d" % (HELPER_PREFIX, stack_obj.name, stage_key, index)
 
 
 def ensure_definition(stack_obj, stage_key, index):
@@ -112,15 +119,34 @@ def ensure_definition(stack_obj, stage_key, index):
 
 
 def ensure_instance_cloud(stack_obj, stage_key, index):
-    """The row point cloud of one definition: one point per instance row, with
-    ``rotation`` and ``scale`` attributes the node group reads by name."""
-    name = instance_name(stack_obj, stage_key, index)
+    """The top-level row point cloud of one definition: one point per instance
+    row, with ``rotation`` and ``scale`` attributes the node group reads by
+    name."""
+    return _ensure_cloud(instance_name(stack_obj, stage_key, index))
+
+
+def ensure_nested_cloud(stack_obj, stage_key, index):
+    """The nested placement cloud of one definition: one point per placement of
+    a child definition inside it, with the same transforms as a top-level cloud
+    plus an INT ``child`` attribute naming the child each point places."""
+    return _ensure_cloud(nested_name(stack_obj, stage_key, index))
+
+
+def _ensure_cloud(name):
     cloud = bpy.data.objects.get(name)
     if cloud is None:
         cloud = bpy.data.objects.new(name, bpy.data.pointclouds.new(name))
         collection().objects.link(cloud)
     _hide(cloud)
     return cloud
+
+
+def remove_cloud(cloud):
+    """Remove a row point cloud object and its data when orphaned."""
+    data = cloud.data
+    bpy.data.objects.remove(cloud, do_unlink=True)
+    if data is not None and data.users == 0:
+        bpy.data.pointclouds.remove(data)
 
 
 def definition_collections(stack_obj, stage_key):
@@ -137,8 +163,16 @@ def definition_collections(stack_obj, stage_key):
 
 
 def instance_clouds(stack_obj, stage_key):
-    """Every row cloud this stage owns, keyed by index."""
-    prefix = instance_name(stack_obj, stage_key, 0)[:-1]
+    """Every top-level row cloud this stage owns, keyed by index."""
+    return _clouds(instance_name(stack_obj, stage_key, 0)[:-1])
+
+
+def nested_clouds(stack_obj, stage_key):
+    """Every nested placement cloud this stage owns, keyed by index."""
+    return _clouds(nested_name(stack_obj, stage_key, 0)[:-1])
+
+
+def _clouds(prefix):
     found = {}
     for obj in bpy.data.objects:
         if not obj.name.startswith(prefix) or obj.type != "POINTCLOUD":
@@ -165,12 +199,12 @@ def remove_definition(stack_obj, stage_key, index):
         # count never reaches zero, and remove() unlinks it as it goes.
         bpy.data.collections.remove(coll)
 
-    cloud = bpy.data.objects.get(instance_name(stack_obj, stage_key, index))
-    if cloud is not None:
-        data = cloud.data
-        bpy.data.objects.remove(cloud, do_unlink=True)
-        if data is not None and data.users == 0:
-            bpy.data.pointclouds.remove(data)
+    for cloud in (
+        bpy.data.objects.get(instance_name(stack_obj, stage_key, index)),
+        bpy.data.objects.get(nested_name(stack_obj, stage_key, index)),
+    ):
+        if cloud is not None:
+            remove_cloud(cloud)
 
 
 def remove_helper(stack_obj, stage_key):

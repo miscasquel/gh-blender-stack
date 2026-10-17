@@ -507,8 +507,9 @@ def _apply(obj, stage, sections, attributes=None):
     Instance definitions (protocol §5.2) are the same rule one level up: each
     `idef.<i>.*` group fills definition i's prototype collection (created on
     first sight, removed when the response stops carrying it), the top-level
-    `inst.*` rows fill each definition's row cloud, and a definition's own rows
-    become nested placement empties inside its collection.
+    `inst.*` rows fill each definition's row cloud, and a definition's own
+    `idef.<i>.inst.*` rows fill its nested placement cloud, which the node
+    group instances from.
     """
     base = {"mesh": [], "curves": [], "points": []}
     definitions = {}
@@ -635,12 +636,12 @@ def _rows_of(sections, prefix):
 
 
 def _apply_instance_rows(obj, stage, definitions, top_rows, nested_rows):
-    """The row pairs: each definition's top-level rows fill its row cloud
-    (position/rotation/scale, read by the node group). A definition's own rows
-    are nested placements; the node group bakes them into the parent's
-    prototype chain (see nodes.ensure_group)."""
-    import mathutils
-
+    """The row pairs: each definition's top-level rows fill its row cloud, and
+    its own rows fill its nested placement cloud (position/rotation/scale, read
+    by the node group). Both are the same channel; nested clouds carry the row
+    target as an INT ``child`` attribute, which the group's per-child instance
+    selections compare against. Nothing bakes: the node group instances the
+    child's prototype chain at these points (see nodes.ensure_group)."""
     # Legacy leftovers: earlier builds represented a nested placement as an
     # Empty with a collection instance; the node graph carries them now, so any
     # such object is removed on sight.
@@ -665,53 +666,78 @@ def _apply_instance_rows(obj, stage, definitions, top_rows, nested_rows):
     # Top-level rows: one cloud per definition, or none when it has no rows.
     clouds = {}
     for target, matrix in top_rows:
-        clouds.setdefault(target, []).append(matrix)
-    for index in sorted(definitions):
-        matrices = clouds.get(index, [])
-        existing = helpers.instance_clouds(obj, stage.key).get(index)
-        if not matrices:
-            if existing is not None:
-                data = existing.data
-                bpy.data.objects.remove(existing, do_unlink=True)
-                if data is not None and data.users == 0:
-                    bpy.data.pointclouds.remove(data)
-            continue
-        cloud = helpers.ensure_instance_cloud(obj, stage.key, index)
-        data = cloud.data
-        n = len(matrices)
-        if len(data.points) != n:
-            data.resize(n)
-        positions = np.empty(n * 3, dtype=np.float32)
-        rotation = data.attributes.get("rotation")
-        if rotation is None:
-            rotation = data.attributes.new("rotation", "QUATERNION", "POINT")
-        scale = data.attributes.get("scale")
-        if scale is None:
-            scale = data.attributes.new("scale", "FLOAT_VECTOR", "POINT")
-        warned_shear = False
-        for row, matrix in enumerate(matrices):
-            local = helpers.matrix_of(matrix)
-            position = local.to_translation()
-            positions[row * 3:row * 3 + 3] = position
-            quaternion = local.to_quaternion()
-            scale_value = local.to_scale()
-            rotation.data[row].value = quaternion
-            scale.data[row].vector = scale_value
-            if not warned_shear and not helpers.decomposes_cleanly(
-                local, position, quaternion, scale_value
-            ):
-                # A shear (or a non-uniform basis Blender cannot rebuild from
-                # position/rotation/scale) is the one shape the point-cloud
-                # channel cannot carry; the transform is applied lossily.
-                print(
-                    "[gh-stack] %s: instance transform %d has shear; "
-                    "Blender can only carry position, rotation and scale" % (stage.key, row),
-                    flush=True,
-                )
-                warned_shear = True
-        data.points.foreach_set("co", positions)
-        data.points.update()
-        cloud.update_tag()
+        clouds.setdefault(target, []).append((target, matrix))
+    for index, existing in sorted(helpers.instance_clouds(obj, stage.key).items()):
+        if not clouds.get(index):
+            helpers.remove_cloud(existing)
+    for index, rows in sorted(clouds.items()):
+        if rows:
+            _write_rows_cloud(
+                helpers.ensure_instance_cloud(obj, stage.key, index), rows, stage.key
+            )
+
+    # Nested placements: one cloud per definition that nests something, or
+    # none when its own rows are gone.
+    for index, existing in sorted(helpers.nested_clouds(obj, stage.key).items()):
+        if not nested_rows.get(index):
+            helpers.remove_cloud(existing)
+    for index, rows in sorted(nested_rows.items()):
+        if rows:
+            _write_rows_cloud(
+                helpers.ensure_nested_cloud(obj, stage.key, index),
+                rows,
+                stage.key,
+                with_child=True,
+            )
+
+
+def _write_rows_cloud(cloud, rows, stage_key, with_child=False):
+    """One row cloud's data: a point per ``(target, matrix)`` row with
+    ``rotation`` / ``scale`` attributes the node group reads by name. A nested
+    cloud also carries the target definition index per point, so one
+    Instance-on-Points per child can select its own placements."""
+    data = cloud.data
+    n = len(rows)
+    if len(data.points) != n:
+        data.resize(n)
+    positions = np.empty(n * 3, dtype=np.float32)
+    rotation = data.attributes.get("rotation")
+    if rotation is None:
+        rotation = data.attributes.new("rotation", "QUATERNION", "POINT")
+    scale = data.attributes.get("scale")
+    if scale is None:
+        scale = data.attributes.new("scale", "FLOAT_VECTOR", "POINT")
+    child = None
+    if with_child:
+        child = data.attributes.get("child")
+        if child is None:
+            child = data.attributes.new("child", "INT", "POINT")
+    warned_shear = False
+    for row, (target, matrix) in enumerate(rows):
+        local = helpers.matrix_of(matrix)
+        position = local.to_translation()
+        positions[row * 3:row * 3 + 3] = position
+        quaternion = local.to_quaternion()
+        scale_value = local.to_scale()
+        rotation.data[row].value = quaternion
+        scale.data[row].vector = scale_value
+        if child is not None:
+            child.data[row].value = int(target)
+        if not warned_shear and not helpers.decomposes_cleanly(
+            local, position, quaternion, scale_value
+        ):
+            # A shear (or a non-uniform basis Blender cannot rebuild from
+            # position/rotation/scale) is the one shape the point-cloud
+            # channel cannot carry; the transform is applied lossily.
+            print(
+                "[gh-stack] %s: instance transform %d has shear; "
+                "Blender can only carry position, rotation and scale" % (stage_key, row),
+                flush=True,
+            )
+            warned_shear = True
+    data.points.foreach_set("co", positions)
+    data.points.update()
+    cloud.update_tag()
 
 
 def _apply_attributes(obj, stage, sections, attributes):
