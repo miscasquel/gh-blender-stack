@@ -107,7 +107,7 @@ Portal (`Portal.Gh` 0.5.2 and the patched Portal.blender 0.3.0) stays installed 
 | Stack object | Yes | Base geometry, native modifiers, `gh_stack_id` (uuid), stage records (key, label, state, current request ID, applied output hash, last error, timings, frozen flag), and the parameter custom props. |
 | GH stage modifier | Yes, in the modifier panel | Geometry Nodes modifier built from the "GH Stage" template. Named by its label, e.g. `GH · Panelize`. |
 | Stage node group | No | One per stage, owned by that modifier. Named `GHS <key>`. Custom props: `gh_stage_key`, `gh_stack_id`. Nodes: one Object Info per geometry type → Join Geometry → Group Output. The group input is ignored. |
-| Helpers | No | Hidden objects in the excluded collection `GH Stage Data`. Created on first use, one per geometry type per stage (mesh, curves, points). Identity transform, data in stack-local space. Named `GHS <stack>.<key>.<kind>`. |
+| Helpers | No | Hidden objects in `GH Stage Data`, owned by the dedicated **GH Stage** scene (never linked into the user's scene, so the outliner stays theirs). Created on first use, one per geometry type per stage (mesh, curves, points). Identity transform, data in stack-local space. Named `GHS <stack>.<key>.<kind>`. |
 | Parameters | Yes, on the stack object | Custom props `gh/<stage_key>/<param_id>` with UI ranges and defaults. |
 | Cache | Disk and memory | Content-addressed responses, keyed by request ID. |
 
@@ -386,7 +386,7 @@ blender/gh_stack/
     stack.py                     prefix evaluation on clones
     geometry_io.py               numpy in and out, in-place writes
     nodes.py                     templates, ownership, Join and Object Info wiring
-    helpers.py                   helper objects and the GH Stage Data collection
+    helpers.py                   helper objects, definitions, row clouds (GH Stage scene)
     props.py                     parameter custom props and UI ranges
     engine.py                    tick loop, states, triggers, guard, frame cache
     ops.py, ui.py, prefs.py
@@ -586,6 +586,7 @@ Facts this plan relies on, and how each was checked. Scratch scripts live in `/t
 - Modifier `persistent_uid` is stable across reorder and new on duplicate. A duplicate shares its node group.
 - `stack.copy()` copies modifiers with the same UIDs and evaluates a prefix.
 - Hidden helpers and helpers in an excluded collection still resolve through Object Info (checked by vertex count).
+- Helpers, definitions and row clouds owned by a separate `GH Stage` scene still resolve through Object Info from the user's scene: evaluation, instance references, a Cycles render (lit pixels counted) and save/reload all checked (2026-10-17).
 - GN PLY import caches by path. Rewriting the same path leaves stale geometry.
 - Setting an object-typed modifier input from Python hung headless evaluation.
 - Blender ships Python 3.14.7 with numpy.

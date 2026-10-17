@@ -66,7 +66,11 @@ but it is not a true instance hierarchy and scales with copies × child size.
   excluded collections are not evaluated, and Collection Info reads them
   empty. Instances that reference a *datablock* are not drawn while that
   datablock is viewport-hidden — prototype geometry is read through
-  `Object Info` (copies), which is exactly why the current chains draw.
+  `Object Info` (copies), which is exactly why the current chains draw, and
+  why datablocks in *another scene* resolve too: the plumbing (helpers,
+  definitions, row clouds) is owned by the dedicated `GH Stage` scene since
+  the decluttering pass, verified through evaluation, a Cycles render and
+  save/reload.
 - The group carries `gh_stack_format` and `gh_stack_nested` stamps;
   `_group_matches` requires both, and both same-hash paths call `ensure_group`
   so a stale group repairs itself. **Bump `nodes.GROUP_FORMAT` whenever the
