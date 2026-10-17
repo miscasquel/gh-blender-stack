@@ -43,6 +43,21 @@ namespace GhStack
                     else ignored.Add(goo.TypeName);
                     continue;
                 }
+                // A block instance can also arrive wrapped (the Model Object
+                // route): the goo cast is what unwraps it. Tried before the
+                // geometry casts, or the wrapper would flatten to a mesh.
+                Grasshopper.Rhinoceros.Model.ModelObject modelObject =
+                    goo as Grasshopper.Rhinoceros.Model.ModelObject;
+                if (modelObject != null)
+                {
+                    GH_InstanceReference wrapped;
+                    if (modelObject.CastTo<GH_InstanceReference>(out wrapped) && wrapped != null)
+                    {
+                        if (instances != null) instances.Add(wrapped);
+                        else ignored.Add(goo.TypeName);
+                        continue;
+                    }
+                }
 
                 // GH_Surface derives from GH_Brep, so surfaces land here too.
                 GH_Brep brepGoo = goo as GH_Brep;

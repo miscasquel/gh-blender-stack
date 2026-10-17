@@ -20,6 +20,12 @@ from . import helpers
 
 GROUP_PREFIX = "GHS "
 MODIFIER_PREFIX = "GH · "
+# The node group's format. Stamped on every group the builder writes, and
+# required by _group_matches: a group from an older build (no stamp, no nested
+# chain) is stale even when the object set matches, which is what lets a
+# same-hash frame repair a session that has not applied since the format
+# changed.
+GROUP_FORMAT = 2
 
 
 def group_name(stage_key):
@@ -155,6 +161,7 @@ def ensure_group(stack_obj, stage_key, nested_rows=None):
 
     group.links.new(join.outputs["Geometry"], output.inputs["Geometry"])
     group["gh_stack_nested"] = signature
+    group["gh_stack_format"] = GROUP_FORMAT
     return group
 
 
@@ -180,13 +187,34 @@ def _definitions(stack_obj, stage_key):
     return definitions
 
 
-def _group_matches(group, helpers_map, definitions, signature=""):
-    """Whether the group already reads exactly this set of objects and the
-    same nested structure."""
+def _reachable(definitions, nested_rows):
+    """The definitions the builder actually wires: those with a row cloud, plus
+    everything their nested placements reference, transitively. A definition no
+    row reaches gets no chain, so it must not be expected in the group either
+    (otherwise every apply would see a mismatch and rebuild)."""
+    reachable = set()
+    stack = [index for index, (_objects, cloud) in definitions.items() if cloud is not None]
+    while stack:
+        index = stack.pop()
+        if index in reachable or index not in definitions:
+            continue
+        reachable.add(index)
+        for target, _matrix in (nested_rows or {}).get(index, []):
+            if target not in reachable:
+                stack.append(target)
+    return reachable
+
+
+def _group_matches(group, helpers_map, definitions, signature="", nested_rows=None):
+    """Whether the group already reads exactly this set of objects, the same
+    nested structure, and the current format."""
+    if group.get("gh_stack_format") != GROUP_FORMAT:
+        return False
     if group.get("gh_stack_nested") != signature:
         return False
     expected = set(helpers_map.values())
-    for objects, cloud in definitions.values():
+    for index in _reachable(definitions, nested_rows):
+        objects, cloud = definitions[index]
         expected.update(objects.values())
         if cloud is not None:
             expected.add(cloud)

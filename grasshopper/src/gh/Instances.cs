@@ -382,8 +382,19 @@ namespace GhStack
                     RhinoDoc document = RhinoDoc.ActiveDoc;
                     if (document != null && document.InstanceDefinitions.Find(referenceId, true) != null)
                         return DefinitionFromDocument(referenceId);
+                    // A document block the id names is gone (deleted, another
+                    // document): an empty table entry would be a phantom block,
+                    // so the row is skipped loudly instead.
+                    _warnings.Add(
+                        "An instance reference to a document block (" + referenceId.ToString("N")
+                        + ") could not be resolved; the row was skipped");
+                    return -1;
                 }
-
+                if (paired == null || paired.Objects == null || paired.Objects.Count == 0)
+                {
+                    _warnings.Add("An instance reference without a definition was skipped");
+                    return -1;
+                }
                 return WriteDefinition(paired, Key(paired, referenceId));
             }
 

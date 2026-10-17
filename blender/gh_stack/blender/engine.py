@@ -61,6 +61,8 @@ _epochs = {}
 # stored either way, so nothing evaluated is wasted.
 _pending = {}
 _dirty = set()  # object names that need a pass
+_waiting_objects = set()  # object names with a request in flight (stall retry)
+_last_stall_check = 0.0
 _registered = False
 # Monotonic deadline until which the engine runs at the fast cadence; see
 # HOT_INTERVAL. Advanced by every edit, response and frame change.
@@ -178,6 +180,7 @@ def _timer():
     try:
         stats["passes"] += 1
         _handle_incoming()
+        _nudge_stalled_waits()
         busy = False
         for name in list(_dirty):
             obj = bpy.data.objects.get(name)
@@ -204,6 +207,43 @@ def _timer():
 
         print("[gh-stack] engine error:\n%s" % traceback.format_exc(), flush=True)
         return IDLE_INTERVAL
+
+
+def _nudge_stalled_waits():
+    """Mark a stack object dirty when one of its stages has waited past the
+    timeout, so the retry path in `_process_stage` runs without the user
+    touching anything.
+
+    The timeout itself lives in the per-stage pass, which only runs for dirty
+    objects; a lost answer (a disconnect, a dropped frame) dirties nothing, so
+    a waiting stage could sit invisible until the next edit. Checked at most
+    once a second.
+    """
+    global _last_stall_check
+    now = time.monotonic()
+    if now - _last_stall_check < 1.0:
+        return
+    _last_stall_check = now
+    for name in list(_waiting_objects):
+        obj = bpy.data.objects.get(name)
+        if obj is None:
+            _waiting_objects.discard(name)
+            continue
+        record = stack_mod.stack_of(obj)
+        if record is None or not record.stages:
+            _waiting_objects.discard(name)
+            continue
+        waiting = False
+        for stage in record.stages:
+            pending = _pending.get((record.stack_id, stage.key))
+            if not pending:
+                continue
+            waiting = True
+            if now - min(pending.values()) > _timeout():
+                _dirty.add(name)
+                _mark_hot()
+        if not waiting:
+            _waiting_objects.discard(name)
 
 
 def _handle_incoming():
@@ -357,6 +397,12 @@ def _handle_response(header, sections):
             stats["applies"] += 1
             _set(stage, "applied_out_hash", out_hash)
             applied = True
+        if rid == stage.rid and not applied:
+            # The displayed answer is already this one, but the node group may
+            # predate the current format (a group written by an older build, or
+            # a session that has not applied since nesting landed). Rebuilding
+            # is cheap and is the only way a same-hash frame can repair it.
+            nodes.ensure_group(obj, stage.key, _nested_rows_of(sections))
         if not applied and not was_pending:
             # Nothing to apply and nothing was being waited for: the answer is
             # stored under its own rid, which is what makes a later pass over that
@@ -484,19 +530,22 @@ def _apply(obj, stage, sections, attributes=None):
             base[bucket].append((name, values))
 
     top_rows = _rows_of(sections, "")
-    nested_scopes = {}
-    for name in sections:
-        index, rest = _definition_split(name)
-        if index is not None and rest.startswith("inst."):
-            nested_scopes.setdefault(index, None)
-    keep = set(definitions) | set(nested_scopes)
+    nested_rows = _nested_rows_of(sections)
+    keep = set(definitions) | set(nested_rows)
     for index, _matrix in top_rows:
         keep.add(index)
-    nested_rows = {}
-    for index in nested_scopes:
-        nested_rows[index] = _rows_of(sections, "idef.%d." % index)
+    for index in sorted(nested_rows):
         for target, _matrix in nested_rows[index]:
-            keep.add(target)
+            if target in definitions or target in nested_rows:
+                keep.add(target)
+            else:
+                # The response names a nested placement whose definition group
+                # is absent: keep it visible instead of building an empty block.
+                print(
+                    "[gh-stack] %s: block %d nests definition %d, which the response does not carry"
+                    % (stage.key, index, target),
+                    flush=True,
+                )
     for index in keep:
         definitions.setdefault(index, {"mesh": [], "curves": [], "points": []})
 
@@ -533,6 +582,19 @@ def _definition_split(name):
     return int(parts[1]), parts[2]
 
 
+def _nested_rows_of(sections):
+    """Every definition's nested placements, ``{index: [(target, matrix)]}``.
+
+    One source of truth for the apply path and for the same-hash repair path
+    (a frame already applied still has to be able to rebuild the node group)."""
+    scopes = {}
+    for name in sections:
+        index, rest = _definition_split(name)
+        if index is not None and rest.startswith("inst."):
+            scopes.setdefault(index, None)
+    return {index: _rows_of(sections, "idef.%d." % index) for index in scopes}
+
+
 def _kind_of(name):
     if name.startswith("mesh.") or name.startswith("subd."):
         return "mesh"
@@ -546,16 +608,28 @@ def _kind_of(name):
 def _rows_of(sections, prefix):
     """The decoded row pairs of one scope as ``[(definition index, matrix 4x4)]``.
 
-    Both halves are all-or-nothing (protocol §5.2); a mismatched pair keeps the
-    shorter side rather than failing the whole response.
+    Both halves are all-or-nothing (protocol §5.2). A missing or mismatched
+    pair is reported rather than silently degraded: a truncated pair used to
+    keep the shorter side and leave no trace.
     """
     refs = sections.get(prefix + "inst.ref_def")
     mats = sections.get(prefix + "inst.transforms")
     if refs is None and mats is None:
         return []
     if refs is None or mats is None or len(mats) < 16:
+        print(
+            "[gh-stack] %sinst.* rows are incomplete (ref_def=%s, transforms=%s); skipped"
+            % (prefix, refs is not None, mats is not None),
+            flush=True,
+        )
         return []
     matrices = np.asarray(mats, dtype=np.float32).reshape(-1, 16)
+    if len(refs) != len(matrices):
+        print(
+            "[gh-stack] %sinst.* row pair lengths differ (%d rows vs %d matrices); the shorter side is used"
+            % (prefix, len(refs), len(matrices)),
+            flush=True,
+        )
     count = min(len(refs), len(matrices))
     return [(int(refs[row]), matrices[row]) for row in range(count)]
 
@@ -962,6 +1036,10 @@ def _process_stage(obj, record, stage):
             _set(stage, "state", stack_mod.STATE_OK)
             _set(stage, "error", "")
             return "busy"
+        # The cached frame is the displayed one, but the group may predate the
+        # current format: repairing it here is what lets a replay fix a stale
+        # session (see _handle_response).
+        nodes.ensure_group(obj, stage.key, _nested_rows_of(cached_sections))
         _set(stage, "state", stack_mod.STATE_OK)
         return "idle"
 
@@ -1030,6 +1108,7 @@ def _process_stage(obj, record, stage):
 
     now = time.monotonic()
     _pending_of(record.stack_id, stage.key)[rid] = now
+    _waiting_objects.add(obj.name)
     _state_since[(record.stack_id, stage.key)] = now
     _set(stage, "rid", rid)
     _set(stage, "geom_hash", geom_hash)

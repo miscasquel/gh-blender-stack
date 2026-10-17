@@ -612,9 +612,10 @@ class InstanceApplyTests(unittest.TestCase):
         group = bpy.data.node_groups[nodes.group_name(stage.key)]
         helpers_map = helpers.ensure_helpers(obj, stage.key)
         definitions = nodes._definitions(obj, stage.key)
+        nested = engine._nested_rows_of(sections)
         signature = group["gh_stack_nested"]
-        self.assertTrue(nodes._group_matches(group, helpers_map, definitions, signature))
-        self.assertFalse(nodes._group_matches(group, helpers_map, definitions, "changed"))
+        self.assertTrue(nodes._group_matches(group, helpers_map, definitions, signature, nested))
+        self.assertFalse(nodes._group_matches(group, helpers_map, definitions, "changed", nested))
 
         # Move the nested placement: the structure signature changes, so the
         # next apply rebuilds the chain instead of keeping the old transform.
@@ -628,6 +629,51 @@ class InstanceApplyTests(unittest.TestCase):
             self.assertEqual(zs, [5.0, 5.0, 5.0, 5.0])
         finally:
             evaluated.to_mesh_clear()
+
+    def test_a_group_without_the_format_stamp_is_rebuilt(self):
+        # A group written by an older build has no format stamp (and no nested
+        # chain): a same-hash frame must still be able to repair it, so the
+        # stamp is part of the match.
+        from blender.gh_stack.blender import engine, helpers, nodes
+
+        obj, stage = self._stage()
+        sections = dict(self._quad_sections("idef.0."))
+        sections["idef.1.inst.ref_def"] = np.array([0], dtype=np.uint32)
+        sections["idef.1.inst.transforms"] = self._wire_transform((0, 0, 3))
+        sections["inst.ref_def"] = np.array([1], dtype=np.uint32)
+        sections["inst.transforms"] = self._wire_transform((0, 0, 0))
+        engine._apply(obj, stage, sections, None)
+
+        group = bpy.data.node_groups[nodes.group_name(stage.key)]
+        helpers_map = helpers.ensure_helpers(obj, stage.key)
+        definitions = nodes._definitions(obj, stage.key)
+        nested = engine._nested_rows_of(sections)
+
+        group["gh_stack_format"] = 1  # what an older build left behind
+        self.assertFalse(nodes._group_matches(group, helpers_map, definitions,
+                                              group["gh_stack_nested"], nested))
+        nodes.ensure_group(obj, stage.key, nested)
+        self.assertEqual(group["gh_stack_format"], nodes.GROUP_FORMAT)
+        self.assertTrue(nodes._group_matches(group, helpers_map, definitions,
+                                             group["gh_stack_nested"], nested))
+
+    def test_an_orphan_definition_is_not_expected_in_the_group(self):
+        # A definition no row reaches gets no chain; expecting its objects would
+        # make every apply see a mismatch and rebuild forever.
+        from blender.gh_stack.blender import engine, helpers, nodes
+
+        obj, stage = self._stage()
+        sections = dict(self._quad_sections("idef.0."))
+        sections["inst.ref_def"] = np.array([0], dtype=np.uint32)
+        sections["inst.transforms"] = self._wire_transform((0, 0, 0))
+        engine._apply(obj, stage, sections, None)
+
+        group = bpy.data.node_groups[nodes.group_name(stage.key)]
+        helpers_map = helpers.ensure_helpers(obj, stage.key)
+        definitions = nodes._definitions(obj, stage.key)
+        definitions[99] = definitions[0]  # a definition with no row anywhere
+        self.assertTrue(nodes._group_matches(group, helpers_map, definitions,
+                                             group["gh_stack_nested"], {}))
 
     def test_apply_combined_base_and_blocks(self):
         # The live shape: base mesh + definition geometry + a definition-marked
@@ -910,6 +956,27 @@ class EngineUpdateTests(unittest.TestCase):
         self.assertEqual((header.get("geom") or {}).get("mode"), "full")
         after = np.asarray(sections["idef.1.mesh.verts"], dtype=np.float32)
         self.assertFalse(np.array_equal(before, after))
+
+    def test_a_lost_answer_is_retried_without_an_edit(self):
+        # The timeout lives in the per-stage pass, which runs only for dirty
+        # objects; a lost answer (a disconnect) dirties nothing, so the timer
+        # nudges a stage that has waited past the timeout.
+        import time
+
+        from blender.gh_stack.blender import engine
+
+        holder, member, stage, record = self._collection_scene()
+        self._capture(holder, record, stage)
+        self.assertIn(holder.name, engine._waiting_objects)
+
+        pending = engine._pending_of(record.stack_id, stage.key)
+        self.assertTrue(pending)
+        for rid in list(pending):
+            pending[rid] = time.monotonic() - 1000.0
+        engine._dirty.clear()
+        engine._last_stall_check = 0.0
+        engine._nudge_stalled_waits()
+        self.assertIn(holder.name, engine._dirty)
 
     def test_an_object_sources_edit_ships_a_new_definition(self):
         from blender.gh_stack.blender import engine
