@@ -47,10 +47,10 @@ namespace GhStack
 
             if (frame.Find("subd.verts") != null)
             {
-                var notes = new List<string>();
+                var notes = new List<WireWarning>();
                 SubD subd = Conversion.SubDFromSections(frame, scale, notes);
-                foreach (string line in notes)
-                    if (note != null) note(line);
+                foreach (WireWarning warning in notes)
+                    if (note != null) note(warning.Message);
                 if (subd != null)
                 {
                     AttributeStore.Attach(subd, "subd", attributes, frame.Sections);

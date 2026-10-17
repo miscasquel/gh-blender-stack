@@ -22,6 +22,36 @@ using Rhino.Geometry;
 
 namespace GhStack.Core
 {
+    /// <summary>One conversion loss or approximation (protocol §4.4): the
+    /// documented code plus the human-readable message. The channel keeps this
+    /// shape rather than bare strings so a response header carries the
+    /// per-cause code the fixture pins (`curve_approximated`), not one blanket
+    /// "conversion" (P6-9). The text-only overloads of the conversion entry
+    /// points stay for callers that just print a line.</summary>
+    public sealed class WireWarning
+    {
+        public readonly string Code;
+        public readonly string Message;
+
+        public WireWarning(string code, string message)
+        {
+            Code = code;
+            Message = message;
+        }
+    }
+
+    /// <summary>The warning codes the converter emits (protocol §4.4).</summary>
+    public static class WarningCodes
+    {
+        public const string CurveApproximated = "curve_approximated";
+        public const string CurveDeviation = "curve_deviation";
+        public const string CurveSampled = "curve_sampled";
+        public const string SubdCreases = "subd_creases";
+        public const string SubdJoined = "subd_joined";
+        public const string BrepMeshed = "brep_meshed";
+        public const string InstanceSkipped = "instance_skipped";
+    }
+
     public static class Conversion
     {
         // ------------------------------------------------------- sections -> mesh
@@ -34,6 +64,21 @@ namespace GhStack.Core
             Section verts = frame.Find(prefix + "mesh.verts") ?? frame.Find(prefix + "subd.verts");
             Section counts = frame.Find(prefix + "mesh.face_counts") ?? frame.Find(prefix + "subd.face_counts");
             Section indices = frame.Find(prefix + "mesh.face_indices") ?? frame.Find(prefix + "subd.face_indices");
+            return BuildMesh(verts, counts, indices, frame.Find(prefix + "mesh.colors"), scale);
+        }
+
+        /// <summary>The cage of a subd.* group, never falling back to mesh.*:
+        /// a frame may carry both groups, and the SubD's crease pairs index
+        /// its own cage, not the mesh beside it.</summary>
+        private static Mesh SubdCageFromSections(DecodedFrame frame, double scale)
+        {
+            return BuildMesh(frame.Find("subd.verts"), frame.Find("subd.face_counts"),
+                             frame.Find("subd.face_indices"), null, scale);
+        }
+
+        private static Mesh BuildMesh(Section verts, Section counts, Section indices,
+                                      Section colors, double scale)
+        {
             if (verts == null || counts == null || indices == null) return null;
 
             var mesh = new Mesh();
@@ -44,15 +89,12 @@ namespace GhStack.Core
             // loop is deliberate. S3 measures what this actually costs.
             for (int i = 0; i < positions.Length; i += 3)
             {
-                mesh.Vertices.Add(
-                    (float)(positions[i] * scale),
-                    (float)(positions[i + 1] * scale),
-                    (float)(positions[i + 2] * scale));
+                Point3d point = FromWire(positions[i], positions[i + 1], positions[i + 2], scale);
+                mesh.Vertices.Add((float)point.X, (float)point.Y, (float)point.Z);
             }
 
             AddFaces(mesh, counts.ToU32(), indices.ToU32());
 
-            Section colors = frame.Find(prefix + "mesh.colors");
             if (colors != null) SetMeshColors(mesh, colors);
 
             mesh.Normals.ComputeNormals();
@@ -132,11 +174,7 @@ namespace GhStack.Core
             Point3f[] points = mesh.Vertices.ToPoint3fArray();
             var positions = new float[points.Length * 3];
             for (int i = 0; i < points.Length; i++)
-            {
-                positions[i * 3] = (float)(points[i].X / scale);
-                positions[i * 3 + 1] = (float)(points[i].Y / scale);
-                positions[i * 3 + 2] = (float)(points[i].Z / scale);
-            }
+                WriteWire(positions, i * 3, new Point3d(points[i]), scale);
             sections.Add(Section.Floats(prefix + ".verts", positions));
 
             var counts = new List<uint>();
@@ -175,7 +213,7 @@ namespace GhStack.Core
                     rgba[i * 4 + 2] = c.B;
                     rgba[i * 4 + 3] = c.A;
                 }
-                sections.Add(Section.Bytes("mesh.colors", rgba));
+                sections.Add(Section.Bytes(prefix + ".colors", rgba));
             }
 
             return sections;
@@ -208,7 +246,7 @@ namespace GhStack.Core
         /// cubic Beziers inside the deviation budget, and only those are counted as
         /// approximated (D3).</summary>
         public static List<Section> SectionsFromCurves(
-            IList<Curve> curves, double scale, List<string> warnings, out int approximated)
+            IList<Curve> curves, double scale, List<WireWarning> warnings, out int approximated)
         {
             approximated = 0;
             var pts = new List<float>();
@@ -280,16 +318,19 @@ namespace GhStack.Core
 
             if (approximated > 0)
             {
-                warnings.Add(approximated + " curve(s) approximated as cubic Bezier spans");
+                warnings.Add(new WireWarning(WarningCodes.CurveApproximated,
+                    approximated + " curve(s) approximated as cubic Bezier spans"));
             }
             if (maxDeviation > DeviationBudgetMeters * Math.Abs(scale))
             {
-                warnings.Add("Curve approximation deviation "
+                warnings.Add(new WireWarning(WarningCodes.CurveDeviation,
+                    "Curve approximation deviation "
                     + (maxDeviation / Math.Abs(scale) * 1000.0).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)
-                    + " mm exceeds the 0.1 mm budget");
+                    + " mm exceeds the 0.1 mm budget"));
             }
             if (sampled > 0)
-                warnings.Add(sampled + " curve(s) sampled to polylines; no exact representation was available");
+                warnings.Add(new WireWarning(WarningCodes.CurveSampled,
+                    sampled + " curve(s) sampled to polylines; no exact representation was available"));
 
             var sections = new List<Section>();
             if (counts.Count == 0) return sections;
@@ -467,7 +508,7 @@ namespace GhStack.Core
                 for (int k = 0; k < n; k++)
                 {
                     int baseIndex = (at + k) * 4;
-                    ps.Add(new Point3d(raw[baseIndex] * scale, raw[baseIndex + 1] * scale, raw[baseIndex + 2] * scale));
+                    ps.Add(FromWire(raw[baseIndex], raw[baseIndex + 1], raw[baseIndex + 2], scale));
                     double w = raw[baseIndex + 3];
                     ws.Add(w == 0 ? 1.0 : w);
                 }
@@ -581,6 +622,24 @@ namespace GhStack.Core
             return values != null && index < values.Length ? values[index] : fallback;
         }
 
+        // ------------------------------------------------------ point scaling
+
+        /// <summary>The wire's metres into document units. One place for the
+        /// multiply: the four converted loops this replaces had drifted apart
+        /// copies, which is exactly where a units bug hides (P6-14).</summary>
+        private static Point3d FromWire(double x, double y, double z, double scale)
+        {
+            return new Point3d(x * scale, y * scale, z * scale);
+        }
+
+        /// <summary>Document units onto the wire's metres, the inverse.</summary>
+        private static void WriteWire(float[] target, int offset, Point3d point, double scale)
+        {
+            target[offset] = (float)(point.X / scale);
+            target[offset + 1] = (float)(point.Y / scale);
+            target[offset + 2] = (float)(point.Z / scale);
+        }
+
         // --------------------------------------------------------------- points
 
         /// <summary>Points from pts.* sections.</summary>
@@ -591,7 +650,7 @@ namespace GhStack.Core
             if (positions == null) return result;
             float[] f = positions.ToFloats();
             for (int i = 0; i + 2 < f.Length; i += 3)
-                result.Add(new Point3d(f[i] * scale, f[i + 1] * scale, f[i + 2] * scale));
+                result.Add(FromWire(f[i], f[i + 1], f[i + 2], scale));
             return result;
         }
 
@@ -612,7 +671,7 @@ namespace GhStack.Core
             var cloud = new PointCloud();
             for (int i = 0; i < n; i++)
             {
-                var point = new Point3d(f[i * 3] * scale, f[i * 3 + 1] * scale, f[i * 3 + 2] * scale);
+                Point3d point = FromWire(f[i * 3], f[i * 3 + 1], f[i * 3 + 2], scale);
                 if (rgba != null && rgba.Length >= (i + 1) * 4)
                     cloud.Add(point, Color.FromArgb(rgba[i * 4 + 3], rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]));
                 else
@@ -628,11 +687,7 @@ namespace GhStack.Core
             if (points.Count == 0) return sections;
             var positions = new float[points.Count * 3];
             for (int i = 0; i < points.Count; i++)
-            {
-                positions[i * 3] = (float)(points[i].X / scale);
-                positions[i * 3 + 1] = (float)(points[i].Y / scale);
-                positions[i * 3 + 2] = (float)(points[i].Z / scale);
-            }
+                WriteWire(positions, i * 3, points[i], scale);
             sections.Add(Section.Floats("pts.positions", positions));
             return sections;
         }
@@ -642,9 +697,9 @@ namespace GhStack.Core
         /// <summary>Build a SubD from subd.* sections and apply the crease tags.
         /// Blender sends fractional crease values; they are rounded to the nearest
         /// tag and the count of affected edges is warned (D2).</summary>
-        public static SubD SubDFromSections(DecodedFrame frame, double scale, List<string> warnings)
+        public static SubD SubDFromSections(DecodedFrame frame, double scale, List<WireWarning> warnings)
         {
-            Mesh cage = MeshFromSections(frame, scale);
+            Mesh cage = SubdCageFromSections(frame, scale);
             if (cage == null || cage.Vertices.Count == 0) return null;
             SubD subd = SubD.CreateFromMesh(cage);
             if (subd == null) return null;
@@ -666,13 +721,22 @@ namespace GhStack.Core
 
             int fractional = 0;
             int changed = 0;
+            int unmatched = 0;
             for (int i = 0; i + 1 < pairs.Length; i += 2)
             {
                 float v = (i / 2) < vals.Length ? vals[i / 2] : 0f;
                 if (Math.Abs(v) > 1e-6 && Math.Abs(v - 1f) > 1e-6) fractional++;
                 SubDEdgeTag tag = v >= 0.5f ? SubDEdgeTag.Crease : SubDEdgeTag.Smooth;
                 SubDEdge edge;
-                if (!byPair.TryGetValue(PairKey((int)pairs[i], (int)pairs[i + 1]), out edge)) continue;
+                if (!byPair.TryGetValue(PairKey((int)pairs[i], (int)pairs[i + 1]), out edge))
+                {
+                    // A crease with no edge on the cage is a loss, and this
+                    // repository does not drop losses silently (principle 6):
+                    // the vertex order of a SubD cage is not stable across a
+                    // round trip, so this is the visible half of that.
+                    unmatched++;
+                    continue;
+                }
                 if (edge.Tag != tag)
                 {
                     edge.Tag = tag;
@@ -680,15 +744,19 @@ namespace GhStack.Core
                 }
             }
             if (fractional > 0)
-                warnings.Add(fractional + " fractional crease value(s) rounded to the nearest tag; "
-                    + changed + " edge(s) changed");
+                warnings.Add(new WireWarning(WarningCodes.SubdCreases,
+                    fractional + " fractional crease value(s) rounded to the nearest tag; "
+                    + changed + " edge(s) changed"));
+            if (unmatched > 0)
+                warnings.Add(new WireWarning(WarningCodes.SubdCreases,
+                    unmatched + " crease edge(s) had no matching cage edge and were dropped"));
             return subd;
         }
 
         /// <summary>Encode a SubD as its control cage plus crease tags (D2).
         /// Boundary edges of an open cage read Crease by default, so only tagged
         /// creases are sent.</summary>
-        public static List<Section> SectionsFromSubD(SubD subd, double scale, List<string> warnings)
+        public static List<Section> SectionsFromSubD(SubD subd, double scale, List<WireWarning> warnings)
         {
             Mesh cage = Mesh.CreateFromSubDControlNet(subd);
             var sections = MeshSections(cage, scale, "subd", false);
@@ -709,9 +777,12 @@ namespace GhStack.Core
             {
                 sections.Add(Section.U32("subd.crease_edges", creaseEdges.ToArray()));
                 sections.Add(Section.Floats("subd.crease_values", creaseValues.ToArray()));
+                // The warning is about what was sent: a cage with no tagged
+                // creases has nothing to lose, and warning anyway made every
+                // SubD stage read as lossy (P6-10).
+                warnings.Add(new WireWarning(WarningCodes.SubdCreases,
+                    "Creases transferred as tags; semi-sharp and vertex creases are not available from RhinoCommon"));
             }
-
-            warnings.Add("Creases transferred as tags; semi-sharp and vertex creases are not available from RhinoCommon");
             return sections;
         }
 
@@ -729,27 +800,24 @@ namespace GhStack.Core
         /// joined. counts feeds the response header.</summary>
         public static List<Section> SectionsFromGeometry(
             IList<Mesh> meshes, IList<Curve> curves, IList<Point3d> points, IList<SubD> subds,
-            IList<Brep> breps, double scale, List<string> warnings, out Dictionary<string, object> counts)
+            IList<Brep> breps, double scale, List<WireWarning> warnings, out Dictionary<string, object> counts)
         {
             var sections = new List<Section>();
             var allMeshes = new List<Mesh>();
             foreach (Mesh m in meshes)
                 if (m != null && m.Vertices.Count > 0) allMeshes.Add(m);
 
-            int meshedBreps = 0;
             foreach (Brep b in breps)
             {
                 if (b == null) continue;
                 Mesh[] ms = Mesh.CreateFromBrep(b, MeshingParameters.Default);
                 if (ms == null) continue;
                 foreach (Mesh m in ms)
-                {
                     if (m != null && m.Vertices.Count > 0) allMeshes.Add(m);
-                    meshedBreps++;
-                }
             }
             if (breps.Count > 0)
-                warnings.Add(breps.Count + " surface(s)/Brep(s) converted to mesh; Blender has no B-rep");
+                warnings.Add(new WireWarning(WarningCodes.BrepMeshed,
+                    breps.Count + " surface(s)/Brep(s) converted to mesh; Blender has no B-rep"));
 
             int meshCount = 0;
             if (allMeshes.Count > 0)
@@ -773,7 +841,8 @@ namespace GhStack.Core
                 {
                     SubD[] joined = SubD.JoinSubDs(subds, RhinoMath.ZeroTolerance, false);
                     if (joined != null && joined.Length == 1) subd = joined[0];
-                    else warnings.Add("Several SubDs arrived; only the first was sent");
+                    else warnings.Add(new WireWarning(WarningCodes.SubdJoined,
+                        "Several SubDs arrived; only the first was sent"));
                 }
                 sections.AddRange(SectionsFromSubD(subd, scale, warnings));
                 subdCount = 1;
@@ -789,10 +858,21 @@ namespace GhStack.Core
             counts = new Dictionary<string, object>();
             counts["meshes"] = (long)meshCount;
             counts["subd"] = (long)subdCount;
-            counts["curves"] = (long)curves.Count;
+            counts["curves"] = (long)EmittedCurveCount(sections);
             counts["points"] = (long)points.Count;
             counts["approximated_curves"] = (long)approximated;
             return sections;
+        }
+
+        /// <summary>Curves actually written, not the input goo count:
+        /// SectionsFromCurves drops null curves and curves that defeat every
+        /// representation, and the header's counts describe the frame (P6-11).
+        /// The fixture's `counts.curves` is the emitted count.</summary>
+        private static int EmittedCurveCount(List<Section> sections)
+        {
+            foreach (Section s in sections)
+                if (s.Name == "crv.counts") return s.ElementCount;
+            return 0;
         }
 
         // ----------------------------------------------------------- instances
@@ -831,6 +911,60 @@ namespace GhStack.Core
             foreach (Section s in sections)
                 result.Add(new Section(prefix + s.Name, s.Dtype, s.Raw));
             return result;
+        }
+
+        // ------------------------------------------------- text-only warnings
+
+        // The S6/S9 spike checks compile against these overloads and only ever
+        // print a warning line, so they keep the plain-string view. The plugin
+        // uses the WireWarning overloads above, which is the one that carries
+        // the protocol §4.4 code.
+
+        /// <summary>Text-only view of SectionsFromCurves' warnings.</summary>
+        public static List<Section> SectionsFromCurves(
+            IList<Curve> curves, double scale, List<string> warnings, out int approximated)
+        {
+            var rich = new List<WireWarning>();
+            List<Section> sections = SectionsFromCurves(curves, scale, rich, out approximated);
+            CopyMessages(rich, warnings);
+            return sections;
+        }
+
+        /// <summary>Text-only view of SubDFromSections' warnings.</summary>
+        public static SubD SubDFromSections(DecodedFrame frame, double scale, List<string> warnings)
+        {
+            var rich = new List<WireWarning>();
+            SubD subd = SubDFromSections(frame, scale, rich);
+            CopyMessages(rich, warnings);
+            return subd;
+        }
+
+        /// <summary>Text-only view of SectionsFromSubD's warnings.</summary>
+        public static List<Section> SectionsFromSubD(SubD subd, double scale, List<string> warnings)
+        {
+            var rich = new List<WireWarning>();
+            List<Section> sections = SectionsFromSubD(subd, scale, rich);
+            CopyMessages(rich, warnings);
+            return sections;
+        }
+
+        /// <summary>Text-only view of SectionsFromGeometry's warnings.</summary>
+        public static List<Section> SectionsFromGeometry(
+            IList<Mesh> meshes, IList<Curve> curves, IList<Point3d> points, IList<SubD> subds,
+            IList<Brep> breps, double scale, List<string> warnings, out Dictionary<string, object> counts)
+        {
+            var rich = new List<WireWarning>();
+            List<Section> sections = SectionsFromGeometry(
+                meshes, curves, points, subds, breps, scale, rich, out counts);
+            CopyMessages(rich, warnings);
+            return sections;
+        }
+
+        private static void CopyMessages(List<WireWarning> source, List<string> target)
+        {
+            if (target == null) return;
+            foreach (WireWarning warning in source)
+                target.Add(warning.Message);
         }
     }
 }

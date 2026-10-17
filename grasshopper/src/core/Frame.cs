@@ -100,6 +100,15 @@ namespace GhStack.Core
             Sections = sections;
         }
 
+        /// <summary>An in-memory frame (a StageSlot's held state) shaped like a
+        /// decoded one, so the section converters can be reused without going
+        /// back through the wire. The header may be partial: converters look up
+        /// only the keys they need.</summary>
+        public static DecodedFrame FromSections(Dictionary<string, object> header, List<Section> sections)
+        {
+            return new DecodedFrame(header ?? new Dictionary<string, object>(), sections);
+        }
+
         public Section Find(string name)
         {
             foreach (Section s in Sections)
@@ -186,9 +195,12 @@ namespace GhStack.Core
         {
             if (frame == null) throw new FrameException("bad_frame", "null frame");
             if (frame.Length < 4) throw new FrameException("bad_frame", "no header length");
+            if (frame.Length > MaxMessageBytes)
+                throw new FrameException("too_large",
+                    "frame is " + frame.Length + " bytes, over the " + MaxMessageBytes + " cap");
             long headLen = ReadU32(frame, 0);
             if (headLen > MaxHeaderBytes)
-                throw new FrameException("bad_frame", "header length " + headLen + " over the cap");
+                throw new FrameException("too_large", "header length " + headLen + " over the cap");
             if (frame.Length < 4 + headLen)
                 throw new FrameException("bad_frame", "header is truncated");
 
@@ -221,6 +233,8 @@ namespace GhStack.Core
             var sections = new List<Section>();
             long offset = 4 + headLen;
             object tableObj = Json.Get(header, "sections");
+            if (tableObj != null && !(tableObj is List<object>))
+                throw new FrameException("bad_frame", "sections is not an array");
             var table = tableObj as List<object>;
             if (table != null)
             {
@@ -232,15 +246,29 @@ namespace GhStack.Core
                     // Validate before the values are used: a missing name makes
                     // the section unmatchable (`Find` compares names), and an
                     // unknown dtype is a frame Python rejects (codec.py:88).
-                    string name = Json.GetString(entry, "name");
+                    // The reads are typed: Json.GetString/GetLong would throw
+                    // InvalidCastException or FormatException for a number
+                    // where a string belongs (or a string where a number
+                    // belongs), which is not the classified failure the decoder
+                    // contract promises (P2-1).
+                    string name = Json.Get(entry, "name") as string;
                     if (string.IsNullOrEmpty(name))
                         throw new FrameException("bad_frame", "section entry without a name");
-                    string dtype = Json.GetString(entry, "dtype");
+                    string dtype = Json.Get(entry, "dtype") as string;
                     if (dtype != "f32" && dtype != "i32" && dtype != "u32" && dtype != "u8")
                         throw new FrameException("bad_frame",
                             "section " + name + " has unknown dtype " + (dtype ?? "(missing)"));
-                    long nbytes = Json.GetLong(entry, "bytes");
-                    if (offset + nbytes > frame.Length)
+                    object bytesObj = Json.Get(entry, "bytes");
+                    long nbytes;
+                    if (bytesObj is long) nbytes = (long)bytesObj;
+                    else if (bytesObj is int) nbytes = (int)bytesObj;
+                    else throw new FrameException("bad_frame",
+                        "section " + name + " bytes is not an integer");
+                    // Compare against the remainder, not offset + nbytes: a
+                    // huge declared length would overflow the sum and slip
+                    // through to an array allocation. A negative length can
+                    // never fit either.
+                    if (nbytes < 0 || nbytes > frame.Length - offset)
                         throw new FrameException("bad_frame", "section " + name + " runs past the payload");
                     var raw = new byte[nbytes];
                     Buffer.BlockCopy(frame, (int)offset, raw, 0, (int)nbytes);

@@ -44,7 +44,8 @@ echo "built $OUT ($(stat -c%s "$OUT") bytes)"
 # ArchivableDictionary runs without a Rhino process, but the types must be
 # present). They build only where the Rhino install is; the codec tests above
 # need nothing from Rhino.
-RC_DLL="${RHINO:-$PREFIX/drive_c/Program Files/Rhino 8}/System/RhinoCommon.dll"
+RHINO_DIR="${RHINO:-$PREFIX/drive_c/Program Files/Rhino 8}"
+RC_DLL="$RHINO_DIR/System/RhinoCommon.dll"
 ATTR_OUT="$OUT_DIR/GhStackAttrTests.exe"
 if [ -f "$RC_DLL" ]; then
   cp -f "$RC_DLL" "$OUT_DIR/"
@@ -63,4 +64,31 @@ if [ -f "$RC_DLL" ]; then
   echo "built $ATTR_OUT ($(stat -c%s "$ATTR_OUT") bytes)"
 else
   echo "note: no RhinoCommon.dll under the prefix; attribute tests not built" >&2
+fi
+
+# The link round trip drives the real GhLink over a fake WebSocket server. It
+# needs Grasshopper.dll (GH_Component is a Grasshopper type) and RhinoCommon,
+# but no Rhino process: an unattached component's OnPingDocument() returns
+# null, so the solve trigger is exercised as a note.
+GH_DLL="$RHINO_DIR/Plug-ins/Grasshopper/Grasshopper.dll"
+GHIO_DLL="$RHINO_DIR/Plug-ins/Grasshopper/GH_IO.dll"
+LINK_OUT="$OUT_DIR/GhStackLinkTests.exe"
+if [ -f "$GH_DLL" ] && [ -f "$GHIO_DLL" ] && [ -f "$RC_DLL" ]; then
+  cp -f "$RC_DLL" "$GH_DLL" "$GHIO_DLL" "$OUT_DIR/"
+  rm -f "$LINK_OUT"
+  WINEPREFIX="$PREFIX" "$WINE" "$CSC" \
+    /nologo /target:exe \
+    /out:"$(win_path "$LINK_OUT")" \
+    /r:"$(win_path "$GH_DLL")" /r:"$(win_path "$GHIO_DLL")" /r:"$(win_path "$RC_DLL")" \
+    /r:System.Drawing.dll \
+    "$(win_path "$REPO/grasshopper/src/core/Json.cs")" \
+    "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/GhLink.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/MiniWsClient.cs")" \
+    "$(win_path "$REPO/grasshopper/tests/console/LinkTests.cs")" \
+    2>&1 | grep -vE 'fixme:|MESA-EGL|pci id|^$' || true
+  [ -f "$LINK_OUT" ] || { echo "build failed: $LINK_OUT not produced" >&2; exit 1; }
+  echo "built $LINK_OUT ($(stat -c%s "$LINK_OUT") bytes)"
+else
+  echo "note: no Grasshopper/RhinoCommon under the prefix; link tests not built" >&2
 fi

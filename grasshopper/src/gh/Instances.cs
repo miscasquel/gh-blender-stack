@@ -176,7 +176,6 @@ namespace GhStack
                 {
                     string prefix = "idef." + index + ".";
                     var objects = new List<ModelObject>();
-                    var childNames = new List<string>();
 
                     Mesh mesh = Conversion.MeshFromSections(_frame, _scale, prefix);
                     if (mesh != null && mesh.Vertices.Count > 0)
@@ -205,7 +204,6 @@ namespace GhStack
                                 ReferenceId(nested[row]), nestedTransforms[row]));
                             nestedGoo.InstanceDefinition = child;
                             if (!AddObject(objects, nestedGoo, "nested block")) continue;
-                            childNames.Add(ChildName(child));
                         }
                     }
 
@@ -219,7 +217,7 @@ namespace GhStack
                     var definitionAttributes = new ModelInstanceDefinition.Attributes();
                     definitionAttributes.Objects = objects;
                     definitionAttributes.Name = string.IsNullOrEmpty(from)
-                        ? DefinitionPrefix + ContentHash(prefix, childNames)
+                        ? DefinitionPrefix + ContentHash(index)
                         : from;
                     var definition = new ModelInstanceDefinition(definitionAttributes);
                     if (!definition.IsValid)
@@ -249,55 +247,70 @@ namespace GhStack
                 return true;
             }
 
-            /// <summary>A child definition's name as a string, for the fallback
-            /// content hash.</summary>
-            private static string ChildName(ModelInstanceDefinition definition)
-            {
-                object rawName = definition.Name;
-                if (rawName != null)
-                {
-                    string name = rawName.ToString();
-                    if (!string.IsNullOrEmpty(name)) return name;
-                }
-                return definition.DisplayName ?? "";
-            }
-
             /// <summary>A stable fallback name for an unnamed definition: the
             /// sections in protocol order, then one entry per nested row (the
-            /// child's name and its transform), so equal content shares a name
-            /// and a rename alone is a real change.</summary>
-            private string ContentHash(string prefix, List<string> childNames)
+            /// child's table name, its transform, and the child's own recursive
+            /// content), so equal content shares a name and any real change —
+            /// a rename, a moved row, a child's geometry — is a new name.
+            /// Hashing only the child's resolved name let two different nested
+            /// contents share `GHStack &lt;hash&gt;` (2026-10-17 handoff, item
+            /// (a)).</summary>
+            private string ContentHash(long index)
             {
-                var byName = new Dictionary<string, Section>();
-                foreach (Section section in _frame.Sections)
-                    if (section.Name.StartsWith(prefix, StringComparison.Ordinal))
-                        byName[section.Name.Substring(prefix.Length)] = section;
+                string cached;
+                if (_contentHashes.TryGetValue(index, out cached)) return cached;
+                // A malformed frame can nest a definition inside itself; the
+                // recursion is cut rather than allowed to run out the stack.
+                if (!_hashing.Add(index)) return "cycle";
 
-                long[] nested;
-                List<Transform> nestedTransforms;
-                ReadRows(_frame, prefix, out nested, out nestedTransforms);
-
-                using (var sha = SHA256.Create())
+                try
                 {
-                    foreach (string name in FrameCodec.OrderedNames(byName.Keys))
-                        Update(sha, name, byName[name].Raw);
-                    if (nested != null)
+                    string prefix = "idef." + index + ".";
+                    var byName = new Dictionary<string, Section>();
+                    foreach (Section section in _frame.Sections)
+                        if (section.Name.StartsWith(prefix, StringComparison.Ordinal))
+                            byName[section.Name.Substring(prefix.Length)] = section;
+
+                    long[] nested;
+                    List<Transform> nestedTransforms;
+                    ReadRows(_frame, prefix, out nested, out nestedTransforms);
+
+                    string hash;
+                    using (var sha = SHA256.Create())
                     {
-                        for (int i = 0; i < nested.Length && i < childNames.Count; i++)
+                        foreach (string name in FrameCodec.OrderedNames(byName.Keys))
+                            Update(sha, name, byName[name].Raw);
+                        if (nested != null)
                         {
-                            Update(sha, "inst.ref_def", BitConverter.GetBytes((uint)nested[i]));
-                            var m = Conversion.TransformToWire(nestedTransforms[i]);
-                            var raw = new byte[m.Length * 4];
-                            Buffer.BlockCopy(m, 0, raw, 0, raw.Length);
-                            Update(sha, "inst.transforms", raw);
+                            for (int i = 0; i < nested.Length; i++)
+                            {
+                                Update(sha, "inst.ref_def", BitConverter.GetBytes((uint)nested[i]));
+                                var m = Conversion.TransformToWire(nestedTransforms[i]);
+                                var raw = new byte[m.Length * 4];
+                                Buffer.BlockCopy(m, 0, raw, 0, raw.Length);
+                                Update(sha, "inst.transforms", raw);
+                            }
+                            for (int i = 0; i < nested.Length; i++)
+                                Update(sha, "inst.name",
+                                    System.Text.Encoding.UTF8.GetBytes(NameOf(_frame, nested[i])));
+                            for (int i = 0; i < nested.Length; i++)
+                                Update(sha, "inst.content",
+                                    System.Text.Encoding.UTF8.GetBytes(ContentHash(nested[i])));
                         }
-                        foreach (string childName in childNames)
-                            Update(sha, "inst.name", System.Text.Encoding.UTF8.GetBytes(childName));
+                        sha.TransformFinalBlock(new byte[0], 0, 0);
+                        hash = Hex(sha.Hash, 12);
                     }
-                    sha.TransformFinalBlock(new byte[0], 0, 0);
-                    return Hex(sha.Hash, 12);
+                    _contentHashes[index] = hash;
+                    return hash;
+                }
+                finally
+                {
+                    _hashing.Remove(index);
                 }
             }
+
+            private readonly Dictionary<long, string> _contentHashes = new Dictionary<long, string>();
+            private readonly HashSet<long> _hashing = new HashSet<long>();
 
             private void Note(string message)
             {
@@ -313,12 +326,15 @@ namespace GhStack
         /// the rows reference go into <paramref name="definitions"/> (header) and
         /// their geometry into <paramref name="sections"/> as `idef.<i>.*`; the
         /// rows themselves land in `inst.ref_def` / `inst.transforms`. Does
-        /// nothing when the list is empty.</summary>
+        /// nothing when the list is empty. <paramref name="counts"/>, when
+        /// given, gains `definitions` and `instances` so a reader can tell an
+        /// instanced response from a plain one without scanning sections.</summary>
         public static void Emit(IList<GH_InstanceReference> instances, double scale,
                                 List<Section> sections,
                                 List<Dictionary<string, object>> attributes,
                                 List<Dictionary<string, object>> definitions,
-                                List<string> warnings)
+                                List<WireWarning> warnings,
+                                Dictionary<string, object> counts = null)
         {
             if (instances == null || instances.Count == 0) return;
             var writer = new DefinitionWriter(scale, sections, attributes, definitions, warnings);
@@ -328,7 +344,8 @@ namespace GhStack
             {
                 if (instance == null || instance.Value == null)
                 {
-                    warnings.Add("An instance reference without a value was ignored");
+                    warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
+                        "An instance reference without a value was ignored"));
                     continue;
                 }
                 int index = writer.Definition(instance.InstanceDefinition, instance.Value.ParentIdefId);
@@ -339,6 +356,26 @@ namespace GhStack
             if (refDef.Count == 0) return;
             sections.Add(Section.U32("inst.ref_def", refDef.ToArray()));
             sections.Add(Section.Floats("inst.transforms", transforms.ToArray()));
+            if (counts != null)
+            {
+                counts["definitions"] = (long)definitions.Count;
+                counts["instances"] = (long)refDef.Count;
+            }
+        }
+
+        /// <summary>Text-only view of Emit's warnings for callers that just
+        /// print them (the S9 spike checks).</summary>
+        public static void Emit(IList<GH_InstanceReference> instances, double scale,
+                                List<Section> sections,
+                                List<Dictionary<string, object>> attributes,
+                                List<Dictionary<string, object>> definitions,
+                                List<string> warnings)
+        {
+            var rich = new List<WireWarning>();
+            Emit(instances, scale, sections, attributes, definitions, rich);
+            if (warnings == null) return;
+            foreach (WireWarning warning in rich)
+                warnings.Add(warning.Message);
         }
 
         private class DefinitionWriter
@@ -347,14 +384,14 @@ namespace GhStack
             private readonly List<Section> _sections;
             private readonly List<Dictionary<string, object>> _attributes;
             private readonly List<Dictionary<string, object>> _definitions;
-            private readonly List<string> _warnings;
+            private readonly List<WireWarning> _warnings;
             private readonly Dictionary<string, int> _byKey = new Dictionary<string, int>();
             private readonly HashSet<string> _visiting = new HashSet<string>();
 
             public DefinitionWriter(double scale, List<Section> sections,
                                     List<Dictionary<string, object>> attributes,
                                     List<Dictionary<string, object>> definitions,
-                                    List<string> warnings)
+                                    List<WireWarning> warnings)
             {
                 _scale = scale;
                 _sections = sections;
@@ -385,14 +422,15 @@ namespace GhStack
                     // A document block the id names is gone (deleted, another
                     // document): an empty table entry would be a phantom block,
                     // so the row is skipped loudly instead.
-                    _warnings.Add(
+                    _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
                         "An instance reference to a document block (" + referenceId.ToString("N")
-                        + ") could not be resolved; the row was skipped");
+                        + ") could not be resolved; the row was skipped"));
                     return -1;
                 }
                 if (paired == null || paired.Objects == null || paired.Objects.Count == 0)
                 {
-                    _warnings.Add("An instance reference without a definition was skipped");
+                    _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
+                        "An instance reference without a definition was skipped"));
                     return -1;
                 }
                 return WriteDefinition(paired, Key(paired, referenceId));
@@ -440,12 +478,14 @@ namespace GhStack
                 InstanceDefinition docDef = doc == null ? null : doc.InstanceDefinitions.Find(id, true);
                 if (docDef == null)
                 {
-                    _warnings.Add("A nested block (" + key + ") is not in the document and was skipped");
+                    _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
+                        "A nested block (" + key + ") is not in the document and was skipped"));
                     return -1;
                 }
                 if (!_visiting.Add(key))
                 {
-                    _warnings.Add("A block definition nests inside itself and was skipped");
+                    _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
+                        "A block definition nests inside itself and was skipped"));
                     return -1;
                 }
                 try
@@ -584,7 +624,8 @@ namespace GhStack
                 if (obj.CastTo<Mesh>(out fallbackMesh) && fallbackMesh != null) return fallbackMesh;
                 Curve fallbackCurve;
                 if (obj.CastTo<Curve>(out fallbackCurve) && fallbackCurve != null) return fallbackCurve;
-                _warnings.Add("An object in a block definition (" + obj.TypeName + ") has no wire form and was skipped");
+                _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
+                    "An object in a block definition (" + obj.TypeName + ") has no wire form and was skipped"));
                 return null;
             }
 
@@ -612,7 +653,8 @@ namespace GhStack
                 InstanceReferenceGeometry reference = geometry as InstanceReferenceGeometry;
                 if (reference != null) { nested.Add(new GH_InstanceReference(reference)); return; }
                 if (geometry is Point) { points.Add(((Point)geometry).Location); return; }
-                _warnings.Add("A block definition object (" + geometry.ObjectType + ") has no wire form and was skipped");
+                _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
+                    "A block definition object (" + geometry.ObjectType + ") has no wire form and was skipped"));
             }
 
             private static string Key(ModelInstanceDefinition paired, Guid referenceId)

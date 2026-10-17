@@ -14,10 +14,8 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
-using Grasshopper;
 using Grasshopper.Kernel;
 using Rhino;
-using Rhino.Geometry;
 using GhStack.Core;
 
 namespace GhStack
@@ -26,7 +24,16 @@ namespace GhStack
     public class StageSlot
     {
         public string Rid = "";
-        public Dictionary<string, object> Params = new Dictionary<string, object>();
+        private volatile Dictionary<string, object> _params = new Dictionary<string, object>();
+        /// <summary>The request's parameter values. The socket thread publishes a
+        /// fresh dictionary per request and never mutates it afterwards; the
+        /// volatile reference is what makes the UI thread see a whole snapshot
+        /// (P3-3).</summary>
+        public Dictionary<string, object> Params
+        {
+            get { return _params; }
+            set { _params = value; }
+        }
         public List<Section> Sections;
         /// <summary>Attribute descriptors of the held sections (protocol §5).
         /// Written under Gate together with Sections; read during a solve.</summary>
@@ -42,10 +49,19 @@ namespace GhStack
         public string Message = "";
         public DateTime RequestedAt = DateTime.UtcNow;
         public int ResolveAttempts = 0;
+        /// <summary>True while the request was accepted for a key no component
+        /// has claimed yet: the first request can arrive while the document is
+        /// still loading, before the first solve publishes the keys. The solve
+        /// that follows either claims the key or the slot is refused as
+        /// `unknown_stage` and pruned (P3-5).</summary>
+        internal bool Provisional = false;
     }
 
     public static class GhLink
     {
+        /// <summary>The WebSocket endpoint to connect to. Set it before the
+        /// first component registers; a running link keeps the endpoint its
+        /// worker connected with.</summary>
         public static string Endpoint = "ws://127.0.0.1:" + DefaultPort() + "/";
 
         private static readonly object Gate = new object();
@@ -61,11 +77,35 @@ namespace GhStack
         private const long MaxOutboxBytes = 64L * 1024 * 1024;
         private static readonly AutoResetEvent OutboxSignal = new AutoResetEvent(false);
 
-        private static Thread _thread;
-        private static volatile bool _running;
+        // One worker per Start: the running flag lives in the worker, not in a
+        // static, so an old thread that a Stop could not join in time can never
+        // revive against a later Start (P3-1).
+        private sealed class Worker
+        {
+            public volatile bool Running;
+        }
+
+        private static Worker _worker;      // under Gate
+        private static Thread _thread;      // under Gate
         private static volatile bool _connected;
-        private static volatile bool _publishedThisConnection;
-        private static MiniWsClient _client;
+        // Published once per connection; read and reserved under Gate (P3-4).
+        private static bool _publishedThisConnection = false;
+        private static MiniWsClient _client;  // under Gate; Stop disposes it
+
+        // The keys live components have published. Every publish replaces its
+        // owner's one entry, so the union is the document's live key set and
+        // ReconcileOwnership can prune everything else (P3-5). Ownership is
+        // reference identity, not Equals: two components of one class must not
+        // collapse.
+        private class Claim
+        {
+            public GH_Component Owner;
+            public string StageKey;
+            public string ParamKey;
+            public string ParamId;
+        }
+
+        private static readonly List<Claim> Claims = new List<Claim>();
 
         // The published document state: stages present and parameter declarations.
         private static readonly Dictionary<string, bool> StageEnabled = new Dictionary<string, bool>();
@@ -90,30 +130,93 @@ namespace GhStack
 
         public static void Unregister(GH_Component component)
         {
-            lock (Gate) { Components.Remove(component); }
+            bool last;
+            lock (Gate)
+            {
+                Components.Remove(component);
+                RemoveClaimLocked(component);
+                last = Components.Count == 0;
+            }
+            // The keys this component published go with it; keys another live
+            // component still claims stay (P3-5).
+            ReconcileOwnership();
+            if (last)
+            {
+                // No component can serve anything: stop the worker rather than
+                // retrying a connection nothing will answer on. Start() runs
+                // again on the next Register.
+                Stop();
+                lock (Gate)
+                {
+                    Slots.Clear();
+                    StageEnabled.Clear();
+                    StageParams.Clear();
+                    _lastStages.Clear();
+                    _publishedThisConnection = false;
+                }
+            }
         }
 
-        public static void PublishStage(string key, bool enabled)
-        {
-            if (string.IsNullOrEmpty(key)) return;
-            lock (Gate) { StageEnabled[key] = enabled; }
-        }
-
-        public static void PublishParam(string key, Dictionary<string, object> declaration)
+        /// <summary>Publishes one stage key, owned by <paramref name="owner"/>.
+        /// Called from the owner's SolveInstance on the UI thread.</summary>
+        public static void PublishStage(GH_Component owner, string key, bool enabled)
         {
             if (string.IsNullOrEmpty(key)) return;
             lock (Gate)
             {
+                Claim claim = ClaimForLocked(owner);
+                claim.StageKey = key;
+                claim.ParamKey = null;
+                claim.ParamId = null;
+                StageEnabled[key] = enabled;
+            }
+        }
+
+        /// <summary>Publishes one parameter declaration, owned by
+        /// <paramref name="owner"/>. Called from the owner's SolveInstance on
+        /// the UI thread.</summary>
+        public static void PublishParam(GH_Component owner, string key, Dictionary<string, object> declaration)
+        {
+            if (string.IsNullOrEmpty(key)) return;
+            lock (Gate)
+            {
+                Claim claim = ClaimForLocked(owner);
+                string id = Json.GetString(declaration, "id");
+                claim.StageKey = null;
+                claim.ParamKey = key;
+                claim.ParamId = id;
+
                 List<Dictionary<string, object>> list;
                 if (!StageParams.TryGetValue(key, out list))
                 {
                     list = new List<Dictionary<string, object>>();
                     StageParams[key] = list;
                 }
-                string id = Json.GetString(declaration, "id");
                 for (int i = 0; i < list.Count; i++)
                     if (Json.GetString(list[i], "id") == id) { list[i] = declaration; return; }
                 list.Add(declaration);
+            }
+        }
+
+        /// <summary>Drops every key <paramref name="owner"/> claimed. Called
+        /// when a component's key goes empty: the publish calls run no more, so
+        /// without this its old key would stay in hello and its slot in the
+        /// registry until the component is deleted. The registries themselves
+        /// are pruned by the next ReconcileOwnership, which is why this must
+        /// not prune here: a solve in progress may not have published its other
+        /// components yet.</summary>
+        public static void Forget(GH_Component owner)
+        {
+            lock (Gate)
+            {
+                foreach (Claim claim in Claims)
+                {
+                    if (!object.ReferenceEquals(claim.Owner, owner)) continue;
+                    claim.StageKey = null;
+                    claim.ParamKey = null;
+                    claim.ParamId = null;
+                    return;
+                }
             }
         }
 
@@ -181,44 +284,74 @@ namespace GhStack
             lock (Gate)
             {
                 if (_thread != null && _thread.IsAlive) return;
-                _running = true;
-                _thread = new Thread(Loop);
+                var worker = new Worker();
+                worker.Running = true;
+                _worker = worker;
+                _thread = new Thread(delegate() { Loop(worker); });
                 _thread.IsBackground = true;
                 _thread.Name = "GhStack-socket";
                 _thread.Start();
             }
         }
 
+        /// <summary>Stops the socket worker and waits briefly for it. The
+        /// receive loop is blocked in a socket read, so the client is disposed
+        /// to unblock it; without that the thread would outlive the call by an
+        /// unbounded time. Called when the last component leaves the document,
+        /// so a canvas with no GH Stack components holds no socket.</summary>
         public static void Stop()
         {
-            _running = false;
+            Worker worker;
+            Thread thread;
+            MiniWsClient client;
+            lock (Gate)
+            {
+                worker = _worker;
+                thread = _thread;
+                client = _client;
+                _worker = null;
+                _thread = null;
+            }
+            if (worker != null) worker.Running = false;
+            if (client != null) client.Dispose();
+            OutboxSignal.Set();
+            if (thread != null && thread != Thread.CurrentThread)
+                thread.Join(2000);
             _connected = false;
+            // The worker's finally usually clears these as it exits; if the join
+            // above timed out, do not carry frames from the dead connection into
+            // the next one.
+            lock (Gate)
+            {
+                Outbox.Clear();
+                OutboxBytes = 0;
+            }
         }
 
-        private static void Loop()
+        private static void Loop(Worker worker)
         {
             int backoffMs = 500;
-            while (_running)
+            while (worker.Running)
             {
                 MiniWsClient client = null;
                 try
                 {
                     client = new MiniWsClient(Endpoint);
                     client.Connect();
-                    _client = client;
+                    lock (Gate) { _client = client; }
                     _connected = true;
-                    _publishedThisConnection = false;
+                    lock (Gate) { _publishedThisConnection = false; }
                     backoffMs = 500;
                     Note("connected to " + Endpoint);
                     // Publish from this thread: waiting for the next solve would
                     // delay hello until the user touches the canvas.
                     SendPublication();
                     var stopSend = new ManualResetEvent(false);
-                    var sender = new Thread(delegate() { SendLoop(client, stopSend); });
+                    var sender = new Thread(delegate() { SendLoop(client, stopSend, worker); });
                     sender.IsBackground = true;
                     sender.Name = "GhStack-sender";
                     sender.Start();
-                    ReceiveLoop(client);
+                    ReceiveLoop(client, worker);
                     stopSend.Set();
                     sender.Join(500);
                     Note("connection closed; retrying");
@@ -231,19 +364,19 @@ namespace GhStack
                 {
                     if (client != null) client.Dispose();
                     _connected = false;
-                    _client = null;
-                    // Frames queued for a connection that just died are stale:
-                    // a reconnect publishes hello/schema again, and the engine
-                    // re-derives any response it still needs. Delivering the
-                    // backlog instead was the other half of the outbox bug.
                     lock (Gate)
                     {
+                        if (_client == client) _client = null;
+                        // Frames queued for a connection that just died are stale:
+                        // a reconnect publishes hello/schema again, and the engine
+                        // re-derives any response it still needs. Delivering the
+                        // backlog instead was the other half of the outbox bug.
                         Outbox.Clear();
                         OutboxBytes = 0;
                     }
                 }
                 int slept = 0;
-                while (_running && slept < backoffMs)
+                while (worker.Running && slept < backoffMs)
                 {
                     Thread.Sleep(100);
                     slept += 100;
@@ -252,9 +385,9 @@ namespace GhStack
             }
         }
 
-        private static void ReceiveLoop(MiniWsClient client)
+        private static void ReceiveLoop(MiniWsClient client, Worker worker)
         {
-            while (_running)
+            while (worker.Running)
             {
                 byte[] frame = client.ReceiveBinary();
                 if (frame == null) return;
@@ -266,6 +399,13 @@ namespace GhStack
                 catch (FrameException ex)
                 {
                     Note("bad frame (" + ex.Code + "): " + ex.Message);
+                    // The two failures the peer can act on are answered before
+                    // the frame is dropped: a version mismatch and an
+                    // oversized frame. bad_frame stays a local note; its
+                    // sender already knows the bytes cannot be decoded, and
+                    // Blender dedupes the text.
+                    if (ex.Code == "proto_mismatch" || ex.Code == "too_large")
+                        Enqueue(ErrorFrame(ex.Code, ex.Message, null, null));
                     continue;
                 }
                 catch (JsonException ex)
@@ -320,11 +460,43 @@ namespace GhStack
 
             string key = Json.GetString(header, "stage");
             string rid = Json.GetString(header, "rid");
+            if (string.IsNullOrEmpty(key))
+            {
+                Note("request without a stage key");
+                return;
+            }
             var geom = Json.Get(header, "geom") as Dictionary<string, object>;
             string mode = geom == null ? null : Json.GetString(geom, "mode");
             string hash = geom == null ? null : Json.GetString(geom, "hash");
 
-            StageSlot slot = Slot(key);
+            StageSlot slot;
+            bool noComponents = false;
+            lock (Gate)
+            {
+                Slots.TryGetValue(key ?? "", out slot);
+                if (slot == null)
+                {
+                    // No component means no key can ever be claimed; do not grow
+                    // the registry for a request nothing can answer.
+                    if (Components.Count == 0)
+                    {
+                        noComponents = true;
+                    }
+                    else
+                    {
+                        slot = new StageSlot();
+                        slot.Provisional = !IsOwnedLocked(key);
+                        Slots[key ?? ""] = slot;
+                    }
+                }
+            }
+            if (noComponents)
+            {
+                // The request triggers no solve: there is no document to solve.
+                Note("request for stage " + key + ", but no GH Stack component is on the canvas");
+                return;
+            }
+
             bool canServe;
             lock (Gate)
             {
@@ -362,18 +534,12 @@ namespace GhStack
                 // Blender waiting out its timeout, and its retry is another ref —
                 // a loop with no way out, which is what a reopened .blend looked
                 // like: no geometry, no error, forever.
-                var refusal = new Dictionary<string, object>();
-                refusal["type"] = "error";
-                refusal["code"] = "unknown_ref";
-                refusal["message"] = "no geometry for hash " + (hash ?? "(none)");
-                refusal["stage"] = key;
-                refusal["rid"] = rid;
                 lock (Gate)
                 {
                     slot.Status = "unknown_ref";
                     slot.Message = "Not holding this geometry; asking Blender to resend it";
                 }
-                Enqueue(FrameCodec.Encode(refusal, null));
+                Enqueue(ErrorFrame("unknown_ref", "no geometry for hash " + (hash ?? "(none)"), key, rid));
                 return;
             }
 
@@ -403,7 +569,8 @@ namespace GhStack
             return list;
         }
 
-        private static void RequestSolve()        {
+        private static void RequestSolve()
+        {
             GH_Component origin;
             lock (Gate) { origin = Components.Count > 0 ? Components[0] : null; }
             if (origin == null)
@@ -423,6 +590,12 @@ namespace GhStack
             {
                 doc.ScheduleSolution(10, delegate(GH_Document d)
                 {
+                    // Reconcile when the solve has finished: every component has
+                    // published by then, so an unclaimed provisional slot is
+                    // genuinely foreign (P3-5). Subscribing here and
+                    // unsubscribing in the handler keeps one subscription per
+                    // scheduled solve.
+                    d.SolutionEnd += OnSolutionEnd;
                     lock (Gate)
                     {
                         foreach (GH_Component c in Components) c.ExpireSolution(true);
@@ -435,23 +608,115 @@ namespace GhStack
             }
         }
 
-        private static void SendLoop(MiniWsClient client, ManualResetEvent stop)
+        private static void OnSolutionEnd(object sender, GH_SolutionEventArgs e)
+        {
+            GH_Document document = sender as GH_Document;
+            if (document != null) document.SolutionEnd -= OnSolutionEnd;
+            ReconcileOwnership();
+        }
+
+        /// <summary>Drops every registry entry no live component claims: stage
+        /// keys, parameter declarations, and the slots they served. A
+        /// provisional slot whose key nobody claimed answers `unknown_stage`
+        /// before it goes, so the peer sees the mismatch instead of a
+        /// timeout.</summary>
+        private static void ReconcileOwnership()
+        {
+            var refused = new List<KeyValuePair<string, string>>();
+            lock (Gate)
+            {
+                var stageKeys = new HashSet<string>();
+                var paramIds = new Dictionary<string, HashSet<string>>();
+                foreach (Claim claim in Claims)
+                {
+                    if (!string.IsNullOrEmpty(claim.StageKey)) stageKeys.Add(claim.StageKey);
+                    if (!string.IsNullOrEmpty(claim.ParamKey) && claim.ParamId != null)
+                    {
+                        HashSet<string> ids;
+                        if (!paramIds.TryGetValue(claim.ParamKey, out ids))
+                        {
+                            ids = new HashSet<string>();
+                            paramIds[claim.ParamKey] = ids;
+                        }
+                        ids.Add(claim.ParamId);
+                    }
+                }
+
+                foreach (string key in new List<string>(StageEnabled.Keys))
+                    if (!stageKeys.Contains(key)) StageEnabled.Remove(key);
+
+                foreach (string key in new List<string>(StageParams.Keys))
+                {
+                    HashSet<string> ids;
+                    if (paramIds.TryGetValue(key, out ids))
+                    {
+                        List<Dictionary<string, object>> list = StageParams[key];
+                        for (int i = list.Count - 1; i >= 0; i--)
+                            if (!ids.Contains(Json.GetString(list[i], "id") ?? ""))
+                                list.RemoveAt(i);
+                        if (list.Count > 0) continue;
+                    }
+                    StageParams.Remove(key);
+                }
+
+                foreach (KeyValuePair<string, StageSlot> pair in new List<KeyValuePair<string, StageSlot>>(Slots))
+                {
+                    if (stageKeys.Contains(pair.Key) || paramIds.ContainsKey(pair.Key))
+                    {
+                        pair.Value.Provisional = false;
+                        continue;
+                    }
+                    Slots.Remove(pair.Key);
+                    if (pair.Value.Provisional && !string.IsNullOrEmpty(pair.Value.Rid))
+                        refused.Add(new KeyValuePair<string, string>(pair.Key, pair.Value.Rid));
+                }
+            }
+            foreach (KeyValuePair<string, string> entry in refused)
+                Enqueue(ErrorFrame("unknown_stage",
+                    "no GH Stack component claims this stage key", entry.Key, entry.Value));
+        }
+
+        private static bool IsOwnedLocked(string key)
+        {
+            return StageEnabled.ContainsKey(key ?? "") || StageParams.ContainsKey(key ?? "");
+        }
+
+        private static Claim ClaimForLocked(GH_Component owner)
+        {
+            foreach (Claim claim in Claims)
+                if (object.ReferenceEquals(claim.Owner, owner)) return claim;
+            var fresh = new Claim();
+            fresh.Owner = owner;
+            Claims.Add(fresh);
+            return fresh;
+        }
+
+        private static void RemoveClaimLocked(GH_Component owner)
+        {
+            for (int i = 0; i < Claims.Count; i++)
+            {
+                if (object.ReferenceEquals(Claims[i].Owner, owner))
+                {
+                    Claims.RemoveAt(i);
+                    return;
+                }
+            }
+        }
+
+        private static void SendLoop(MiniWsClient client, ManualResetEvent stop, Worker worker)
         {
             var handles = new WaitHandle[] { OutboxSignal, stop };
-            while (_running)
+            while (worker.Running)
             {
                 int fired = WaitHandle.WaitAny(handles, 250);
                 if (fired == 1) return;
                 if (fired == 0) SendFrames(client);
-                RetryStaleSolves();
+                if (worker.Running) RetryStaleSolves();
                 // Re-publish on a slow heartbeat: a component added while the link
                 // was down (or a schema sent before a reconnect) is picked up
                 // without the user having to touch the canvas.
-                if (_connected && (DateTime.UtcNow - _lastPublishAt).TotalSeconds >= 2.0)
-                {
-                    _lastPublishAt = DateTime.UtcNow;
+                if (_connected && (DateTime.UtcNow - LastPublishAt()).TotalSeconds >= 2.0)
                     SendPublication();
-                }
             }
         }
 
@@ -523,6 +788,19 @@ namespace GhStack
             OutboxSignal.Set();
         }
 
+        /// <summary>One `error` frame (protocol §4.6). `stage` and `rid` are
+        /// omitted when the frame being answered carries none.</summary>
+        private static byte[] ErrorFrame(string code, string message, string stage, string rid)
+        {
+            var header = new Dictionary<string, object>();
+            header["type"] = "error";
+            header["code"] = code;
+            header["message"] = message;
+            if (!string.IsNullOrEmpty(stage)) header["stage"] = stage;
+            if (!string.IsNullOrEmpty(rid)) header["rid"] = rid;
+            return FrameCodec.Encode(header, null);
+        }
+
         // ------------------------------------------------------------- publish
 
         /// <summary>Sends hello and schema once per connection, from the UI thread
@@ -535,13 +813,25 @@ namespace GhStack
         }
 
         private static volatile string _lastDocName = "(unsaved)";
-        private static DateTime _lastPublishAt = DateTime.MinValue;
+        // The heartbeat timestamp is a long read/written with Interlocked: a
+        // DateTime wraps two ints, which this 32-bit runtime can tear (P3-4).
+        private static long _lastPublishTicks = DateTime.MinValue.Ticks;
+
+        private static DateTime LastPublishAt()
+        {
+            return new DateTime(Interlocked.Read(ref _lastPublishTicks), DateTimeKind.Utc);
+        }
+
+        private static void MarkPublished()
+        {
+            Interlocked.Exchange(ref _lastPublishTicks, DateTime.UtcNow.Ticks);
+        }
 
         /// <summary>Builds and enqueues hello/schema from the published state.
         /// Safe from either thread: it only touches the registries and the outbox.</summary>
         private static void SendPublication()
         {
-            _lastPublishAt = DateTime.UtcNow;
+            MarkPublished();
             if (!_connected) return;
             Dictionary<string, bool> stages;
             Dictionary<string, List<Dictionary<string, object>>> paramsByStage;
@@ -552,7 +842,14 @@ namespace GhStack
                 foreach (var kv in StageParams) paramsByStage[kv.Key] = new List<Dictionary<string, object>>(kv.Value);
             }
 
-            bool needHello = !_publishedThisConnection || stagesChanged;
+            // Reserve the once-per-connection hello under Gate: two threads
+            // reading the flag independently both sent one (P3-4).
+            bool needHello;
+            lock (Gate)
+            {
+                needHello = !_publishedThisConnection || StagesChangedLocked(stages);
+                if (needHello) _publishedThisConnection = true;
+            }
 
             if (needHello)
             {
@@ -569,12 +866,11 @@ namespace GhStack
                 // Keep in sync with blender_manifest.toml (the release path
                 // enforces that one), bl_info in gh_stack/__init__.py and the
                 // example in docs/protocol.md. N6: six places, two checked.
-                hello["client"] = "GhStack 0.2.0";
+                hello["client"] = "GhStack 0.2.1";
                 hello["doc"] = _lastDocName;
                 hello["doc_units"] = UnitsName();
                 hello["stages"] = list;
                 Enqueue(FrameCodec.Encode(hello, null));
-                _publishedThisConnection = true;
                 lock (Gate) { _lastStages = new Dictionary<string, bool>(stages); }
             }
 
@@ -592,26 +888,15 @@ namespace GhStack
 
         private static Dictionary<string, bool> _lastStages = new Dictionary<string, bool>();
 
-        private static bool stagesChanged
+        private static bool StagesChangedLocked(Dictionary<string, bool> stages)
         {
-            get
+            if (_lastStages.Count != stages.Count) return true;
+            foreach (var kv in stages)
             {
-                lock (Gate)
-                {
-                    if (_lastStages.Count != StageEnabled.Count) return true;
-                    foreach (var kv in StageEnabled)
-                    {
-                        bool other;
-                        if (!_lastStages.TryGetValue(kv.Key, out other) || other != kv.Value) return true;
-                    }
-                    return false;
-                }
+                bool other;
+                if (!_lastStages.TryGetValue(kv.Key, out other) || other != kv.Value) return true;
             }
-        }
-
-        public static void Republish()
-        {
-            _publishedThisConnection = false;
+            return false;
         }
 
         private static string UnitsName()

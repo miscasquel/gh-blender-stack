@@ -40,7 +40,15 @@ namespace GhStack
                     {
                         using (Stream stream = assembly.GetManifestResourceStream(resource))
                         {
-                            if (stream != null) loaded = new Bitmap(stream);
+                            if (stream != null)
+                            {
+                                // Decode a copy: GDI+ needs the stream open for
+                                // the bitmap's lifetime, and the cached icon is
+                                // drawn on every repaint, long after this
+                                // using block (P6-17).
+                                using (Bitmap decoded = new Bitmap(stream))
+                                    loaded = new Bitmap(decoded);
+                            }
                         }
                     }
                 }

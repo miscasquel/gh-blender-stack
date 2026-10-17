@@ -79,6 +79,9 @@ namespace GhStack
             if (string.IsNullOrEmpty(key))
             {
                 // Unconfigured components stay quiet: no key, nothing to do.
+                // The registration side is still told, so a key that was typed
+                // and then cleared does not outlive the edit.
+                GhLink.Forget(this);
                 Message = "No key";
                 da.SetDataList("Geometry", new List<IGH_Goo>());
                 da.SetData("Request ID", "");
@@ -87,7 +90,7 @@ namespace GhStack
                 da.SetDataList("Attributes", new List<string>());
                 return;
             }
-            GhLink.PublishStage(key, enabled);
+            GhLink.PublishStage(this, key, enabled);
 
             StageSlot slot = GhLink.Slot(key);
             var geometry = new List<IGH_Goo>();
@@ -105,7 +108,7 @@ namespace GhStack
                 var frameHeader = new Dictionary<string, object>();
                 if (slot.Definitions != null && slot.Definitions.Count > 0)
                     frameHeader["definitions"] = new List<object>(slot.Definitions);
-                var frame = new DecodedFrame(frameHeader, slot.Sections);
+                var frame = DecodedFrame.FromSections(frameHeader, slot.Sections);
                 double scale = GhLink.DocumentScale();
                 geometry = StageGeometry.Build(frame, scale, slot.Attributes, delegate(string note)
                 {
@@ -199,13 +202,14 @@ namespace GhStack
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, note);
             if (string.IsNullOrEmpty(key))
             {
+                GhLink.Forget(this);
                 Message = "No key";
                 da.SetData("Sent", false);
                 da.SetData("Output hash", "");
                 da.SetData("Status", "No key");
                 return;
             }
-            GhLink.PublishStage(key, enabled);
+            GhLink.PublishStage(this, key, enabled);
 
             StageSlot slot = GhLink.Slot(key);
             bool sent = false;
@@ -229,7 +233,7 @@ namespace GhStack
                         AddRuntimeMessage(GH_RuntimeMessageLevel.Remark,
                             "Ignored unsupported geometry: " + typeName);
 
-                    var warnings = new List<string>();
+                    var warnings = new List<WireWarning>();
                     Dictionary<string, object> counts;
                     List<Section> sections = Conversion.SectionsFromGeometry(
                         meshes, curves, points, subds, breps, GhLink.DocumentScale(),
@@ -247,16 +251,22 @@ namespace GhStack
 
                     // Blocks: one definition table entry per unique definition the
                     // instance references name, plus the inst.* row pair (§5.2).
+                    // Emit also adds the definitions/instances counts.
                     var definitions = new List<Dictionary<string, object>>();
                     Instances.Emit(instances, GhLink.DocumentScale(), sections, attributes,
-                                   definitions, warnings);
+                                   definitions, warnings, counts);
+                    // Present even with no blocks: a reader should not have to
+                    // branch on section names to tell a plain response from an
+                    // instanced one.
+                    if (!counts.ContainsKey("definitions")) counts["definitions"] = 0L;
+                    if (!counts.ContainsKey("instances")) counts["instances"] = 0L;
 
                     var warningList = new List<object>();
-                    foreach (string w in warnings)
+                    foreach (WireWarning warning in warnings)
                     {
                         var entry = new Dictionary<string, object>();
-                        entry["code"] = "conversion";
-                        entry["message"] = w;
+                        entry["code"] = warning.Code;
+                        entry["message"] = warning.Message;
                         warningList.Add(entry);
                     }
 
@@ -280,8 +290,8 @@ namespace GhStack
                     sent = true;
                     status = "ok";
                     GhLink.SetSlotStatus(slot, "ok", "");
-                    foreach (string w in warnings)
-                        AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, w);
+                    foreach (WireWarning warning in warnings)
+                        AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, warning.Message);
                 }
                 catch (Exception ex)
                 {
@@ -303,6 +313,8 @@ namespace GhStack
                         errorCounts["curves"] = 0;
                         errorCounts["points"] = 0;
                         errorCounts["approximated_curves"] = 0;
+                        errorCounts["definitions"] = 0;
+                        errorCounts["instances"] = 0;
                         var errorHeader = new Dictionary<string, object>();
                         errorHeader["type"] = "response";
                         errorHeader["stage"] = key;
@@ -408,6 +420,7 @@ namespace GhStack
 
             if (string.IsNullOrEmpty(key))
             {
+                GhLink.Forget(this);
                 Message = "No key";
                 da.SetData("Value", null);
                 return;
@@ -415,8 +428,12 @@ namespace GhStack
             string type = TypeName(typeIndex);
             StageSlot slot = GhLink.Slot(key);
             object value = null;
-            if (slot.Params.ContainsKey(_paramId.ToString()))
-                value = slot.Params[_paramId.ToString()];
+            // One read of the published snapshot: the socket thread replaces the
+            // dictionary whole, so a local keeps this solve on one request even
+            // if another lands meanwhile (P3-3).
+            Dictionary<string, object> parameters = slot.Params;
+            if (parameters != null)
+                parameters.TryGetValue(_paramId.ToString(), out value);
             if (value == null) value = ParamValues.ParseDefault(type, defaultText);
             // Coerce once to the declared type: the value may be left over from a
             // previous type, and the default must never be published untyped (a
@@ -444,7 +461,7 @@ namespace GhStack
             }
             declaration["values"] = valueList;
             declaration["group"] = group;
-            GhLink.PublishParam(key, declaration);
+            GhLink.PublishParam(this, key, declaration);
 
             da.SetData("Value", OutputValue(type, value));
             Message = type + (GhLink.Connected ? "" : " (disconnected)");

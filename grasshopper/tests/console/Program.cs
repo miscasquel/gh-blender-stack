@@ -55,6 +55,8 @@ namespace GhStack.Tests.Console
 
             CheckDecoderBoundary();
 
+            CheckFloatText();
+
             CheckJsonWriter();
 
             System.Console.WriteLine();
@@ -144,17 +146,33 @@ namespace GhStack.Tests.Console
             Report(name, problems);
 
             // Exercise the typed accessors on a couple of fixtures, so a broken
-            // conversion path cannot hide behind the raw-byte checks.
+            // conversion path cannot hide behind the raw-byte checks. Guarded:
+            // the fixture is regenerated from time to time and a missing
+            // section must report, not dereference null (P6-18).
             if (name == "response-mixed")
             {
                 Section verts = decoded.Find("mesh.verts");
-                float[] f = verts.ToFloats();
-                if (f.Length != 9 || f[3] != 1.0f)
-                    System.Console.WriteLine("  WARN mesh.verts typed access looks wrong");
+                if (verts == null)
+                {
+                    problems.Add("typed access: mesh.verts is missing");
+                }
+                else
+                {
+                    float[] f = verts.ToFloats();
+                    if (f.Length != 9 || f[3] != 1.0f)
+                        problems.Add("typed access: mesh.verts looks wrong");
+                }
                 Section counts = decoded.Find("crv.counts");
-                uint[] c = counts.ToU32();
-                if (c.Length != 2 || c[0] != 2 || c[1] != 3)
-                    System.Console.WriteLine("  WARN crv.counts typed access looks wrong");
+                if (counts == null)
+                {
+                    problems.Add("typed access: crv.counts is missing");
+                }
+                else
+                {
+                    uint[] c = counts.ToU32();
+                    if (c.Length != 2 || c[0] != 2 || c[1] != 3)
+                        problems.Add("typed access: crv.counts looks wrong");
+                }
             }
         }
 
@@ -206,6 +224,21 @@ namespace GhStack.Tests.Console
             if ((bool)ParamValues.Cast("bool", "not a bool") != false)
                 problems.Add("Cast(bool, string) was not neutral");
 
+            // P5-1, the two sides' int rules read from params.py: `int` is
+            // int(round(float(v))) — banker's rounding — and `value_list` is
+            // int(v), truncation. A disagreement would compute one input as two
+            // different request IDs, one per side.
+            if ((int)ParamValues.Cast("int", 2.7) != 3)
+                problems.Add("Cast(int, 2.7) did not round");
+            if ((int)ParamValues.Cast("int", 2.5) != 2 || (int)ParamValues.Cast("int", 3.5) != 4)
+                problems.Add("Cast(int) is not banker's rounding");
+            if ((int)ParamValues.Cast("value_list", 2.7) != 2)
+                problems.Add("Cast(value_list, 2.7) did not truncate");
+            if ((int)ParamValues.Cast("value_list", -2.7) != -2)
+                problems.Add("Cast(value_list, -2.7) did not truncate toward zero");
+            if ((long)ParamValues.ParseDefault("int", "2.7") != 3L)
+                problems.Add("ParseDefault(int, 2.7) did not round");
+
             object json = ParamValues.JsonValue(new double[] { 1.0, 2.0, 3.0 });
             var jsonList = json as List<object>;
             if (jsonList == null || jsonList.Count != 3)
@@ -234,17 +267,35 @@ namespace GhStack.Tests.Console
                 delegate { Json.Parse("1.2.3"); });
             CheckThrows<JsonException>(problems, "1e",
                 delegate { Json.Parse("1e"); });
+            // A megabyte of '[' would push the recursive parser into an
+            // uncatchable StackOverflowException without the depth cap.
+            CheckThrows<JsonException>(problems, "deep nesting",
+                delegate { Json.Parse(new string('[', 1000) + new string(']', 1000)); });
+
+            // P5-2: the number grammar is JSON's, not double.TryParse's. Python's
+            // json rejects these tokens, so a peer must not be accepted here.
+            CheckThrows<JsonException>(problems, "+2",
+                delegate { Json.Parse("+2"); });
+            CheckThrows<JsonException>(problems, "01",
+                delegate { Json.Parse("01"); });
+            CheckThrows<JsonException>(problems, "1.",
+                delegate { Json.Parse("1."); });
+            CheckThrows<JsonException>(problems, ".5",
+                delegate { Json.Parse(".5"); });
+            // A syntactically valid number beyond double is Python's float('inf')
+            // (json.loads accepts it), not a syntax error.
+            object huge = Json.Parse("1e400");
+            if (!(huge is double) || !double.IsPositiveInfinity((double)huge))
+                problems.Add("1e400 did not parse as an infinity");
+            object tiny = Json.Parse("-1e400");
+            if (!(tiny is double) || !double.IsNegativeInfinity((double)tiny))
+                problems.Add("-1e400 did not parse as a negative infinity");
 
             // A header that is not valid JSON decodes as a bad_frame.
             CheckFrameProblem(problems, "truncated header json",
                 FrameWithHeader("{\"type\":\"ping\",\"v\":2"), "bad_frame");
-
-            // P2-2: a non-numeric version is a proto_mismatch, not a crash.
-            var versionHeader = new Dictionary<string, object>();
-            versionHeader["type"] = "ping";
-            versionHeader["v"] = "x";
-            CheckFrameProblem(problems, "string version",
-                FrameCodec.Encode(versionHeader, null), "proto_mismatch");
+            CheckFrameProblem(problems, "deeply nested header",
+                FrameWithHeader(new string('[', 1000) + new string(']', 1000)), "bad_frame");
 
             // P2-3: unknown dtype and a missing name are bad_frames.
             CheckFrameProblem(problems, "unknown dtype",
@@ -256,6 +307,74 @@ namespace GhStack.Tests.Console
                     new List<Section> { new Section("", "f32", new byte[4]) }),
                 "bad_frame");
 
+            // The section table's field types are part of the contract: a
+            // number where a name belongs used to throw InvalidCastException
+            // out of Json.GetString, and a string where a length belongs a
+            // FormatException out of Json.GetLong (P2-1's remaining inputs).
+            CheckFrameProblem(problems, "numeric section name",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":7,\"dtype\":\"f32\",\"bytes\":4}]}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "numeric dtype",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"mesh.verts\",\"dtype\":9,\"bytes\":4}]}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "string section bytes",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"mesh.verts\",\"dtype\":\"f32\",\"bytes\":\"4\"}]}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "negative section bytes",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"mesh.verts\",\"dtype\":\"f32\",\"bytes\":-4}]}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "astronomical section bytes",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"mesh.verts\",\"dtype\":\"f32\",\"bytes\":9223372036854775807}]}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "sections is not an array",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":{\"name\":\"x\"}}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "section entry is not an object",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[4]}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "trailing bytes after a section",
+                FrameWithPayload("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"mesh.verts\",\"dtype\":\"u8\",\"bytes\":1}]}", "xy"),
+                "bad_frame");
+
+            // The size caps are too_large, the code protocol §4.6 reserves for
+            // "message exceeds the size limit"; answerable frames are the ones
+            // the receive path sends an error for (P5-4).
+            byte[] overCap = new byte[4];
+            long cap = FrameCodec.MaxHeaderBytes + 1;
+            overCap[0] = (byte)(cap & 0xFF);
+            overCap[1] = (byte)((cap >> 8) & 0xFF);
+            overCap[2] = (byte)((cap >> 16) & 0xFF);
+            overCap[3] = (byte)((cap >> 24) & 0xFF);
+            CheckFrameProblem(problems, "header over the cap", overCap, "too_large");
+
+            // v: exactly Python's check_version semantics — a JSON number equal
+            // to 2 is accepted (2 and 2.0), everything else is a
+            // proto_mismatch: a string, a bool, a list, null, a missing key, a
+            // different number. 1e400 overflows to an infinity, as Python's
+            // float() reads it, and mismatches rather than failing to parse.
+            CheckVersionAccepted(problems, "v=2", "{\"type\":\"ping\",\"v\":2}");
+            CheckVersionAccepted(problems, "v=2.0", "{\"type\":\"ping\",\"v\":2.0}");
+            CheckFrameProblem(problems, "v=\"2\"",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":\"2\"}"), "proto_mismatch");
+            CheckFrameProblem(problems, "v=true",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":true}"), "proto_mismatch");
+            CheckFrameProblem(problems, "v=[2]",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":[2]}"), "proto_mismatch");
+            CheckFrameProblem(problems, "v=null",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":null}"), "proto_mismatch");
+            CheckFrameProblem(problems, "v missing",
+                FrameWithHeader("{\"type\":\"ping\"}"), "proto_mismatch");
+            CheckFrameProblem(problems, "v=3",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":3}"), "proto_mismatch");
+            CheckFrameProblem(problems, "v=2.5",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2.5}"), "proto_mismatch");
+            CheckFrameProblem(problems, "v=2.0000000000000004",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2.0000000000000004}"), "proto_mismatch");
+            CheckFrameProblem(problems, "v=1e400",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":1e400}"), "proto_mismatch");
+            CheckFrameProblem(problems, "v=+2 (not JSON)",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":+2}"), "bad_frame");
+
             if (problems.Count == 0)
             {
                 System.Console.WriteLine("PASS decoder-boundary");
@@ -266,9 +385,86 @@ namespace GhStack.Tests.Console
             foreach (string p in problems) System.Console.WriteLine("     " + p);
         }
 
-        private static void CheckJsonWriter()
+        /// <summary>A header that must decode, as the version boundary's accept side.</summary>
+        private static void CheckVersionAccepted(List<string> problems, string what, string header)
+        {
+            try
+            {
+                FrameCodec.Decode(FrameWithHeader(header));
+            }
+            catch (Exception ex)
+            {
+                problems.Add(what + ": refused (" + ex.GetType().Name + ": " + ex.Message + ")");
+            }
+        }
+
+        /// <summary>A hand-built frame around raw header text and raw payload
+        /// bytes, for shapes the encoder refuses to produce.</summary>
+        private static byte[] FrameWithPayload(string text, string payload)
+        {
+            byte[] head = Encoding.UTF8.GetBytes(text);
+            byte[] body = Encoding.UTF8.GetBytes(payload);
+            var frame = new byte[4 + head.Length + body.Length];
+            frame[0] = (byte)(head.Length & 0xFF);
+            frame[1] = (byte)((head.Length >> 8) & 0xFF);
+            frame[2] = (byte)((head.Length >> 16) & 0xFF);
+            frame[3] = (byte)((head.Length >> 24) & 0xFF);
+            Buffer.BlockCopy(head, 0, frame, 4, head.Length);
+            Buffer.BlockCopy(body, 0, frame, 4 + head.Length, body.Length);
+            return frame;
+        }
+
+        /// <summary>FormatDouble's boundary (P5-3): byte-identical to Python's
+        /// repr for every value whose shortest form needs at most 15 significant
+        /// digits — the protocol's practical range (counts, short decimals,
+        /// exponents). A 16-17-digit value round-trips but can carry one digit
+        /// more than Python (Mono Math.PI: 3.1415926535897931, Python:
+        /// 3.141592653589793), so only the round trip is pinned there.</summary>
+        private static void CheckFloatText()
         {
             var problems = new List<string>();
+            CheckFloatText(problems, 1.0, "1.0");
+            CheckFloatText(problems, -2.0, "-2.0");
+            CheckFloatText(problems, 0.0, "0.0");
+            CheckFloatText(problems, 2.5, "2.5");
+            CheckFloatText(problems, 0.1, "0.1");
+            CheckFloatText(problems, 1e21, "1e+21");
+            CheckFloatText(problems, 1.5e-7, "1.5e-07");
+            CheckFloatText(problems, 1e-7, "1e-07");
+
+            double pi = Math.PI;
+            double back;
+            string text = Json.FormatDouble(pi);
+            if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out back)
+                || back != pi)
+                problems.Add("Math.PI does not round-trip: " + text);
+            if (text.IndexOf('E') >= 0)
+                problems.Add("uppercase exponent survived: " + text);
+
+            CheckThrows<JsonException>(problems, "NaN text",
+                delegate { Json.FormatDouble(double.NaN); });
+            CheckThrows<JsonException>(problems, "infinity text",
+                delegate { Json.FormatDouble(double.PositiveInfinity); });
+
+            if (problems.Count == 0)
+            {
+                System.Console.WriteLine("PASS float-text");
+                return;
+            }
+            _failures += problems.Count;
+            System.Console.WriteLine("FAIL float-text");
+            foreach (string p in problems) System.Console.WriteLine("     " + p);
+        }
+
+        private static void CheckFloatText(List<string> problems, double value, string expected)
+        {
+            string got = Json.FormatDouble(value);
+            if (got != expected)
+                problems.Add(value + " -> " + got + " != " + expected);
+        }
+
+        private static void CheckJsonWriter()
+        {            var problems = new List<string>();
 
             // A typed list encodes exactly like List<object>. The writer used to
             // reject anything but List<object>, which crashed a live canvas the

@@ -7,8 +7,9 @@
 //
 // Integers stay long and floats stay double, because Python's json module writes
 // them differently ("4" vs "4.0") and the golden fixtures compare bytes. Floats
-// are formatted the way Python's repr does for the ranges the protocol uses:
-// shortest round-trip text, with ".0" appended to integral values.
+// are formatted as Python's repr for the ranges the protocol uses — shortest
+// round-trip text with ".0" appended to integral values, lowercase exponent —
+// with one known boundary (see FormatDouble).
 //
 // Deliberate deviation from the plan's "DataContractJsonSerializer" (§10): that
 // serializer emits members in declaration order and cannot sort keys, which the
@@ -29,20 +30,26 @@ namespace GhStack.Core
         public static object Parse(string text)
         {
             int pos = 0;
-            object value = ParseValue(text, ref pos);
+            object value = ParseValue(text, ref pos, 0);
             SkipWhitespace(text, ref pos);
             if (pos != text.Length)
                 throw new JsonException("trailing content at index " + pos);
             return value;
         }
 
-        private static object ParseValue(string s, ref int pos)
+        // A 1 MiB header of '[' would drive the recursive parser into an
+        // uncatchable StackOverflowException, which takes the connection (and
+        // the process) down; the protocol's headers nest a handful deep.
+        private const int MaxDepth = 64;
+
+        private static object ParseValue(string s, ref int pos, int depth)
         {
             SkipWhitespace(s, ref pos);
             if (pos >= s.Length) throw new JsonException("unexpected end of input");
+            if (depth > MaxDepth) throw new JsonException("nesting over the depth cap");
             char c = s[pos];
-            if (c == '{') return ParseObject(s, ref pos);
-            if (c == '[') return ParseArray(s, ref pos);
+            if (c == '{') return ParseObject(s, ref pos, depth);
+            if (c == '[') return ParseArray(s, ref pos, depth);
             if (c == '"') return ParseString(s, ref pos);
             if (c == 't') { Expect(s, ref pos, "true"); return true; }
             if (c == 'f') { Expect(s, ref pos, "false"); return false; }
@@ -50,7 +57,7 @@ namespace GhStack.Core
             return ParseNumber(s, ref pos);
         }
 
-        private static Dictionary<string, object> ParseObject(string s, ref int pos)
+        private static Dictionary<string, object> ParseObject(string s, ref int pos, int depth)
         {
             var obj = new Dictionary<string, object>();
             pos++; // {
@@ -66,7 +73,7 @@ namespace GhStack.Core
                 if (pos >= s.Length || s[pos] != ':')
                     throw new JsonException("expected ':' at index " + pos);
                 pos++;
-                obj[key] = ParseValue(s, ref pos);
+                obj[key] = ParseValue(s, ref pos, depth + 1);
                 SkipWhitespace(s, ref pos);
                 if (pos >= s.Length) throw new JsonException("unterminated object");
                 if (s[pos] == ',') { pos++; continue; }
@@ -75,7 +82,7 @@ namespace GhStack.Core
             }
         }
 
-        private static List<object> ParseArray(string s, ref int pos)
+        private static List<object> ParseArray(string s, ref int pos, int depth)
         {
             var list = new List<object>();
             pos++; // [
@@ -83,7 +90,7 @@ namespace GhStack.Core
             if (pos < s.Length && s[pos] == ']') { pos++; return list; }
             while (true)
             {
-                list.Add(ParseValue(s, ref pos));
+                list.Add(ParseValue(s, ref pos, depth + 1));
                 SkipWhitespace(s, ref pos);
                 if (pos >= s.Length) throw new JsonException("unterminated array");
                 if (s[pos] == ',') { pos++; continue; }
@@ -129,44 +136,55 @@ namespace GhStack.Core
             }
         }
 
+        private static bool IsDigit(char c)
+        {
+            return c >= '0' && c <= '9';
+        }
+
+        /// <summary>One JSON number: -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?.
+        /// The grammar is enforced here rather than left to double.TryParse:
+        /// TryParse also takes "+2", "01" and "1.", which Python's json module
+        /// rejects, and a peer must not be accepted on one side and refused on
+        /// the other (P5-2). A syntactically valid number double cannot hold is
+        /// an infinity, exactly as Python's float() reads it, so an out-of-range
+        /// `v` classifies the same way on both sides.</summary>
         private static object ParseNumber(string s, ref int pos)
         {
             int start = pos;
             bool isFloat = false;
-            if (pos < s.Length && (s[pos] == '-' || s[pos] == '+')) pos++;
-            while (pos < s.Length)
+            if (pos < s.Length && s[pos] == '-') pos++;
+            if (pos >= s.Length || !IsDigit(s[pos]))
+                throw new JsonException("bad number at index " + start);
+            if (s[pos] == '0') pos++;
+            else while (pos < s.Length && IsDigit(s[pos])) pos++;
+            if (pos < s.Length && s[pos] == '.')
             {
-                char c = s[pos];
-                if (c >= '0' && c <= '9') { pos++; continue; }
-                if (c == '.' || c == 'e' || c == 'E')
-                {
-                    isFloat = true;
-                    pos++;
-                    continue;
-                }
-                break;
+                isFloat = true;
+                pos++;
+                if (pos >= s.Length || !IsDigit(s[pos]))
+                    throw new JsonException("bad number at index " + start);
+                while (pos < s.Length && IsDigit(s[pos])) pos++;
+            }
+            if (pos < s.Length && (s[pos] == 'e' || s[pos] == 'E'))
+            {
+                isFloat = true;
+                pos++;
+                if (pos < s.Length && (s[pos] == '+' || s[pos] == '-')) pos++;
+                if (pos >= s.Length || !IsDigit(s[pos]))
+                    throw new JsonException("bad number at index " + start);
+                while (pos < s.Length && IsDigit(s[pos])) pos++;
             }
             string token = s.Substring(start, pos - start);
-            if (token.Length == 0) throw new JsonException("empty number at index " + start);
-            if (isFloat)
-                return ParseDouble(token, start);
-            long l;
-            if (long.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out l))
-                return l;
-            // Too big for long: the protocol never uses such integers in headers,
-            // but do not lose the value.
-            return ParseDouble(token, start);
-        }
-
-        /// <summary>Every malformed numeric path raises JsonException: the
-        /// callers catch exactly that, and a raw FormatException or
-        /// OverflowException would tear a healthy connection down (P2-1).</summary>
-        private static double ParseDouble(string token, int index)
-        {
+            if (!isFloat)
+            {
+                long l;
+                if (long.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out l))
+                    return l;
+            }
             double value;
-            if (!double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
-                throw new JsonException("bad number '" + token + "' at index " + index);
-            return value;
+            if (double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+                return value;
+            return token[0] == '-' ? double.NegativeInfinity : double.PositiveInfinity;
         }
 
         private static void Expect(string s, ref int pos, string word)
@@ -273,14 +291,23 @@ namespace GhStack.Core
             sb.Append('"');
         }
 
-        /// <summary>Python-repr style float text: shortest round-trip, with ".0"
-        /// appended so integral floats stay distinguishable from integers.</summary>
+        /// <summary>Python-repr style float text: ".0" appended so integral
+        /// floats stay distinguishable from integers, and a lowercase exponent
+        /// (Mono's "R" writes "1E+21" where Python writes "1e+21"). Mono's "R"
+        /// and Python's repr agree byte for byte for every value whose shortest
+        /// form needs at most 15 significant digits — the protocol's practical
+        /// range, since headers carry counts, parameter values and short
+        /// decimals. A value needing 16–17 digits (Math.PI) round-trips but can
+        /// carry one extra digit versus Python's repr, so this writer is
+        /// canonical for the fixture values, not for every double in
+        /// existence. No peer hashes a header, so the difference is text
+        /// stability, not a wire contract.</summary>
         public static string FormatDouble(double d)
         {
             if (double.IsNaN(d) || double.IsInfinity(d))
                 throw new JsonException("JSON cannot carry " + d);
-            string s = d.ToString("R", CultureInfo.InvariantCulture);
-            if (s.IndexOf('.') < 0 && s.IndexOf('e') < 0 && s.IndexOf('E') < 0)
+            string s = d.ToString("R", CultureInfo.InvariantCulture).Replace("E", "e");
+            if (s.IndexOf('.') < 0 && s.IndexOf('e') < 0)
                 s += ".0";
             return s;
         }

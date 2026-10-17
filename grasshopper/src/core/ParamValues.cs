@@ -41,7 +41,9 @@ namespace GhStack.Core
             double number;
             if (type == "float")
                 return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out number) ? number : 0.0;
-            if (type == "int" || type == "value_list")
+            if (type == "int")
+                return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out number) ? (long)Math.Round(number) : 0L;
+            if (type == "value_list")
                 return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out number) ? (long)number : 0L;
             if (type == "bool")
                 return text != null && text.Trim().ToLowerInvariant() == "true";
@@ -89,7 +91,15 @@ namespace GhStack.Core
             try
             {
                 if (type == "float") return Convert.ToDouble(value, CultureInfo.InvariantCulture);
-                if (type == "int" || type == "value_list") return (int)Convert.ToInt64(value, CultureInfo.InvariantCulture);
+                // Python's providers: int(round(float(value))) for `int`, plain
+                // int(value) (truncation) for `value_list` (params.py:64-70).
+                // Convert.ToInt32(double) is banker's rounding, as Python's
+                // round() is; out-of-range input throws and lands on the type's
+                // neutral value below, so no undefined cast survives.
+                if (type == "int")
+                    return Convert.ToInt32(Convert.ToDouble(value, CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
+                if (type == "value_list")
+                    return Convert.ToInt32(Math.Truncate(Convert.ToDouble(value, CultureInfo.InvariantCulture)), CultureInfo.InvariantCulture);
                 if (type == "bool") return Convert.ToBoolean(value, CultureInfo.InvariantCulture);
                 if (type == "vector3" || type == "color")
                 {

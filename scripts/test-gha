@@ -27,6 +27,13 @@ if [ -f grasshopper/build/out/GhStackAttrTests.exe ]; then
     "$(win_path "$PWD/grasshopper/build/out/GhStackAttrTests.exe")" >>"$LOG" 2>&1
   CODE=$(( CODE | $? ))
 fi
+# The link half: the real GhLink against a scripted fake server (the socket
+# thread, slots, notes, outbox and receive paths; no Rhino document).
+if [ -f grasshopper/build/out/GhStackLinkTests.exe ]; then
+  WINEPREFIX="$PREFIX" "$WINE" \
+    "$(win_path "$PWD/grasshopper/build/out/GhStackLinkTests.exe")" >>"$LOG" 2>&1
+  CODE=$(( CODE | $? ))
+fi
 set -e
 
 grep -vE 'fixme:|MESA-EGL|pci id|^$' "$LOG" || true
