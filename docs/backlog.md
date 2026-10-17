@@ -5,8 +5,11 @@ measured evidence behind the bigger items lives in `polish-plan.md`, which is a
 record of one review rather than a plan. If something is not here, it is either
 done or was judged not worth doing — it is not missing.
 
-**Next session:** read `docs/handoff-2026-10-17.md` first — it carries the
-verified state (instances work live, both directions), the two facts that cost
+**Next session:** read `docs/handoff-2026-10-17-instancing.md` first — the
+owner asked for the Blender-side instance node graph to be rebuilt (true
+instancing + a repeat zone instead of baked transformed copies); it carries
+the critique, the target design and the constraints. Then
+`docs/handoff-2026-10-17.md` for the batch's state, the two facts that cost
 the last hunt, the debug recipes, and the open debts.
 
 Each item says what it is, where, and why it matters. Effort is not estimated:
