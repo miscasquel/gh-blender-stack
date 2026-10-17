@@ -13,6 +13,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
+# The shipped add-on never manipulates sys.path (Add-on Guidelines, G2): the
+# installed extension gets `websockets` from its declared wheel, the development
+# install from the addons directory. Tests import the package straight from the
+# tree, so the harness provides the vendored copy — test code, not shipped code.
+VENDOR = os.path.join(REPO, "blender", "gh_stack", "vendor")
+if VENDOR not in sys.path:
+    sys.path.insert(0, VENDOR)
 
 loader = unittest.TestLoader()
 suite = loader.discover(HERE, pattern="test_*.py", top_level_dir=HERE)

@@ -5,12 +5,27 @@
 #
 # The zip in dist/ is the install path for users (scripts/install-extension or
 # Blender's Install from Disk). scripts/install-addon stays for development: it
-# symlinks the working tree, which has no wheel and falls back to vendor/.
+# installs the live tree, with no wheel, next to the addons directory.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SOURCE="$REPO/blender/gh_stack"
 OUT="$REPO/dist"
+
+# The wheel is third-party code that ships inside the zip; its digest is pinned
+# so a modified or substituted wheel fails the build instead of the platform's
+# review (which is the only other place it is checked). From PyPI:
+# websockets-17.2-py3-none-any.whl.
+WHEEL="$SOURCE/wheels/websockets-17.2-py3-none-any.whl"
+WHEEL_SHA256="6aa59f0ef92e796b2db6f5f26550c4713c0e4036899fadf02f55e2ed4db0b7ae"
+if [ ! -f "$WHEEL" ]; then
+  echo "missing wheel: $WHEEL" >&2
+  exit 1
+fi
+if ! echo "$WHEEL_SHA256  $WHEEL" | sha256sum -c --quiet -; then
+  echo "wheel digest does not match the pinned sha256 — refusing to build" >&2
+  exit 1
+fi
 
 # The manifest, its wheel, and the add-on code must validate before building.
 blender --command extension validate "$SOURCE" 2>&1 | grep -v '^DEBUG' || true
@@ -35,4 +50,18 @@ if [ -z "$ZIP" ]; then
   echo "build failed: no zip in $OUT" >&2
   exit 1
 fi
+
+# Validate the artifact, not just the source: this runs the same checks the
+# platform runs, catching "wheel declared but missing", malformed permission
+# strings and path-separator mistakes.
+blender --command extension validate "$ZIP" 2>&1 | grep -v '^DEBUG' || true
+
+# Nothing platform-specific or dev-only may ride inside the zip.
+BAD="$(unzip -Z1 "$ZIP" | grep -E '(^|/)vendor/|\.so$|\.exe$|\.pyc$|\.zip$' || true)"
+if [ -n "$BAD" ]; then
+  echo "zip carries files that must not ship:" >&2
+  echo "$BAD" >&2
+  exit 1
+fi
+
 echo "built $ZIP ($(stat -c%s "$ZIP") bytes)"

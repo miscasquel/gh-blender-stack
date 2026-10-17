@@ -22,41 +22,10 @@ import numpy as np
 
 from ..core import attributes as attr_mod
 
-# Section orders per protocol §5. mesh.colors exists only for plain meshes;
-# subd.colors does not exist in v2. Attribute sections (``attr.<i>.values``,
-# ``attr.<i>.offsets``) are described by the frame header, not by a fixed order.
-MESH_SECTION_ORDER = (
-    "mesh.verts",
-    "mesh.face_counts",
-    "mesh.face_indices",
-    "mesh.colors",
-    "mesh.crease_edges",
-    "mesh.crease_values",
-)
+from . import prefs
 
-SUBD_SECTION_ORDER = (
-    "subd.verts",
-    "subd.face_counts",
-    "subd.face_indices",
-    "subd.crease_edges",
-    "subd.crease_values",
-)
-
-CURVE_SECTION_ORDER = (
-    "crv.points",
-    "crv.counts",
-    "crv.types",
-    "crv.orders",
-    "crv.knots_mode",
-    "crv.cyclic",
-)
-
-POINT_SECTION_ORDER = (
-    "pts.positions",
-    "pts.radii",
-    "pts.colors",
-)
-
+# The serialization order per protocol §5 lives in hashing.HASH_SECTION_ORDER;
+# this module reads and writes sections by name.
 CREASE_ATTRIBUTE = "crease_edge"
 COLOR_ATTRIBUTE = "Col"
 
@@ -650,7 +619,7 @@ def _instance_rows(geometry):
     index_attr = cloud.attributes.get(".reference_index")
     transform_attr = cloud.attributes.get("instance_transform")
     if index_attr is None or transform_attr is None:
-        print("[gh-stack] instances skipped: no reference_index/instance_transform", flush=True)
+        prefs.log("[gh-stack] instances skipped: no reference_index/instance_transform", flush=True)
         return None
 
     n = len(cloud.points)
@@ -668,7 +637,7 @@ def _instance_rows(geometry):
         if 0 <= slot < len(refs):
             rows.append((refs[slot], matrices[row * 16:(row + 1) * 16]))
         else:
-            print(
+            prefs.log(
                 "[gh-stack] instance row %d skipped: reference index %d out of range" % (row, slot),
                 flush=True,
             )
@@ -695,13 +664,13 @@ def _reference_parts(reference, depth):
     if reference is None:
         return [], []
     if depth >= MAX_INSTANCE_DEPTH:
-        print("[gh-stack] instance nesting deeper than %d skipped" % MAX_INSTANCE_DEPTH, flush=True)
+        prefs.log("[gh-stack] instance nesting deeper than %d skipped" % MAX_INSTANCE_DEPTH, flush=True)
         return [], []
     try:
         depsgraph = bpy.context.evaluated_depsgraph_get()
         evaluated = reference.evaluated_get(depsgraph)
     except Exception as ex:
-        print("[gh-stack] instance reference not evaluable: %r" % (ex,), flush=True)
+        prefs.log("[gh-stack] instance reference not evaluable: %r" % (ex,), flush=True)
         return [], []
 
     if isinstance(reference, bpy.types.Collection):
@@ -745,7 +714,7 @@ def _object_parts(obj, depth):
     try:
         return [bpy.types.GeometrySet.from_evaluated_object(obj)], []
     except Exception as ex:
-        print(
+        prefs.log(
             "[gh-stack] instance reference %r not readable: %r" % (obj.name, ex),
             flush=True,
         )
@@ -812,7 +781,7 @@ def _serialize_definition(reference, sections, attributes, definitions, depth):
     definitions.append({"name": _reference_name(reference)})
     prefix = "idef.%d." % index
     if depth >= MAX_INSTANCE_DEPTH:
-        print("[gh-stack] instance nesting deeper than %d skipped" % MAX_INSTANCE_DEPTH, flush=True)
+        prefs.log("[gh-stack] instance nesting deeper than %d skipped" % MAX_INSTANCE_DEPTH, flush=True)
         return index
 
     units, nested = _definition_parts(reference, depth)
@@ -858,7 +827,7 @@ def _serialize_instances(geometry, sections, attributes, definitions, depth):
     if not rows:
         return None
     if depth >= MAX_INSTANCE_DEPTH:
-        print("[gh-stack] instance nesting deeper than %d skipped" % MAX_INSTANCE_DEPTH, flush=True)
+        prefs.log("[gh-stack] instance nesting deeper than %d skipped" % MAX_INSTANCE_DEPTH, flush=True)
         return None
 
     local = {}
@@ -924,7 +893,7 @@ def curves_component_to_sections(curves, prefix=""):
         is_cyclic = bool(cyclic_attr.data[index].value) if cyclic_attr is not None else False
 
         if ctype == CURVE_TYPE_CATMULL_ROM:
-            print(
+            prefs.log(
                 "[gh-stack] Catmull-Rom curve component skipped: no wire representation",
                 flush=True,
             )
@@ -1305,13 +1274,4 @@ def surface_to_mesh(obj):
     return bpy.data.meshes.new_from_object(evaluated)
 
 
-def evaluated_mesh(obj, depsgraph=None):
-    """The evaluated mesh of ``obj``. The caller does not free anything: with no
-    modifiers this is ``obj.data``, otherwise the evaluated mesh is owned by the
-    evaluated object and stays valid until the depsgraph updates."""
-    if depsgraph is None:
-        import bpy
 
-        depsgraph = bpy.context.evaluated_depsgraph_get()
-    evaluated = obj.evaluated_get(depsgraph)
-    return evaluated.data if evaluated.type == "MESH" else None

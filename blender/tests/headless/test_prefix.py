@@ -514,9 +514,18 @@ class NestedGroupPrefixTests(unittest.TestCase):
                 and abs(first[0] - 9.0) < 1e-3
             )
 
+        # Capture enough state in the message that a rare failure is diagnosable
+        # instead of re-derived (this flaked once during the 0.2.0 release run).
+        followed_ok = pump(seconds=10.0, until=followed)
         self.assertTrue(
-            pump(seconds=10.0, until=followed),
-            "the nested-group edit never reached Grasshopper: stale prefix memo?",
+            followed_ok,
+            "the nested-group edit never reached Grasshopper: stale prefix memo? "
+            "report=%r state=%s rid %s -> %s" % (
+                report_of(self.report),
+                self.stage.state,
+                rid_before[-12:],
+                self.stage.rid[-12:],
+            ),
         )
         self.assertEqual(self.stage.state, "ok", self.stage.error)
         # +10 puts the cube's first vertex at x = 9: the new evaluation, sent.

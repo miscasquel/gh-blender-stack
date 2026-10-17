@@ -1,48 +1,45 @@
 """WebSocket server on a background thread (plan §8.1, S2).
 
-`websockets` 17.2 is vendored at ``gh_stack/vendor``. The server runs its own
-asyncio loop on a plain thread; the main thread talks to it only through the
-bridge queues. The socket thread never touches bpy (plan §3, principle 7).
+The dependency is the official pure-Python `websockets` wheel the extension
+declares (Blender installs it into the extension's `_libs` on `sys.path`; the
+development install places the same package where Blender already looks). No
+code here manipulates `sys.path` — the Add-on Guidelines forbid it. The server
+runs its own asyncio loop on a plain thread; the main thread talks to it only
+through the bridge queues. The socket thread never touches bpy: the one bpy
+read, the online-access gate, happens in `start()` on the caller's thread.
 """
 
 import asyncio
-import os
-import sys
 import threading
+
+import bpy
 
 from .. import core  # noqa: F401
 from ..core import codec
-from . import bridge
-
-VENDOR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "vendor")
+from . import bridge, prefs
 
 
 def _load_websockets():
-    """Import websockets, preferring an installed copy.
-
-    The extension ships the official pure-Python wheel, which Blender installs
-    into the extension's _libs directory (on sys.path while the extension is
-    enabled). The vendored copy under vendor/ is the fallback for development
-    installs (scripts/install-addon), which have no wheel.
-    """
+    """Import websockets, the one declared dependency."""
     try:
         import websockets as ws
         from websockets.asyncio.server import serve as ws_serve
 
         return ws, ws_serve, None
-    except ImportError as first_error:
-        if VENDOR not in sys.path:
-            sys.path.insert(0, VENDOR)
-        try:
-            import websockets as ws
-            from websockets.asyncio.server import serve as ws_serve
-
-            return ws, ws_serve, None
-        except ImportError as exc:  # pragma: no cover - reported in the UI
-            return None, None, exc or first_error
+    except ImportError as exc:  # pragma: no cover - reported in the UI
+        return None, None, exc
 
 
 websockets, serve, IMPORT_ERROR = _load_websockets()
+
+
+async def _refuse(ws, code, message):
+    """Answer an unusable frame with a protocol `error` frame (§4.6). Never
+    raises into the read loop: a peer that cannot be told can only be dropped."""
+    try:
+        await ws.send(codec.encode_frame({"type": "error", "code": code, "message": message}))
+    except Exception:
+        pass
 
 
 class GhServer(object):
@@ -59,6 +56,18 @@ class GhServer(object):
         if not websockets:
             bridge.state["error"] = "websockets missing: %s" % (IMPORT_ERROR,)
             return False
+        if not bpy.app.online_access:
+            # The `network` permission contract: the listening socket is the
+            # add-on's only network use, and Blender's switch is the user's
+            # consent. Checked on every start, so flipping the preference and
+            # pressing Start works without a restart. A notice, not an error —
+            # an offline session is a legitimate state.
+            bridge.state["notice"] = (
+                "Online access is disabled — enable it in Preferences > System"
+                + (" (locked by the command line)" if bpy.app.online_access_override else "")
+            )
+            return False
+        bridge.state["notice"] = ""
         if self._thread and self._thread.is_alive() and self._port == port:
             return True
         self.stop()
@@ -173,6 +182,13 @@ class GhServer(object):
                     header, sections = codec.decode_frame(message)
                 except codec.CodecError as exc:
                     bridge.state["error"] = "bad frame: %s" % (exc,)
+                    # Answer with the protocol's own code (§4.6) instead of
+                    # silence: a wrong version additionally ends the connection
+                    # (returning from this handler closes it).
+                    code = codec.code_of(exc)
+                    await _refuse(ws, code, str(exc))
+                    if code == "proto_mismatch":
+                        break
                     continue
                 if header.get("type") == "hello":
                     bridge.set_connected(header.get("doc", ""))
@@ -188,12 +204,12 @@ class GhServer(object):
             except Exception:
                 pass
             if closed:
-                print("[gh-stack] client disconnected: %r" % (exc,), flush=True)
+                prefs.log("[gh-stack] client disconnected: %r" % (exc,), flush=True)
             else:
                 import traceback
 
                 bridge.state["error"] = "handler error: %r" % (exc,)
-                print("[gh-stack] handler error: %r\n%s" % (exc, traceback.format_exc()), flush=True)
+                prefs.log("[gh-stack] handler error: %r\n%s" % (exc, traceback.format_exc()), flush=True)
         finally:
             try:
                 self._clients.remove(ws)
@@ -205,10 +221,6 @@ class GhServer(object):
 
 
 SERVER = GhServer()
-
-
-def register():
-    pass
 
 
 def unregister():

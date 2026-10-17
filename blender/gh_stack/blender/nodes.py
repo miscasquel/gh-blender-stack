@@ -17,7 +17,7 @@ inside the group (plan §5).
 
 import bpy
 
-from . import helpers
+from . import helpers, prefs
 
 GROUP_PREFIX = "GHS "
 MODIFIER_PREFIX = "GH · "
@@ -241,13 +241,13 @@ def _note_skipped(stage_key, definitions, nested_rows, wired):
             if target in accepted or target not in definitions:
                 continue
             if target == index:
-                print(
+                prefs.log(
                     "[gh-stack] %s: nested block %d is inside itself; the placement is skipped"
                     % (stage_key, index),
                     flush=True,
                 )
             else:
-                print(
+                prefs.log(
                     "[gh-stack] %s: the placement of block %d inside block %d would close "
                     "a cycle; the placement is skipped" % (stage_key, target, index),
                     flush=True,
@@ -374,11 +374,3 @@ def set_modifier_visible(stack_obj, stage_key, visible):
         modifier.show_viewport = visible
     if modifier.show_render != visible:
         modifier.show_render = visible
-
-
-def register():
-    pass
-
-
-def unregister():
-    pass

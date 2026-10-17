@@ -8,7 +8,7 @@ property decorators.
 
 import bpy
 
-from . import bridge, engine, server as server_mod, stack as stack_mod
+from . import bridge, engine, prefs, server as server_mod, stack as stack_mod
 
 
 class GHSTACK_PT_panel(bpy.types.Panel):
@@ -33,6 +33,8 @@ class GHSTACK_PT_panel(bpy.types.Panel):
             row.label(text="Server not running", icon="UNLINKED")
         if state.get("error"):
             box.label(text=state["error"], icon="ERROR")
+        if state.get("notice"):
+            box.label(text=state["notice"], icon="INFO")
 
         obj = context.object
         record = stack_mod.stack_of(obj) if obj is not None else None
@@ -65,8 +67,6 @@ class GHSTACK_PT_panel(bpy.types.Panel):
         row = box.row()
         row.label(text="Key")
         row.label(text=stage.key)
-        if bridge.state.get("notice"):
-            box.label(text=bridge.state["notice"], icon="INFO")
         if stage.error:
             box.label(text=stage.error, icon="ERROR")
         for line in (stage.warnings or "").split("\n"):
@@ -179,7 +179,7 @@ def _state_icon(stage):
         stack_mod.STATE_WAITING: "TIME",
         stack_mod.STATE_ERROR: "ERROR",
         stack_mod.STATE_DISCONNECTED: "UNLINKED",
-        "disabled": "CHECKBOX_DEHLT",
+        stack_mod.STATE_DISABLED: "CHECKBOX_DEHLT",
     }.get(stage.state, "DOT")
 
 
@@ -190,11 +190,7 @@ def _port():
     bound = server_mod.SERVER.port
     if bound:
         return bound
-    try:
-        prefs = bpy.context.preferences.addons[__package__.split(".")[0]].preferences
-        return prefs.port
-    except (KeyError, AttributeError):
-        return 9130
+    return prefs._pref("port", 9130)
 
 
 def _safe_unregister(cls):

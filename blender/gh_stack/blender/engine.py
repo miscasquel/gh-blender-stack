@@ -197,7 +197,7 @@ def _timer():
                 bridge.state["error"] = "engine error on %s: %r" % (name, exc)
                 import traceback
 
-                print("[gh-stack] engine error:\n%s" % traceback.format_exc(), flush=True)
+                prefs.log("[gh-stack] engine error:\n%s" % traceback.format_exc(), flush=True)
             _dirty.discard(name)
         if busy:
             return WAIT_INTERVAL
@@ -208,7 +208,7 @@ def _timer():
         bridge.state["error"] = "engine error: %r" % (exc,)
         import traceback
 
-        print("[gh-stack] engine error:\n%s" % traceback.format_exc(), flush=True)
+        prefs.log("[gh-stack] engine error:\n%s" % traceback.format_exc(), flush=True)
         return IDLE_INTERVAL
 
 
@@ -325,7 +325,7 @@ def _handle_schema(header):
                 bridge.state["error"] = "schema for %s failed: %r" % (key, exc)
                 import traceback
 
-                print("[gh-stack] schema error:\n%s" % traceback.format_exc(), flush=True)
+                prefs.log("[gh-stack] schema error:\n%s" % traceback.format_exc(), flush=True)
                 continue
             # A changed schema is a changed definition: frames cached against
             # the old one must not replay.
@@ -335,7 +335,7 @@ def _handle_schema(header):
     if not matched:
         # A schema for a stage no object has: usually a key pasted into GH that
         # does not belong to any stack, or a stage removed in Blender.
-        print("[gh-stack] schema for unknown stage %r ignored" % (key,), flush=True)
+        prefs.log("[gh-stack] schema for unknown stage %r ignored" % (key,), flush=True)
 
 
 def _handle_response(header, sections):
@@ -457,10 +457,10 @@ def _handle_error(header):
             matched = True
             _resend_in_full(obj, record, stage, "unknown_ref")
         if not matched:
-            print("[gh-stack] unknown_ref for unknown stage %r" % (header.get("stage"),), flush=True)
+            prefs.log("[gh-stack] unknown_ref for unknown stage %r" % (header.get("stage"),), flush=True)
         return
 
-    print("[gh-stack] protocol error %s: %s" % (code, message), flush=True)
+    prefs.log("[gh-stack] protocol error %s: %s" % (code, message), flush=True)
     for obj in bpy.data.objects:
         record = stack_mod.stack_of(obj)
         if record is None or not record.stages:
@@ -482,7 +482,7 @@ def _resend_in_full(obj, record, stage, reason):
     _set(stage, "state", stack_mod.STATE_IDLE)
     _set(stage, "error", "")
     _dirty.add(obj.name)
-    print("[gh-stack] %s: resending geometry (%s)" % (stage.key, reason), flush=True)
+    prefs.log("[gh-stack] %s: resending geometry (%s)" % (stage.key, reason), flush=True)
 
 
 def _warnings_text(header):
@@ -545,7 +545,7 @@ def _apply(obj, stage, sections, attributes=None):
             else:
                 # The response names a nested placement whose definition group
                 # is absent: keep it visible instead of building an empty block.
-                print(
+                prefs.log(
                     "[gh-stack] %s: block %d nests definition %d, which the response does not carry"
                     % (stage.key, index, target),
                     flush=True,
@@ -621,7 +621,7 @@ def _rows_of(sections, prefix):
     if refs is None and mats is None:
         return []
     if refs is None or mats is None or len(mats) < 16:
-        print(
+        prefs.log(
             "[gh-stack] %sinst.* rows are incomplete (ref_def=%s, transforms=%s); skipped"
             % (prefix, refs is not None, mats is not None),
             flush=True,
@@ -629,7 +629,7 @@ def _rows_of(sections, prefix):
         return []
     matrices = np.asarray(mats, dtype=np.float32).reshape(-1, 16)
     if len(refs) != len(matrices):
-        print(
+        prefs.log(
             "[gh-stack] %sinst.* row pair lengths differ (%d rows vs %d matrices); the shorter side is used"
             % (prefix, len(refs), len(matrices)),
             flush=True,
@@ -660,7 +660,7 @@ def _apply_instance_rows(obj, stage, definitions, top_rows, nested_rows):
         known = helpers.definition_collections(obj, stage.key)
         missing = [target for target, _matrix in rows if target not in known]
         if missing:
-            print(
+            prefs.log(
                 "[gh-stack] %s: block %d nests definition %d, which the response does not carry"
                 % (stage.key, index, missing[0]),
                 flush=True,
@@ -732,7 +732,7 @@ def _write_rows_cloud(cloud, rows, stage_key, with_child=False):
             # A shear (or a non-uniform basis Blender cannot rebuild from
             # position/rotation/scale) is the one shape the point-cloud
             # channel cannot carry; the transform is applied lossily.
-            print(
+            prefs.log(
                 "[gh-stack] %s: instance transform %d has shear; "
                 "Blender can only carry position, rotation and scale" % (stage_key, row),
                 flush=True,
@@ -775,7 +775,7 @@ def _apply_attributes(obj, stage, sections, attributes):
             helper = objects[kind]
         _bump_id(helper)
         for note in geometry_io.write_attributes(helper.data, entries):
-            print("[gh-stack] %s: %s" % (stage.key, note), flush=True)
+            prefs.log("[gh-stack] %s: %s" % (stage.key, note), flush=True)
         helper.update_tag()
 
 
@@ -903,9 +903,9 @@ def _bump_generation(obj, record, stage, reason=""):
         removed = _store_for(record, stage).prune(generation=stage.generation)
     except OSError as exc:
         removed = []
-        print("[gh-stack] cache reset failed for %s: %r" % (stage.key, exc), flush=True)
+        prefs.log("[gh-stack] cache reset failed for %s: %r" % (stage.key, exc), flush=True)
     if removed:
-        print(
+        prefs.log(
             "[gh-stack] %s: cache reset (%s), %d frame(s) dropped"
             % (stage.key, reason or "definition changed", len(removed)),
             flush=True,
@@ -924,7 +924,7 @@ def _store_frame(record, stage, rid, header, sections):
     try:
         raw = codec.encode_frame(header, entries)
     except (codec.CodecError, KeyError, TypeError) as exc:
-        print("[gh-stack] could not store a frame for %s: %r" % (stage.key, exc), flush=True)
+        prefs.log("[gh-stack] could not store a frame for %s: %r" % (stage.key, exc), flush=True)
         return
     try:
         _store_for(record, stage).store(
@@ -935,7 +935,7 @@ def _store_frame(record, stage, rid, header, sections):
             out_hash=header.get("out_hash") or "",
         )
     except OSError as exc:
-        print("[gh-stack] cache write failed for %s: %r" % (stage.key, exc), flush=True)
+        prefs.log("[gh-stack] cache write failed for %s: %r" % (stage.key, exc), flush=True)
 
 
 def _remember(record, stage, rid, header, sections):
@@ -992,14 +992,14 @@ def _cached_response(record, stage, rid):
             return None
         raw = store.load(rid)
     except OSError as exc:
-        print("[gh-stack] cache read failed for %s: %r" % (stage.key, exc), flush=True)
+        prefs.log("[gh-stack] cache read failed for %s: %r" % (stage.key, exc), flush=True)
         return None
     if raw is None:
         return None
     try:
         header, sections = codec.decode_frame(raw)
     except codec.CodecError as exc:
-        print("[gh-stack] dropping a corrupt cached frame for %s: %r" % (stage.key, exc), flush=True)
+        prefs.log("[gh-stack] dropping a corrupt cached frame for %s: %r" % (stage.key, exc), flush=True)
         store.remove(rid)
         return None
     if header.get("status") != "ok" or header.get("stage") != stage.key:
@@ -1034,7 +1034,7 @@ def _process_stage(obj, record, stage):
     """One stage's pass. Returns "waiting" (request in flight; stop the stack),
     "busy" (work happened; keep the fast timer), or "idle"."""
     if not stage.enabled:
-        _set(stage, "state", "disabled")
+        _set(stage, "state", stack_mod.STATE_DISABLED)
         nodes.set_modifier_visible(obj, stage.key, False)
         return "idle"
     nodes.set_modifier_visible(obj, stage.key, True)
@@ -1132,7 +1132,7 @@ def _process_stage(obj, record, stage):
         _set(stage, "state", stack_mod.STATE_DISCONNECTED)
         return "idle"
     if retry_note:
-        print("[gh-stack] %s: %s" % (stage.key, retry_note), flush=True)
+        prefs.log("[gh-stack] %s: %s" % (stage.key, retry_note), flush=True)
     stats["sends"] += 1
 
     now = time.monotonic()
@@ -1458,6 +1458,14 @@ def _bump_epochs(depsgraph):
     moving it. Counting that would retire the memo the engine just filled, once
     per pass, and the memo would never hold. Blender states which of the three
     kinds of update each entry is; this reads it rather than guessing.
+
+    **Accepted risk, recorded 2026-10-17 (the backlog asked for one of the
+    two):** a change that never tags the depsgraph is invisible here, and no
+    later pass catches it — a script writing mesh or point-cloud data directly
+    is verified to fire no update at all, and a rebake finishing is unverified.
+    The workarounds are an edit that does tag (any operator) or Push, which
+    retires the prefix memo. Watching for those writes would mean re-introducing
+    an input description, which is the design the depsgraph replaced in 0.1.3.
     """
     try:
         updates = list(depsgraph.updates)

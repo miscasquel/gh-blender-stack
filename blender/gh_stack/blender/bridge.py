@@ -10,7 +10,6 @@ import queue
 import time
 
 INCOMING = queue.Queue()  # (header dict, sections dict)
-OUTGOING = queue.Queue()  # frame bytes
 
 state = {
     "listening": False,
@@ -39,18 +38,6 @@ def drain_incoming():
         except queue.Empty:
             break
     return items
-
-
-def post_outgoing(frame):
-    OUTGOING.put(frame)
-
-
-def take_outgoing():
-    """One frame to send, or None."""
-    try:
-        return OUTGOING.get_nowait()
-    except queue.Empty:
-        return None
 
 
 def set_connected(doc):

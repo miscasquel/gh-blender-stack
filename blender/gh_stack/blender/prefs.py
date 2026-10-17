@@ -3,10 +3,32 @@
 import os
 
 import bpy
-from bpy.props import FloatProperty, IntProperty, StringProperty
+from bpy.props import EnumProperty, FloatProperty, IntProperty, StringProperty
 
 DEFAULT_DATA_ROOT = "~/.local/share/gh-stack"
 DEFAULT_CACHE_MB = 256
+
+# A plain snapshot of `log_level`, refreshed on the main thread (register and
+# every change), so any thread can call `log()` without touching bpy — the
+# socket thread prints disconnects and decode failures (plan §3, principle 7).
+_log_info = True
+
+
+def _log_level_changed(self, context):
+    refresh_log_level()
+
+
+def refresh_log_level():
+    global _log_info
+    _log_info = _pref("log_level", "info") != "quiet"
+
+
+def log(*args, **kwargs):
+    """A gated `print` for the `[gh-stack]` diagnostics: `quiet` silences them,
+    `info` (the default) prints. Errors still surface in the panel state either
+    way; this only controls the system console."""
+    if _log_info:
+        print(*args, **kwargs)
 
 
 class GhStackPreferences(bpy.types.AddonPreferences):
@@ -37,9 +59,15 @@ class GhStackPreferences(bpy.types.AddonPreferences):
         default=DEFAULT_CACHE_MB,
         min=1,
     )
-    log_level: StringProperty(
+    log_level: EnumProperty(
         name="Log level",
+        description="How much the add-on prints to the system console",
+        items=[
+            ("quiet", "Quiet", "Print nothing; stage states stay visible in the panel"),
+            ("info", "Info", "Print the add-on's [gh-stack] diagnostics"),
+        ],
         default="info",
+        update=_log_level_changed,
     )
 
     def draw(self, context):
@@ -76,6 +104,7 @@ def cache_size_bytes():
 
 def register():
     bpy.utils.register_class(GhStackPreferences)
+    refresh_log_level()
 
 
 def unregister():

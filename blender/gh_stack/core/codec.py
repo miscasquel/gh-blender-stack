@@ -38,6 +38,26 @@ class SectionError(CodecError):
     """A section's declared size or dtype is inconsistent."""
 
 
+# The protocol §4.6 codes this codec can raise. `code_of` exists so a caller
+# (the server) can answer a rejected frame with the code the spec defines
+# instead of parsing the message itself.
+CODEC_CODES = ("proto_mismatch", "bad_frame", "too_large")
+
+
+def code_of(exc):
+    """The error code a codec exception carries: the leading token of its
+    message when it is one of the protocol codes, else ``"bad_frame"``."""
+    token = str(exc).split(":", 1)[0]
+    return token if token in CODEC_CODES else "bad_frame"
+
+
+def _reject_constant(text):
+    """Reject ``NaN``/``Infinity``: they are Python json extensions, not JSON,
+    and the C# decoder rejects them too — the two codecs must agree on what is
+    valid input."""
+    raise ValueError("non-finite JSON literal %r" % text)
+
+
 def canonical_json(obj):
     """Encode JSON the way the protocol demands: sorted keys, tight separators.
 
@@ -166,18 +186,20 @@ def decode_frame(frame):
     """
     if not isinstance(frame, (bytes, bytearray)):
         raise HeaderError("frame must be bytes, not %s" % type(frame).__name__)
+    if len(frame) > MAX_MESSAGE_BYTES:
+        raise CodecError("too_large: frame is %d bytes" % len(frame))
     if len(frame) < 4:
         raise HeaderError("frame too short for the header length prefix")
     (head_len,) = _HEADER_LEN.unpack_from(bytes(frame), 0)
     if head_len > MAX_HEADER_BYTES:
-        raise HeaderError("bad_frame: header length %d over the cap" % head_len)
+        raise CodecError("too_large: header length %d over the cap" % head_len)
     if len(frame) < 4 + head_len:
         raise HeaderError("bad_frame: header is truncated")
     head_bytes = bytes(frame[4 : 4 + head_len])
     body = bytes(frame[4 + head_len :])
 
     try:
-        header = json.loads(head_bytes.decode("utf-8"))
+        header = json.loads(head_bytes.decode("utf-8"), parse_constant=_reject_constant)
     except (UnicodeDecodeError, ValueError) as ex:
         raise HeaderError("bad_frame: header is not valid JSON: %s" % ex)
     if not isinstance(header, dict):

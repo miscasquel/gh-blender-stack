@@ -26,7 +26,9 @@ blender --command extension install-file -r user_default -e "$ZIP" 2>&1 | grep -
 
 LOG="$(mktemp)"
 set +e
-blender -b --factory-startup --python-exit-code 1 \
+# --online-mode: a factory startup reports online access as off, and the add-on
+# gates its server on bpy.app.online_access (the `network` permission contract).
+blender -b --factory-startup --online-mode --python-exit-code 1 \
   --python "$REPO/blender/tests/installed/run.py" >"$LOG" 2>&1
 CODE=$?
 set -e

@@ -28,7 +28,6 @@ if BLENDER_PKG not in sys.path:
     sys.path.insert(0, BLENDER_PKG)
 
 from blender.gh_stack.blender import geometry_io  # noqa: E402
-from blender.gh_stack.core import codec  # noqa: E402
 
 PORT = 9143
 
@@ -464,7 +463,6 @@ class MixedEngineTests(unittest.TestCase):
 
     def test_03_a_response_without_curves_or_points_clears_them(self):
         import gh_stack.blender.helpers as helpers
-        import gh_stack.blender.stack as stack_mod
         from blender.gh_stack.blender import engine as engine_mod
 
         mesh_sections = {"mesh.verts": [(0, 0, 0), (1, 0, 0), (0, 1, 0)],

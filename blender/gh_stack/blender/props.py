@@ -6,18 +6,7 @@ keyframed and driven. Ranges go through ``id_properties_ui``. The schema itself
 """
 
 from ..core import codec, params as core_params
-from . import bridge, stack as stack_mod
-
-TYPE_DEFAULTS = {
-    "float": 0.0,
-    "int": 0,
-    "bool": False,
-    "vector3": (0.0, 0.0, 0.0),
-    "color": (0.0, 0.0, 0.0),
-    "value_list": 0,
-    "text": "",
-}
-
+from . import bridge, prefs, stack as stack_mod
 
 def schema_of(stage):
     """The stage's schema as the plain dicts the core expects."""
@@ -154,7 +143,7 @@ def apply_schema(obj, stage, params):
             if keys:
                 notice += " and %d keyframe(s)/driver(s) were removed" % keys
             bridge.state["notice"] = notice
-            print("[gh-stack] " + notice, flush=True)
+            prefs.log("[gh-stack] " + notice, flush=True)
         if name not in obj:
             obj[name] = _initial_value(entry)
         elif entry.type == "value_list":
@@ -289,7 +278,7 @@ def _safe_values(obj, stage):
             core_params.cast(param["type"], values[pid])
             safe[pid] = values[pid]
         except (core_params.SchemaError, TypeError, ValueError):
-            print(
+            prefs.log(
                 "[gh-stack] value for %s/%s does not fit type %s; using the default"
                 % (stage.key, pid, param["type"]),
                 flush=True,
@@ -304,11 +293,3 @@ def canonical_json(obj, stage):
 
 def cast_values(obj, stage):
     return core_params.cast_params(schema_of(stage), _safe_values(obj, stage))
-
-
-def register():
-    pass
-
-
-def unregister():
-    pass

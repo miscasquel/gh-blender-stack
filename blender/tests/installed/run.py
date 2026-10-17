@@ -48,8 +48,10 @@ def saved_port_check(server, prefs):
     phase2 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "port_phase2.py")
     # `sys.executable` inside Blender is the embedded Python, not Blender itself;
     # `bpy.app.binary_path` is the interpreter that can run a second headless pass.
+    # --online-mode: a fresh throwaway config reports online access as off, and
+    # the add-on gates its server on it (the `network` permission contract).
     result = subprocess.run(
-        [bpy.app.binary_path, "-b", "--python", phase2],
+        [bpy.app.binary_path, "-b", "--online-mode", "--python", phase2],
         env=dict(os.environ, GHSTACK_PORT_EXPECT=str(SAVED_PORT)),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

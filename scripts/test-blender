@@ -6,7 +6,10 @@ cd "$(dirname "$0")/.."
 
 LOG="$(mktemp)"
 set +e
-blender -b --factory-startup --python-exit-code 1 \
+# --online-mode: the add-on's `network` permission contract gates the server on
+# bpy.app.online_access, which a factory startup reports as off (no user
+# preference to read). The suite is the consent here.
+blender -b --factory-startup --online-mode --python-exit-code 1 \
   --python blender/tests/headless/run.py >"$LOG" 2>&1
 CODE=$?
 set -e

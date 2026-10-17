@@ -27,6 +27,7 @@ STATE_WAITING = "waiting"
 STATE_OK = "ok"
 STATE_ERROR = "error"
 STATE_DISCONNECTED = "disconnected"
+STATE_DISABLED = "disabled"
 
 
 def new_stage_key(label="stage"):

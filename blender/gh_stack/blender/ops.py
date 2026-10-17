@@ -3,7 +3,7 @@
 import bpy
 from bpy.props import IntProperty, StringProperty
 
-from . import engine, helpers, nodes, stack as stack_mod
+from . import bridge, engine, helpers, nodes, stack as stack_mod
 
 STACK_TYPES = {"MESH", "CURVE", "POINTCLOUD", "SURFACE"}
 
@@ -96,8 +96,12 @@ class GHSTACK_OT_start_server(bpy.types.Operator):
 
     def execute(self, context):
         ok = engine.start_server()
-        self.report({"INFO"} if ok else {"ERROR"}, "GH Stack server " + ("started" if ok else "failed"))
-        return {"FINISHED"} if ok else {"CANCELLED"}
+        if ok:
+            self.report({"INFO"}, "GH Stack server started")
+            return {"FINISHED"}
+        why = bridge.state.get("notice") or bridge.state.get("error") or "failed"
+        self.report({"WARNING"}, "GH Stack server not started: %s" % why)
+        return {"CANCELLED"}
 
 
 def _safe_unregister(cls):

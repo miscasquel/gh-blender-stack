@@ -327,7 +327,3 @@ def decomposes_cleanly(matrix, position, quaternion, scale):
 
 def register():
     adopt_existing()
-
-
-def unregister():
-    pass

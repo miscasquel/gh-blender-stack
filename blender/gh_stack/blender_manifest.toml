@@ -1,21 +1,25 @@
 schema_version = "1.0.0"
 
 id = "gh_stack"
-# Keep in sync with bl_info in gh_stack/__init__.py (P8-4).
-version = "0.2.0"
+# The single source for the add-on version: the development install
+# (scripts/install-addon) generates bl_info from this manifest.
+version = "0.2.1"
 name = "GH Stack"
 tagline = "Grasshopper definitions as stackable modifiers in Blender"
 maintainer = "Miquel Oller <miqueloc14@gmail.com>"
 type = "add-on"
 
 license = ["SPDX:GPL-3.0-or-later"]
+copyright = ["2026 Miquel Oller"]
 blender_version_min = "5.2.0"
 website = "https://github.com/miscasquel/gh-blender-stack"
 
 # The official pure-Python wheel. Blender installs it into the extension's
-# _libs directory; the vendored copy in vendor/ is only the fallback for
-# development installs (scripts/install-addon).
+# _libs directory; the development install (scripts/install-addon) places the
+# same package on Blender's addons path instead.
 wheels = ["./wheels/websockets-17.2-py3-none-any.whl"]
 
 [permissions]
 network = "Listen on localhost for the Grasshopper connection"
+files = "Store cached Grasshopper frames under the data root"
+clipboard = "Copy the stage key to paste into Grasshopper"

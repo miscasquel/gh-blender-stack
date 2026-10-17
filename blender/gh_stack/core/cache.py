@@ -14,6 +14,7 @@ deletion on eviction. The engine keeps its own decoded-memory dict as the hot
 path; this store is the backing store and the cross-session cache.
 """
 
+import heapq
 import json
 import os
 
@@ -40,8 +41,10 @@ class CacheIndex(object):
     """Maps rid to stored responses for one stack and stage.
 
     Eviction is FIFO over insertion order, bounded by a byte budget. The cache is
-    a plain dict, so lookups are the hot path; the seq counter only exists for
-    eviction order.
+    a plain dict, so lookups are the hot path; a lazily-pruned heap over
+    ``(seq, rid)`` keeps eviction O(log n) per insert (the scan-min-per-removal
+    version was quadratic), and the running byte total keeps ``total_size``
+    O(1).
     """
 
     def __init__(self, base_dir, stack_id, stage_key, size_limit=DEFAULT_SIZE_LIMIT):
@@ -51,6 +54,8 @@ class CacheIndex(object):
         self.size_limit = size_limit
         self._entries = {}
         self._seq = 0
+        self._total = 0
+        self._order = []  # (seq, rid); refreshed or removed pairs go stale
         self._evicted = []
 
     # ------------------------------------------------------------------ paths
@@ -81,8 +86,13 @@ class CacheIndex(object):
     def add(self, rid, size=0, generation=0, definition="", out_hash=""):
         """Insert or refresh an entry. Refreshing counts as a re-insert for FIFO."""
         self._seq += 1
+        existing = self._entries.get(rid)
+        if existing is not None:
+            self._total -= existing.size
         entry = CacheEntry(rid, self.path_for(rid), size, self._seq, generation, definition, out_hash)
         self._entries[rid] = entry
+        self._total += size
+        heapq.heappush(self._order, (self._seq, rid))
         self._evict()
         return entry
 
@@ -92,10 +102,14 @@ class CacheIndex(object):
         if entry is not None:
             self._seq += 1
             entry.seq = self._seq
+            heapq.heappush(self._order, (self._seq, rid))
         return entry
 
     def remove(self, rid):
-        return self._entries.pop(rid, None)
+        entry = self._entries.pop(rid, None)
+        if entry is not None:
+            self._total -= entry.size
+        return entry
 
     def rids(self):
         return list(self._entries.keys())
@@ -105,15 +119,19 @@ class CacheIndex(object):
         """Evict oldest-first until the total fits the budget. Returns the entries
         dropped, so a disk store can delete their files."""
         dropped = []
-        while len(self._entries) > 1 and self.total_size() > self.size_limit:
-            oldest = min(self._entries.values(), key=lambda e: e.seq)
-            del self._entries[oldest.rid]
-            dropped.append(oldest)
+        while len(self._entries) > 1 and self._total > self.size_limit:
+            seq, rid = heapq.heappop(self._order)
+            entry = self._entries.get(rid)
+            if entry is None or entry.seq != seq:
+                continue  # a refreshed or removed entry's old pair
+            del self._entries[rid]
+            self._total -= entry.size
+            dropped.append(entry)
         self._evicted = dropped
         return dropped
 
     def total_size(self):
-        return sum(e.size for e in self._entries.values())
+        return self._total
 
     def evicted(self):
         """Entries dropped by the last add, for logging."""
