@@ -1,4 +1,4 @@
-"""Helper objects and the GH Stage Data collection (plan §5).
+"""Helper objects, block definitions and row clouds in the GH Stage scene (plan §5).
 
 Helpers are hidden objects that carry a stage's output geometry, one per
 geometry kind: a mesh, a curve, and a point cloud. A node group reads them with
@@ -12,28 +12,69 @@ a small hidden collection holding its own per-kind helpers, read by the stage's
 node group through Object Info, and each definition's rows are hidden point
 clouds (position/rotation/scale) fed into Instance on Points: one cloud for the
 definition's top-level rows, and one for the placements nested inside it.
+
+All of it is owned by the dedicated `GH Stage` scene, not the user's: the
+outliner stays theirs, while the node graph still resolves the datablocks
+through Object Info (verified across scenes, render included).
 """
 
 import bpy
 import numpy as np
 
 COLLECTION_NAME = "GH Stage Data"
+SCENE_NAME = "GH Stage"
 HELPER_PREFIX = "GHS "
 KINDS = ("mesh", "curves", "points")
 
 
-def collection(context=None):
-    """The excluded helper collection, created on first use."""
+def stage_scene():
+    """The scene that owns the plumbing: helpers, definitions and row clouds.
+
+    One scene per file keeps the user's own scene and outliner clean while the
+    objects stay linked — an unlinked datablock would not survive a save — and
+    the node graph reads them across scenes (verified with a render). Created
+    on first use; deleting it is repaired on the next use.
+    """
+    scene = bpy.data.scenes.get(SCENE_NAME)
+    if scene is None:
+        scene = bpy.data.scenes.new(SCENE_NAME)
+    return scene
+
+
+def _adopt(coll):
+    """Own ``coll``: linked into the stage scene, and nowhere else. Sessions
+    from before the stage scene have their plumbing linked into the user's
+    scene; the next use moves it."""
+    scene = stage_scene()
+    if coll.name not in scene.collection.children:
+        scene.collection.children.link(coll)
+    for other in bpy.data.scenes:
+        if other is not scene and coll.name in other.collection.children:
+            other.collection.children.unlink(coll)
+
+
+def collection():
+    """The helper collection, created on first use, owned by the stage scene."""
     existing = bpy.data.collections.get(COLLECTION_NAME)
     if existing is not None:
+        _adopt(existing)
         return existing
     coll = bpy.data.collections.new(COLLECTION_NAME)
-    (context or bpy.context).scene.collection.children.link(coll)
-    # Excluded from the view layer: helpers are plumbing, never visible.
-    layer = (context or bpy.context).view_layer
-    if coll.name in layer.layer_collection.children:
-        layer.layer_collection.children[coll.name].exclude = True
+    stage_scene().collection.children.link(coll)
     return coll
+
+
+def adopt_existing():
+    """Move plumbing linked into the user's scene (sessions from before the
+    stage scene) into the stage scene. Called on register and on file load, so
+    an old file tidies up even before its first apply."""
+    if not hasattr(bpy.data, "collections"):
+        # register() also runs while a file is being read, and data access is
+        # restricted there; the load_post hook adopts once the file is in.
+        return
+    for coll in list(bpy.data.collections):
+        if coll.name == COLLECTION_NAME or coll.name.startswith(HELPER_PREFIX):
+            _adopt(coll)
 
 
 def helper_name(stack_obj, stage_key, kind="mesh"):
@@ -44,10 +85,15 @@ def helper_name(stack_obj, stage_key, kind="mesh"):
 def ensure_helper(stack_obj, stage_key, kind="mesh"):
     """The helper for one kind of one stage. Created hidden and identity-transformed."""
     name = helper_name(stack_obj, stage_key, kind)
+    coll = collection()
     helper = bpy.data.objects.get(name)
     if helper is None:
         helper = bpy.data.objects.new(name, _new_data(name, kind))
-        collection().objects.link(helper)
+        coll.objects.link(helper)
+    elif helper.name not in coll.objects:
+        # The stage scene was deleted: its datablocks survive unlinked, and
+        # this keeps them owned (and saved) again.
+        coll.objects.link(helper)
     # Only write on change, like every engine-side write: an unchanged write
     # tags the depsgraph and restarts Cycles accumulation for nothing.
     _hide(helper)
@@ -91,15 +137,17 @@ def ensure_definition(stack_obj, stage_key, index):
     """One definition's prototype collection plus its per-kind helper objects.
     Returns ``(collection, {kind: object})``.
 
-    The collection is linked at the scene root and hidden by flag rather than
-    excluded from the view layer: a collection inside the excluded helper
-    collection is not evaluated, so Collection Info would read it as empty.
+    The collection lives in the stage scene (hidden by flag, never excluded
+    from a view layer: an excluded collection is not evaluated, and Collection
+    Info once read them as empty).
     """
     coll_name = definition_collection_name(stack_obj, stage_key, index)
     coll = bpy.data.collections.get(coll_name)
     if coll is None:
         coll = bpy.data.collections.new(coll_name)
-        bpy.context.scene.collection.children.link(coll)
+        stage_scene().collection.children.link(coll)
+    else:
+        _adopt(coll)
     if not coll.hide_viewport:
         coll.hide_viewport = True
     if not coll.hide_render:
@@ -133,10 +181,15 @@ def ensure_nested_cloud(stack_obj, stage_key, index):
 
 
 def _ensure_cloud(name):
+    coll = collection()
     cloud = bpy.data.objects.get(name)
     if cloud is None:
         cloud = bpy.data.objects.new(name, bpy.data.pointclouds.new(name))
-        collection().objects.link(cloud)
+        coll.objects.link(cloud)
+    elif cloud.name not in coll.objects:
+        # The stage scene was deleted: its datablocks survive unlinked, and
+        # this keeps them owned (and saved) again.
+        coll.objects.link(cloud)
     _hide(cloud)
     return cloud
 
@@ -273,7 +326,7 @@ def decomposes_cleanly(matrix, position, quaternion, scale):
 
 
 def register():
-    pass
+    adopt_existing()
 
 
 def unregister():

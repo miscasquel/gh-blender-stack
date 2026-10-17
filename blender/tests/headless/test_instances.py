@@ -1008,6 +1008,82 @@ class InstanceApplyTests(unittest.TestCase):
             evaluated.to_mesh_clear()
 
 
+    def test_plumbing_lives_in_the_stage_scene(self):
+        # Helpers, definitions and row clouds are owned by the dedicated
+        # "GH Stage" scene, so the user's outliner holds only their own
+        # collections; the node graph still resolves them across scenes.
+        from blender.gh_stack.blender import engine, helpers
+
+        obj, stage = self._stage()
+        sections = dict(self._quad_sections("idef.0."))
+        sections["idef.1.inst.ref_def"] = np.array([0], dtype=np.uint32)
+        sections["idef.1.inst.transforms"] = self._wire_transform((0, 0, 3))
+        sections["inst.ref_def"] = np.array([1], dtype=np.uint32)
+        sections["inst.transforms"] = self._wire_transform((0, 0, 0))
+        engine._apply(obj, stage, sections, None)
+
+        stage_scene = helpers.stage_scene()
+        user_scene = bpy.context.scene
+        owned = [
+            coll for coll in bpy.data.collections
+            if coll.name.startswith(helpers.HELPER_PREFIX)
+            or coll.name == helpers.COLLECTION_NAME
+        ]
+        self.assertTrue(owned)
+        for coll in owned:
+            self.assertIn(coll.name, [c.name for c in stage_scene.collection.children])
+            self.assertNotIn(coll.name, [c.name for c in user_scene.collection.children])
+
+        # Across scenes, the chain still draws.
+        evaluated, mesh = self._realized_mesh(obj)
+        try:
+            zs = sorted(round(v.co.z, 3) for v in mesh.vertices)
+            self.assertEqual(zs, [3.0, 3.0, 3.0, 3.0])
+        finally:
+            evaluated.to_mesh_clear()
+
+    def test_old_layout_collections_are_adopted(self):
+        # Sessions from before the stage scene have their plumbing linked into
+        # the user's scene; the next use moves it, so no manual cleanup is
+        # needed. A deleted stage scene is recreated the same way.
+        from blender.gh_stack.blender import engine, helpers
+
+        obj, stage = self._stage()
+        sections = dict(self._quad_sections("idef.0."))
+        sections["inst.ref_def"] = np.array([0], dtype=np.uint32)
+        sections["inst.transforms"] = self._wire_transform((0, 0, 0))
+        engine._apply(obj, stage, sections, None)
+
+        user_scene = bpy.context.scene
+        stage_scene = helpers.stage_scene()
+        definitions = helpers.definition_collections(obj, stage.key)
+        # The old layout: everything linked at the user's scene root.
+        for coll in [bpy.data.collections[helpers.COLLECTION_NAME], definitions[0]]:
+            user_scene.collection.children.link(coll)
+
+        helpers.ensure_helpers(obj, stage.key)
+        helpers.ensure_definition(obj, stage.key, 0)
+        for coll in [bpy.data.collections[helpers.COLLECTION_NAME], definitions[0]]:
+            self.assertNotIn(coll.name, [c.name for c in user_scene.collection.children])
+            self.assertIn(coll.name, [c.name for c in stage_scene.collection.children])
+
+        # adopt_existing() (register / file load) does it without a use.
+        for coll in [bpy.data.collections[helpers.COLLECTION_NAME], definitions[0]]:
+            user_scene.collection.children.link(coll)
+        helpers.adopt_existing()
+        for coll in [bpy.data.collections[helpers.COLLECTION_NAME], definitions[0]]:
+            self.assertNotIn(coll.name, [c.name for c in user_scene.collection.children])
+
+        # Deleting the stage scene is repaired on the next use.
+        bpy.data.scenes.remove(stage_scene)
+        helpers.collection()
+        self.assertIsNotNone(bpy.data.scenes.get(helpers.SCENE_NAME))
+        self.assertIn(
+            helpers.COLLECTION_NAME,
+            [c.name for c in helpers.stage_scene().collection.children],
+        )
+
+
 class EnginePrefixTests(unittest.TestCase):
     """The product's prefix path end to end: a real stack object, a real
     Instance-on-Points modifier, a real stage added through the operator.

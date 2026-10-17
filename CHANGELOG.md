@@ -80,6 +80,10 @@ Notable changes to this project, following
 
 ### Changed
 
+- **Your scene stays yours.** Helper objects, block definitions and their row
+  clouds now live in a dedicated `GH Stage` scene instead of your own scene, so
+  the outliner and scene graph show only your data. Sessions saved before the
+  move are migrated on first use; drawing and renders are unaffected.
 - **Stage In has one geometry output.** `Geometry` is now a generic list that
   carries everything Blender sent, in order: mesh, SubD cage, curves, point
   cloud. The separate `Curves`, `Points`, and `SubD` outputs are gone; wires

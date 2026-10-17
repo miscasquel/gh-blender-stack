@@ -150,6 +150,9 @@ def _on_load(scene=None):
     """
     if not bpy.app.timers.is_registered(_timer):
         bpy.app.timers.register(_timer, first_interval=IDLE_INTERVAL, persistent=True)
+    # A file from before the stage scene still has its plumbing in the user's
+    # scene: move it now, so the outliner is clean before the first apply.
+    helpers.adopt_existing()
     _pending.clear()
     _prefix_memo.clear()
     _state_since.clear()
