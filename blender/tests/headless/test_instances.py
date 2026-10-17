@@ -141,19 +141,25 @@ class InstanceReadTests(unittest.TestCase):
         sections, attributes, definitions = _serialize(holder)
         by_name = _by_name(sections)
 
-        self.assertEqual(definitions, [{"name": "ProtoColl"}])
-        self.assertIn("idef.0.mesh.verts", by_name)
-        self.assertEqual(by_name["idef.0.mesh.verts"].shape, (4, 3))
-        self.assertEqual(list(by_name["idef.0.mesh.face_counts"]), [4])
+        # The collection is one definition; each member is its own definition
+        # placed by a row (a member's own transform applies).
+        self.assertEqual([entry["name"] for entry in definitions], ["ProtoColl", "read-quad"])
+        self.assertIn("idef.1.mesh.verts", by_name)
+        self.assertEqual(by_name["idef.1.mesh.verts"].shape, (4, 3))
+        self.assertEqual(by_name["idef.1.mesh.face_counts"].shape, (1,))
+        self.assertEqual(list(by_name["idef.0.inst.ref_def"]), [1])
+        np.testing.assert_allclose(
+            by_name["idef.0.inst.transforms"].reshape(4, 4), np.eye(4), atol=1e-6
+        )
 
-        # The per-definition attribute carries the definition index.
+        # The per-member attribute carries the member's definition index.
         load = [a for a in attributes if a["name"] == "load"]
         self.assertEqual(len(load), 1)
-        self.assertEqual(load[0]["definition"], 0)
-        self.assertTrue(load[0]["section"].startswith("idef.0.attr."))
+        self.assertEqual(load[0]["definition"], 1)
+        self.assertTrue(load[0]["section"].startswith("idef.1.attr."))
         self.assertEqual(list(by_name[load[0]["section"]]), [0.5, 1.0, 1.5, 2.0])
 
-        # Two rows, one definition.
+        # Two top rows, one definition.
         self.assertEqual(list(by_name["inst.ref_def"]), [0, 0])
         transforms = by_name["inst.transforms"].reshape(-1, 16)
         self.assertEqual(transforms.shape, (2, 16))
@@ -161,6 +167,85 @@ class InstanceReadTests(unittest.TestCase):
         self.assertEqual([transforms[0][3], transforms[0][7], transforms[0][11]], [0.0, 0.0, 0.0])
         self.assertEqual([transforms[1][3], transforms[1][7], transforms[1][11]], [3.0, 0.0, 0.0])
         np.testing.assert_allclose(transforms[0].reshape(4, 4), np.eye(4), atol=1e-6)
+
+    def test_a_collection_member_transform_rides_its_row(self):
+        # Blender applies a member's own transform when instancing a collection;
+        # the wire carries it as the member's placement row.
+        member = _quad("member-moved")
+        member.location.x = 5.0
+        coll = _collection("MovedColl", member)
+        points = _points("MovedPts", [(0, 0, 0)])
+        holder = _instance_holder("MovedHolder", points, coll, "collection")
+
+        sections, _attributes, definitions = _serialize(holder)
+        by_name = _by_name(sections)
+        self.assertEqual([entry["name"] for entry in definitions], ["MovedColl", "member-moved"])
+        row = by_name["idef.0.inst.transforms"].reshape(4, 4)
+        self.assertEqual([row[0][3], row[1][3], row[2][3]], [5.0, 0.0, 0.0])
+
+    def test_two_collection_members_keep_separate_definitions(self):
+        # Two members used to collapse into one definition with colliding
+        # section names; all but one member was lost, and Python and the GH
+        # codec disagreed on which survived.
+        first = _quad("two-a")
+        second = _quad("two-b")
+        second.location.x = 10.0
+        coll = _collection("TwoColl", first, second)
+        points = _points("TwoPts", [(0, 0, 0)])
+        holder = _instance_holder("TwoHolder", points, coll, "collection")
+
+        sections, _attributes, definitions = _serialize(holder)
+        by_name = _by_name(sections)
+        self.assertEqual([entry["name"] for entry in definitions], ["TwoColl", "two-a", "two-b"])
+        self.assertEqual(by_name["idef.1.mesh.verts"].shape, (4, 3))
+        self.assertEqual(by_name["idef.2.mesh.verts"].shape, (4, 3))
+        self.assertEqual(list(by_name["idef.0.inst.ref_def"]), [1, 2])
+        rows = by_name["idef.0.inst.transforms"].reshape(-1, 16)
+        self.assertEqual([rows[1][3], rows[1][7], rows[1][11]], [10.0, 0.0, 0.0])
+
+    def test_a_member_with_its_own_instances_carries_them(self):
+        # The live shape: a cube whose own modifier instances a sphere, kept as
+        # surface plus instances, instanced by a collection. The member's
+        # definition must carry the sphere and its rows, not just the surface.
+        sphere = _quad("nested-sphere")
+        points = _points("nested-points", [(0, 0, 0), (2, 0, 0)])
+        cube = _quad("nested-cube")
+        group = bpy.data.node_groups.new("nested-cube-group", "GeometryNodeTree")
+        group.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+        group.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+        source = group.nodes.new("NodeGroupInput")
+        output = group.nodes.new("NodeGroupOutput")
+        iono = group.nodes.new("GeometryNodeInstanceOnPoints")
+        join = group.nodes.new("GeometryNodeJoinGeometry")
+        instance_info = group.nodes.new("GeometryNodeObjectInfo")
+        instance_info.inputs["Object"].default_value = sphere
+        instance_info.transform_space = "ORIGINAL"
+        points_info = group.nodes.new("GeometryNodeObjectInfo")
+        points_info.inputs["Object"].default_value = points
+        points_info.transform_space = "ORIGINAL"
+        group.links.new(instance_info.outputs["Geometry"], iono.inputs["Instance"])
+        group.links.new(points_info.outputs["Geometry"], iono.inputs["Points"])
+        group.links.new(source.outputs["Geometry"], join.inputs["Geometry"])
+        group.links.new(iono.outputs["Instances"], join.inputs["Geometry"])
+        group.links.new(join.outputs["Geometry"], output.inputs["Geometry"])
+        modifier = cube.modifiers.new("GN", "NODES")
+        modifier.node_group = group
+        coll = _collection("NestedColl", cube)
+        holder_points = _points("NestedHolderPts", [(0, 0, 0)])
+        holder = _instance_holder("NestedHolder", holder_points, coll, "collection")
+
+        sections, _attributes, definitions = _serialize(holder)
+        by_name = _by_name(sections)
+
+        self.assertEqual(
+            [entry["name"] for entry in definitions],
+            ["NestedColl", "nested-cube", "nested-sphere"],
+        )
+        self.assertIn("idef.1.mesh.verts", by_name)              # the cube's surface
+        self.assertIn("idef.2.mesh.verts", by_name)              # the sphere
+        self.assertEqual(list(by_name["idef.1.inst.ref_def"]), [2, 2])
+        nested = by_name["idef.1.inst.transforms"].reshape(-1, 16)
+        self.assertEqual([nested[1][3], nested[1][7], nested[1][11]], [2.0, 0.0, 0.0])
 
     def test_rotation_and_scale_ride_the_row_transform(self):
         import mathutils
@@ -223,19 +308,26 @@ class InstanceReadTests(unittest.TestCase):
         sections, _attributes, definitions = _serialize(holder)
         by_name = _by_name(sections)
 
-        self.assertEqual([entry["name"] for entry in definitions], ["nest-outer", "nest-inner"])
-        self.assertIn("idef.1.mesh.verts", by_name)          # the inner cube
-        self.assertIn("idef.0.inst.ref_def", by_name)        # outer nests inner
+        # outer -> empty (row) -> inner cube (row): the empty is its own level,
+        # as in the scene.
+        self.assertEqual(
+            [entry["name"] for entry in definitions],
+            ["nest-outer", "nest-empty", "nest-inner-cube"],
+        )
+        self.assertIn("idef.2.mesh.verts", by_name)
         self.assertEqual(list(by_name["idef.0.inst.ref_def"]), [1])
+        self.assertEqual(list(by_name["idef.1.inst.ref_def"]), [2])
         self.assertEqual(list(by_name["inst.ref_def"]), [0])
 
-    def test_child_collection_members_join_the_parent_definition(self):
+    def test_child_collection_members_become_nested_rows(self):
         # A child collection inside the instanced one: Blender instances both
-        # as one thing, so the members join the parent's definition (no extra
-        # nesting level, no dropped geometry).
+        # as one thing; each member crosses as a placement row with its own
+        # definition, so nothing is dropped and transforms apply.
         child = bpy.data.collections.new("nest-child-coll")
         bpy.context.scene.collection.children.link(child)
-        child.objects.link(_quad("nest-child-cube"))
+        cube = _quad("nest-child-cube")
+        cube.location.x = 4.0
+        child.objects.link(cube)
         parent = bpy.data.collections.new("nest-parent-coll")
         bpy.context.scene.collection.children.link(parent)
         parent.children.link(child)
@@ -245,9 +337,62 @@ class InstanceReadTests(unittest.TestCase):
         sections, _attributes, definitions = _serialize(holder)
         by_name = _by_name(sections)
 
-        self.assertEqual([entry["name"] for entry in definitions], ["nest-parent-coll"])
-        self.assertEqual(by_name["idef.0.mesh.verts"].shape, (4, 3))
-        self.assertFalse(any(name.startswith("idef.0.inst.") for name in by_name))
+        self.assertEqual(
+            [entry["name"] for entry in definitions],
+            ["nest-parent-coll", "nest-child-cube"],
+        )
+        self.assertIn("idef.1.mesh.verts", by_name)
+        self.assertEqual(list(by_name["idef.0.inst.ref_def"]), [1])
+        row = by_name["idef.0.inst.transforms"].reshape(4, 4)
+        self.assertEqual([row[0][3], row[1][3], row[2][3]], [4.0, 0.0, 0.0])
+
+    def test_separate_children_does_not_apply_the_empty_twice(self):
+        # With Separate Children on, Blender bakes the child's world transform
+        # into the row that references it; the empty's own matrix must not be
+        # applied again on top.
+        inner = _collection("sep-inner", _quad("sep-cube"))
+        outer = bpy.data.collections.new("sep-outer")
+        bpy.context.scene.collection.children.link(outer)
+        empty = bpy.data.objects.new("sep-empty", None)
+        outer.objects.link(empty)
+        empty.instance_type = "COLLECTION"
+        empty.instance_collection = inner
+        empty.location.x = 2.0
+        points = _points("sep-points", [(0, 0, 0)])
+
+        group = bpy.data.node_groups.new("sep-group", "GeometryNodeTree")
+        group.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+        output = group.nodes.new("NodeGroupOutput")
+        iono = group.nodes.new("GeometryNodeInstanceOnPoints")
+        cinfo = group.nodes.new("GeometryNodeCollectionInfo")
+        cinfo.inputs["Collection"].default_value = outer
+        cinfo.inputs["Separate Children"].default_value = True
+        cinfo.inputs["Reset Children"].default_value = False
+        pinfo = group.nodes.new("GeometryNodeObjectInfo")
+        pinfo.inputs["Object"].default_value = points
+        pinfo.transform_space = "ORIGINAL"
+        group.links.new(cinfo.outputs["Instances"], iono.inputs["Instance"])
+        group.links.new(pinfo.outputs["Geometry"], iono.inputs["Points"])
+        group.links.new(iono.outputs["Instances"], output.inputs["Geometry"])
+        holder = bpy.data.objects.new("sep-holder", None)
+        bpy.context.scene.collection.objects.link(holder)
+        holder.modifiers.new("GN", "NODES").node_group = group
+
+        sections, _attributes, definitions = _serialize(holder)
+        by_name = _by_name(sections)
+        self.assertEqual(
+            [entry["name"] for entry in definitions],
+            ["sep-outer", "sep-empty", "sep-cube"],
+        )
+        # The empty's 2 appears once: in the row that places it inside the
+        # collection's definition; the cube sits at the origin inside the
+        # empty's definition (no second 2).
+        top_row = by_name["inst.transforms"].reshape(4, 4)
+        self.assertEqual([top_row[0][3], top_row[1][3], top_row[2][3]], [0.0, 0.0, 0.0])
+        empty_row = by_name["idef.0.inst.transforms"].reshape(4, 4)
+        self.assertEqual([empty_row[0][3], empty_row[1][3], empty_row[2][3]], [2.0, 0.0, 0.0])
+        cube_row = by_name["idef.1.inst.transforms"].reshape(4, 4)
+        self.assertEqual([cube_row[0][3], cube_row[1][3], cube_row[2][3]], [0.0, 0.0, 0.0])
 
     def test_definition_names_take_part_in_the_request_hash(self):
         from blender.gh_stack.blender import engine
@@ -285,8 +430,11 @@ class InstanceReadTests(unittest.TestCase):
         }
         frame = codec.encode_frame(header, sections)
         decoded_header, decoded_sections = codec.decode_frame(frame)
-        self.assertEqual(decoded_header["definitions"], [{"name": "FrameColl"}])
-        self.assertIn("idef.0.mesh.verts", decoded_sections)
+        self.assertEqual(
+            [entry["name"] for entry in decoded_header["definitions"]],
+            ["FrameColl", "frame-quad"],
+        )
+        self.assertIn("idef.1.mesh.verts", decoded_sections)
         self.assertEqual(list(decoded_sections["inst.ref_def"]), [0])
 
 
@@ -749,15 +897,18 @@ class EngineUpdateTests(unittest.TestCase):
         holder, member, stage, record = self._collection_scene()
         header, sections = self._capture(holder, record, stage)
         self.assertEqual((header.get("geom") or {}).get("mode"), "full")
-        self.assertEqual(header.get("definitions"), [{"name": "update-coll"}])
-        before = np.asarray(sections["idef.0.mesh.verts"], dtype=np.float32)
+        self.assertEqual(
+            [entry["name"] for entry in header.get("definitions")],
+            ["update-coll", "update-member"],
+        )
+        before = np.asarray(sections["idef.1.mesh.verts"], dtype=np.float32)
 
         self._edit(member, "update-member")
         engine._pending_of(record.stack_id, stage.key).clear()
         header, sections = self._capture(holder, record, stage)
 
         self.assertEqual((header.get("geom") or {}).get("mode"), "full")
-        after = np.asarray(sections["idef.0.mesh.verts"], dtype=np.float32)
+        after = np.asarray(sections["idef.1.mesh.verts"], dtype=np.float32)
         self.assertFalse(np.array_equal(before, after))
 
     def test_an_object_sources_edit_ships_a_new_definition(self):

@@ -675,15 +675,21 @@ def _instance_rows(geometry):
     return rows or None
 
 
+_GEOMETRY_MEMBER_TYPES = frozenset(
+    ("MESH", "CURVE", "SURFACE", "POINTCLOUD", "CURVES", "FONT", "META",
+     "GREASEPENCIL", "VOLUME")
+)
+
+
 def _reference_parts(reference, depth):
     """A raw Collection or Object reference as ``(units, rows)``.
 
-    A collection contributes its members and recurses into its child
-    collections; a member that is an empty instancing another collection
-    contributes a **nested row** (the placement) rather than geometry — the
-    shapes Blender's own collection instancing produces. A plain object
-    contributes its evaluated geometry.
-    """
+    A **collection** contributes one placement row per member — Blender applies
+    a member's own transform when a collection is instanced — plus its child
+    collections, recursively. An **object** contributes its evaluated geometry;
+    an empty that instances a collection contributes that collection's content
+    (the row already carries the empty's placement, so it is not applied
+    twice)."""
     import bpy
 
     if reference is None:
@@ -698,32 +704,43 @@ def _reference_parts(reference, depth):
         print("[gh-stack] instance reference not evaluable: %r" % (ex,), flush=True)
         return [], []
 
-    members = getattr(evaluated, "objects", None)
-    if members is None:
-        return _member_parts(evaluated, depth)
-    units, rows = [], []
-    for member in members:
-        member_units, member_rows = _member_parts(member, depth)
-        units += member_units
-        rows += member_rows
-    for child in getattr(evaluated, "children", None) or ():
-        child_units, child_rows = _reference_parts(child, depth + 1)
-        units += child_units
-        rows += child_rows
-    return units, rows
+    if isinstance(reference, bpy.types.Collection):
+        units, rows = [], []
+        for member in evaluated.objects:
+            member_units, member_rows = _member_parts(member, depth)
+            units += member_units
+            rows += member_rows
+        for child in getattr(evaluated, "children", None) or ():
+            child_units, child_rows = _reference_parts(child, depth + 1)
+            units += child_units
+            rows += child_rows
+        return units, rows
+    return _object_parts(evaluated, depth)
 
 
 def _member_parts(obj, depth):
-    """One collection member as ``(units, rows)``."""
-    import bpy
-
+    """One collection member as ``(units, rows)``: a placement row to the
+    member, whose own transform Blender applies. Non-geometry members (cameras,
+    lights) and bare empties contribute nothing."""
     if obj is None:
         return [], []
     if obj.type == "EMPTY":
-        collection = getattr(obj, "instance_collection", None)
-        if collection is not None:
-            # The empty places another collection: a nested row, not geometry.
-            return [], [(collection, _matrix_wire(obj.matrix_world))]
+        if _instances_a_collection(obj):
+            return [], [(obj, _matrix_wire(obj.matrix_world))]
+        return [], []
+    if obj.type not in _GEOMETRY_MEMBER_TYPES:
+        return [], []
+    return [], [(obj, _matrix_wire(obj.matrix_world))]
+
+
+def _object_parts(obj, depth):
+    """A direct object reference as ``(units, rows)``: its evaluated geometry,
+    or the content of the collection an empty instances."""
+    import bpy
+
+    if obj.type == "EMPTY":
+        if _instances_a_collection(obj):
+            return _reference_parts(obj.instance_collection, depth + 1)
         return [], []
     try:
         return [bpy.types.GeometrySet.from_evaluated_object(obj)], []
@@ -733,6 +750,11 @@ def _member_parts(obj, depth):
             flush=True,
         )
         return [], []
+
+
+def _instances_a_collection(obj):
+    return (getattr(obj, "instance_type", "NONE") == "COLLECTION"
+            and getattr(obj, "instance_collection", None) is not None)
 
 
 def _matrix_wire(matrix):
@@ -748,18 +770,19 @@ def _definition_parts(reference, depth):
     itself; ``nested_rows`` are ``(reference, 16 floats)`` placements that become
     the definition's own instance rows (nested blocks).
 
-    A GeometrySet contributes its own components plus its rows. A set with no
-    components at all whose rows are all identity placements — Blender's shape
-    for Collection Info with separate children off — is *hoisted*: its
-    references become this definition's content instead of an extra nesting
-    level. A Collection or Object reference contributes its evaluated objects.
+    A GeometrySet contributes its own components as a unit — the unit's own
+    instance rows are resolved by the caller from the unit, so they are not
+    returned here (that would double them). A set with no components at all
+    whose rows are all identity placements — the Collection Info shape — is
+    *hoisted*: its references become this definition's content instead of an
+    extra nesting level. Anything else keeps its rows as nested placements.
     """
     if not hasattr(reference, "instance_references"):
         return _reference_parts(reference, depth)
 
-    rows = _instance_rows(reference) or []
     if _has_components(reference):
-        return [reference], rows
+        return [reference], []
+    rows = _instance_rows(reference) or []
     if not rows:
         return [], []
     if depth < MAX_INSTANCE_DEPTH and all(_is_identity(matrix) for _ref, matrix in rows):
@@ -778,28 +801,43 @@ def _is_identity(matrix):
 
 
 def _serialize_definition(reference, sections, attributes, definitions, depth):
-    """Serialize one definition into the flat table, resolving the reference of
-    its content. Returns the definition's index."""
+    """Serialize one definition into the flat table. Returns its index.
+
+    Rows come from two sources, resolved through one dictionary so a child
+    reached twice lands once: the definition's nested placements, and every
+    unit's own instances — an object member whose geometry carries instances of
+    its own (a cube whose modifier instances a sphere, say).
+    """
     index = len(definitions)
     definitions.append({"name": _reference_name(reference)})
     prefix = "idef.%d." % index
+    if depth >= MAX_INSTANCE_DEPTH:
+        print("[gh-stack] instance nesting deeper than %d skipped" % MAX_INSTANCE_DEPTH, flush=True)
+        return index
+
     units, nested = _definition_parts(reference, depth)
+    resolved = {}
+    ref_def = []
+    transforms = []
+
+    def resolve(child_reference, matrix):
+        child = resolved.get(id(child_reference))
+        if child is None:
+            child = _serialize_definition(
+                child_reference, sections, attributes, definitions, depth + 1
+            )
+            resolved[id(child_reference)] = child
+        ref_def.append(child)
+        transforms.extend(matrix)
+
     for unit in units:
         _serialize_geometry(unit, sections, attributes, prefix=prefix, definition=index)
+        for child_reference, matrix in (_instance_rows(unit) or []):
+            resolve(child_reference, matrix)
+    for child_reference, matrix in nested:
+        resolve(child_reference, matrix)
 
-    if nested:
-        sub_index = {}
-        ref_def = []
-        transforms = []
-        for sub_reference, matrix in nested:
-            sub = sub_index.get(id(sub_reference))
-            if sub is None:
-                sub = _serialize_definition(
-                    sub_reference, sections, attributes, definitions, depth + 1
-                )
-                sub_index[id(sub_reference)] = sub
-            ref_def.append(sub)
-            transforms.extend(matrix)
+    if ref_def:
         sections.append((prefix + "inst.ref_def", "u32", np.asarray(ref_def, dtype=np.uint32)))
         sections.append(
             (prefix + "inst.transforms", "f32",
