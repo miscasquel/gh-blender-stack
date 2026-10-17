@@ -519,7 +519,7 @@ def _apply(obj, stage, sections, attributes=None):
     _apply_attributes(obj, stage, sections, attributes)
     _apply_instance_rows(obj, stage, definitions, top_rows, nested_rows)
 
-    nodes.ensure_group(obj, stage.key)
+    nodes.ensure_group(obj, stage.key, nested_rows)
 
 
 def _definition_split(name):
@@ -563,18 +563,13 @@ def _rows_of(sections, prefix):
 def _apply_instance_rows(obj, stage, definitions, top_rows, nested_rows):
     """The row pairs: each definition's top-level rows fill its row cloud
     (position/rotation/scale, read by the node group). A definition's own rows
-    are nested placements; the wire and the GH side keep them, but this side
-    does not draw them yet (see below)."""
+    are nested placements; the node group bakes them into the parent's
+    prototype chain (see nodes.ensure_group)."""
     import mathutils
 
-    # Nested placements are not drawn on the Blender side yet: the prototype
-    # chain feeds Instance on Points with the prototype's *own* geometry, so a
-    # nested reference would have to be baked into the parent's prototype
-    # (transformed and joined at apply time). Empties with a collection
-    # instance used to stand in for them, but a datablock-referenced instance
-    # is not drawn while the prototype is viewport-hidden, which is why the
-    # Collection Info route was retired (probed 2026-10-16). Remove any
-    # leftovers and say so, once per scope.
+    # Legacy leftovers: earlier builds represented a nested placement as an
+    # Empty with a collection instance; the node graph carries them now, so any
+    # such object is removed on sight.
     for index in sorted(definitions):
         collection, _objects = helpers.ensure_definition(obj, stage.key, index)
         for child in list(collection.objects):
@@ -592,11 +587,6 @@ def _apply_instance_rows(obj, stage, definitions, top_rows, nested_rows):
                 % (stage.key, index, missing[0]),
                 flush=True,
             )
-        print(
-            "[gh-stack] %s: block %d nests %d placement(s); nested blocks are "
-            "not drawn on the Blender side yet" % (stage.key, index, len(rows)),
-            flush=True,
-        )
 
     # Top-level rows: one cloud per definition, or none when it has no rows.
     clouds = {}
@@ -626,14 +616,16 @@ def _apply_instance_rows(obj, stage, definitions, top_rows, nested_rows):
             scale = data.attributes.new("scale", "FLOAT_VECTOR", "POINT")
         warned_shear = False
         for row, matrix in enumerate(matrices):
-            local = _matrix_of(matrix)
+            local = helpers.matrix_of(matrix)
             position = local.to_translation()
             positions[row * 3:row * 3 + 3] = position
             quaternion = local.to_quaternion()
             scale_value = local.to_scale()
             rotation.data[row].value = quaternion
             scale.data[row].vector = scale_value
-            if not warned_shear and not _decomposes_cleanly(local, position, quaternion, scale_value):
+            if not warned_shear and not helpers.decomposes_cleanly(
+                local, position, quaternion, scale_value
+            ):
                 # A shear (or a non-uniform basis Blender cannot rebuild from
                 # position/rotation/scale) is the one shape the point-cloud
                 # channel cannot carry; the transform is applied lossily.
@@ -646,25 +638,6 @@ def _apply_instance_rows(obj, stage, definitions, top_rows, nested_rows):
         data.points.foreach_set("co", positions)
         data.points.update()
         cloud.update_tag()
-
-
-def _matrix_of(matrix):
-    """A mathutils Matrix from the wire's row-major 16 floats (translation in
-    the fourth column, protocol §5.2)."""
-    import mathutils
-
-    m = np.asarray(matrix, dtype=np.float32).reshape(4, 4)
-    return mathutils.Matrix((tuple(m[0]), tuple(m[1]), tuple(m[2]), tuple(m[3])))
-
-
-def _decomposes_cleanly(matrix, position, quaternion, scale):
-    import mathutils
-
-    rebuilt = mathutils.Matrix.LocRotScale(position, quaternion, scale)
-    difference = np.abs(
-        np.asarray(rebuilt, dtype=np.float32) - np.asarray(matrix, dtype=np.float32)
-    )
-    return float(difference.max()) < 1e-4
 
 
 def _apply_attributes(obj, stage, sections, attributes):

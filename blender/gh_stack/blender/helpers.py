@@ -14,6 +14,7 @@ point cloud (position/rotation/scale) fed into Instance on Points.
 """
 
 import bpy
+import numpy as np
 
 COLLECTION_NAME = "GH Stage Data"
 HELPER_PREFIX = "GHS "
@@ -214,6 +215,27 @@ def _hide(obj):
         obj.hide_render = True
     if obj.display_type != "WIRE":
         obj.display_type = "WIRE"
+
+
+def matrix_of(matrix):
+    """A mathutils Matrix from the wire's row-major 16 floats (translation in
+    the fourth column, protocol §5.2)."""
+    import mathutils
+
+    m = np.asarray(matrix, dtype=np.float32).reshape(4, 4)
+    return mathutils.Matrix((tuple(m[0]), tuple(m[1]), tuple(m[2]), tuple(m[3])))
+
+
+def decomposes_cleanly(matrix, position, quaternion, scale):
+    """Whether position/rotation/scale rebuild the matrix. A shear is the one
+    shape the point-cloud channel and the Transform node cannot carry."""
+    import mathutils
+
+    rebuilt = mathutils.Matrix.LocRotScale(position, quaternion, scale)
+    difference = np.abs(
+        np.asarray(rebuilt, dtype=np.float32) - np.asarray(matrix, dtype=np.float32)
+    )
+    return float(difference.max()) < 1e-4
 
 
 def register():

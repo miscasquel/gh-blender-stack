@@ -26,14 +26,23 @@ def group_name(stage_key):
     return "%s%s" % (GROUP_PREFIX, stage_key)
 
 
-def ensure_group(stack_obj, stage_key):
+def ensure_group(stack_obj, stage_key, nested_rows=None):
     """The node group for one stage, wired to all of its helpers and block
-    definitions. Returns the group."""
+    definitions, nested placements included. Returns the group.
+
+    ``nested_rows`` maps a definition index to ``[(target, matrix)]`` — the
+    placements of other definitions inside it. Each definition's prototype
+    chain is recursive: its own geometry joined with every nested child's
+    chain through a Transform node, so a parent's rows instance the nested
+    content with it.
+    """
     helpers_map = helpers.ensure_helpers(stack_obj, stage_key)
     definitions = _definitions(stack_obj, stage_key)
+    nested_rows = nested_rows or {}
+    signature = _nested_signature(nested_rows)
     name = group_name(stage_key)
     group = bpy.data.node_groups.get(name)
-    if group is not None and _group_matches(group, helpers_map, definitions):
+    if group is not None and _group_matches(group, helpers_map, definitions, signature):
         return group
     if group is None:
         group = bpy.data.node_groups.new(name, "GeometryNodeTree")
@@ -58,36 +67,69 @@ def ensure_group(stack_obj, stage_key):
         group.links.new(info.outputs["Geometry"], join.inputs["Geometry"])
         y += 100.0
 
-    y -= 100.0
-    for index in sorted(definitions):
-        objects, cloud = definitions[index]
-        if cloud is None:
-            # A definition only its parent instances: no own chain.
-            continue
-        chain_x = -600.0
+    prototype_cache = {}
+    building = set()
 
-        # The prototype geometry is read with Object Info (originals), NOT
-        # Collection Info: instances that reference a datablock are not drawn
-        # while that datablock is viewport-hidden, and the prototypes must stay
-        # hidden (probed with A/B/A renders, 2026-10-16 — the evaluated
-        # geometry was right, the viewport drew only the base mesh). Object
-        # Info copies the geometry into the graph, exactly like the base
-        # helpers, so the instances are drawn.
+    def prototype_join(index):
+        """The node chain for one definition's content: its own per-kind
+        objects joined with every nested placement (recursively)."""
+        cached = prototype_cache.get(index)
+        if cached is not None:
+            return cached
         proto = group.nodes.new("GeometryNodeJoinGeometry")
-        proto.location = (chain_x, y)
+        proto.location = (-800.0, y)
+        if index in building:
+            print(
+                "[gh-stack] %s: nested block %d is inside itself; the inner placement is skipped"
+                % (stage_key, index),
+                flush=True,
+            )
+            prototype_cache[index] = proto
+            return proto
+        building.add(index)
+        objects = definitions.get(index, ({}, None))[0]
         for kind in helpers.KINDS:
             info = group.nodes.new("GeometryNodeObjectInfo")
-            info.location = (chain_x - 200.0, y)
+            info.location = (-1000.0, y)
             info.inputs["Object"].default_value = objects[kind]
             info.transform_space = "ORIGINAL"
             group.links.new(info.outputs["Geometry"], proto.inputs["Geometry"])
+        for target, matrix in nested_rows.get(index, []):
+            if target not in definitions:
+                continue
+            child = prototype_join(target)
+            transform = group.nodes.new("GeometryNodeTransform")
+            transform.location = (-900.0, y - 100.0)
+            local = helpers.matrix_of(matrix)
+            position = local.to_translation()
+            quaternion = local.to_quaternion()
+            scale = local.to_scale()
+            transform.inputs["Translation"].default_value = position
+            transform.inputs["Rotation"].default_value = quaternion.to_euler()
+            transform.inputs["Scale"].default_value = scale
+            if not helpers.decomposes_cleanly(local, position, quaternion, scale):
+                print(
+                    "[gh-stack] %s: a nested transform in block %d has shear; "
+                    "only position, rotation and scale can be carried" % (stage_key, index),
+                    flush=True,
+                )
+            group.links.new(child.outputs["Geometry"], transform.inputs["Geometry"])
+            group.links.new(transform.outputs["Geometry"], proto.inputs["Geometry"])
+        building.discard(index)
+        prototype_cache[index] = proto
+        return proto
 
+    for index in sorted(definitions):
+        _objects, cloud = definitions[index]
+        if cloud is None:
+            # A definition only its parent instances: no own chain.
+            continue
         iono = group.nodes.new("GeometryNodeInstanceOnPoints")
-        iono.location = (chain_x + 300.0, y)
-        group.links.new(proto.outputs["Geometry"], iono.inputs["Instance"])
+        iono.location = (0.0, y)
+        group.links.new(prototype_join(index).outputs["Geometry"], iono.inputs["Instance"])
 
         pinfo = group.nodes.new("GeometryNodeObjectInfo")
-        pinfo.location = (chain_x, y - 200.0)
+        pinfo.location = (-200.0, y - 200.0)
         pinfo.inputs["Object"].default_value = cloud
         pinfo.transform_space = "ORIGINAL"
         group.links.new(pinfo.outputs["Geometry"], iono.inputs["Points"])
@@ -97,13 +139,13 @@ def ensure_group(stack_obj, stage_key):
         # name explicitly. Both attributes are written with the rows, so a
         # missing-attribute default can never degenerate the transform.
         rotation = group.nodes.new("GeometryNodeInputNamedAttribute")
-        rotation.location = (chain_x + 100.0, y - 200.0)
+        rotation.location = (-100.0, y - 200.0)
         rotation.data_type = "QUATERNION"
         rotation.inputs["Name"].default_value = "rotation"
         group.links.new(rotation.outputs["Attribute"], iono.inputs["Rotation"])
 
         scale = group.nodes.new("GeometryNodeInputNamedAttribute")
-        scale.location = (chain_x + 100.0, y - 300.0)
+        scale.location = (-100.0, y - 300.0)
         scale.data_type = "FLOAT_VECTOR"
         scale.inputs["Name"].default_value = "scale"
         group.links.new(scale.outputs["Attribute"], iono.inputs["Scale"])
@@ -112,7 +154,19 @@ def ensure_group(stack_obj, stage_key):
         y -= 300.0
 
     group.links.new(join.outputs["Geometry"], output.inputs["Geometry"])
+    group["gh_stack_nested"] = signature
     return group
+
+
+def _nested_signature(nested_rows):
+    """A deterministic string of the nested placements, stored on the group so
+    a changed structure rebuilds it instead of leaving a stale chain."""
+    parts = []
+    for index in sorted(nested_rows):
+        for target, matrix in nested_rows[index]:
+            values = ",".join("%.9g" % float(v) for v in matrix)
+            parts.append("%d>%d:%s" % (index, target, values))
+    return ";".join(parts)
 
 
 def _definitions(stack_obj, stage_key):
@@ -126,9 +180,11 @@ def _definitions(stack_obj, stage_key):
     return definitions
 
 
-def _group_matches(group, helpers_map, definitions):
-    """Whether the group already reads exactly this set of objects: the base
-    helpers, every prototype object, and every row cloud."""
+def _group_matches(group, helpers_map, definitions, signature=""):
+    """Whether the group already reads exactly this set of objects and the
+    same nested structure."""
+    if group.get("gh_stack_nested") != signature:
+        return False
     expected = set(helpers_map.values())
     for objects, cloud in definitions.values():
         expected.update(objects.values())

@@ -675,33 +675,70 @@ def _instance_rows(geometry):
     return rows or None
 
 
-def _evaluated_units(reference):
-    """GeometrySet sources for a raw Collection or Object reference: the
-    evaluated objects, with their modifiers applied."""
+def _reference_parts(reference, depth):
+    """A raw Collection or Object reference as ``(units, rows)``.
+
+    A collection contributes its members and recurses into its child
+    collections; a member that is an empty instancing another collection
+    contributes a **nested row** (the placement) rather than geometry — the
+    shapes Blender's own collection instancing produces. A plain object
+    contributes its evaluated geometry.
+    """
     import bpy
 
     if reference is None:
-        return []
+        return [], []
+    if depth >= MAX_INSTANCE_DEPTH:
+        print("[gh-stack] instance nesting deeper than %d skipped" % MAX_INSTANCE_DEPTH, flush=True)
+        return [], []
     try:
         depsgraph = bpy.context.evaluated_depsgraph_get()
         evaluated = reference.evaluated_get(depsgraph)
     except Exception as ex:
         print("[gh-stack] instance reference not evaluable: %r" % (ex,), flush=True)
-        return []
-    objects = getattr(evaluated, "objects", None)
-    if objects is None:
-        objects = [evaluated]
-    units = []
-    for obj in objects:
-        try:
-            units.append(bpy.types.GeometrySet.from_evaluated_object(obj))
-        except Exception as ex:
-            print(
-                "[gh-stack] instance reference %r not readable: %r"
-                % (getattr(reference, "name", reference), ex),
-                flush=True,
-            )
-    return units
+        return [], []
+
+    members = getattr(evaluated, "objects", None)
+    if members is None:
+        return _member_parts(evaluated, depth)
+    units, rows = [], []
+    for member in members:
+        member_units, member_rows = _member_parts(member, depth)
+        units += member_units
+        rows += member_rows
+    for child in getattr(evaluated, "children", None) or ():
+        child_units, child_rows = _reference_parts(child, depth + 1)
+        units += child_units
+        rows += child_rows
+    return units, rows
+
+
+def _member_parts(obj, depth):
+    """One collection member as ``(units, rows)``."""
+    import bpy
+
+    if obj is None:
+        return [], []
+    if obj.type == "EMPTY":
+        collection = getattr(obj, "instance_collection", None)
+        if collection is not None:
+            # The empty places another collection: a nested row, not geometry.
+            return [], [(collection, _matrix_wire(obj.matrix_world))]
+        return [], []
+    try:
+        return [bpy.types.GeometrySet.from_evaluated_object(obj)], []
+    except Exception as ex:
+        print(
+            "[gh-stack] instance reference %r not readable: %r" % (obj.name, ex),
+            flush=True,
+        )
+        return [], []
+
+
+def _matrix_wire(matrix):
+    """A mathutils matrix as the wire's 16 floats: row-major, translation in
+    the fourth column (protocol §5.2) — the Python row view is that order."""
+    return np.asarray([list(row) for row in matrix], dtype=np.float32).reshape(-1)
 
 
 def _definition_parts(reference, depth):
@@ -718,7 +755,7 @@ def _definition_parts(reference, depth):
     level. A Collection or Object reference contributes its evaluated objects.
     """
     if not hasattr(reference, "instance_references"):
-        return _evaluated_units(reference), []
+        return _reference_parts(reference, depth)
 
     rows = _instance_rows(reference) or []
     if _has_components(reference):

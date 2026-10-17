@@ -206,6 +206,49 @@ class InstanceReadTests(unittest.TestCase):
         # Definition 1 is the quad itself.
         self.assertEqual(by_name["idef.1.mesh.verts"].shape, (4, 3))
 
+    def test_a_collection_instance_inside_a_collection_is_a_nested_row(self):
+        # The shape Blender's own collection instancing makes: an empty with
+        # instance_collection inside the instanced collection. It must cross as
+        # a nested row (the placement), not be dropped as "not readable".
+        inner = _collection("nest-inner", _quad("nest-inner-cube"))
+        outer = bpy.data.collections.new("nest-outer")
+        bpy.context.scene.collection.children.link(outer)
+        empty = bpy.data.objects.new("nest-empty", None)
+        outer.objects.link(empty)
+        empty.instance_type = "COLLECTION"
+        empty.instance_collection = inner
+        points = _points("nest-points", [(0, 0, 0)])
+        holder = _instance_holder("nest-holder", points, outer, "collection")
+
+        sections, _attributes, definitions = _serialize(holder)
+        by_name = _by_name(sections)
+
+        self.assertEqual([entry["name"] for entry in definitions], ["nest-outer", "nest-inner"])
+        self.assertIn("idef.1.mesh.verts", by_name)          # the inner cube
+        self.assertIn("idef.0.inst.ref_def", by_name)        # outer nests inner
+        self.assertEqual(list(by_name["idef.0.inst.ref_def"]), [1])
+        self.assertEqual(list(by_name["inst.ref_def"]), [0])
+
+    def test_child_collection_members_join_the_parent_definition(self):
+        # A child collection inside the instanced one: Blender instances both
+        # as one thing, so the members join the parent's definition (no extra
+        # nesting level, no dropped geometry).
+        child = bpy.data.collections.new("nest-child-coll")
+        bpy.context.scene.collection.children.link(child)
+        child.objects.link(_quad("nest-child-cube"))
+        parent = bpy.data.collections.new("nest-parent-coll")
+        bpy.context.scene.collection.children.link(parent)
+        parent.children.link(child)
+        points = _points("nest-b-points", [(0, 0, 0)])
+        holder = _instance_holder("nest-b-holder", points, parent, "collection")
+
+        sections, _attributes, definitions = _serialize(holder)
+        by_name = _by_name(sections)
+
+        self.assertEqual([entry["name"] for entry in definitions], ["nest-parent-coll"])
+        self.assertEqual(by_name["idef.0.mesh.verts"].shape, (4, 3))
+        self.assertFalse(any(name.startswith("idef.0.inst.") for name in by_name))
+
     def test_definition_names_take_part_in_the_request_hash(self):
         from blender.gh_stack.blender import engine
 
@@ -348,13 +391,10 @@ class InstanceApplyTests(unittest.TestCase):
         finally:
             evaluated.to_mesh_clear()
 
-    def test_apply_nested_rows_are_accepted_but_not_drawn(self):
-        # Nested placements are a known Blender-side limitation: the prototype
-        # chain instances a prototype's own geometry, so a nested reference
-        # would have to be baked into the parent prototype first. The wire and
-        # the GH side keep the data; this side accepts it, warns, and draws
-        # nothing (no silent corruption, no leftover empties).
-        from blender.gh_stack.blender import engine, helpers
+    def test_apply_draws_nested_rows(self):
+        # A nested placement reaches the parent's prototype chain through a
+        # Transform node, so the parent's rows instance it with the parent.
+        from blender.gh_stack.blender import engine, helpers, nodes
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -374,9 +414,70 @@ class InstanceApplyTests(unittest.TestCase):
         for collection in collections.values():
             self.assertEqual([o for o in collection.objects if o.type == "EMPTY"], [])
 
+        group = bpy.data.node_groups[nodes.group_name(stage.key)]
+        self.assertTrue(any(n.bl_idname == "GeometryNodeTransform" for n in group.nodes))
+        self.assertFalse(any(n.bl_idname == "GeometryNodeCollectionInfo" for n in group.nodes))
+
         evaluated, mesh = self._realized_mesh(obj)
         try:
-            self.assertEqual(len(mesh.vertices), 0)
+            self.assertEqual(len(mesh.vertices), 4)
+            zs = sorted(round(v.co.z, 3) for v in mesh.vertices)
+            self.assertEqual(zs, [3.0, 3.0, 3.0, 3.0])
+        finally:
+            evaluated.to_mesh_clear()
+
+    def test_apply_draws_two_levels_of_nesting(self):
+        # def0: a quad; def1 nests it 3 up; def2 nests def1 1 up; one top row
+        # of def2 — the quad lands at z = 4.
+        from blender.gh_stack.blender import engine
+
+        obj, stage = self._stage()
+        sections = dict(self._quad_sections("idef.0."))
+        sections["idef.1.inst.ref_def"] = np.array([0], dtype=np.uint32)
+        sections["idef.1.inst.transforms"] = self._wire_transform((0, 0, 3))
+        sections["idef.2.inst.ref_def"] = np.array([1], dtype=np.uint32)
+        sections["idef.2.inst.transforms"] = self._wire_transform((0, 0, 1))
+        sections["inst.ref_def"] = np.array([2], dtype=np.uint32)
+        sections["inst.transforms"] = self._wire_transform((0, 0, 0))
+
+        engine._apply(obj, stage, sections, None)
+
+        evaluated, mesh = self._realized_mesh(obj)
+        try:
+            self.assertEqual(len(mesh.vertices), 4)
+            zs = sorted(round(v.co.z, 3) for v in mesh.vertices)
+            self.assertEqual(zs, [4.0, 4.0, 4.0, 4.0])
+        finally:
+            evaluated.to_mesh_clear()
+
+    def test_the_group_rebuilds_when_the_nested_structure_changes(self):
+        from blender.gh_stack.blender import engine, helpers, nodes
+
+        obj, stage = self._stage()
+        sections = dict(self._quad_sections("idef.0."))
+        sections["idef.1.inst.ref_def"] = np.array([0], dtype=np.uint32)
+        sections["idef.1.inst.transforms"] = self._wire_transform((0, 0, 3))
+        sections["inst.ref_def"] = np.array([1], dtype=np.uint32)
+        sections["inst.transforms"] = self._wire_transform((0, 0, 0))
+        engine._apply(obj, stage, sections, None)
+
+        group = bpy.data.node_groups[nodes.group_name(stage.key)]
+        helpers_map = helpers.ensure_helpers(obj, stage.key)
+        definitions = nodes._definitions(obj, stage.key)
+        signature = group["gh_stack_nested"]
+        self.assertTrue(nodes._group_matches(group, helpers_map, definitions, signature))
+        self.assertFalse(nodes._group_matches(group, helpers_map, definitions, "changed"))
+
+        # Move the nested placement: the structure signature changes, so the
+        # next apply rebuilds the chain instead of keeping the old transform.
+        sections["idef.1.inst.transforms"] = self._wire_transform((0, 0, 5))
+        engine._apply(obj, stage, sections, None)
+        self.assertNotEqual(group["gh_stack_nested"], signature)
+
+        evaluated, mesh = self._realized_mesh(obj)
+        try:
+            zs = sorted(round(v.co.z, 3) for v in mesh.vertices)
+            self.assertEqual(zs, [5.0, 5.0, 5.0, 5.0])
         finally:
             evaluated.to_mesh_clear()
 
