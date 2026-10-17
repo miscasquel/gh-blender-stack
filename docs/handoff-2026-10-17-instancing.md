@@ -6,6 +6,19 @@ works quite nicely"); this file is the agreed redesign of how the *Blender*
 node graph represents instances and nesting. The general state of the batch is
 in `docs/handoff-2026-10-17.md`; the live work list in `docs/backlog.md`.
 
+**Status (later session): implemented.** The chain is now
+`Join(own, Instance-on-Points(child chain) per distinct child)` fed by
+per-definition placement clouds (`GHS …nest<i>`, position/rotation/scale plus a
+`child` index attribute), so a placement is one instance and the graph grows
+with definitions and distinct placements, never with depth or row count.
+`GROUP_FORMAT` is 3 and old groups repair themselves on the next same-hash
+frame. The repeat zone was dropped deliberately: Blender 5.2 cannot evaluate
+recursive node groups (a self-referencing group exposes no sockets), and the
+wire's DAG order is not guaranteed, so a runtime walk would need a topological
+remap and dynamic per-iteration selection for no gain over shared static
+chains. The target design below stays as the record of the ask; the live
+verification (§Verification, and the batch handoff §3) is still open.
+
 ---
 
 ## Why (the owner's critique, verbatim)

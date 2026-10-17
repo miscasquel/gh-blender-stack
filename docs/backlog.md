@@ -5,12 +5,13 @@ measured evidence behind the bigger items lives in `polish-plan.md`, which is a
 record of one review rather than a plan. If something is not here, it is either
 done or was judged not worth doing — it is not missing.
 
-**Next session:** read `docs/handoff-2026-10-17-instancing.md` first — the
-owner asked for the Blender-side instance node graph to be rebuilt (true
-instancing + a repeat zone instead of baked transformed copies); it carries
-the critique, the target design and the constraints. Then
-`docs/handoff-2026-10-17.md` for the batch's state, the two facts that cost
-the last hunt, the debug recipes, and the open debts.
+**Next session:** the Blender-side instance graph rebuild is done — nested
+placements are true instances (one `Instance on Points` per distinct child,
+fed by per-definition placement clouds; `GROUP_FORMAT` 3; no repeat zone,
+which Blender 5.2 cannot use for recursion). `docs/handoff-2026-10-17-instancing.md`
+keeps the ask and the status; `docs/handoff-2026-10-17.md` carries the batch's
+state, the debug recipes and the open debts. The open work is the live
+verification of nesting in both directions, the instances debts, then W3/W4.
 
 Each item says what it is, where, and why it matters. Effort is not estimated:
 the last three batches each looked like an afternoon and were not.
