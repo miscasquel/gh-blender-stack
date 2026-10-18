@@ -3,7 +3,7 @@ schema_version = "1.0.0"
 id = "gh_stack"
 # The single source for the add-on version: the development install
 # (scripts/install-addon) generates bl_info from this manifest.
-version = "0.2.1"
+version = "0.2.2"
 name = "GH Stack"
 tagline = "Grasshopper definitions as stackable modifiers in Blender"
 maintainer = "Miquel Oller <miqueloc14@gmail.com>"

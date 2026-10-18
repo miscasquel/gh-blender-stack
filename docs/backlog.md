@@ -5,13 +5,14 @@ measured evidence behind the bigger items lives in `polish-plan.md`, which is a
 record of one review rather than a plan. If something is not here, it is either
 done or was judged not worth doing — it is not missing.
 
-**Next session:** 0.2.1 cleared the reliability and polish backlog and the
-compliance platform's Phase 0 (see `docs/extensions-compliance.md`). The next
-release is 0.3.0: **W3/W4** — the operators and persistence work in
-`docs/plan.md` §9.7/§9.8 (Pull, Recompute from here, Freeze, Preview, Key all,
-Clear keys, Purge orphans; the `frozen`/`unbound` states; undo-safe stage
-lifecycle and parameter-orphan handling) — then the S6 display half and S7 in
-the GUI, then the acceptance pass A1–A10. The portal upload is its own batch
+**Next session:** 0.2.2 lands the cyclic NURBS conversion fix; 0.2.1 before it
+cleared the reliability and polish backlog and the compliance platform's
+Phase 0 (see `docs/extensions-compliance.md`). The next release is 0.3.0:
+**W3/W4** — the operators and persistence work in `docs/plan.md` §9.7/§9.8
+(Pull, Recompute from here, Freeze, Preview, Key all, Clear keys, Purge
+orphans; the `frozen`/`unbound` states; undo-safe stage lifecycle and
+parameter-orphan handling) — then the S6 display half and S7 in the GUI, then
+the acceptance pass A1–A10. The portal upload is its own batch
 (compliance Phase 1, G7 pre-ask included) and is independent.
 
 Each item says what it is, where, and why it matters. Effort is not estimated:

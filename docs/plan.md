@@ -644,6 +644,7 @@ attribute store has console coverage. **S9 answered both of its questions**
 operations, and instances cross as named graph-side block definitions — valid,
 previewing and baking without a document write at solve time, the route
 Grasshopper's own Model Block Definition components use.
-Next: instances as blocks (item 3, in flight), then W3/W4 (operators and
-persistence), the S6 display half and S7 in the GUI, and finally the acceptance
-pass A1–A10 (M5–M7).
+Instances as blocks landed 2026-10-17 (nested blocks both ways, helper data in
+the dedicated `GH Stage` scene). Next: W3/W4 (operators and persistence), the
+S6 display half and S7 in the GUI, and finally the acceptance pass A1–A10
+(M5–M7).

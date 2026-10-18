@@ -44,7 +44,7 @@ namespace GhStack.Tests.Console
                 // 1. hello on connect: no components, so no stages; the client
                 //    string is the one release version bump to keep in sync.
                 Dictionary<string, object> hello = ReadUntil(server, "hello");
-                Check("hello client", (string)Json.Get(hello, "client") == "GhStack 0.2.1",
+                Check("hello client", (string)Json.Get(hello, "client") == "GhStack 0.2.2",
                     "client=" + Json.Get(hello, "client"));
                 Check("hello doc", (string)Json.Get(hello, "doc") == "(unsaved)",
                     "doc=" + Json.Get(hello, "doc"));

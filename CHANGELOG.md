@@ -10,7 +10,11 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.2] — 2026-10-18
+
+A conversion patch: cyclic NURBS curves are exact in both directions. A cyclic
+curve used to arrive in Rhino 262 mm off its Blender shape and come home as an
+approximate cubic fit; both problems are fixed at the source.
 
 ### Fixed
 
@@ -503,3 +507,5 @@ First public release: a working demo of the Blender ↔ Grasshopper loop.
 [0.1.2]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.1.2
 [0.1.3]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.1.3
 [0.2.0]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.2.0
+[0.2.1]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.2.1
+[0.2.2]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.2.2

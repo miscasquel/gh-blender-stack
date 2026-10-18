@@ -50,7 +50,7 @@ Every message carries `"v": 2`. A message with a different `v` is answered with 
 Sent once per connection, first.
 
 ```json
-{"type":"hello","v":2,"client":"GhStack 0.2.1","doc":"Panels.gh",
+{"type":"hello","v":2,"client":"GhStack 0.2.2","doc":"Panels.gh",
  "doc_units":"Millimeters",
  "stages":[{"key":"panelize-3f9a","enabled":true}]}
 ```
