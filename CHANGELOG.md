@@ -44,6 +44,11 @@ Notable changes to this project, following
 
 ### Fixed
 
+- **Documents saved before the `Attributes` output existed open and run again.**
+  A Stage In loaded from such a document used to throw
+  `Parameter "Attributes" does not exist` and pop a dialog on its first solve.
+  The plugin now skips writes to an output the loaded component does not have;
+  the older component keeps its older output list.
 - **The add-on no longer re-enables a stage's modifier.** Every engine pass used
   to write the viewport and render flags back on, undoing the toggle the moment
   it was flipped; the flags are read now, and only seeded when the stage is

@@ -33,6 +33,18 @@ namespace GhStack
             get { return new Guid("a1f0c2d4-1b2e-4c3a-9d4f-5e6a7b8c9d01"); }
         }
 
+        // Documents saved before an output was added come back with the file's
+        // own parameter list, so a name the class declares now may not exist on
+        // the loaded instance; writing to it throws ('Parameter "X" does not
+        // exist.') and pops a breakpoint dialog. Skip those writes: an older
+        // document keeps its older output list and must still open and solve.
+        private bool HasOutput(string name)
+        {
+            foreach (IGH_Param param in Params.Output)
+                if (param.Name == name) return true;
+            return false;
+        }
+
         protected override Bitmap Icon
         {
             get { return Icons.Get("import"); }
@@ -87,7 +99,8 @@ namespace GhStack
                 da.SetData("Request ID", "");
                 da.SetData("Status", "No key");
                 da.SetData("Message", "Connect the stage key from the GH Stack panel in Blender");
-                da.SetDataList("Attributes", new List<string>());
+                if (HasOutput("Attributes"))
+                    da.SetDataList("Attributes", new List<string>());
                 return;
             }
             GhLink.PublishStage(this, key, enabled);
@@ -123,7 +136,8 @@ namespace GhStack
             da.SetData("Request ID", slot.Rid);
             da.SetData("Status", status);
             da.SetData("Message", slot.Message);
-            da.SetDataList("Attributes", StageGeometry.AttributeNames(slot.Attributes));
+            if (HasOutput("Attributes"))
+                da.SetDataList("Attributes", StageGeometry.AttributeNames(slot.Attributes));
             Message = GhLink.Connected ? status : "disconnected";
             // Blocks on the output at a glance: an instance row that never made
             // it into Geometry is otherwise invisible (the live "no instances"

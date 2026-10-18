@@ -38,6 +38,16 @@ the last three batches each looked like an afternoon and were not.
   already prescribes the fix (detect shared groups each tick, give the duplicate
   its own group, key and helpers); this is acceptance item A10.
 
+### Grasshopper plugin
+
+- **Old components keep their old parameter list** (2026-10-18). A Stage In
+  saved before the `Attributes` output existed now opens and solves, because the
+  plugin skips writes to outputs the loaded component does not have (the
+  document keeps its older output list). A proper fix is a `Read()` migration
+  that registers missing parameters on load and so lets an old document gain the
+  new output; not worth the untested surface while pre-attribute documents
+  matter only to this machine's owner.
+
 ---
 
 ## Design constraints
