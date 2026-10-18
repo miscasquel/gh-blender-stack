@@ -23,12 +23,16 @@ the last three batches each looked like an afternoon and were not.
 
 ### Blender engine — smaller
 
-- **`NestedGroupPrefixTests.test_02` flaked once** (2026-10-17, during the 0.2.0
-  release run): the edit inside the nested group did not reach `fake_gh` within
-  the 10 s pump. It passed in isolation and in every later full run, and its
-  failure message now carries the fake's report, the stage state and both rids,
-  so the next occurrence is diagnosable. Remove this item once a reason is found
-  or a release cycle passes without it.
+- **A layer B test flakes, twice now, still unidentified** (2026-10-17 during
+  the 0.2.0 release run; again 2026-10-18 on a full run of `main` at `22db8dc`).
+  Both times the visible symptom was `AssertionError: 'waiting' != 'ok'` with an
+  empty diagnostic. The 2026-10-17 occurrence was `NestedGroupPrefixTests.test_02`
+  (the edit inside the nested group did not reach `fake_gh` within the 10 s
+  pump), and that assertion now carries the fake's report, the stage state and
+  both rids. The 2026-10-18 occurrence's test name was not captured (only the
+  tail of the run was kept). A 10-run capture attempt immediately afterwards
+  was all green (154 tests each, logs in `/tmp/opencode/flake-capture/`). Remove
+  this item once a reason is found or a release cycle passes without it.
 - **Duplicated objects share one node group** (verified 2026-10-18 by an
   adversarial probe of the W3/W4 batch): object duplication copies the stage
   record, the modifier and its `persistent_uid` verbatim, and the node group
