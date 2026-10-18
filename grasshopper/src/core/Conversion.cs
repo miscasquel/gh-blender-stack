@@ -9,10 +9,13 @@
 // scale (document units per meter). The caller gets it from
 // RhinoMath.UnitScale(UnitSystem.Meters, doc.ModelUnitSystem).
 //
-// Curve exactness: Blender NURBS splines can express clamped-uniform or uniform
-// knots, any order 2..6, with weights. Anything else is converted to Bezier
-// spans (MakePiecewiseBezier, lossless) and sent as a degree-3 Bezier net;
-// dropping weights off a rational curve is the lossy step D3 warns about.
+// Curve exactness: Blender NURBS splines can express uniform-open, clamped-
+// uniform (endpoint), and uniform-periodic knots, any order 2..6, with weights
+// (Blender's cyclic+endpoint combination has no standard form and the periodic
+// construction is used for it). Curves in that set travel NURBS to NURBS,
+// exactly, as one curve. Everything else is converted to Bezier spans
+// (MakePiecewiseBezier, lossless); dropping weights off a rational curve is the
+// lossy step D3 warns about.
 
 using System;
 using System.Collections.Generic;
@@ -235,16 +238,24 @@ namespace GhStack.Core
 
         /// <summary>Encode curves as crv.* sections.
         ///
-        /// The rule is exact by construction, not by inspecting knots:
-        /// MakePiecewiseBezier (lossless knot insertion) makes every span a single
-        /// rational Bezier of the curve's degree; Blender holds a single span
-        /// exactly as a NURBS spline whose order equals its control-point count, for
-        /// any order 2..6, weights included. So each span travels as one wire curve
-        /// and circles, ellipses, arcs, and every NURBS Blender could not otherwise
-        /// express come back exactly. Only curves that defeat that decomposition
-        /// (degree above 5, periodic curves, degenerate weights) are fitted with
-        /// cubic Beziers inside the deviation budget, and only those are counted as
-        /// approximated (D3).</summary>
+        /// Two exact routes, then one approximation route:
+        ///
+        /// A NURBS whose knots are one of Blender's modes (uniform open,
+        /// clamped/uniform endpoint, or uniform periodic; order 2..6, positive
+        /// weights) travels as one wire NURBS — the same form Blender sent —
+        /// so it comes back as one spline.
+        ///
+        /// Everything else is decomposed with MakePiecewiseBezier (lossless knot
+        /// insertion): every span becomes a single rational Bezier of the curve's
+        /// degree, and Blender holds a single span exactly as a NURBS spline
+        /// whose order equals its control-point count, for any order 2..6,
+        /// weights included. So each span travels as one wire curve and circles,
+        /// ellipses, arcs, and every NURBS Blender could not otherwise express
+        /// come back exactly.
+        ///
+        /// Only curves that defeat both (degree above 5, non-uniform knots,
+        /// degenerate weights) are fitted with cubic Beziers inside the
+        /// deviation budget, and only those are counted as approximated (D3).</summary>
         public static List<Section> SectionsFromCurves(
             IList<Curve> curves, double scale, List<WireWarning> warnings, out int approximated)
         {
@@ -277,6 +288,21 @@ namespace GhStack.Core
                 if (nurbs == null)
                 {
                     sampled++;
+                    continue;
+                }
+
+                // A NURBS whose knots match one of Blender's modes travels as
+                // one wire NURBS, exactly as Blender sent it: order, knot mode,
+                // cyclic flag, weights. This keeps a cyclic curve a single
+                // cyclic spline across the round trip instead of splitting it
+                // into spans (or, before this path existed, fitting it).
+                byte directMode;
+                bool directCyclic;
+                List<ControlPoint> directPoints;
+                if (TryBlenderNurbs(nurbs, out directMode, out directCyclic, out directPoints))
+                {
+                    AppendNurbs(directPoints, (byte)nurbs.Order, directMode, directCyclic, scale,
+                        pts, counts, types, orders, modes, cyclic);
                     continue;
                 }
 
@@ -388,6 +414,100 @@ namespace GhStack.Core
             orders.Add((byte)count);
             modes.Add(1);
             cyclic.Add(0);
+        }
+
+        /// <summary>Whether the curve's knot structure is one of Blender's NURBS
+        /// modes — uniform open, clamped/uniform endpoint, or uniform periodic —
+        /// and if so the direct wire form: order 2..6, positive weights, distinct
+        /// knots with a constant step, repeated knots only as clamped ends.
+        /// Anything else (interior multiplicities, non-uniform knots, degree
+        /// above 5) cannot survive Blender's NURBS representation and is
+        /// decomposed into spans instead.
+        ///
+        /// A periodic curve sends its unique polygon: openNURBS stores the first
+        /// `degree` control points repeated at the end, and Blender rebuilds the
+        /// wrap from the cyclic flag.</summary>
+        private static bool TryBlenderNurbs(
+            NurbsCurve curve, out byte mode, out bool cyclic, out List<ControlPoint> points)
+        {
+            mode = 0;
+            cyclic = false;
+            points = null;
+
+            int order = curve.Order;
+            if (order < 2 || order > 6) return false;
+            if (curve.Points.Count < order) return false;
+            if (!WeightsPositive(curve)) return false;
+
+            var knots = curve.Knots;
+            bool clamped = knots.IsClampedStart && knots.IsClampedEnd;
+            int interiorEnd = knots.Count - order + 1;
+            double step = 0.0;
+            double previous = knots[0];
+            for (int i = 1; i < knots.Count; i++)
+            {
+                double knot = knots[i];
+                if (knot == previous)
+                {
+                    // A repeated knot survives only as a clamped end; an interior
+                    // repeat is a non-uniform knot vector Blender cannot hold (a
+                    // rational circle keeps its span boundaries that way).
+                    if (!clamped || (i >= order - 1 && i < interiorEnd)) return false;
+                    continue;
+                }
+                double delta = knot - previous;
+                if (!(delta > 0.0)) return false;
+                if (step == 0.0) step = delta;
+                else if (Math.Abs(delta - step) > 1e-9 * step) return false;
+                previous = knot;
+            }
+            if (step == 0.0) return false;
+
+            if (curve.IsPeriodic)
+            {
+                int unique = curve.Points.Count - curve.Degree;
+                if (unique < order) return false;
+                for (int i = unique; i < curve.Points.Count; i++)
+                {
+                    ControlPoint tail = curve.Points[i];
+                    ControlPoint head = curve.Points[i - unique];
+                    if (tail.Location.DistanceTo(head.Location) > 1e-12
+                        || Math.Abs(tail.Weight - head.Weight) > 1e-12) return false;
+                }
+                points = new List<ControlPoint>(unique);
+                for (int i = 0; i < unique; i++) points.Add(curve.Points[i]);
+                mode = 0;
+                cyclic = true;
+                return true;
+            }
+
+            points = new List<ControlPoint>(curve.Points.Count);
+            for (int i = 0; i < curve.Points.Count; i++) points.Add(curve.Points[i]);
+            mode = clamped ? (byte)1 : (byte)0;
+            return true;
+        }
+
+        /// <summary>One Blender-expressible NURBS as its own wire curve: Euclidean
+        /// coordinates plus weight, order, knot mode and the cyclic flag — the
+        /// same form Blender sent, and the one it rebuilds exactly.</summary>
+        private static void AppendNurbs(
+            List<ControlPoint> points, byte order, byte mode, bool cyclic, double scale,
+            List<float> pts, List<uint> counts, List<byte> types, List<byte> orders,
+            List<byte> modes, List<byte> cyc)
+        {
+            foreach (ControlPoint cp in points)
+            {
+                Point3d location = cp.Location;
+                pts.Add((float)(location.X / scale));
+                pts.Add((float)(location.Y / scale));
+                pts.Add((float)(location.Z / scale));
+                pts.Add((float)cp.Weight);
+            }
+            counts.Add((uint)points.Count);
+            types.Add(2);
+            orders.Add(order);
+            modes.Add(mode);
+            cyc.Add((byte)(cyclic ? 1 : 0));
         }
 
         private static bool WeightsPositive(NurbsCurve curve)
@@ -570,6 +690,11 @@ namespace GhStack.Core
             return curve.IsValid ? curve : null;
         }
 
+        /// <summary>One wire NURBS curve. ``order`` is Blender's order; once
+        /// uniform knots were rejected this builds the exact open forms, and for
+        /// a cyclic curve the periodic uniform form — passing the *degree*, not
+        /// the order, to ``NurbsCurve.Create`` (the call that used to build every
+        /// cyclic curve one degree too high).</summary>
         private static NurbsCurve BuildNurbs(
             List<Point3d> ps, List<double> ws, int order, bool endpoint, bool cyclic)
         {
@@ -579,10 +704,31 @@ namespace GhStack.Core
             foreach (double w in ws)
                 if (Math.Abs(w - 1.0) > 1e-12) { rational = true; break; }
 
-            if (cyclic && !rational)
+            if (cyclic)
             {
-                NurbsCurve periodic = NurbsCurve.Create(true, ord, ps);
-                if (periodic != null) return periodic;
+                NurbsCurve periodic = NurbsCurve.Create(true, ord - 1, ps);
+                if (periodic != null)
+                {
+                    if (!rational) return periodic;
+                    // The wire carries Euclidean points + weight. `SetWeight`
+                    // writes the homogeneous W slot (ON_NurbsCurve_SetWeight),
+                    // which would move each point to location/w; the
+                    // Point3d+weight overload of SetPoint writes the
+                    // homogeneous (x*w, y*w, z*w, w) the kernel expects.
+                    // A periodic curve repeats the first `degree` control
+                    // points at the end; their weights repeat with them.
+                    if (periodic.Points.MakeRational())
+                    {
+                        for (int i = 0; i < periodic.Points.Count; i++)
+                            periodic.Points.SetPoint(i, ps[i % n], ws[i % n]);
+                        return periodic;
+                    }
+                    // MakeRational refused (unexpected): fall through to the
+                    // uniform open construction below, which keeps the weights.
+                }
+                // Too few points for the periodic construction: fall through to
+                // the uniform open form, which is what a plain Blender spline
+                // with this order evaluates to in that case.
             }
 
             var curve = new NurbsCurve(3, rational, ord, n);

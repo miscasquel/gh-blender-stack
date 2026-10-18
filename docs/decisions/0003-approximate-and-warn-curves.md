@@ -10,8 +10,12 @@ Verified: a NURBS spline's weights, order, and knots mode survive a Geometry Nod
 
 ## Decision
 
-- Curves that Blender's knot modes can express are transferred exactly.
-- Other curves are converted to Bezier spans. Rational spans become non-rational approximations.
+- Curves that Blender's knot modes can express are transferred exactly. That
+  set is uniform-open, clamped-uniform (endpoint) and uniform-periodic knots,
+  any order 2..6, weights included; they travel NURBS to NURBS, as one curve.
+- Other curves are converted to Bezier spans when the span split can carry
+  them (every span a single rational Bezier). Rational spans become
+  non-rational approximations only when neither route applies.
 - The engine measures the deviation by sampling. A warning is emitted when it exceeds the threshold (default 0.1 mm, configurable). Every approximated curve is counted in the stage status regardless of deviation.
 - Approximation never blocks a transfer. The warning is the signal.
 

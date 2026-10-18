@@ -10,6 +10,22 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Cyclic NURBS curves are exact in both directions.** The wire-side builder
+  passed Blender's NURBS *order* to `NurbsCurve.Create`'s *degree* parameter, so
+  every cyclic curve was built one degree too high (the reported FiraTower
+  curve sat 262 mm off its Blender shape). The too-high degree then defeated the
+  encoder's exact-span guard, so the curve came back as a cubic fit with a
+  `curve_approximated` warning, and cyclic curves with weights silently lost
+  their periodicity. Curves whose knots match Blender's NURBS modes —
+  uniform-open, clamped-uniform, uniform-periodic — now travel as one wire NURBS
+  with their order, knot mode and cyclic flag, and come back as one spline
+  instead of a span split. No protocol change; the `.gha` needs a rebuild and a
+  Rhino restart to pick it up.
+
 ## [0.2.1] — 2026-10-17
 
 A hygiene patch: the add-on is extension-platform ready (online access,

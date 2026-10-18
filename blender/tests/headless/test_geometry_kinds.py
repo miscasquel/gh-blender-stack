@@ -155,6 +155,91 @@ class CurveRoundTripTests(unittest.TestCase):
         back.points.foreach_get("weight", got_w)
         np.testing.assert_allclose(got_w, weights, rtol=0, atol=1e-6)
 
+    def test_cyclic_nurbs_keeps_one_cyclic_spline_across_the_wire(self):
+        """A uniform cyclic NURBS travels as one NURBS with its order, knot mode
+        and cyclic flag — the same form Blender sent — so it comes back as one
+        cyclic spline instead of a span split (the stage-0a1764 shape)."""
+        obj = new_curve_object("cyc")
+        spline = obj.data.splines.new("NURBS")
+        spline.points.add(5)
+        pts = [(7.67, 0.0, 0.0), (3.835, 6.6424155, 0.0), (-3.835, 6.642415, 0.0),
+               (-7.67, 0.0, 0.0), (-3.835, -6.6424155, 0.0), (3.835, -6.6424155, 0.0)]
+        for i, p in enumerate(pts):
+            spline.points[i].co = (p[0], p[1], p[2], 1.0)
+        spline.order_u = 6
+        spline.use_endpoint_u = False
+        spline.use_cyclic_u = True
+        source_samples = curve_samples(obj.data)
+
+        sections = geometry_io.curve_to_sections(obj.data)
+        by = by_name(sections)
+        self.assertEqual(list(by["crv.types"]), [geometry_io.CURVE_NURBS])
+        self.assertEqual(list(by["crv.orders"]), [6])
+        self.assertEqual(list(by["crv.knots_mode"]), [geometry_io.KNOTS_NORMAL])
+        self.assertEqual(list(by["crv.cyclic"]), [1])
+        self.assertEqual(list(by["crv.counts"]), [6])
+
+        target = bpy.data.curves.new("cyc-dst", "CURVE")
+        geometry_io.sections_to_curve(target, sections)
+        self.assertEqual(len(target.splines), 1)
+        back = target.splines[0]
+        self.assertEqual(back.type, "NURBS")
+        self.assertEqual(back.order_u, 6)
+        self.assertTrue(back.use_cyclic_u)
+        self.assertFalse(back.use_endpoint_u)
+        np.testing.assert_allclose(curve_samples(target), source_samples, rtol=0, atol=1e-5)
+
+    def test_cyclic_rational_nurbs_wire_keeps_weights(self):
+        obj = new_curve_object("cyc-rational")
+        spline = obj.data.splines.new("NURBS")
+        spline.points.add(5)
+        pts = [(0, 0, 0), (1, 2, 0), (-1, 2, 0), (-2, 0, 0), (-1, -2, 0), (1, -2, 0)]
+        weights = [1.0, 0.8, 1.0, 0.8, 1.0, 0.8]
+        for i, p in enumerate(pts):
+            spline.points[i].co = (p[0], p[1], p[2], 1.0)
+            spline.points[i].weight = weights[i]
+        spline.order_u = 6
+        spline.use_endpoint_u = False
+        spline.use_cyclic_u = True
+
+        sections = geometry_io.curve_to_sections(obj.data)
+        by = by_name(sections)
+        np.testing.assert_allclose(by["crv.points"][:, 3], weights, rtol=0, atol=1e-6)
+        self.assertEqual(list(by["crv.cyclic"]), [1])
+
+        target = bpy.data.curves.new("cyc-rational-dst", "CURVE")
+        geometry_io.sections_to_curve(target, sections)
+        back = target.splines[0]
+        self.assertTrue(back.use_cyclic_u)
+        got_w = np.empty(6, dtype=np.float32)
+        back.points.foreach_get("weight", got_w)
+        np.testing.assert_allclose(got_w, weights, rtol=0, atol=1e-6)
+
+    def test_evaluated_nurbs_component_is_the_cyclic_wire_form(self):
+        """The prefix path (a node group's evaluated curves component) sends a
+        cyclic NURBS as one cyclic wire curve with its own order and knot mode."""
+        obj = new_curve_object("cyc-component")
+        spline = obj.data.splines.new("NURBS")
+        spline.points.add(5)
+        pts = [(7.67, 0.0, 0.0), (3.835, 6.6424155, 0.0), (-3.835, 6.642415, 0.0),
+               (-7.67, 0.0, 0.0), (-3.835, -6.6424155, 0.0), (3.835, -6.6424155, 0.0)]
+        for i, p in enumerate(pts):
+            spline.points[i].co = (p[0], p[1], p[2], 1.0)
+        spline.order_u = 6
+        spline.use_endpoint_u = False
+        spline.use_cyclic_u = True
+
+        dg = bpy.context.evaluated_depsgraph_get()
+        geometry = obj.evaluated_get(dg).evaluated_geometry()
+        sections, _attributes, _definitions = geometry_io.geometry_set_to_sections(geometry)
+        by = by_name(sections)
+        self.assertEqual(list(by["crv.types"]), [geometry_io.CURVE_NURBS])
+        self.assertEqual(list(by["crv.orders"]), [6])
+        self.assertEqual(list(by["crv.knots_mode"]), [geometry_io.KNOTS_NORMAL])
+        self.assertEqual(list(by["crv.cyclic"]), [1])
+        self.assertEqual(list(by["crv.counts"]), [6])
+        self.assertEqual(len(by["crv.points"]), 6)
+
     def test_bezier_travels_as_a_bezier_knot_net_and_returns(self):
         obj = new_curve_object("bez")
         spline = obj.data.splines.new("BEZIER")

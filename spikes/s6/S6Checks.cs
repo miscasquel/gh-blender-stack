@@ -74,19 +74,21 @@ namespace GhStack.Spike.S6
             // weights, and Blender holds a single span exactly. expectedApprox is
             // 0 and the spans travel with mode 1 (endpoint) for all of them.
 
-            // 1. clamped uniform degree-3
+            // 1. clamped uniform degree-3 — one wire NURBS now that the direct
+            // NURBS route carries Blender-expressible knots.
             NurbsCurve uniform = NurbsCurve.Create(false, 3, SinePoints(8));
-            RoundTrip(r, "uniform", uniform, 0, 1);
+            RoundTrip(r, "uniform", uniform, 0, 1, 1);
 
             // 1b. rational weights on clamped-uniform knots
             NurbsCurve weighted = uniform.DuplicateCurve() as NurbsCurve;
             weighted.Points.SetWeight(3, 2.5);
-            RoundTrip(r, "weighted", weighted, 0, 1);
+            RoundTrip(r, "weighted", weighted, 0, 1, 1);
 
-            // 1c. unclamped uniform knots
+            // 1c. unclamped uniform knots — now travels as one NURBS with
+            // normal knots (mode 0), not as a span split.
             NurbsCurve unclamped = uniform.DuplicateCurve() as NurbsCurve;
             for (int i = 0; i < unclamped.Knots.Count; i++) unclamped.Knots[i] = i;
-            RoundTrip(r, "unclamped", unclamped, 0, 1);
+            RoundTrip(r, "unclamped", unclamped, 0, 0, 1);
 
             // 2. interior non-uniform knot
             NurbsCurve moved = uniform.DuplicateCurve() as NurbsCurve;
@@ -127,10 +129,127 @@ namespace GhStack.Spike.S6
             r["poly.count"] = (long)back.Count;
             r["poly.deviation"] = back.Count == 1 ? Deviation(poly, back[0], 16) : -1.0;
             r["poly.type"] = sections.Count > 2 ? (long)sections[2].Raw[0] : -1;
+
+            Cyclic(r);
+        }
+
+        /// <summary>The stage-0a1764 form: a uniform cyclic NURBS (order 6,
+        /// six control points, normal knots). It used to be built one degree too
+        /// high on the wire side — a 0.26 m error — which then defeated the
+        /// encoder's degree guard and came home as a cubic fit. Both directions
+        /// must be exact, and the curve must travel as ONE cyclic wire NURBS.</summary>
+        private static void Cyclic(Dictionary<string, object> r)
+        {
+            var cyclicPts = new List<Point3d> {
+                new Point3d(7.67, 0, 0), new Point3d(3.835, 6.6424155, 0),
+                new Point3d(-3.835, 6.642415, 0), new Point3d(-7.67, 0, 0),
+                new Point3d(-3.835, -6.6424155, 0), new Point3d(3.835, -6.6424155, 0) };
+            NurbsCurve truth = NurbsCurve.Create(true, 5, cyclicPts);
+
+            // a frame exactly as Blender sent it: order 6, mode 0 (normal), cyclic
+            var frame = new DecodedFrame(new Dictionary<string, object>(), new List<Section> {
+                Section.Floats("crv.points", WireFloats(cyclicPts, null)),
+                Section.U32("crv.counts", new uint[] { 6 }),
+                Section.Bytes("crv.types", new byte[] { 2 }),
+                Section.Bytes("crv.orders", new byte[] { 6 }),
+                Section.Bytes("crv.knots_mode", new byte[] { 0 }),
+                Section.Bytes("crv.cyclic", new byte[] { 1 }),
+            });
+            List<Curve> decoded = Conversion.CurvesFromSections(frame, 1.0);
+            r["cyclic.decode_curves"] = (long)decoded.Count;
+            r["cyclic.decode_deviation"] = decoded.Count == 1
+                ? Deviation(truth, decoded[0], 64) : -1.0;
+
+            NurbsCurve source = decoded.Count == 1 ? decoded[0] as NurbsCurve : truth;
+            if (source != null)
+            {
+                var warnings = new List<string>();
+                int approximated;
+                List<Section> sections = Conversion.SectionsFromCurves(
+                    new List<Curve> { source }, 1.0, warnings, out approximated);
+                r["cyclic.approx"] = (long)approximated;
+                r["cyclic.warnings"] = warnings.Count > 0 ? warnings[0] : "(none)";
+                r["cyclic.wire_curves"] = (long)sections[1].ToU32().Length;
+                r["cyclic.wire_cps"] = (long)sections[1].ToU32()[0];
+                r["cyclic.type"] = (long)sections[2].Raw[0];
+                r["cyclic.order"] = (long)sections[3].Raw[0];
+                r["cyclic.mode"] = (long)sections[4].Raw[0];
+                r["cyclic.flag"] = (long)sections[5].Raw[0];
+                List<Curve> back = Conversion.CurvesFromSections(Frame(sections), 1.0);
+                r["cyclic.back_curves"] = (long)back.Count;
+                r["cyclic.roundtrip_deviation"] = back.Count == 1
+                    ? Deviation(truth, back[0], 64) : -1.0;
+            }
+            else
+            {
+                r["cyclic.decode_curves_UNEXPECTED"] = (long)decoded.Count;
+            }
+
+            // cyclic rational: the periodic construction must carry weights
+            var weights = new List<double> { 1.0, 0.85, 1.0, 0.85, 1.0, 0.85 };
+            // The independent reference for the wire's Euclidean+weight form:
+            // write the homogeneous slot directly (x*w, y*w, z*w, w), the form
+            // openNURBS stores. SetWeight would write W alone and move the point.
+            NurbsCurve ratTruth = truth.DuplicateCurve() as NurbsCurve;
+            ratTruth.Points.MakeRational();
+            for (int i = 0; i < ratTruth.Points.Count; i++)
+            {
+                Point3d location = cyclicPts[i % 6];
+                double w = weights[i % 6];
+                ratTruth.Points.SetPoint(i, new Point4d(location.X * w, location.Y * w,
+                                                        location.Z * w, w));
+            }
+
+            var ratFrame = new DecodedFrame(new Dictionary<string, object>(), new List<Section> {
+                Section.Floats("crv.points", WireFloats(cyclicPts, weights)),
+                Section.U32("crv.counts", new uint[] { 6 }),
+                Section.Bytes("crv.types", new byte[] { 2 }),
+                Section.Bytes("crv.orders", new byte[] { 6 }),
+                Section.Bytes("crv.knots_mode", new byte[] { 0 }),
+                Section.Bytes("crv.cyclic", new byte[] { 1 }),
+            });
+            List<Curve> ratDecoded = Conversion.CurvesFromSections(ratFrame, 1.0);
+            r["cyclic_rat.decode_curves"] = (long)ratDecoded.Count;
+            r["cyclic_rat.decode_deviation"] = ratDecoded.Count == 1
+                ? Deviation(ratTruth, ratDecoded[0], 64) : -1.0;
+
+            var ratWarnings = new List<string>();
+            int ratApproximated;
+            List<Section> ratSections = Conversion.SectionsFromCurves(
+                new List<Curve> { ratTruth }, 1.0, ratWarnings, out ratApproximated);
+            r["cyclic_rat.approx"] = (long)ratApproximated;
+            r["cyclic_rat.wire_curves"] = (long)ratSections[1].ToU32().Length;
+            if (ratSections.Count > 0)
+            {
+                float[] raw = ratSections[0].ToFloats();
+                double maxWeight = 0.0;
+                for (int i = 0; i < weights.Count && i * 4 + 3 < raw.Length; i++)
+                    maxWeight = Math.Max(maxWeight, Math.Abs(raw[i * 4 + 3] - weights[i]));
+                r["cyclic_rat.weight_error"] = maxWeight;
+            }
+            List<Curve> ratBack = Conversion.CurvesFromSections(Frame(ratSections), 1.0);
+            r["cyclic_rat.back_curves"] = (long)ratBack.Count;
+            r["cyclic_rat.roundtrip_deviation"] = ratBack.Count == 1
+                ? Deviation(ratTruth, ratBack[0], 64) : -1.0;
+        }
+
+        /// <summary>The wire's control points: Euclidean xyz plus weight, the
+        /// encoding Blender reads (protocol §5).</summary>
+        private static float[] WireFloats(List<Point3d> points, List<double> weights)
+        {
+            var raw = new float[points.Count * 4];
+            for (int i = 0; i < points.Count; i++)
+            {
+                raw[i * 4] = (float)points[i].X;
+                raw[i * 4 + 1] = (float)points[i].Y;
+                raw[i * 4 + 2] = (float)points[i].Z;
+                raw[i * 4 + 3] = (float)(weights == null ? 1.0 : weights[i]);
+            }
+            return raw;
         }
 
         private static void RoundTrip(Dictionary<string, object> r, string name, NurbsCurve original,
-                                      int expectedApprox, int expectedMode)
+                                      int expectedApprox, int expectedMode, long expectedSpans = -1)
         {
             var curves = new List<Curve> { original };
             var warnings = new List<string>();
@@ -143,12 +262,15 @@ namespace GhStack.Spike.S6
             r[name + ".order"] = sections.Count > 3 && sections[3].Raw.Length > 0 ? (long)sections[3].Raw[0] : -1;
             r[name + ".cps"] = sections.Count > 1 ? (long)(sections[1].ToU32().Length > 0 ? sections[1].ToU32()[0] : 0) : -1;
             r[name + ".spans"] = sections.Count > 1 ? (long)sections[1].ToU32().Length : -1;
+            r[name + ".cyclic"] = sections.Count > 5 && sections[5].Raw.Length > 0 ? (long)sections[5].Raw[0] : -1;
             r[name + ".back"] = (long)back.Count;
             r[name + ".deviation"] = DeviationToCurves(original, back, 32);
             r[name + ".warnings"] = warnings.Count > 0 ? warnings[0] : "(none)";
             if (approximated != expectedApprox) r[name + ".approx_UNEXPECTED"] = true;
             if (sections.Count > 4 && sections[4].Raw.Length > 0 && sections[4].Raw[0] != expectedMode)
                 r[name + ".mode_UNEXPECTED"] = (long)sections[4].Raw[0];
+            if (expectedSpans >= 0 && sections.Count > 1 && sections[1].ToU32().Length != expectedSpans)
+                r[name + ".spans_UNEXPECTED"] = (long)sections[1].ToU32().Length;
         }
 
         /// <summary>Largest distance from samples of one curve to the nearest of

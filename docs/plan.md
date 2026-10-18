@@ -130,8 +130,8 @@ Blender reads geometry components through `Object.evaluated_geometry()`, which r
 | Mesh | Mesh with vertex colors | Exact | N-gons kept. Rhino 8 meshes support n-gons (`Mesh.Ngons`). |
 | SubD | Control cage mesh, `crease_edge` attribute, and a `mesh.subd` flag | Cage exact. Edge creases as tags (D2) | Display with a native Subdivision Surface modifier you place. The add-on never subdivides on its own. |
 | Line, polyline | Poly spline | Exact | |
-| Arc, circle, NURBS with clamped, uniform, or Bezier knots | NURBS spline with weights, order, and knots mode | Exact | Weights, order, and knots mode survive a GN object reference (verified). |
-| NURBS with interior non-uniform knots | Single-span rational Beziers (`NurbsCurve.MakePiecewiseBezier`, one wire curve per span) | Exact | Weights kept; spans are single rational Beziers Blender holds exactly. |
+| Arc, circle, NURBS with clamped, uniform, or Bezier knots | NURBS spline with weights, order, and knots mode | Exact | Weights, order, and knots mode survive a GN object reference (verified). Uniform-open, clamped-uniform and uniform-periodic NURBS travel as one wire NURBS (same order, knot mode, cyclic flag, weights). |
+| NURBS with interior non-uniform knots | Single-span rational Beziers (`NurbsCurve.MakePiecewiseBezier`, one wire curve per span) | Exact | Weights kept; spans are single rational Beziers Blender holds exactly. A rational circle keeps its span boundaries this way. |
 | Bezier (Blender) → GH | NurbsCurve, degree 3 | Exact | |
 | Point | Point cloud | Exact | |
 | Brep | Mesh (`Mesh.CreateFromBrep`) | Lossy by nature | Blender has no B-rep. Warned once per stage. |
@@ -143,14 +143,19 @@ Blender reads geometry components through `Object.evaluated_geometry()`, which r
 - *Warning text:* every stage with SubD output reports "creases transferred as tags; semi-sharp and vertex creases are not available from RhinoCommon".
 
 **Curve approximation policy (D3)**
-- A curve is transferred exactly whenever its piecewise-Bezier spans can be
-  carried: every span is a single rational Bezier, and Blender holds a single
-  span exactly (any order 2–6, weights included). This covers poly, Bezier,
-  NURBS, circles, ellipses, and arcs of any angle.
-- Only a curve the span split cannot carry (degree above 5, periodic) is fitted
-  with non-rational cubic Beziers (`BezierCurve.CreateCubicBeziers`) inside a
-  0.1 mm budget. Every fitted curve is counted in the stage status, and a
-  warning reports the measured deviation when it exceeds the budget.
+- A curve is transferred exactly whenever Blender's NURBS modes can hold it:
+  uniform-open, clamped-uniform (endpoint) and uniform-periodic knots, any
+  order 2–6, weights included. Those travel as one wire NURBS, exactly as
+  Blender sent them, so a cyclic spline stays one cyclic spline.
+- Everything else is carried by the span split when the spans allow it: every
+  span is a single rational Bezier, and Blender holds a single span exactly
+  (any order 2–6, weights included). This covers poly, Bezier, NURBS,
+  circles, ellipses, and arcs of any angle.
+- Only a curve both routes cannot carry (degree above 5, interior knots
+  Blender cannot express, degenerate weights) is fitted with non-rational
+  cubic Beziers (`BezierCurve.CreateCubicBeziers`) inside a 0.1 mm budget.
+  Every fitted curve is counted in the stage status, and a warning reports the
+  measured deviation when it exceeds the budget.
 - Rational coordinates: Rhino stores homogeneous control points, the wire
   carries Euclidean + weight. Both directions convert explicitly (this mix-up
   distorted every rational curve in the first live S6 run).
@@ -504,7 +509,7 @@ GH solve time will dominate real definitions. The transport is not the bottlenec
 | **S3** | Geometry round trip with the C# side at 10k and 100k triangles. | Budgets in §13 met or revised with data. **Passed 2026-10-11**: geometry matches at 1k/10k/100k; the 100k round trip is 30.3 ms (C# 10.0 + 5.1 ms, 1.61 MB each way). `spikes/results/s3.txt` |
 | **S4** | SubD: can `SubDEdge.Tag` be set? Does `SubD.CreateFromMesh` produce a usable SubD from a cage? Are the curve approximation paths behaving? | Setter exists: tags round-trip. No setter: tags are dropped on Blender → GH with a warning (D2). **Passed 2026-10-11**: setter works, cage SubD is valid, `MakePiecewiseBezier` is lossless; the loss is dropping weights (0.73 units at radius 5). `spikes/results/s4.txt` |
 | **S5** | Parameter UI in the GUI: keyframe and driver decorators on custom props, vector and color arrays per component, value-list dropdown. | Decorators and arrays work, or the UI is adjusted. **Passed 2026-10-12**: keyframes animate the GH output live, decorators sit on Blender's split rows, per-component vector keys and drivers are covered by `blender/tests/headless/test_param_ui.py`, and the value-list dropdown works end to end (index on the wire). |
-| **S6** | Mixed output (mesh plus curves) through a stage on a mesh stack: display, native modifiers, and what `evaluated_geometry()` returns downstream. | Behaves as §6 says, or the mixed-output rules are revised. **Conversions passed 2026-10-12** (`spikes/results/s6.txt`): curves, points, SubD cages with tag creases, and Breps all round-trip through the product code inside Rhino. The live run drove a rewrite: curves are exact by construction (one wire curve per piecewise-Bezier span, weights kept), the homogeneous-vs-Euclidean coordinate mix-up was fixed, and all curve goos dispatch. The display half — mixed output through a stage with native modifiers and `evaluated_geometry()` downstream — is covered headless by `blender/tests/headless/test_geometry_kinds.py`; the GUI pass remains. |
+| **S6** | Mixed output (mesh plus curves) through a stage on a mesh stack: display, native modifiers, and what `evaluated_geometry()` returns downstream. | Behaves as §6 says, or the mixed-output rules are revised. **Conversions passed 2026-10-12** (`spikes/results/s6.txt`): curves, points, SubD cages with tag creases, and Breps all round-trip through the product code inside Rhino. The live run drove a rewrite: curves are exact by construction (one wire curve per piecewise-Bezier span, weights kept), the homogeneous-vs-Euclidean coordinate mix-up was fixed, and all curve goos dispatch. **Update 2026-10-18:** cyclic uniform NURBS curves are exact too, and travel as one NURBS instead of a span split; the S6 checks gained cyclic cases (see `docs/handoff-2026-10-18-nurbs-lossless.md`). The display half — mixed output through a stage with native modifiers and `evaluated_geometry()` downstream — is covered headless by `blender/tests/headless/test_geometry_kinds.py`; the GUI pass remains. |
 | **S7** | Helpers in the GUI: Object Info in Original space for mesh, curve, and point helpers. Duplicate and reload ownership. | Works in the GUI. |
 | **S8** | Extension install on 5.2 with the vendored `websockets` wheel. | Installs. Fallback is `vendor/`. **Passed 2026-10-12**: `blender_manifest.toml` with the official pure-Python wheel; `scripts/test-extension` installs into a throwaway config and completes a `fake_gh` round trip from the installed extension (websockets imported from the wheel's site-packages). |
 
@@ -607,6 +612,7 @@ Facts this plan relies on, and how each was checked. Scratch scripts live in `/t
 - No public semi-sharp edge value or vertex crease property was found.
 - `SubDEdge.Tag` **has a working setter** (confirmed live by S4); `SubD.CreateFromMesh` yields a valid cage SubD; boundary edges read `Crease` by default.
 - `NurbsCurve.MakePiecewiseBezier` is lossless (knot insertion). `ConvertSpanToBezier` returns a `BezierCurve` (no `Domain`; a span is 0..1). Dropping weights on a rational circle (radius 5) distorts it by 0.73 units; the wire therefore keeps the weights and sends one wire curve per span, each a single rational Bezier (S6).
+- `NurbsCurve.Create(periodic, degree, points)` takes a **degree** (order - 1); passing an order builds a curve one degree too high. `NurbsCurvePointList.SetWeight` writes the **homogeneous W** slot (`ON_NurbsCurve_SetWeight`), which moves a control point to `location/w`; the wire's Euclidean + weight needs `MakeRational()` then `Points.SetPoint(i, location, weight)` (the `(x*w, y*w, z*w, w)` slot). `MakeRational` preserves periodicity. Verified 2026-10-18 with rhino3dm 8.35 and the C#/S6 checks.
 
 **Portal (upstream and local copies)**
 - Upstream source is public under Apache-2.0: `Portal.Core` (including a WebSocket manager) and `Portal.Gh` (components `Remote` with WebSocket client and server, `Local`, `Serialization`, `Utils`).
