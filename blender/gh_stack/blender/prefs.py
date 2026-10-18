@@ -7,6 +7,14 @@ from bpy.props import EnumProperty, FloatProperty, IntProperty, StringProperty
 
 DEFAULT_DATA_ROOT = "~/.local/share/gh-stack"
 DEFAULT_CACHE_MB = 256
+# A dynamic-range port: 9130, the default through 0.2.2, is where BlenderKit
+# sits, so the two fought over the loopback. The plugin's default endpoint in
+# `GhLink.cs`, `tools/fake_gh` and the docs carry the same number.
+DEFAULT_PORT = 59130
+# The port through 0.2.2. A saved preference still on it is moved once on
+# register, with a notice, because the old value would otherwise override the
+# new default and collide exactly as before.
+OLD_DEFAULT_PORT = 9130
 
 # A plain snapshot of `log_level`, refreshed on the main thread (register and
 # every change), so any thread can call `log()` without touching bpy — the
@@ -37,7 +45,7 @@ class GhStackPreferences(bpy.types.AddonPreferences):
     port: IntProperty(
         name="Server port",
         description="Loopback port the add-on listens on; Grasshopper connects to it",
-        default=9130,
+        default=DEFAULT_PORT,
         min=1024,
         max=65535,
     )
@@ -102,9 +110,29 @@ def cache_size_bytes():
     return int(_pref("cache_size_mb", DEFAULT_CACHE_MB)) * 1024 * 1024
 
 
+def _migrate_old_port():
+    """Move a saved preference still on the old default to the new one.
+
+    Blender saves add-on preferences, so a value stored as 9130 keeps winning
+    over the new default — and 9130 is BlenderKit's, which is why the default
+    moved. Only the old default is touched; any deliberate port is left alone."""
+    try:
+        settings = bpy.context.preferences.addons[__package__.rsplit(".", 1)[0]].preferences
+    except (KeyError, AttributeError):
+        return
+    if settings.port == OLD_DEFAULT_PORT:
+        settings.port = DEFAULT_PORT
+        log(
+            "[gh-stack] port preference 9130 (the old default, BlenderKit's) moved to %d; "
+            "change it in Preferences > Add-ons if you need 9130" % DEFAULT_PORT,
+            flush=True,
+        )
+
+
 def register():
     bpy.utils.register_class(GhStackPreferences)
     refresh_log_level()
+    _migrate_old_port()
 
 
 def unregister():

@@ -1,7 +1,7 @@
 """A Python stand-in for the Grasshopper side, for layer B tests (plan §14).
 
     PYTHONPATH=blender/gh_stack/vendor python3 tools/fake_gh/fake_gh.py \
-        --port 9130 --stage <key> [--scale 2.0] [--report /tmp/report.json]
+        --port 59130 --stage <key> [--scale 2.0] [--report /tmp/report.json]
 
 It speaks protocol v2: sends `hello` and one `schema` (a float parameter), then
 answers every `request`. The "definition" is deliberately trivial and visible:
@@ -80,7 +80,7 @@ def _summarise(state):
 
 async def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, default=9130)
+    ap.add_argument("--port", type=int, default=59130)
     ap.add_argument("--stage", required=True)
     ap.add_argument("--scale-param", default=PARAM_ID)
     ap.add_argument("--report", default="")

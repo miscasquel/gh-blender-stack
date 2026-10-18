@@ -7,7 +7,7 @@ as a stage in its modifier stack, with a parameter you can edit in Blender.
 Blender                                     Rhino / Grasshopper (wine)
 ┌───────────────────────────┐   WebSocket   ┌───────────────────────────────┐
 │ Cube                      │◄─────────────►│ Stage In ──► Scale ──► Stage Out│
-│   GH · Demo (stage)       │   9130        │                 ▲              │
+│   GH · Demo (stage)       │   59130       │                 ▲              │
 │   Bevel (native, optional)│               │               Param            │
 │ (GH Stage scene: helpers) │               │                                │
 └───────────────────────────┘               └───────────────────────────────┘
@@ -71,7 +71,7 @@ For development, `scripts/install-addon` symlinks the working tree instead (no
 wheel; the vendored websockets copy is used). The add-on appears as **GH Stack**
 in Blender's Preferences > Add-ons. The panel is in the 3D viewport sidebar
 (**N**) under the **GH Stack** tab. The server starts with the add-on on port
-9130 (add-on preferences).
+59130 (add-on preferences; 9130 through 0.2.2, where BlenderKit sits).
 
 ## The loop
 

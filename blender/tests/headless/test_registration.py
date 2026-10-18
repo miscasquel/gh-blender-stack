@@ -48,6 +48,24 @@ class RegistrationOrderTests(unittest.TestCase):
             "server, which reads the port preference",
         )
 
+    def test_saved_old_default_port_is_migrated(self):
+        """A preference Blender saved while the default was 9130 would keep
+        winning over the new default — and 9130 is BlenderKit's. Only the old
+        default moves; a deliberate port is left alone."""
+        from gh_stack.blender import prefs as prefs_mod
+
+        settings = bpy.context.preferences.addons["gh_stack"].preferences
+        original = settings.port
+        try:
+            settings.port = prefs_mod.OLD_DEFAULT_PORT
+            prefs_mod._migrate_old_port()
+            self.assertEqual(settings.port, prefs_mod.DEFAULT_PORT)
+            settings.port = 9158
+            prefs_mod._migrate_old_port()
+            self.assertEqual(settings.port, 9158, "a deliberate port was moved")
+        finally:
+            settings.port = original
+
     def test_the_server_follows_the_preference(self):
         import gh_stack.blender.engine as engine
         from gh_stack.blender import server as server_mod

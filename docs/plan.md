@@ -218,7 +218,7 @@ It outputs the value Blender sends when connected, or the default otherwise.
 ## 8. Protocol v2
 
 ### 8.1 Transport
-- Blender runs the server on `127.0.0.1:9130` (configurable), using the `websockets` package. Version 17.2 is pure Python (`py3-none-any`) and was tested on Python 3.14.7.
+- Blender runs the server on `127.0.0.1:59130` (configurable), using the `websockets` package. Version 17.2 is pure Python (`py3-none-any`) and was tested on Python 3.14.7.
 - GH runs the client on a background thread with `System.Net.WebSockets.ClientWebSocket`.
 - Loopback only. No authentication in v1.
 
@@ -410,7 +410,7 @@ blender/tests/
 **Packaging.** A Blender extension (`blender/gh_stack/blender_manifest.toml`). `websockets` ships as the official pure-Python wheel (`wheels/websockets-17.2-py3-none-any.whl`), so one zip covers Linux and Windows; Blender installs it into the extension's `_libs`. `scripts/build-extension` stages the source without `vendor/` and builds `dist/gh_stack-<version>.zip`; `scripts/install-extension` installs and enables it; `scripts/test-extension` proves the installed extension round-trips. Development installs (`scripts/install-addon`) have no wheel and fall back to the vendored copy under `vendor/` on `sys.path`, as Portal does.
 
 **Preferences**
-- Server port (default 9130).
+- Server port (default 59130; 9130 through 0.2.2, where BlenderKit sits).
 - Timeout (default 30 s).
 - Curve deviation warning threshold (default 0.1 mm).
 - Cache size limit.

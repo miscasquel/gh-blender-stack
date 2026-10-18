@@ -15,7 +15,7 @@ you can edit and keyframe in Blender, packaged as a Blender extension.
 Blender                                          Rhino / Grasshopper (wine)
 ┌───────────────────────────┐      WebSocket     ┌─────────────────────────────────┐
 │ Cube                      │◄──────────────────►│ Stage In ──► Scale ──► Stage Out│
-│   GH · Demo (stage)       │        9130        │                 ▲               │
+│   GH · Demo (stage)       │       59130        │                 ▲               │
 │   Bevel (native, optional)│                    │               Param             │
 └───────────────────────────┘                    └─────────────────────────────────┘
 ```
@@ -122,7 +122,7 @@ Development path: `scripts/install-addon` symlinks the working tree into
 Blender's user scripts (no wheel; the vendored copy under `vendor/` is used).
 Both installs appear as **GH Stack** in Preferences > Add-ons.
 
-Then follow [DEMO.md](DEMO.md). The server listens on port 9130 (configurable in
+Then follow [DEMO.md](DEMO.md). The server listens on port 59130 (configurable in
 the add-on preferences).
 
 ## Working on it

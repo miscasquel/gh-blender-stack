@@ -206,7 +206,7 @@ def _port():
     bound = server_mod.SERVER.port
     if bound:
         return bound
-    return prefs._pref("port", 9130)
+    return prefs._pref("port", prefs.DEFAULT_PORT)
 
 
 def _safe_unregister(cls):

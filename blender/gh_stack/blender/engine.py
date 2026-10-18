@@ -1638,7 +1638,7 @@ def waiting_seconds(stack_id, stage_key):
 
 def start_server(port=None):
     if port is None:
-        port = int(prefs._pref("port", 9130))
+        port = int(prefs._pref("port", prefs.DEFAULT_PORT))
     return server.SERVER.start(port)
 
 

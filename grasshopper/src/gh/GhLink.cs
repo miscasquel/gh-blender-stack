@@ -117,7 +117,7 @@ namespace GhStack
         private static string DefaultPort()
         {
             string port = Environment.GetEnvironmentVariable("GHSTACK_PORT");
-            return string.IsNullOrEmpty(port) ? "9130" : port;
+            return string.IsNullOrEmpty(port) ? "59130" : port;
         }
 
         // ------------------------------------------------------------- registry

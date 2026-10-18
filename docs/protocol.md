@@ -7,7 +7,7 @@
 
 ## 1. Overview
 
-- Blender listens on `127.0.0.1:9130` (configurable). GH connects.
+- Blender listens on `127.0.0.1:59130` (configurable). GH connects.
 - Each message is one binary WebSocket message: a small JSON header describing the message, followed by raw binary sections for geometry.
 - Blender owns identity and caching. It computes geometry hashes and request IDs. GH echoes them back and never computes them.
 - Parameters travel as JSON values in the header. Geometry travels as binary sections.

@@ -29,6 +29,11 @@ Notable changes to this project, following
 
 ### Changed
 
+- **The default server port is 59130** (was 9130, where BlenderKit sits — the
+  two fought over the loopback). A saved preference still on 9130 is moved once
+  on register, with a notice in the console. The plugin's default endpoint and
+  `tools/fake_gh` carry the same number, so a stale `.gha` needs a rebuild and
+  a Rhino restart only if you rely on the default.
 - **The stage lifecycle is the modifiers panel.** The viewport, render and
   edit-mode toggles are the enable switch (a stage is active while visible in
   any context), drag reorders it, and deleting the stage's modifier removes the
