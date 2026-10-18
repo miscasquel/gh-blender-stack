@@ -8,7 +8,7 @@ property decorators.
 
 import bpy
 
-from . import bridge, engine, prefs, server as server_mod, stack as stack_mod
+from . import bridge, engine, prefs, props, server as server_mod, stack as stack_mod
 
 
 class GHSTACK_PT_panel(bpy.types.Panel):
@@ -58,11 +58,14 @@ class GHSTACK_PT_panel(bpy.types.Panel):
     def draw_stage(self, layout, obj, record, stage, index):
         box = layout.box()
         row = box.row()
-        row.prop(stage, "enabled", text="")
+        # Enable, disable, reorder and remove are the modifier's own controls
+        # (plan §11): the row carries only what the modifiers panel cannot —
+        # Pull, Freeze, and the key to paste into Grasshopper.
         row.label(text=stage.label or stage.key, icon="GEOMETRY_NODES")
         row.label(text=_state_text(stage), icon=_state_icon(stage))
+        row.operator("gh_stack.pull", text="", icon="IMPORT").index = index
+        row.operator("gh_stack.freeze", text="", icon="FREEZE", depress=stage.frozen).index = index
         row.operator("gh_stack.copy_key", text="", icon="COPYDOWN").index = index
-        row.operator("gh_stack.remove_stage", text="", icon="TRASH").index = index
 
         row = box.row()
         row.label(text="Key")
@@ -75,7 +78,9 @@ class GHSTACK_PT_panel(bpy.types.Panel):
 
         if stage.params:
             params_box = box.box()
-            params_box.label(text="Parameters", icon="DRIVER")
+            row = params_box.row()
+            row.label(text="Parameters", icon="DRIVER")
+            row.operator("gh_stack.key_all", text="Key all").index = index
             # Group labels come from the Param component's Group input; parameters
             # with no group sit directly under the header, in schema order.
             groups = []
@@ -167,6 +172,15 @@ class GHSTACK_PT_diagnostics(bpy.types.Panel):
                 if entry.type == "value_list":
                     detail += " (%d values)" % len([c for c in entry.values.split("\n") if c])
                 box.label(text="%s: %s" % (entry.label or entry.param_id, detail))
+            # Parameters Grasshopper no longer declares keep their properties
+            # and keyframes (protocol §4.2); the list is derived, and purge is
+            # explicit (plan §7).
+            orphaned = props.orphans(obj, stage)
+            if orphaned:
+                box.label(text="Orphans: %d" % len(orphaned), icon="ORPHAN_DATA")
+                for name in orphaned:
+                    box.label(text=name.rsplit("/", 1)[-1])
+                box.operator("gh_stack.purge_orphans", icon="TRASH")
 
 
 def _state_text(stage):
@@ -180,6 +194,8 @@ def _state_icon(stage):
         stack_mod.STATE_ERROR: "ERROR",
         stack_mod.STATE_DISCONNECTED: "UNLINKED",
         stack_mod.STATE_DISABLED: "CHECKBOX_DEHLT",
+        stack_mod.STATE_FROZEN: "FREEZE",
+        stack_mod.STATE_UNBOUND: "GHOST_ENABLED",
     }.get(stage.state, "DOT")
 
 

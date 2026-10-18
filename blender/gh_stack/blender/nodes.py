@@ -324,7 +324,11 @@ def _group_matches(group, helpers_map, definitions, signature="", nested_rows=No
 
 def ensure_modifier(stack_obj, stage):
     """The GN modifier on the stack object for one stage, inserted after the
-    active modifier, or after the last GH stage when there is no active one."""
+    active modifier, or after the last GH stage when there is no active one.
+
+    The flag seed is the only place the add-on writes a modifier's visibility:
+    from then on the three toggles in the modifiers panel are the control (plan
+    §11), and the engine reads them back instead of writing them."""
     group = ensure_group(stack_obj, stage.key)
     modifier = modifier_for(stack_obj, stage.key)
     if modifier is None:
@@ -332,6 +336,8 @@ def ensure_modifier(stack_obj, stage):
     modifier.node_group = group
     modifier.show_viewport = stage.enabled
     modifier.show_render = stage.enabled
+    modifier.show_in_editmode = stage.enabled
+    stage.modifier_uid = modifier.persistent_uid
 
     # Position: right after the active modifier, else at the end.
     order = [m.name for m in stack_obj.modifiers]
@@ -354,23 +360,59 @@ def modifier_for(stack_obj, stage_key):
     return None
 
 
-def remove_modifier(stack_obj, stage_key):
-    modifier = modifier_for(stack_obj, stage_key)
-    if modifier is None:
-        return
+def modifier_of(stack_obj, stage):
+    """The stage's modifier, found by its persistent uid first.
+
+    The uid survives a deleted or swapped node group — which leaves the modifier
+    in place with ``node_group`` None — so it can tell "the modifier was
+    deleted" (the stage goes with it) apart from "the group was deleted" (the
+    group is rebuilt); the group-name link alone cannot. The name link stays as
+    the fallback for records saved before the uid existed. (Object duplication
+    copies the uid verbatim in Blender 5.2, so a duplicate resolves through the
+    per-object search either way.)"""
+    uid = getattr(stage, "modifier_uid", 0)
+    if uid:
+        for mod in stack_obj.modifiers:
+            if mod.persistent_uid == uid:
+                return mod
+    return modifier_for(stack_obj, stage.key)
+
+
+def modifier_by_name(stack_obj, stage):
+    """Last-resort finder for a record saved before the uid existed whose node
+    group is gone too, when the group-name link has nothing to match: the
+    modifier's creation name (``GH · <label>``). Only an *unattached* modifier
+    (``node_group`` None) qualifies — one that still holds a group belongs to
+    whoever owns that group's name — and binding it attaches a group, so a
+    second same-label stage cannot claim the same modifier afterwards."""
+    wanted = MODIFIER_PREFIX + (stage.label or stage.key)
+    for mod in stack_obj.modifiers:
+        if mod.type == "NODES" and mod.node_group is None and mod.name == wanted:
+            return mod
+    return None
+
+
+def modifier_active(modifier):
+    """Whether a stage modifier is visible in any context: viewport, render, or
+    edit mode. All three off is what "disabled" means (plan §9.2/§11)."""
+    return bool(modifier.show_viewport or modifier.show_render or modifier.show_in_editmode)
+
+
+def bind_modifier(stack_obj, stage, modifier):
+    """Point a stage's modifier at its node group, rebuilding the group when the
+    datablock is gone. Never moves or renames the modifier. Returns True when
+    the group had to be (re)built."""
+    wanted = group_name(stage.key)
     group = modifier.node_group
-    stack_obj.modifiers.remove(modifier)
+    if group is not None and group.name == wanted:
+        return False
+    modifier.node_group = ensure_group(stack_obj, stage.key)
+    return True
+
+
+def remove_orphan_group(stage_key):
+    """Drop a stage's node group once nothing references it (the stage was
+    removed by deleting its modifier)."""
+    group = bpy.data.node_groups.get(group_name(stage_key))
     if group is not None and group.users == 0:
         bpy.data.node_groups.remove(group)
-
-
-def set_modifier_visible(stack_obj, stage_key, visible):
-    modifier = modifier_for(stack_obj, stage_key)
-    if modifier is None:
-        return
-    # Only write on change: an unchanged write tags the depsgraph and restarts
-    # Cycles accumulation for nothing.
-    if modifier.show_viewport != visible:
-        modifier.show_viewport = visible
-    if modifier.show_render != visible:
-        modifier.show_render = visible

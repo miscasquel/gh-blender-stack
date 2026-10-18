@@ -105,6 +105,11 @@ def ensure_helpers(stack_obj, stage_key):
     return {kind: ensure_helper(stack_obj, stage_key, kind) for kind in KINDS}
 
 
+def missing_kinds(stack_obj, stage_key):
+    """Which per-kind helpers of a stage are gone (deleted datablocks)."""
+    return [kind for kind in KINDS if helper_for(stack_obj, stage_key, kind) is None]
+
+
 def helper_for(stack_obj, stage_key, kind):
     return bpy.data.objects.get(helper_name(stack_obj, stage_key, kind))
 

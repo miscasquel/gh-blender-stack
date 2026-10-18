@@ -11,7 +11,8 @@ What it proves, headless:
 4. The stack object's evaluated mesh shows the GH output through the modifier.
 5. Changing a parameter sends a `ref` request (no geometry) and the result
    updates; the fake's report shows full=1 and ref>=1.
-6. Disabling a stage hides its modifier without removing anything.
+6. The modifier's own visibility toggles are the control: the engine reads them
+   and never writes them back.
 """
 
 import json
@@ -211,16 +212,36 @@ class EngineDemoTests(unittest.TestCase):
         coords = self.helper_coords()
         self.assertAlmostEqual(float(coords[0][0] - before[0][0]), 2.5, places=3)
 
-    def test_05_disable_hides_the_modifier(self):
-        self.stage.enabled = False
-        self.engine._timer()
-        self.assertEqual(self.stage.state, "disabled")
+    def test_05_modifier_toggles_are_the_switch(self):
+        """The three context toggles in the modifiers panel are the control, and
+        the engine never writes them back (the old bug: every pass re-enabled
+        realtime and render)."""
         import gh_stack.blender.nodes as nodes
 
-        modifier = nodes.modifier_for(self.obj, self.stage.key)
+        modifier = nodes.modifier_of(self.obj, self.stage)
         self.assertIsNotNone(modifier)
-        self.assertFalse(modifier.show_viewport)
-        self.stage.enabled = True
+        # Muting one context keeps the stage active: render is still on.
+        modifier.show_viewport = False
+        self.engine._mark_object_dirty(self.obj)
+        self.engine._timer()
+        self.assertEqual(self.stage.state, "ok", self.stage.error)
+        self.assertTrue(self.stage.enabled, "one muted context disabled the stage")
+        self.assertFalse(modifier.show_viewport, "the engine re-enabled the toggle")
+        # All three off: disabled, and the toggles stay where they were put.
+        modifier.show_render = False
+        modifier.show_in_editmode = False
+        self.engine._mark_object_dirty(self.obj)
+        self.engine._timer()
+        self.assertEqual(self.stage.state, "disabled")
+        self.assertFalse(self.stage.enabled)
+        self.assertFalse(modifier.show_render)
+        self.assertFalse(modifier.show_in_editmode)
+        # Back on: the cached frame replays.
+        modifier.show_viewport = True
+        modifier.show_render = True
+        modifier.show_in_editmode = True
+        self.engine._mark_object_dirty(self.obj)
+        self.assertTrue(pump(until=lambda: self.stage.state == "ok"))
 
 
 if __name__ == "__main__":

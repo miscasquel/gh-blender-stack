@@ -48,12 +48,12 @@ def pump(seconds=8.0, until=None):
     return until is None
 
 
-def start_fake(stage_key, report):
+def start_fake(stage_key, report, port=PORT):
     return subprocess.Popen(
         [
             sys.executable,
             os.path.join(REPO, "tools", "fake_gh", "fake_gh.py"),
-            "--port", str(PORT),
+            "--port", str(port),
             "--stage", stage_key,
             "--report", report,
         ],
@@ -160,6 +160,90 @@ class ReopenTests(unittest.TestCase):
         self.assertEqual(stage.state, "ok", stage.error)
         report = report_of(self.report)
         self.assertGreaterEqual(report.get("full", 0) + report.get("ref", 0), 1, report)
+
+
+class RepairTests(unittest.TestCase):
+    """Plumbing deleted before a save is rebuilt on load, and the stage is marked
+    unbound until an answer arrives (plan §9.7). Deleting the *modifier* is not
+    repaired — that is removal (plan §9.8), covered by test_stage_controls."""
+
+    @classmethod
+    def setUpClass(cls):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        bpy.ops.preferences.addon_enable(module="gh_stack")
+        import gh_stack.blender.bridge as bridge
+        import gh_stack.blender.engine as engine
+        import gh_stack.blender.helpers as helpers
+        import gh_stack.blender.nodes as nodes
+
+        cls.engine = engine
+        cls.bridge = bridge
+        cls.helpers = helpers
+        cls.nodes = nodes
+
+        prefs = bpy.context.preferences.addons["gh_stack"].preferences
+        prefs.data_root = tempfile.mkdtemp(prefix="gh-stack-repair-test-")
+        engine.start_server(9148)
+        time.sleep(0.5)
+
+        bpy.ops.mesh.primitive_cube_add(size=2.0)
+        obj = bpy.context.object
+        obj.name = "Repair"
+        bpy.ops.gh_stack.add_stage(label="Repair")
+        cls.stage_key = obj.gh_stack.stages[0].key
+
+        # The file this test opens: helpers and the node group already gone.
+        for kind in helpers.KINDS:
+            helper = helpers.helper_for(obj, cls.stage_key, kind)
+            if helper is not None:
+                bpy.data.objects.remove(helper, do_unlink=True)
+        group = bpy.data.node_groups.get(nodes.group_name(cls.stage_key))
+        if group is not None:
+            bpy.data.node_groups.remove(group)
+
+        cls.blend = os.path.join(tempfile.gettempdir(), "gh_stack_repair_test.blend")
+        bpy.ops.wm.save_as_mainfile(filepath=cls.blend)
+
+        # Grasshopper stays connected across the load, like the reopen test.
+        cls.report = os.path.join(tempfile.gettempdir(), "fake_gh_repair_report.json")
+        if os.path.exists(cls.report):
+            os.remove(cls.report)
+        cls.fake = start_fake(cls.stage_key, cls.report, port=9148)
+        deadline = time.time() + 5.0
+        while time.time() < deadline and not bridge.state["connected"]:
+            time.sleep(0.05)
+        cls.connected = bridge.state["connected"]
+
+        bpy.ops.wm.open_mainfile(filepath=cls.blend)
+
+    @classmethod
+    def tearDownClass(cls):
+        stop_fake(getattr(cls, "fake", None))
+        bpy.ops.preferences.addon_disable(module="gh_stack")
+
+    def test_01_lost_plumbing_rebuilt_and_unbound(self):
+        obj = bpy.data.objects.get("Repair")
+        self.assertIsNotNone(obj, "the saved object did not survive the reload")
+        stage = obj.gh_stack.stages[0]
+        self.assertEqual(stage.state, "unbound", "a rebuilt stage was not marked unbound")
+        for kind in self.helpers.KINDS:
+            self.assertIsNotNone(
+                self.helpers.helper_for(obj, self.stage_key, kind),
+                "helper %s was not rebuilt on load" % kind,
+            )
+        modifier = self.nodes.modifier_of(obj, stage)
+        self.assertIsNotNone(modifier)
+        self.assertIsNotNone(modifier.node_group, "the node group was not rebuilt on load")
+
+    def test_02_an_answer_returns_it_to_ok(self):
+        obj = bpy.data.objects.get("Repair")
+        stage = obj.gh_stack.stages[0]
+        self.assertTrue(self.connected, "the fake never connected before the load")
+        self.assertTrue(
+            pump(seconds=10.0, until=lambda: stage.state in ("ok", "error")),
+            "the rebuilt stage never reached a result",
+        )
+        self.assertEqual(stage.state, "ok", stage.error)
 
 
 if __name__ == "__main__":

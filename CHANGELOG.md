@@ -10,6 +10,43 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Pull and Freeze.** Pull asks Grasshopper for a stage's output again without
+  touching the frame cache; Freeze parks a stage — no requests, no cache replay,
+  the output stays — and Pull is how a frozen stage is refreshed on demand. A
+  frozen stage reports `frozen`; a stage no document has ever answered reports
+  `unbound`.
+- **Key all.** One button keys every parameter of a stage at the current frame;
+  integer, boolean and value-list keys hold (constant interpolation), text is
+  not animatable. Value-list parameters are keyed on their real value property,
+  which is what makes them animatable at all.
+- **Purge orphans.** Parameters removed in Grasshopper keep their properties and
+  keyframes (protocol §4.2); the Diagnostics panel lists them and purges them
+  explicitly.
+
+### Changed
+
+- **The stage lifecycle is the modifiers panel.** The viewport, render and
+  edit-mode toggles are the enable switch (a stage is active while visible in
+  any context), drag reorders it, and deleting the stage's modifier removes the
+  stage with its helpers, block definitions and parameters. The N-panel keeps
+  Add Stage, Push, Pull, Freeze, Key all and the key copy; its enable checkbox
+  and trash button are gone.
+- **Push skips frozen stages** entirely.
+
+### Fixed
+
+- **The add-on no longer re-enables a stage's modifier.** Every engine pass used
+  to write the viewport and render flags back on, undoing the toggle the moment
+  it was flipped; the flags are read now, and only seeded when the stage is
+  created.
+- **Lost plumbing is rebuilt on load.** Helpers or a node group deleted before a
+  save come back on reopen (marked `unbound` until an answer), instead of the
+  stage silently evaluating the wrong prefix.
+
 ## [0.2.2] — 2026-10-18
 
 A conversion patch: cyclic NURBS curves are exact in both directions. A cyclic

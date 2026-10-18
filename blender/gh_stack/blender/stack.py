@@ -28,6 +28,8 @@ STATE_OK = "ok"
 STATE_ERROR = "error"
 STATE_DISCONNECTED = "disconnected"
 STATE_DISABLED = "disabled"
+STATE_FROZEN = "frozen"
+STATE_UNBOUND = "unbound"
 
 
 def new_stage_key(label="stage"):
@@ -99,7 +101,20 @@ class GhStage(bpy.types.PropertyGroup):
 
     key: StringProperty(name="Key", default="")
     label: StringProperty(name="Label", default="")
+    # Derived from the modifier's own visibility flags on every pass: a stage is
+    # active while its modifier is visible in any context (viewport, render or
+    # edit mode), and disabled only when all three are off. Kept as a field so
+    # saved files and readers of the record stay coherent; the toggles in the
+    # modifiers panel are the control (plan §11), not a checkbox in the panel.
     enabled: BoolProperty(name="Enabled", default=True)
+    # Freeze: no requests, and no cache replay either — the helpers keep their
+    # last output. Pull still refreshes on demand (plan §9.2, §9.8).
+    frozen: BoolProperty(name="Frozen", default=False)
+    # The modifier's persistent_uid, written when the modifier is created or
+    # first seen. It is what tells "the modifier was deleted" (the stage goes
+    # with it) apart from "the node group was deleted" (the group is rebuilt),
+    # which the group-name link alone cannot (plan §9.7).
+    modifier_uid: IntProperty(name="Modifier", default=0)
     state: StringProperty(name="State", default=STATE_IDLE)
     # The request the stage last asked for: set when a request goes out (or when a
     # cached frame is applied), never for a frame the scene has merely moved to.

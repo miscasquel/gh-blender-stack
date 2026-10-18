@@ -207,7 +207,7 @@ It outputs the value Blender sends when connected, or the default otherwise.
 - Ranges are set through `id_properties_ui`.
 - In Blender 5.2, `action.fcurves` no longer exists. Access is through `action.layers[].strips[].channelbags[].fcurves`. Any code touching keyframe interpolation must use that path.
 
-**Parameter UI.** A "GH Parameters" panel per stage shows the widgets, with "Key all" and "Clear keys" buttons. Keyframe and driver decorators are verified in spike S5. Parameters removed from GH move to an orphan list, so their keyframes are not dropped silently. Orphans can be purged explicitly.
+**Parameter UI.** A "GH Parameters" panel per stage shows the widgets, with a "Key all" button that keys every parameter at the current frame (int, bool and value-list keys are constant-interpolated; text is not animatable). Single parameters are keyed and cleared through Blender's own decorators (the keyframe diamond, the context menu, the Dope Sheet). Keyframe and driver decorators are verified in spike S5. Parameters removed from GH move to an orphan list, so their keyframes are not dropped silently. Orphans can be purged explicitly.
 
 **Frame cache.** The cache behaves like Geometry Nodes simulation caches: it fills as the user plays and scrubs, with no bake setup and no frame range fields. The content-addressed response store *is* the frame cache — a keyframed parameter produces a different request ID per frame, so frames are keyed by their content, not by frame number. Frames are written to the disk store as they arrive (raw protocol frame plus a generation/fingerprint sidecar) and replay in any order. A per-stage generation resets the stage's frames when Grasshopper sends something that makes them describe the wrong definition: a slider upstream of Stage Out (the same request ID answered with a different output hash), a schema change, a reconnecting document, or a manual Push. A re-opened session reuses frames whose generation and definition fingerprint still match (ADR 0008). No bake operator exists.
 
@@ -296,7 +296,9 @@ Protocol mismatches (different `proto`) are rejected with an error message in bo
 A stage's prefix never includes its own parameters, so a parameter change cannot feed back into its own request.
 
 ### 9.2 States
-`idle` · `waiting` · `ok` · `error` · `disconnected` · `disabled` (no requests; downstream receives input directly) · `frozen` (no requests; the helper keeps its last output) · `unbound` (no GH document has answered yet).
+`idle` · `waiting` · `ok` · `error` · `disconnected` · `disabled` (no requests; downstream receives input directly) · `frozen` (no requests; the helper keeps its last output) · `unbound` (no GH document has answered yet; also the state a rebuilt stage carries until an answer arrives).
+
+`disabled` is derived, not stored: a stage is active while its modifier is visible in any context — viewport, render, or edit mode — so all three toggles off is the off switch, and the add-on never writes a toggle back (plan §11). `frozen` is its own flag: it stops requests *and* cache replay, and Push skips frozen stages entirely.
 
 ### 9.3 Latest-wins
 - One request is in flight per stage. A new request supersedes the previous one.
@@ -321,16 +323,22 @@ A stage's prefix never includes its own parameters, so a parameter change cannot
 ### 9.7 Undo, save, reload
 - Stage records, helper data, and node groups live in the `.blend`.
 - The disk cache is content-addressed, so restoring an earlier state is a cache hit.
-- On load, stages are re-bound by key. Missing helpers or groups are rebuilt and marked `unbound`.
+- On load, stages are re-bound by key. Missing helpers or node groups are rebuilt and marked `unbound`; a missing *modifier* is not repaired — deleting it removes the stage (§9.8).
+- The stage's modifier is linked by its `persistent_uid`, which survives a deleted or swapped node group; the group-name link stays as the fallback for records saved before the uid and for duplicated objects.
 - The engine's timer and handlers are persistent (Blender clears non-persistent ones on every file load), and a load resets mid-request stages and marks every stack for evaluation, so a reopened file talks to Grasshopper without an edit.
 
 ### 9.8 Operators
-Add Stage, Remove Stage, Push, Pull, Recompute from here, Freeze, Preview, Key all, Clear keys, Purge orphans. All are undo-safe. (Bake range is removed: the frame cache fills during playback, ADR 0008.)
+Add Stage, Push, Pull, Freeze, Key all, Purge orphans. All are undo-safe. (Bake range is removed: the frame cache fills during playback, ADR 0008.)
 
 - **Add Stage** creates a node group from the template, assigns a new key, creates the helpers on first use, and inserts the modifier after the active one.
-- **Remove Stage** removes the modifier and its helpers. The node group is removed when it has no users. Cache entries are kept.
-- **Freeze** stops requests. The helpers keep their last output.
-- **Preview** temporarily includes the stage's helpers in the view layer as a display object outside the stack.
+- **Remove Stage** is native: deleting the stage's modifier removes the stage, its helpers, its block definitions and its parameter properties. The node group is removed when it has no users. Cache entries are kept.
+- **Push** forces a fresh request for every live stage and resets the stack's frame cache. Frozen stages are skipped entirely.
+- **Pull** asks Grasshopper for one stage's output again without resetting the frame cache; it is also how a frozen stage is refreshed once, on demand.
+- **Freeze** stops requests and cache replay; the helpers keep their last output.
+- **Key all** keys every parameter of a stage at the current frame (see §7).
+- **Purge orphans** deletes parameter properties Grasshopper no longer declares, with their keyframes; until then they stay in the orphan list (protocol §4.2).
+
+Enable, disable and reorder are the modifier's own controls: the viewport, render and edit-mode toggles are the switch (a stage is active while visible in any context), and the add-on never writes them back after creation.
 
 ---
 
@@ -410,9 +418,9 @@ blender/tests/
 - Log level.
 
 **UI**
-- Modifier panel: native. GH stages appear as normal modifiers, with enable, reorder, and delete.
-- N-panel "GH Stack": per-stage rows showing label, copyable key, state, last solve time, warnings, and errors. Buttons for the operators in §9.8.
-- N-panel "GH Parameters": one section per stage, with widgets, keyframe decorators, Key all, and Clear keys.
+- Modifier panel: native and authoritative for lifecycle. GH stages appear as normal modifiers: the viewport, render and edit-mode toggles enable and disable the stage, drag reorders it, and X removes the stage with its helpers and parameters.
+- N-panel "GH Stack": per-stage rows showing label, copyable key, state, warnings, and errors, with Pull and Freeze buttons; Add Stage and Push at the stack. The Diagnostics child panel lists orphaned parameters and purges them.
+- N-panel "GH Parameters": one section per stage, with widgets, keyframe decorators, and Key all.
 - Status bar or header indicator for connection: listening, connected (with GH document name), or error.
 
 ---
@@ -645,6 +653,9 @@ operations, and instances cross as named graph-side block definitions — valid,
 previewing and baking without a document write at solve time, the route
 Grasshopper's own Model Block Definition components use.
 Instances as blocks landed 2026-10-17 (nested blocks both ways, helper data in
-the dedicated `GH Stage` scene). Next: W3/W4 (operators and persistence), the
-S6 display half and S7 in the GUI, and finally the acceptance pass A1–A10
-(M5–M7).
+the dedicated `GH Stage` scene), and W3/W4 landed 2026-10-18: the operators are
+Add Stage, Push, Pull, Freeze, Key all and Purge orphans; the modifier panel is
+the lifecycle (its toggles enable, drag reorders, X removes); the `frozen` and
+`unbound` states, load-time plumbing repair and the parameter-orphan list are in
+(§9.2, §9.7, §9.8). Next: the S6 display half and S7 in the GUI, and finally the
+acceptance pass A1–A10 (M5–M7).

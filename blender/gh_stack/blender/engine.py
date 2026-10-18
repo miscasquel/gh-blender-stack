@@ -45,6 +45,9 @@ HOT_SECONDS = 1.0
 _cache = {}  # (stack_id, stage_key) -> {rid: (header, sections)}; the hot path
 _stores = {}  # (stack_id, stage_key) -> ResponseStore; the backing store
 _prefix_memo = {}  # (obj.as_pointer(), stage key) -> {"revision": tuple, "sections": list}
+# (stack_id, stage_key) pairs allowed exactly one request while frozen: Pull.
+# Transient session state, like `_pending` — never saved, cleared on register.
+_pull_permits = set()
 # Blender's own invalidation: one counter per datablock, (type, name) -> int, moved
 # by `_bump_epochs` for everything the depsgraph tags and by `_bump_id` for the
 # engine's own writes. The prefix revision reads the counters of the names it
@@ -166,6 +169,13 @@ def _on_load(scene=None):
             if stage.geom_hash:
                 # We cannot know that GH kept the geometry: ask again in full.
                 stage.geom_hash = ""
+            # Plumbing lost with the file (helpers or the node group deleted
+            # before the save) is rebuilt here and the stage marked unbound
+            # until an answer arrives (plan §9.7). A missing *modifier* is not
+            # repaired: deleting it is how a stage is removed (§9.8).
+            modifier = nodes.modifier_of(obj, stage)
+            if modifier is not None:
+                _repair_plumbing(obj, record, stage, modifier)
     _mark_dirty_all()
     _mark_hot()
 
@@ -423,10 +433,15 @@ def _handle_response(header, sections):
         if was_pending and not applied:
             # The active frame's answer arrived, but the playhead moved on while
             # it was in flight: keep the last good output and let the next pass
-            # evaluate the frame the scene is actually on.
-            _set(stage, "state", stack_mod.STATE_IDLE)
+            # evaluate the frame the scene is actually on. A frozen stage stays
+            # frozen — Pull asked for the answer, freeze still owns the state.
+            _set(
+                stage,
+                "state",
+                stack_mod.STATE_FROZEN if stage.frozen else stack_mod.STATE_IDLE,
+            )
         else:
-            _set(stage, "state", stack_mod.STATE_OK)
+            _set(stage, "state", _rest_state(stage))
         _set(stage, "error", "")
         if applied:
             stats["tags"] += 1
@@ -864,6 +879,12 @@ def _set(stage, field, value):
     return False
 
 
+def _rest_state(stage):
+    """The state a stage settles into after an answer. A frozen stage stays
+    frozen through a Pull; it owns the state (plan §9.2)."""
+    return stack_mod.STATE_FROZEN if stage.frozen else stack_mod.STATE_OK
+
+
 def _store_for(record, stage):
     key = (record.stack_id, stage.key)
     root = prefs.data_root()
@@ -1018,7 +1039,7 @@ def _process_object(obj):
         return False
     if not record.stack_id:
         record.stack_id = stack_mod.ensure_stack(obj).stack_id
-    busy = False
+    busy = _drop_removed_stages(obj, record)
     for stage in record.stages:
         outcome = _process_stage(obj, record, stage)
         if outcome == "waiting":
@@ -1030,14 +1051,94 @@ def _process_object(obj):
     return busy
 
 
+def _drop_removed_stages(obj, record):
+    """Removing a stage is deleting its modifier in the modifiers panel (§9.8):
+    the modifier is the stage's anchor in the stack, so a stage whose modifier is
+    gone is removed here — helpers, block definitions and parameter properties
+    included. Cache entries are kept. Returns True when something was removed.
+
+    A missing *node group* is not removal: ``modifier_of`` finds the modifier by
+    its persistent uid and the group is rebuilt by ``_repair_plumbing``."""
+    removed = False
+    for index in range(len(record.stages) - 1, -1, -1):
+        stage = record.stages[index]
+        if nodes.modifier_of(obj, stage) is not None:
+            continue
+        if not stage.modifier_uid and nodes.modifier_by_name(obj, stage) is not None:
+            # A record from before the uid existed, whose node group is gone
+            # too: the modifier is there but has nothing to match on. Keep the
+            # stage — removal is data loss, and the pass repairs it.
+            continue
+        _forget(record.stack_id, stage.key)
+        _pull_permits.discard((record.stack_id, stage.key))
+        _forget_prefix(obj, stage.key)
+        helpers.remove_helper(obj, stage.key)
+        for definition in list(helpers.definition_collections(obj, stage.key)):
+            helpers.remove_definition(obj, stage.key, definition)
+        stack_mod.clear_stage_params(obj, stage.key)
+        nodes.remove_orphan_group(stage.key)
+        record.stages.remove(index)
+        removed = True
+    if removed:
+        obj.update_tag()
+    return removed
+
+
+def _repair_plumbing(obj, record, stage, modifier):
+    """Rebuild plumbing a saved file (or the outliner) lost: the node group and
+    the helper objects. A rebuilt stage is marked unbound until an answer
+    arrives, and its applied hash is cleared so a cached frame with the same
+    out_hash is re-applied instead of skipped over empty helpers (plan §9.7).
+    Returns True when something was rebuilt."""
+    rebuilt = False
+    if helpers.missing_kinds(obj, stage.key):
+        helpers.ensure_helpers(obj, stage.key)
+        modifier.node_group = nodes.ensure_group(obj, stage.key)
+        rebuilt = True
+    elif nodes.bind_modifier(obj, stage, modifier):
+        rebuilt = True
+    if stage.modifier_uid != modifier.persistent_uid:
+        # Adopt the uid of the modifier actually found: an old record has none,
+        # and a stale one (a record restored by undo, a duplicate's copied uid)
+        # follows the modifier that is really there.
+        stage.modifier_uid = modifier.persistent_uid
+    if rebuilt:
+        _forget(record.stack_id, stage.key)
+        _set(stage, "applied_out_hash", "")
+        if stage.state != stack_mod.STATE_UNBOUND:
+            _set(stage, "state", stack_mod.STATE_UNBOUND)
+        prefs.log("[gh-stack] %s: plumbing rebuilt, marked unbound" % stage.key, flush=True)
+    return rebuilt
+
+
 def _process_stage(obj, record, stage):
     """One stage's pass. Returns "waiting" (request in flight; stop the stack),
     "busy" (work happened; keep the fast timer), or "idle"."""
-    if not stage.enabled:
-        _set(stage, "state", stack_mod.STATE_DISABLED)
-        nodes.set_modifier_visible(obj, stage.key, False)
+    modifier = nodes.modifier_of(obj, stage)
+    if modifier is None and not stage.modifier_uid:
+        # A record saved before the uid existed, whose group is gone: the name
+        # fallback still finds it, and the repair below re-links it.
+        modifier = nodes.modifier_by_name(obj, stage)
+    if modifier is None:
+        # `_drop_removed_stages` runs first; this is a defensive skip only.
         return "idle"
-    nodes.set_modifier_visible(obj, stage.key, True)
+    active = nodes.modifier_active(modifier)
+    # The modifier's own toggles are the control (plan §11): a stage is active
+    # while visible in any context, and the record mirrors that for the state
+    # row. Nothing here ever writes a modifier flag back — that was the bug
+    # where a toggle in the modifiers panel was undone by the next pass.
+    _set(stage, "enabled", active)
+    if not active:
+        _set(stage, "state", stack_mod.STATE_DISABLED)
+        return "idle"
+    _repair_plumbing(obj, record, stage, modifier)
+    if stage.frozen and (record.stack_id, stage.key) not in _pull_permits:
+        # Freeze: no requests and no cache replay; the helpers keep their last
+        # output. Pull (engine.request_again) plants a one-shot permit above and
+        # works while frozen; it is consumed here.
+        _set(stage, "state", stack_mod.STATE_FROZEN)
+        return "idle"
+    _pull_permits.discard((record.stack_id, stage.key))
 
     sections, geom_hash, attributes, definitions = _prefix_sections(obj, record, stage)
     params_json = props.canonical_json(obj, stage)
@@ -1062,20 +1163,26 @@ def _process_stage(obj, record, stage):
             stats["applies"] += 1
             _set(stage, "applied_out_hash", out_hash)
             _set(stage, "warnings", _warnings_text(header))
-            _set(stage, "state", stack_mod.STATE_OK)
+            _set(stage, "state", _rest_state(stage))
             _set(stage, "error", "")
             return "busy"
         # The cached frame is the displayed one, but the group may predate the
         # current format: repairing it here is what lets a replay fix a stale
         # session (see _handle_response).
         nodes.ensure_group(obj, stage.key, _nested_rows_of(cached_sections))
-        _set(stage, "state", stack_mod.STATE_OK)
+        _set(stage, "state", _rest_state(stage))
         return "idle"
 
     if not bridge.state["connected"]:
         # A miss with Grasshopper away keeps the last good output; only cached
-        # frames replay (renders use the cache).
-        _set(stage, "state", stack_mod.STATE_DISCONNECTED)
+        # frames replay (renders use the cache). A stage no document has ever
+        # answered reads unbound instead of disconnected: disconnected means a
+        # client was there and left (plan §9.2).
+        _set(
+            stage,
+            "state",
+            stack_mod.STATE_UNBOUND if not stage.applied_out_hash else stack_mod.STATE_DISCONNECTED,
+        )
         return "idle"
 
     pending = _pending_of(record.stack_id, stage.key)
@@ -1164,7 +1271,7 @@ def _prefix_sections(obj, record, stage):
     are both skipped, and the stored hash means the pass does not pay for
     re-serializing either.
     """
-    modifier = nodes.modifier_for(obj, stage.key)
+    modifier = nodes.modifier_of(obj, stage)
     index = _modifier_index(obj, modifier)
     revision = _prefix_revision(obj, record, index)
     # Keyed by identity, not by name: an object renamed to a name another object
@@ -1535,11 +1642,11 @@ def start_server(port=None):
     return server.SERVER.start(port)
 
 
-def request_again(obj, stage=None):
+def request_again(obj, stage=None, skip_frozen=False):
     """Force a fresh request without touching the frame cache: the nonce changes
     so the request id cannot collide with a cached one. Used when a stage is
-    created or its identity changes. The memoized prefix is retired with it: a
-    fresh request must carry what the scene shows."""
+    created or its identity changes, and by Pull. The memoized prefix is retired
+    with it: a fresh request must carry what the scene shows."""
     record = stack_mod.stack_of(obj)
     if record is None:
         return
@@ -1547,17 +1654,50 @@ def request_again(obj, stage=None):
         record.stack_id = stack_mod.ensure_stack(obj).stack_id
     stages = [stage] if stage is not None else list(record.stages)
     for item in stages:
+        if skip_frozen and item.frozen:
+            continue
         item.nonce += 1
         _forget(record.stack_id, item.key)
         _forget_prefix(obj, item.key)
-        _set(item, "state", stack_mod.STATE_IDLE)
+        if item.frozen:
+            # Pull on a frozen stage: one request, then parked again.
+            _pull_permits.add((record.stack_id, item.key))
+            _set(item, "state", stack_mod.STATE_FROZEN)
+        else:
+            _set(item, "state", stack_mod.STATE_IDLE)
+    _dirty.add(obj.name)
+    _mark_hot()
+
+
+def freeze(obj, stage):
+    """Freeze a stage: stop requests and cache replay; the helpers keep their
+    last output. An answer already in flight is forgotten (and still cached when
+    it lands); Pull refreshes on demand while frozen."""
+    record = stack_mod.stack_of(obj)
+    if record is None:
+        return
+    _pull_permits.discard((record.stack_id, stage.key))
+    _forget(record.stack_id, stage.key)
+    _set(stage, "rid", "")
+    _set(stage, "error", "")
+    _set(stage, "state", stack_mod.STATE_FROZEN)
+
+
+def unfreeze(obj, stage):
+    """Resume a frozen stage: the next pass replays a cached frame or asks
+    Grasshopper again, whichever the current request id resolves to."""
+    record = stack_mod.stack_of(obj)
+    if record is not None:
+        _pull_permits.discard((record.stack_id, stage.key))
+    _set(stage, "state", stack_mod.STATE_IDLE)
     _dirty.add(obj.name)
     _mark_hot()
 
 
 def push(obj=None):
-    """Force a fresh request for every stage of a stack (increments the nonce)
-    and reset its frame cache: Push exists to get past anything cached."""
+    """Force a fresh request for every live stage of a stack (increments the
+    nonce) and reset its frame cache: Push exists to get past anything cached.
+    Frozen stages are parked and skipped entirely (plan §9.8)."""
     obj = obj or bpy.context.object
     if obj is None:
         return
@@ -1567,8 +1707,10 @@ def push(obj=None):
     if not record.stack_id:
         record.stack_id = stack_mod.ensure_stack(obj).stack_id
     for stage in record.stages:
+        if stage.frozen:
+            continue
         _bump_generation(obj, record, stage, "Push")
-    request_again(obj)
+    request_again(obj, skip_frozen=True)
 
 
 def _mark_object_dirty(obj):
@@ -1591,6 +1733,7 @@ def register():
     _prefix_memo.clear()
     _state_since.clear()
     _epochs.clear()
+    _pull_permits.clear()
     _hot_until = 0.0
     for counter in stats:
         stats[counter] = 0

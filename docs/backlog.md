@@ -5,15 +5,14 @@ measured evidence behind the bigger items lives in `polish-plan.md`, which is a
 record of one review rather than a plan. If something is not here, it is either
 done or was judged not worth doing — it is not missing.
 
-**Next session:** 0.2.2 lands the cyclic NURBS conversion fix; 0.2.1 before it
-cleared the reliability and polish backlog and the compliance platform's
-Phase 0 (see `docs/extensions-compliance.md`). The next release is 0.3.0:
-**W3/W4** — the operators and persistence work in `docs/plan.md` §9.7/§9.8
-(Pull, Recompute from here, Freeze, Preview, Key all, Clear keys, Purge
-orphans; the `frozen`/`unbound` states; undo-safe stage lifecycle and
-parameter-orphan handling) — then the S6 display half and S7 in the GUI, then
-the acceptance pass A1–A10. The portal upload is its own batch
-(compliance Phase 1, G7 pre-ask included) and is independent.
+**Next session:** **W3/W4 landed on `main`** (unreleased): the operator set is
+Add Stage, Push, Pull, Freeze, Key all and Purge orphans; the stage lifecycle is
+native — the modifier's viewport/render/edit-mode toggles are the enable switch,
+X removes the stage, drag reorders it — and the `frozen`/`unbound` states,
+load-time plumbing repair and the parameter-orphan list are in. What remains for
+0.3.0: the S6 display half and S7 in the GUI, then the acceptance pass A1–A10.
+The portal upload is its own batch (compliance Phase 1, G7 pre-ask included) and
+is independent.
 
 Each item says what it is, where, and why it matters. Effort is not estimated:
 the last three batches each looked like an afternoon and were not.
@@ -30,6 +29,14 @@ the last three batches each looked like an afternoon and were not.
   failure message now carries the fake's report, the stage state and both rids,
   so the next occurrence is diagnosable. Remove this item once a reason is found
   or a release cycle passes without it.
+- **Duplicated objects share one node group** (verified 2026-10-18 by an
+  adversarial probe of the W3/W4 batch): object duplication copies the stage
+  record, the modifier and its `persistent_uid` verbatim, and the node group
+  datablock is keyed only by the stage key — so both objects' stages resolve to
+  the same group, and every engine pass rebuilds it for whichever object ran
+  last. Both objects then draw the last-processed object's helpers. Plan §5
+  already prescribes the fix (detect shared groups each tick, give the duplicate
+  its own group, key and helpers); this is acceptance item A10.
 
 ---
 

@@ -53,8 +53,11 @@ Blender                                          Rhino / Grasshopper (wine)
 - **Protocol.** Binary frames with a canonical JSON header; geometry and
   parameters in the same stream. The Python and C# codecs are checked against
   eleven shared golden fixtures.
-- **Lifecycle.** States (`waiting`, `ok`, `error`, `disconnected`, `disabled`),
-  timeouts, latest-wins requests, and reconnect with backoff. Inspecteable from the UI.
+- **Lifecycle.** States (`waiting`, `ok`, `error`, `disconnected`, `disabled`,
+  `frozen`, `unbound`), timeouts, latest-wins requests, and reconnect with
+  backoff. The stage's modifier is its lifecycle: its toggles enable and disable
+  it, deleting it removes the stage, Pull refreshes it once, Freeze parks it.
+  Inspectable from the UI.
 - **Frame cache.** The cache behaves like a simulation cache: it fills as you
   play and scrub, stores frames on disk (content-addressed, bounded, resettable
   per stage), replays with Grasshopper closed, and leaves an idle scene alone so

@@ -157,24 +157,83 @@ def apply_schema(obj, stage, params):
         _set_ui(obj, name, entry)
 
 
+def _fcurve_slots(obj):
+    """Yield ``(channelbag, fcurve)`` for every fcurve of the object's action.
+
+    Blender 5.2 has no ``action.fcurves``; the layered API is the only path
+    (plan §7). A generator, so callers can remove while walking."""
+    animation = getattr(obj, "animation_data", None)
+    if animation is None or animation.action is None:
+        return
+    for layer in animation.action.layers:
+        for strip in layer.strips:
+            for bag in strip.channelbags:
+                for fcurve in bag.fcurves:
+                    yield bag, fcurve
+
+
 def _remove_animation(obj, name):
     """Drop the keyframes and drivers of one custom property. Returns how many
     fcurves were removed."""
     path = '["%s"]' % name
     removed = 0
-    animation = getattr(obj, "animation_data", None)
-    if animation is not None and animation.action is not None:
-        for layer in list(animation.action.layers):
-            for strip in list(layer.strips):
-                for bag in list(strip.channelbags):
-                    for fcurve in list(bag.fcurves):
-                        if fcurve.data_path == path:
-                            bag.fcurves.remove(fcurve)
-                            removed += 1
+    for bag, fcurve in list(_fcurve_slots(obj)):
+        if fcurve.data_path == path:
+            bag.fcurves.remove(fcurve)
+            removed += 1
     try:
         obj.driver_remove(path)
     except (TypeError, RuntimeError):
         pass
+    return removed
+
+
+# Parameters whose keys must hold, not interpolate: an interpolated int, bool or
+# choice index is not a value Grasshopper can use (plan §7).
+CONSTANT_TYPES = ("int", "bool", "value_list")
+
+
+def key_all(obj, stage, frame):
+    """Key every parameter of a stage at ``frame``. Text parameters are skipped
+    (not animatable), and int, bool and value list keys are set to constant
+    interpolation. Value list parameters are keyed on the real custom property —
+    the dropdown is a proxy, so this is their only keying path. Returns how many
+    properties were keyed."""
+    keyed = 0
+    for entry in stage.params:
+        if entry.type == "text":
+            continue
+        name = stack_mod.param_prop_name(stage.key, entry.param_id)
+        if name not in obj:
+            continue
+        path = '["%s"]' % name
+        obj.keyframe_insert(data_path=path, frame=frame)
+        keyed += 1
+        if entry.type in CONSTANT_TYPES:
+            for _bag, fcurve in _fcurve_slots(obj):
+                if fcurve.data_path == path:
+                    for point in fcurve.keyframe_points:
+                        point.interpolation = "CONSTANT"
+    return keyed
+
+
+def orphans(obj, stage):
+    """The custom properties of one stage whose parameter left the schema: the
+    orphan list of protocol §4.2. Their values and keyframes are kept, never
+    silently deleted; Purge orphans removes them explicitly."""
+    known = {stack_mod.param_prop_name(stage.key, entry.param_id) for entry in stage.params}
+    prefix = stack_mod.stage_prefix(stage.key)
+    return [name for name in obj.keys() if name.startswith(prefix) and name not in known]
+
+
+def purge_orphans(obj, stage):
+    """Remove every orphaned property of one stage, with its animation. Returns
+    how many properties were removed."""
+    removed = 0
+    for name in orphans(obj, stage):
+        _remove_animation(obj, name)
+        del obj[name]
+        removed += 1
     return removed
 
 

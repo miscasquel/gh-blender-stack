@@ -1,11 +1,26 @@
-"""Operators: Add Stage, Remove Stage, Push, server control (plan §9.8, demo v0)."""
+"""Operators: Add Stage, Push, Pull, Freeze, Key all, Purge orphans, server
+control (plan §9.8).
+
+Stage removal and enable/disable are native: deleting the stage's modifier
+removes the stage, and the modifier's own visibility toggles are the switch
+(plan §11). The add-on never writes those toggles after creation.
+"""
 
 import bpy
 from bpy.props import IntProperty, StringProperty
 
-from . import bridge, engine, helpers, nodes, stack as stack_mod
+from . import bridge, engine, helpers, nodes, props, stack as stack_mod
 
 STACK_TYPES = {"MESH", "CURVE", "POINTCLOUD", "SURFACE"}
+
+
+def _stage(context, index):
+    """The (object, record, stage) the operator was pointed at, or Nones."""
+    obj = context.object
+    record = stack_mod.stack_of(obj) if obj is not None else None
+    if record is None or not (0 <= index < len(record.stages)):
+        return None, None, None
+    return obj, record, record.stages[index]
 
 
 class GHSTACK_OT_add_stage(bpy.types.Operator):
@@ -36,30 +51,6 @@ class GHSTACK_OT_add_stage(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class GHSTACK_OT_remove_stage(bpy.types.Operator):
-    bl_idname = "gh_stack.remove_stage"
-    bl_label = "Remove GH Stage"
-    bl_description = "Remove this Grasshopper stage, its helper and its parameters"
-    bl_options = {"REGISTER", "UNDO"}
-
-    index: IntProperty(name="Index", default=-1)
-
-    def execute(self, context):
-        obj = context.object
-        record = stack_mod.stack_of(obj) if obj is not None else None
-        if record is None or not (0 <= self.index < len(record.stages)):
-            return {"CANCELLED"}
-        stage = record.stages[self.index]
-        nodes.remove_modifier(obj, stage.key)
-        helpers.remove_helper(obj, stage.key)
-        for index in list(helpers.definition_collections(obj, stage.key)):
-            helpers.remove_definition(obj, stage.key, index)
-        stack_mod.clear_stage_params(obj, stage.key)
-        record.stages.remove(self.index)
-        obj.update_tag()
-        return {"FINISHED"}
-
-
 class GHSTACK_OT_push(bpy.types.Operator):
     bl_idname = "gh_stack.push"
     bl_label = "Push"
@@ -71,6 +62,88 @@ class GHSTACK_OT_push(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class GHSTACK_OT_pull(bpy.types.Operator):
+    bl_idname = "gh_stack.pull"
+    bl_label = "Pull"
+    bl_description = "Ask Grasshopper for this stage's output again; cached frames are kept"
+    bl_options = {"REGISTER", "UNDO"}
+
+    index: IntProperty(name="Index", default=-1)
+
+    def execute(self, context):
+        obj, _record, stage = _stage(context, self.index)
+        if stage is None:
+            return {"CANCELLED"}
+        # A fresh request without a cache reset: the frame cache stays valid, so
+        # this is also how a frozen stage is refreshed once, on demand.
+        engine.request_again(obj, stage)
+        self.report({"INFO"}, "Pulling %s" % stage.key)
+        return {"FINISHED"}
+
+
+class GHSTACK_OT_freeze(bpy.types.Operator):
+    bl_idname = "gh_stack.freeze"
+    bl_label = "Freeze"
+    bl_description = "Freeze this stage: no requests until unfrozen; the output stays"
+    bl_options = {"REGISTER", "UNDO"}
+
+    index: IntProperty(name="Index", default=-1)
+
+    def execute(self, context):
+        obj, _record, stage = _stage(context, self.index)
+        if stage is None:
+            return {"CANCELLED"}
+        if stage.frozen:
+            stage.frozen = False
+            engine.unfreeze(obj, stage)
+            self.report({"INFO"}, "Unfroze %s" % stage.key)
+        else:
+            stage.frozen = True
+            engine.freeze(obj, stage)
+            self.report({"INFO"}, "Froze %s" % stage.key)
+        return {"FINISHED"}
+
+
+class GHSTACK_OT_key_all(bpy.types.Operator):
+    bl_idname = "gh_stack.key_all"
+    bl_label = "Key all"
+    bl_description = "Key every parameter of this stage at the current frame"
+    bl_options = {"REGISTER", "UNDO"}
+
+    index: IntProperty(name="Index", default=-1)
+
+    def execute(self, context):
+        obj, _record, stage = _stage(context, self.index)
+        if stage is None:
+            return {"CANCELLED"}
+        keyed = props.key_all(obj, stage, context.scene.frame_current)
+        if not keyed:
+            self.report({"WARNING"}, "nothing animatable to key")
+            return {"CANCELLED"}
+        self.report({"INFO"}, "Keyed %d parameter(s)" % keyed)
+        return {"FINISHED"}
+
+
+class GHSTACK_OT_purge_orphans(bpy.types.Operator):
+    bl_idname = "gh_stack.purge_orphans"
+    bl_label = "Purge orphans"
+    bl_description = "Delete parameter properties Grasshopper no longer declares, with their keyframes"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        obj = context.object
+        record = stack_mod.stack_of(obj) if obj is not None else None
+        if record is None:
+            return {"CANCELLED"}
+        removed = 0
+        for stage in record.stages:
+            removed += props.purge_orphans(obj, stage)
+        if not removed:
+            return {"CANCELLED"}
+        self.report({"INFO"}, "Purged %d orphan(s)" % removed)
+        return {"FINISHED"}
+
+
 class GHSTACK_OT_copy_key(bpy.types.Operator):
     bl_idname = "gh_stack.copy_key"
     bl_label = "Copy stage key"
@@ -79,13 +152,11 @@ class GHSTACK_OT_copy_key(bpy.types.Operator):
     index: IntProperty(name="Index", default=-1)
 
     def execute(self, context):
-        obj = context.object
-        record = stack_mod.stack_of(obj) if obj is not None else None
-        if record is None or not (0 <= self.index < len(record.stages)):
+        _obj, _record, stage = _stage(context, self.index)
+        if stage is None:
             return {"CANCELLED"}
-        key = record.stages[self.index].key
-        context.window_manager.clipboard = key
-        self.report({"INFO"}, "Copied %s" % key)
+        context.window_manager.clipboard = stage.key
+        self.report({"INFO"}, "Copied %s" % stage.key)
         return {"FINISHED"}
 
 
@@ -114,8 +185,11 @@ def _safe_unregister(cls):
 def register():
     for cls in (
         GHSTACK_OT_add_stage,
-        GHSTACK_OT_remove_stage,
         GHSTACK_OT_push,
+        GHSTACK_OT_pull,
+        GHSTACK_OT_freeze,
+        GHSTACK_OT_key_all,
+        GHSTACK_OT_purge_orphans,
         GHSTACK_OT_copy_key,
         GHSTACK_OT_start_server,
     ):
@@ -126,8 +200,11 @@ def unregister():
     for cls in (
         GHSTACK_OT_start_server,
         GHSTACK_OT_copy_key,
+        GHSTACK_OT_purge_orphans,
+        GHSTACK_OT_key_all,
+        GHSTACK_OT_freeze,
+        GHSTACK_OT_pull,
         GHSTACK_OT_push,
-        GHSTACK_OT_remove_stage,
         GHSTACK_OT_add_stage,
     ):
         _safe_unregister(cls)
