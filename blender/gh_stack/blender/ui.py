@@ -148,6 +148,18 @@ class GHSTACK_PT_diagnostics(bpy.types.Panel):
         state = bridge.state
         layout.label(text="connected: %s" % ("yes" if state["connected"] else "no"))
         layout.label(text="doc: %s" % (state["doc"] or "-"))
+        # Trigger, send and apply ages: the difference between "the engine never
+        # heard Blender" and "the engine heard it and stayed quiet". A frozen
+        # trigger age with the scene being edited is the tell for a mute.
+        health = engine.trigger_health()
+        layout.label(
+            text="trigger %s · sent %s · applied %s"
+            % (
+                _age_text(health["trigger_age"]),
+                _age_text(health["send_age"]),
+                _age_text(health["apply_age"]),
+            )
+        )
         if state.get("error"):
             layout.label(text=state["error"], icon="ERROR")
 
@@ -160,6 +172,11 @@ class GHSTACK_PT_diagnostics(bpy.types.Panel):
             box = layout.box()
             box.label(text="%s (%s)" % (stage.key, stage.state))
             box.label(text="rid: %s" % (stage.rid[-16:] or "-"))
+            # The last pass's latencies, so a slow round trip names its slowest
+            # part instead of being a black box.
+            timing_text = _timing_text(engine.stage_timings(record.stack_id, stage.key))
+            if timing_text:
+                box.label(text=timing_text, icon="TIME")
             # Only while something is actually slow: an answer outstanding for a
             # second is where a sync fault looks like nothing at all.
             age = engine.waiting_seconds(record.stack_id, stage.key)
@@ -192,6 +209,26 @@ class GHSTACK_PT_diagnostics(bpy.types.Panel):
 
 def _state_text(stage):
     return stage.state
+
+
+def _age_text(age):
+    """One heartbeat age as text: "-" until it has happened (the panel's line)."""
+    return "-" if age is None else "%.1f s ago" % age
+
+
+def _timing_text(timings):
+    """The last pass's latencies, in the order one round trip happens."""
+    parts = []
+    for label, field in (
+        ("clone", "prefix_ms"),
+        ("encode", "encode_ms"),
+        ("answer", "rtt_ms"),
+        ("apply", "apply_ms"),
+    ):
+        value = timings.get(field)
+        if value is not None:
+            parts.append("%s %.0f ms" % (label, value))
+    return " · ".join(parts)
 
 
 def _state_icon(stage):

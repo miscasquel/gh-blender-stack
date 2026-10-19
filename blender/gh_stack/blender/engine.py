@@ -65,6 +65,27 @@ _verify = set()
 # The last events the engine acted on, for the Diagnostics panel: a bounded ring
 # of "what did it see, what did it do" lines. Never saved.
 _trace = deque(maxlen=200)
+# Trigger health, for the Diagnostics panel: when the depsgraph last reached
+# `_on_depsgraph` (and how many entries that delivery carried), when a pass last
+# sent a request, and when a response was last applied. Monotonic and
+# session-only: the panel renders the ages ("trigger 0.4 s ago"), which is the
+# one line that tells a user whether the engine heard Blender at all.
+_heartbeat = {
+    "trigger_at": None,
+    "trigger_count": 0,
+    "trigger_updates": 0,
+    "sent_at": None,
+    "applied_at": None,
+}
+# Why a stage's last pass did not send: (stack_id, stage_key) -> (reason, rid).
+# A reason is re-recorded only when it changes or when the scene state moves on,
+# so a pass that stays quiet for the same reason does not flood the ring.
+_last_no_send = {}
+# The last pass latencies per stage, in milliseconds:
+# (stack_id, stage_key) -> {"prefix_ms", "encode_ms", "rtt_ms", "apply_ms"}.
+# Diagnostics-only, deliberately not on the saveable stage record: one
+# machine's timings must not travel inside a .blend.
+_timings = {}
 # (stack_id, stage_key) -> {rid: monotonic seconds it was sent}. At most one entry:
 # the evaluation in flight. One at a time, deliberately — a frame that arrives while
 # an answer is outstanding is not queued behind it, because Grasshopper solves in
@@ -87,6 +108,15 @@ _state_since = {}
 # clone tags the depsgraph; without the guard every pass would re-mark every
 # stack dirty and the engine would never idle.
 _evaluating = False
+# Who set the guard, and when: written once per clone, so the watchdog at the
+# top of `_timer` can name the object and stage that left it up without
+# formatting a traceback per clone. `_ticking` tells the depsgraph handler
+# whether the guard it sees belongs to the engine's own clone (a pass is
+# running, the event is ours and expected to be eaten) or to a pass that died
+# before it could clear it (the event is a real edit being dropped).
+_guard_owner = None
+_evaluating_since = None
+_ticking = False
 # Counters for tests and diagnostics: what the engine actually did, so a quiet
 # idle can be asserted without guessing at Blender internals.
 stats = {
@@ -130,10 +160,31 @@ def _mark_hot():
 @bpy.app.handlers.persistent
 def _on_depsgraph(scene, depsgraph=None):
     if _evaluating:
+        _trace_guard_drop()
         return
-    _bump_epochs(depsgraph)
+    _heartbeat["trigger_at"] = time.monotonic()
+    _heartbeat["trigger_count"] += 1
+    _heartbeat["trigger_updates"] = _bump_epochs(depsgraph)
     _mark_dirty_all()
     _mark_hot()
+
+
+def _trace_guard_drop():
+    """Note a depsgraph update the guard swallowed, but only when it is a symptom.
+
+    The guard exists to eat the engine's *own* clone events, and those arrive
+    while a pass is running: one trace line per pass would bury every other
+    event in the ring for no diagnosis. An update that arrives with no pass
+    running means the guard was left up by a pass that died (see
+    `_recover_stuck_guard`) — the exact mute this phase is about — so only that
+    one is named.
+    """
+    if _ticking:
+        return
+    where = "%s (stage %s)" % _guard_owner if _guard_owner else "unknown"
+    line = "depsgraph update dropped: guard up by %s" % where
+    if not _trace or _trace[-1] != line:
+        _trace.append(line)
 
 
 def _drain_depsgraph():
@@ -221,6 +272,8 @@ def _on_load(scene=None):
     _pending.clear()
     _prefix_memo.clear()
     _state_since.clear()
+    _last_no_send.clear()
+    _timings.clear()
     for obj in bpy.data.objects:
         record = stack_mod.stack_of(obj)
         if record is None:
@@ -250,6 +303,32 @@ def _on_load(scene=None):
 # ------------------------------------------------------------------------ tick
 
 
+def _recover_stuck_guard():
+    """Clear `_evaluating` when a previous pass left it set, and say so.
+
+    `_clone_prefix` sets the guard and clears it as the *last* statement of its
+    `finally`; a raise above that statement (removing the clone, dropping the
+    private datablock, the view-layer update) leaves it set for the rest of the
+    session. While it is set the depsgraph handler and the drain both return
+    early, so nothing ever marks a stack dirty again: the next edit is silently
+    ignored, which looks exactly like a dead add-on. A tick that starts with the
+    guard up is that state by definition — the pass that owns it has ended — so
+    the tick explains it, clears it, and marks every stack dirty, which is what
+    makes the edits dropped meanwhile reach Grasshopper after all.
+    """
+    global _evaluating
+    age = time.monotonic() - _evaluating_since if _evaluating_since is not None else 0.0
+    where = "%s (stage %s)" % _guard_owner if _guard_owner else "unknown"
+    _evaluating = False
+    _mark_dirty_all()
+    line = (
+        "guard watchdog: prefix guard left up by %s %.2f s ago; cleared and all stacks marked dirty"
+        % (where, age)
+    )
+    _trace.append(line)
+    prefs.log("[gh-stack] " + line, flush=True)
+
+
 def _timer():
     """bpy.app.timers callback. Returns the next interval.
 
@@ -257,8 +336,14 @@ def _timer():
     engine; every part of the pass is therefore guarded, and failures land in the
     panel state instead.
     """
+    global _ticking
     try:
         stats["passes"] += 1
+        _ticking = True
+        # Before anything else: a guard already up at the start of a tick cannot
+        # belong to this pass, so it is the wedge the watchdog exists for.
+        if _evaluating:
+            _recover_stuck_guard()
         # Before anything in this pass can evaluate a clone (and mute the
         # handler), let Blender deliver whatever is already tagged. Every
         # trigger the add-on has funnels through here, which is what makes the
@@ -281,6 +366,12 @@ def _timer():
                 import traceback
 
                 prefs.log("[gh-stack] engine error:\n%s" % traceback.format_exc(), flush=True)
+                # The pass died before it could decide anything for this
+                # object: say so in the panel, where the silence is what a user
+                # is staring at. One line per consecutive identical failure.
+                line = "engine error on %s: %r" % (name, exc)
+                if not _trace or _trace[-1] != line:
+                    _trace.append(line)
             _dirty.discard(name)
         if busy:
             return WAIT_INTERVAL
@@ -293,6 +384,8 @@ def _timer():
 
         prefs.log("[gh-stack] engine error:\n%s" % traceback.format_exc(), flush=True)
         return IDLE_INTERVAL
+    finally:
+        _ticking = False
 
 
 def _nudge_stalled_waits():
@@ -482,10 +575,15 @@ def _handle_response(header, sections):
         _store_frame(record, stage, rid, header, sections)
 
         was_pending = rid in _pending_of(record.stack_id, key)
+        sent_at = _pending_of(record.stack_id, key).get(rid) if was_pending else None
         _forget(record.stack_id, stage.key)
+        if sent_at is not None:
+            _record_timing(record, stage, "rtt_ms", _timed_since(sent_at))
         applied = False
         if rid == stage.rid and out_hash != stage.applied_out_hash:
+            started = time.monotonic()
             _apply(obj, stage, sections, header.get("attributes"))
+            _record_timing(record, stage, "apply_ms", _timed_since(started))
             stats["applies"] += 1
             _set(stage, "applied_out_hash", out_hash)
             applied = True
@@ -668,6 +766,9 @@ def _apply(obj, stage, sections, attributes=None):
     _apply_instance_rows(obj, stage, definitions, top_rows, nested_rows)
 
     nodes.ensure_group(obj, stage.key, nested_rows)
+    # The frame is fully on screen: the heartbeat's "applied" stamp. Written
+    # here rather than at the callers so every apply path is counted once.
+    _heartbeat["applied_at"] = time.monotonic()
 
 
 def _definition_split(name):
@@ -1193,6 +1294,27 @@ def _repair_plumbing(obj, record, stage, modifier):
     return rebuilt
 
 
+def _no_send(record, stage, reason, rid=None):
+    """Explain why a pass that saw the scene move sent nothing.
+
+    The mute this phase is about: an edit the engine saw but did not act on used
+    to leave no trace at all, so "nothing happened" was indistinguishable from
+    "the engine is stuck". One line per decision: repeating the same reason for
+    the same state does not append again, and a new request id (`rid` differs
+    from the last recorded one) or a new reason rewrites it. `rid` is the id
+    this pass computed — when it equals `stage.rid` the displayed state has not
+    moved, which is a no-op, not a silence, and is not recorded.
+    """
+    if rid is not None and rid == stage.rid:
+        return
+    key = (record.stack_id, stage.key)
+    token = (reason, rid)
+    if _last_no_send.get(key) == token:
+        return
+    _last_no_send[key] = token
+    _trace.append("%s: no send (%s)" % (stage.key, reason))
+
+
 def _process_stage(obj, record, stage):
     """One stage's pass. Returns "waiting" (request in flight; stop the stack),
     "busy" (work happened; keep the fast timer), or "idle"."""
@@ -1203,6 +1325,7 @@ def _process_stage(obj, record, stage):
         modifier = nodes.modifier_by_name(obj, stage)
     if modifier is None:
         # `_drop_removed_stages` runs first; this is a defensive skip only.
+        _no_send(record, stage, "no stage")
         return "idle"
     active = nodes.modifier_active(modifier)
     # The modifier's own toggles are the control (plan §11): a stage is active
@@ -1212,6 +1335,7 @@ def _process_stage(obj, record, stage):
     _set(stage, "enabled", active)
     if not active:
         _set(stage, "state", stack_mod.STATE_DISABLED)
+        _no_send(record, stage, "disabled")
         return "idle"
     _repair_plumbing(obj, record, stage, modifier)
     if stage.frozen and (record.stack_id, stage.key) not in _pull_permits:
@@ -1219,10 +1343,13 @@ def _process_stage(obj, record, stage):
         # output. Pull (engine.request_again) plants a one-shot permit above and
         # works while frozen; it is consumed here.
         _set(stage, "state", stack_mod.STATE_FROZEN)
+        _no_send(record, stage, "frozen")
         return "idle"
     _pull_permits.discard((record.stack_id, stage.key))
 
+    started = time.monotonic()
     sections, geom_hash, attributes, definitions = _prefix_sections(obj, record, stage)
+    _record_timing(record, stage, "prefix_ms", _timed_since(started))
     params_json = props.canonical_json(obj, stage)
     rid = hashing.request_id(stage.key, params_json, geom_hash, "m", "stack-local", stage.nonce)
 
@@ -1242,11 +1369,14 @@ def _process_stage(obj, record, stage):
     # it. With a client there, ask; with none, replay the cache as usual and
     # keep the permit for when one connects.
     if cached is not None and (verify_key not in _verify or not bridge.state["connected"]):
+        _no_send(record, stage, "cache hit", rid)
         header, cached_sections = cached
         out_hash = header.get("out_hash") or ""
         _set(stage, "rid", rid)
         if out_hash != stage.applied_out_hash:
+            started = time.monotonic()
             _apply(obj, stage, cached_sections, header.get("attributes"))
+            _record_timing(record, stage, "apply_ms", _timed_since(started))
             stats["applies"] += 1
             _set(stage, "applied_out_hash", out_hash)
             _set(stage, "warnings", _warnings_text(header))
@@ -1265,6 +1395,7 @@ def _process_stage(obj, record, stage):
         # frames replay (renders use the cache). A stage no document has ever
         # answered reads unbound instead of disconnected: disconnected means a
         # client was there and left (plan §9.2).
+        _no_send(record, stage, "disconnected", rid)
         _set(
             stage,
             "state",
@@ -1291,6 +1422,7 @@ def _process_stage(obj, record, stage):
         # session that just ended, and `hello`/`load` cleared it.
         sent_at = next(iter(pending.values()))
         if time.monotonic() - sent_at <= _timeout():
+            _no_send(record, stage, "waiting on rid %s" % next(iter(pending))[-8:], rid)
             return "waiting"
         # The answer never came. We cannot know whether Grasshopper received the
         # geometry, so the retry goes out in full — the same reasoning as the
@@ -1320,13 +1452,16 @@ def _process_stage(obj, record, stage):
         header["attributes"] = attributes
     if mode == "full" and definitions:
         header["definitions"] = definitions
+    started = time.monotonic()
     frame = codec.encode_frame(header, sections if mode == "full" else [])
+    _record_timing(record, stage, "encode_ms", _timed_since(started))
     if not server.SERVER.send(frame):
         # No client socket to carry it. Recording a pending request here would
         # make the stage wait out a whole timeout for an answer nobody was asked
         # for — and the retry would be gated on that same pending entry.
         stats["undelivered"] += 1
         _set(stage, "state", stack_mod.STATE_DISCONNECTED)
+        _no_send(record, stage, "undelivered", rid)
         return "idle"
     _verify.discard(verify_key)
     _trace.append(
@@ -1335,8 +1470,12 @@ def _process_stage(obj, record, stage):
     if retry_note:
         prefs.log("[gh-stack] %s: %s" % (stage.key, retry_note), flush=True)
     stats["sends"] += 1
+    # A send re-arms the "why no send" reason: the next silence is a new
+    # decision, not a repeat of the pass before this one.
+    _last_no_send.pop((record.stack_id, stage.key), None)
 
     now = time.monotonic()
+    _heartbeat["sent_at"] = now
     _pending_of(record.stack_id, stage.key)[rid] = now
     _waiting_objects.add(obj.name)
     _state_since[(record.stack_id, stage.key)] = now
@@ -1388,7 +1527,7 @@ def _prefix_sections(obj, record, stage):
         return memo["sections"], memo["geom_hash"], memo["attributes"], memo["definitions"]
 
     subd = bool(record.subd)
-    sections, attributes, definitions = _clone_prefix(obj, index, subd)
+    sections, attributes, definitions = _clone_prefix(obj, index, subd, stage.key)
     stats["prefix_clones"] += 1
 
     # Blender evaluates modifier-generated attribute data (a Bevel's UVs, for
@@ -1466,7 +1605,7 @@ def _close_enough(old_values, new_values):
     return bool(np.allclose(old, new, rtol=1e-5, atol=1e-9, equal_nan=True))
 
 
-def _clone_prefix(obj, index, subd):
+def _clone_prefix(obj, index, subd, stage_key=None):
     """The evaluated prefix of one stage: the object as it is just before the
     stage's own modifier, which is what everything before the stage has made.
 
@@ -1482,8 +1621,12 @@ def _clone_prefix(obj, index, subd):
     this runs (`_drain_depsgraph`): any user edit still pending is delivered to
     `_on_depsgraph` while the guard is down, so the mute can only ever eat the
     engine's own clone events.
+
+    Object and stage are recorded when the guard goes up, for the watchdog only
+    (one tuple, no traceback): if the cleanup below raises before the reset, the
+    next tick can name what left the engine mute instead of guessing.
     """
-    global _evaluating
+    global _evaluating, _guard_owner, _evaluating_since
     clone = obj.copy()
     # A copy that shares an Edit Mode mesh evaluates empty: the depsgraph hands
     # the edit data to the object in Edit Mode and to nothing else. A private
@@ -1494,6 +1637,8 @@ def _clone_prefix(obj, index, subd):
     if obj.mode == "EDIT":
         owned_data = obj.data.copy()
         clone.data = owned_data
+    _guard_owner = (obj.name, stage_key)
+    _evaluating_since = time.monotonic()
     _evaluating = True
     try:
         bpy.context.scene.collection.objects.link(clone)
@@ -1581,17 +1726,20 @@ def _bump_epochs(depsgraph=None):
     itself — the prefix clone's link, evaluate and unlink — are excluded by the
     ``_evaluating`` guard around the clone, and by nothing else: inspecting
     entries to guess "ours" is how a real edit gets dropped.
+
+    Returns how many updates the delivery carried (0 when there are none, or no
+    depsgraph to read): `_on_depsgraph` keeps it as the heartbeat's detail.
     """
     global _prefix_epoch
     _prefix_epoch += 1
     if depsgraph is None:
-        return
+        return 0
     try:
         updates = list(depsgraph.updates)
     except (AttributeError, RuntimeError, TypeError):
-        return
+        return 0
     if not updates:
-        return
+        return 0
     names = []
     for update in updates[:3]:
         ident = getattr(update.id.bl_rna, "identifier", None) or "?"
@@ -1603,6 +1751,7 @@ def _bump_epochs(depsgraph=None):
         _trace[-1] = line
     else:
         _trace.append(line)
+    return len(updates)
 
 
 def _bump_id(id_block):
@@ -1627,6 +1776,53 @@ def _modifier_index(obj, modifier):
 
 def _timeout():
     return float(prefs._pref("timeout", 30.0))
+
+
+def _timed_since(started):
+    """Milliseconds elapsed since a `time.monotonic()` stamp."""
+    return (time.monotonic() - started) * 1000.0
+
+
+def _record_timing(record, stage, field, value):
+    """Keep the last measured latency of one stage field."""
+    _timings.setdefault((record.stack_id, stage.key), {})[field] = value
+
+
+def stage_timings(stack_id, stage_key):
+    """The last measured pass latencies of one stage, in milliseconds.
+
+    Read by the Diagnostics panel ("clone 11 ms · encode 2 ms · answer 68 ms ·
+    apply 3 ms"), so a slow round trip names its slowest part instead of being a
+    black box. A copy, not the live mapping: a pass may write while the panel
+    draws, and the panel must never be able to change engine state. Fields that
+    have not been measured yet are absent.
+    """
+    values = _timings.get((stack_id, stage_key))
+    return dict(values) if values else {}
+
+
+def _age(now, then):
+    return None if then is None else max(0.0, now - then)
+
+
+def trigger_health():
+    """Ages of the last trigger, send and apply, for the Diagnostics panel.
+
+    The one line that separates "the engine never heard Blender" from "the
+    engine heard it and chose to stay quiet": `trigger_age` is the last depsgraph
+    update that actually reached `_on_depsgraph` (a guard-up mute makes it grow),
+    `trigger_count`/`trigger_updates` say how much arrived, and `send_age` /
+    `apply_age` are the last request that went out and the last response that
+    landed. Ages are seconds, or None when it has not happened in this session.
+    """
+    now = time.monotonic()
+    return {
+        "trigger_age": _age(now, _heartbeat["trigger_at"]),
+        "trigger_count": _heartbeat["trigger_count"],
+        "trigger_updates": _heartbeat["trigger_updates"],
+        "send_age": _age(now, _heartbeat["sent_at"]),
+        "apply_age": _age(now, _heartbeat["applied_at"]),
+    }
 
 
 def waiting_seconds(stack_id, stage_key):
@@ -1751,6 +1947,10 @@ def register():
     _state_since.clear()
     _verify.clear()
     _pull_permits.clear()
+    _last_no_send.clear()
+    _timings.clear()
+    for field in _heartbeat:
+        _heartbeat[field] = 0 if field in ("trigger_count", "trigger_updates") else None
     _hot_until = 0.0
     for counter in stats:
         stats[counter] = 0
