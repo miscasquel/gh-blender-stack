@@ -316,9 +316,17 @@ class ResetRetiresMemoTests(unittest.TestCase):
         # same geometry and answered with the same output.
         set_gn_input(self.gn, 10.0, self.obj)
         self.engine.push(self.obj)
+
+        # The report is written when the fake *receives* the request; the stage
+        # is only `ok` once the answer is back and applied. Waiting for both
+        # removes the race that used to flake this test as 'waiting' != 'ok'.
+        def delivered():
+            return self._seen(9.0) and self.stage.state == "ok"
+
         self.assertTrue(
-            pump(seconds=10.0, until=lambda: self._seen(9.0)),
-            "Push did not carry the geometry the scene is showing",
+            pump(seconds=10.0, until=delivered),
+            "Push did not carry the geometry the scene is showing (state=%s, report=%s)"
+            % (self.stage.state, report_of(self.report)),
         )
         self.assertEqual(self.stage.state, "ok", self.stage.error)
 

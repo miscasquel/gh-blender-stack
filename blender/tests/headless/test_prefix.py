@@ -508,14 +508,19 @@ class NestedGroupPrefixTests(unittest.TestCase):
         def followed():
             report = report_of(self.report)
             first = report.get("received_first") or [None]
+            # The report is written when the fake receives the request; `ok`
+            # means the answer came back and applied. Waiting for both removes
+            # the 'waiting' != 'ok' race that flaked this test once during the
+            # 0.2.0 release run.
             return (
                 self.stage.rid != rid_before
+                and self.stage.state == "ok"
                 and first[0] is not None
                 and abs(first[0] - 9.0) < 1e-3
             )
 
         # Capture enough state in the message that a rare failure is diagnosable
-        # instead of re-derived (this flaked once during the 0.2.0 release run).
+        # instead of re-derived.
         followed_ok = pump(seconds=10.0, until=followed)
         self.assertTrue(
             followed_ok,

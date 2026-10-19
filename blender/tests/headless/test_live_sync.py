@@ -147,6 +147,42 @@ def helper_max(obj, stage_key):
     return float(np.abs(co.reshape(-1, 3)).max())
 
 
+def settle_stages(engine, stack_mod, objects, settled, total=40.0):
+    """Pump until settled, re-arming requests only when they have gone quiet.
+
+    A class transition can leave the server holding a dead socket (the window
+    the frame-cache suite's `await_client` documents), so a lost first request
+    is normal. Re-arming a *young* request is not the fix: under a slow fake it
+    starves the answer that was about to land. A request is therefore replaced
+    only after `REARM_QUIET` seconds of waiting with nothing else in flight.
+    """
+    REARM_QUIET = 6.0
+    deadline = time.time() + total
+    while time.time() < deadline and not settled():
+        quiet = True
+        for obj in objects:
+            record = stack_mod.stack_of(obj)
+            if record is None:
+                continue
+            for stage in record.stages:
+                age = engine.waiting_seconds(record.stack_id, stage.key)
+                if age and age < REARM_QUIET:
+                    quiet = False
+        if quiet:
+            for obj in objects:
+                engine.request_again(obj)
+        pump(seconds=2.0, until=settled)
+    if not settled():
+        states = []
+        for obj in objects:
+            record = stack_mod.stack_of(obj)
+            if record is None:
+                continue
+            for stage in record.stages:
+                states.append((obj.name, stage.state))
+        raise AssertionError("the fake never settled: %s" % (states,))
+
+
 class LiveSyncTestCase(unittest.TestCase):
     """A cube, one stage, one fake client on a private port."""
 
@@ -178,15 +214,10 @@ class LiveSyncTestCase(unittest.TestCase):
         def settled():
             return cls.stage.state == "ok" and report_of(cls.report).get("responses", 0) >= 1
 
-        # A class transition can leave the server holding a socket whose process
-        # is already gone (the window the frame-cache suite's `await_client`
-        # documents): the first request is written there and lost, and the wait
-        # below would spend its budget on an answer that was never asked for.
-        # Re-arm once with a fresh request; a genuinely broken client still
-        # fails the assertions below, with its own message.
-        if not pump(seconds=8.0, until=settled):
-            engine.request_again(cls.obj)
-            pump(seconds=8.0, until=settled)
+        # A silent setup used to surface as an unrelated assertion in the first
+        # test (the 'waiting' != 'ok' flake); settle_stages re-arms lost
+        # requests and names the failure here instead.
+        settle_stages(engine, stack_mod, [cls.obj], settled)
 
     @classmethod
     def tearDownClass(cls):
@@ -289,13 +320,9 @@ class MultiObjectEditTests(unittest.TestCase):
                 and report_of(cls.report_b).get("responses", 0) >= 1
             )
 
-        # The same transition window the single-object suite documents: a
-        # socket from the previous class's process can swallow the first
-        # request, so re-arm once before asserting.
-        if not pump(seconds=8.0, until=settled):
-            engine.request_again(cls.obj_a)
-            engine.request_again(cls.obj_b)
-            pump(seconds=8.0, until=settled)
+        # The same transition window the single-object suite documents: settle,
+        # re-arming quiet requests, and fail here if the fakes never answer.
+        settle_stages(engine, stack_mod, [cls.obj_a, cls.obj_b], settled)
 
     @classmethod
     def _stack_object(cls, name, label):
@@ -1119,7 +1146,7 @@ class SupersedeTests(unittest.TestCase):
         def settled():
             return cls.stage.state == "ok" and report_of(cls.report).get("responses", 0) >= 1
 
-        pump(seconds=20.0, until=settled)
+        settle_stages(engine, stack_mod, [cls.obj], settled)
 
     @classmethod
     def tearDownClass(cls):
