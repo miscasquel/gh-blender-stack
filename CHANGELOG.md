@@ -51,19 +51,51 @@ Notable changes to this project, following
     whole session. The prefix is now flushed, read from the evaluated object,
     and a head-of-stack stage sees shape keys too — the base datablocks were
     blind to them.
+  - **Every object in Edit Mode syncs, not only the active one.** Multi-object
+    editing gives each selected object its own BMesh edits; a stroke on a
+    non-active stack object used to leave the datablock stale, so the pass
+    replayed the cached frame. Push and Pull now flush their target before they
+    build the request, which is what makes a manual push actually carry the
+    stroke.
   - **An edit can no longer be lost between the tag and the pass.** The engine
     drains the depsgraph at the start of every tick, before its own prefix
     evaluation can mute the handler — the "randomly stops until Push" failure.
+    A watchdog names and clears a prefix guard that a failed pass left up, on
+    the next tick and on every reload.
   - **Any depsgraph update retires the memoized prefix.** The old revision kept
     a list of "what a prefix reads"; a reference nobody listed was a change
     nobody saw. One generation counter now moves on every tagged update and
     every engine write, so tagged is tagged.
+  - **A slow or lost request heals itself.** A request still outstanding after
+    a second is superseded by the current state (Grasshopper coalesces solves,
+    so it works on the newest values, not on a stale backlog); a standalone
+    `error` releases the pending wait instead of sitting out the timeout; an
+    `unknown_ref` resend bypasses the frame cache so the promised full send
+    actually goes out; a Pull permit is spent by the send it caused, not before
+    it.
+  - **A cleared helper is re-applied.** If helper data is emptied out of band
+    (a script, an undo), the applied-out-hash skip refused every answer — Push
+    included. A frame that names geometry over empty helpers is re-applied.
+  - **Waiting is cheap.** While an answer is outstanding, a pass returns before
+    it reads the prefix: measured on a 51k-vertex drag, 62 prefix clones for 13
+    sends became 6 for 4, and the engine's main-thread share dropped from ~45%
+    to ~10%. The idle cadence is 20 ms (was 50 ms), so a Grasshopper-side
+    change applies sooner.
   - **A reconnect or a file load asks Grasshopper once** instead of replaying
     the cached frame, so a restarted Grasshopper or a changed document no
     longer needs a Pull.
-- **The Diagnostics panel shows the recent sync activity**: the last depsgraph
-  updates, sends, applies and resets, so a stall is a visible chain instead of
-  a guess.
+- **A solve answers the request its inputs were for** (plugin). Stage Out read
+  the slot's request id at the end of its solve, so a request arriving
+  mid-solve could be answered with geometry the solve had read before it: the
+  stale frame parked under the new id until a cache reset. The solve now pins
+  the request id it started with and answers that. The `.gha` is rebuilt and
+  deployed; **Rhino must be restarted** to load it (Grasshopper scans Libraries
+  on load only).
+- **The Diagnostics panel shows the recent sync activity** — the last depsgraph
+  updates, sends, applies and resets, plus the ages of the last trigger, send
+  and apply, per-stage clone/encode/answer/apply timings, and a "no send"
+  reason when a pass that saw the scene move stayed quiet — so a stall is a
+  visible chain instead of a guess.
 - **Documents saved before the `Attributes` output existed open and run again.**
   A Stage In loaded from such a document used to throw
   `Parameter "Attributes" does not exist` and pop a dialog on its first solve.

@@ -376,13 +376,37 @@ Live checklist under GH (restart Blender first; confirm the Diagnostics
   gh_stack`, symlinked to the working tree; no `bl_ext.*`; `userpref.blend` has
   the addon enabled; Python caches modules, so a **Blender restart** is required
   for code changes and the "Recent activity" box is the live tell.
-- **Latency probe** — 51 076 verts, 60 edits at ~60 Hz, zero-latency fake:
-  clone 10.6 ms; engine 0.96 s / 2.12 s wall (45 %), max tick 40.2 ms; 62
-  clones, 13 sends; disk store 9.7 ms × 13.
+- **Latency probe** — 51 076 verts, 60 edits at ~60 Hz: engine 0.96 s / 2.12 s
+  wall (45 %), 62 clones for 13 sends; disk store 9.7 ms × 13 (zero-latency
+  fake). Re-measured after Phase 6 with a 300 ms solve: 0.13 s / 1.30 s (10 %),
+  6 clones for 4 sends, average tick 2.1 ms.
 
-Working-tree state at writing: uncommitted changes to
-`blender/gh_stack/blender/engine.py`, `ui.py`, `tests/headless/test_instances.py`,
-`test_prefix_memo.py`, new `tests/headless/test_live_sync.py`, `CHANGELOG.md`,
-`docs/plan.md`. Suite: 158/158 green. None of the phases above is implemented
-yet except the parts of Phases 0/6 already present (drain, edit flush, trace,
-generation memo).
+---
+
+## 5. Implementation status (2026-10-19)
+
+Phases 0–6 are implemented, each as its own reviewed and tested commit:
+
+| commit | phase |
+|---|---|
+| `2675672` | the depsgraph is the source of truth for the prefix (158 tests) |
+| `7085324` | this report |
+| `f67cb1f` | Phase 0 — a mute trigger is visible, not silent (162) |
+| `481c2e0` | Phase 1 — the trigger can never die (167) |
+| `a7b52c3` | Phase 2 — every Edit Mode object is flushed (171) |
+| `17b63cb` | Phase 3 — a slow or lost request heals itself (175) |
+| `db6380d` | Phase 4 — the plugin answers the rid its inputs were for (link tests) |
+| `626e317` | Phase 5 — an emptied helper is re-applied (176) |
+| `208fd0a` | Phase 6 — a wait coalesces instead of re-reading the scene (176) |
+
+The adaptive snapshot throttle from Phase 6's plan is deliberately deferred:
+the wait window is free now, and throttling cached replays would trade
+playback smoothness for a cost the Diagnostics timings can prove first.
+
+**Pending: the live acceptance pass** (Blender restarted so the add-on
+reloads; Rhino restarted so the rebuilt `.gha` loads; the Diagnostics "Recent
+activity" box present is the tell). Walk the checklist in §3 Phase 7:
+Edit Mode (single, multi-object, non-active), object-mode and sculpt edits,
+shape keys, modifier and parameter drags, keyframes and drivers, GH-side
+edits and restarts, file reopen, and a drag observed through the Recent
+activity ring. If anything stalls, the ring now names the link.

@@ -5,14 +5,14 @@ measured evidence behind the bigger items lives in `polish-plan.md`, which is a
 record of one review rather than a plan. If something is not here, it is either
 done or was judged not worth doing — it is not missing.
 
-**Next session:** **W3/W4 landed on `main`** (unreleased): the operator set is
-Add Stage, Push, Pull, Freeze, Key all and Purge orphans; the stage lifecycle is
-native — the modifier's viewport/render/edit-mode toggles are the enable switch,
-X removes the stage, drag reorders it — and the `frozen`/`unbound` states,
-load-time plumbing repair and the parameter-orphan list are in. What remains for
-0.3.0: the S6 display half and S7 in the GUI, then the acceptance pass A1–A10.
-The portal upload is its own batch (compliance Phase 1, G7 pre-ask included) and
-is independent.
+**Next session:** the live-sync rebuild landed (unreleased): the depsgraph is
+the source of truth for the prefix, every Edit Mode object syncs, a wedge
+cannot outlive a tick, a slow request supersedes itself at one second, and the
+plugin pins a solve's request id (rebuilt and deployed; **restart Rhino** to
+load it). What remains is the live acceptance pass on this batch
+(`docs/live-sync-report-2026-10-19.md` §3, Phase 7), then the S6 display half
+and S7 in the GUI, then acceptance A1–A10 for 0.3.0. The portal upload is its
+own batch (compliance Phase 1, G7 pre-ask included) and is independent.
 
 Each item says what it is, where, and why it matters. Effort is not estimated:
 the last three batches each looked like an afternoon and were not.
@@ -23,16 +23,6 @@ the last three batches each looked like an afternoon and were not.
 
 ### Blender engine — smaller
 
-- **A layer B test flakes, twice now, still unidentified** (2026-10-17 during
-  the 0.2.0 release run; again 2026-10-18 on a full run of `main` at `22db8dc`).
-  Both times the visible symptom was `AssertionError: 'waiting' != 'ok'` with an
-  empty diagnostic. The 2026-10-17 occurrence was `NestedGroupPrefixTests.test_02`
-  (the edit inside the nested group did not reach `fake_gh` within the 10 s
-  pump), and that assertion now carries the fake's report, the stage state and
-  both rids. The 2026-10-18 occurrence's test name was not captured (only the
-  tail of the run was kept). A 10-run capture attempt immediately afterwards
-  was all green (154 tests each, logs in `/tmp/opencode/flake-capture/`). Remove
-  this item once a reason is found or a release cycle passes without it.
 - **Duplicated objects share one node group** (verified 2026-10-18 by an
   adversarial probe of the W3/W4 batch): object duplication copies the stage
   record, the modifier and its `persistent_uid` verbatim, and the node group
