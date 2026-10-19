@@ -6,6 +6,7 @@ parameter *values* are custom properties (``gh/<stage>/<param>``) so they can be
 keyframed and driven.
 """
 
+import hashlib
 import secrets
 import string
 
@@ -36,6 +37,26 @@ def new_stage_key(label="stage"):
     slug = "".join(c for c in label.lower().replace(" ", "-") if c in string.ascii_lowercase + "-0123456789")
     slug = (slug or "stage")[:12].strip("-") or "stage"
     return "%s-%s" % (slug, "".join(secrets.choice("0123456789abcdef") for _ in range(STAGE_KEY_LENGTH)))
+
+
+def duplicate_stage_key(stage_key, object_name):
+    """A stable key for a stage split out of a duplicated object.
+
+    Duplication copies the stage key verbatim, so both objects claim the same
+    node group and Grasshopper wiring. The split gives one object a new key.
+    Deriving it from the source key and the object name keeps the split stable
+    across undo/redo and save/reload: redoing the duplication cannot strand a
+    key the user has just wired into Grasshopper.
+    """
+    slug = stage_key.rsplit("-", 1)[0] if "-" in stage_key else stage_key
+    slug = (slug or "stage")[:12].strip("-") or "stage"
+    digest = hashlib.sha256(("%s|%s" % (stage_key, object_name)).encode("utf-8")).hexdigest()
+    return "%s-%s" % (slug, digest[:STAGE_KEY_LENGTH])
+
+
+def new_stack_id():
+    """A fresh cache namespace for one object's stack."""
+    return secrets.token_hex(8)
 
 
 def _value_items(self, context):
@@ -156,7 +177,7 @@ def ensure_stack(obj):
     if record is None:
         return None
     if not record.stack_id:
-        record.stack_id = secrets.token_hex(8)
+        record.stack_id = new_stack_id()
     return record
 
 

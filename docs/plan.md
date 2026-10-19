@@ -114,7 +114,7 @@ Portal (`Portal.Gh` 0.5.2 and the patched Portal.blender 0.3.0) stays installed 
 **Rules**
 - **Stage keys** are `<slug>-<6 hex>`, fixed at creation. Labels can change; keys never do. Keys are what you paste into GH.
 - **Parameter keys use a GUID** stored on the GH Param component, not the display name. Renaming a parameter in GH keeps its keyframes.
-- **Each stage owns its node group.** Duplicating a modifier shares the group in Blender. On each engine tick, the add-on detects shared groups and gives the duplicate its own group, key, and helpers. The duplicate shows as unbound until it is wired in GH.
+- **Each stage owns its node group.** Duplicating a modifier shares the group in Blender. On each engine tick, the add-on detects a stage key shared with another object (a duplicated stack) and gives the copy its own stack namespace, stage key, group and helpers; its parameter values, keyframes and drivers move with the key, and it shows as unbound until it is wired in GH.
 - **Object Info uses Original transform space.** Verified: with the stack object rotated and moved, the output stays in stack-local coordinates. The default Relative space gives wrong coordinates.
 - **Modifier inputs are never set from Python.** Setting an object-typed modifier input hung headless evaluation in testing. Everything is wired through node default values.
 - **Stored state lives in the `.blend`**, so undo and save/reload stay consistent.
@@ -318,7 +318,7 @@ A stage's prefix never includes its own parameters, so a parameter change cannot
 ### 9.6 Loop guard and ownership
 - Engine writes are tagged and ignored by the depsgraph handler while the prefix clone evaluates (`_evaluating`); the timer drains pending updates first, so the mute can only eat the engine's own events.
 - A stage's input is always upstream of its output, so the engine cannot form cycles.
-- Shared node groups are detected and split on each tick.
+- A stage key shared with another object (a duplicated stack) is split on each pass: the copy gets its own stack namespace, key, group and helpers, and its parameter properties move with the key.
 - The prefix memo is keyed by one global depsgraph generation, not by a list of the datablocks a prefix reads: Python cannot enumerate a node tree's dependencies, and a missing entry was silent stale geometry. Tagged is tagged; a false alarm costs one re-evaluation.
 
 ### 9.7 Undo, save, reload
@@ -548,7 +548,7 @@ GH solve time will dominate real definitions. The transport is not the bottlenec
 - **A7, persistence.** Undo and redo are consistent. Save and reload keep keyframes and bindings. Renaming a parameter in GH keeps its keyframes.
 - **A8, GH lifecycle.** GH closed shows `disconnected` and keeps the last good output. Reopening GH resyncs with no manual step.
 - **A9, snappiness.** Measured against the §13 budgets and reported.
-- **A10, duplicates.** Duplicated stacks and stages get independent keys and helpers, with no cross-talk.
+- **A10, duplicates.** Duplicated stacks and stages get independent keys and helpers, with no cross-talk. Covered headless by `blender/tests/headless/test_duplicates.py` (key, namespace, group, helpers, parameter values/keyframes/drivers, load split); the live pass remains.
 
 ---
 
@@ -658,5 +658,8 @@ the dedicated `GH Stage` scene), and W3/W4 landed 2026-10-18: the operators are
 Add Stage, Push, Pull, Freeze, Key all and Purge orphans; the modifier panel is
 the lifecycle (its toggles enable, drag reorders, X removes); the `frozen` and
 `unbound` states, load-time plumbing repair and the parameter-orphan list are in
-(§9.2, §9.7, §9.8). Next: the S6 display half and S7 in the GUI, and finally the
-acceptance pass A1–A10 (M5–M7).
+(§9.2, §9.7, §9.8). The live-sync rebuild landed 2026-10-19 (§9.4, §9.6), and
+A10 landed with it: a duplicated stack is split onto its own key, cache
+namespace, group and helpers, with its parameter animation moved along. Next:
+the live acceptance pass (Phase 7 of `live-sync-report-2026-10-19.md`), the S6
+display half and S7 in the GUI, and finally acceptance A1–A10 (M5–M7).

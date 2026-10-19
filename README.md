@@ -27,7 +27,9 @@ Blender                                          Rhino / Grasshopper (wine)
   next tick; no buttons.
 - **Stacks.** Native modifiers and GH stages compose in either order: a stage
   sees everything before its own modifier in the stack, so `GH → GN → GH` chains
-  evaluate as a prefix, and a waiting stage pauses the ones after it.
+  evaluate as a prefix, and a waiting stage pauses the ones after it. Duplicating
+  a stack object gives the copy its own stage key, cache, node group and
+  helpers, with its parameter values and animation, so the two cannot cross-talk.
 - **Geometry kinds.** Meshes (n-gons and vertex colours), curves (poly, Bezier,
   NURBS, circles, ellipses, arcs), point clouds, SubD control cages with
   edge-crease tags, and Breps/surfaces (meshed on the way out, lossy). Stage In
@@ -71,8 +73,10 @@ Blender                                          Rhino / Grasshopper (wine)
 
 - Breps and surfaces arrive as meshes (lossy, warned); Blender surface objects
   are meshed on the way in. There is no B-rep on the wire. There are some issues with the meshing an it's obviously a lossy conversion. That won't be solved without a proper surface kernel inside blender (surface psycho may bridge this gap)
-- Freeze, preview, and the orphan list are not here yet. The frame cache's disk
-  format is per machine and has no persistent promise.
+- The frame cache's disk format is per machine and has no persistent promise.
+- There is no separate Preview operator: a stage's output is its modifier, so
+  the viewport and render toggles are the preview switch. Freeze, Pull, Key all
+  and Purge orphans are in the GH Stack panel.
 
 The authoritative roadmap and scope are in [docs/plan.md](docs/plan.md).
 

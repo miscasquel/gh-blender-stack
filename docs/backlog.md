@@ -5,11 +5,13 @@ measured evidence behind the bigger items lives in `polish-plan.md`, which is a
 record of one review rather than a plan. If something is not here, it is either
 done or was judged not worth doing — it is not missing.
 
-**Next session:** the live-sync rebuild landed (unreleased): the depsgraph is
-the source of truth for the prefix, every Edit Mode object syncs, a wedge
-cannot outlive a tick, a slow request supersedes itself at one second, and the
-plugin pins a solve's request id (rebuilt and deployed; **restart Rhino** to
-load it). What remains is the live acceptance pass on this batch
+**Next session:** A10 is done (unreleased): a duplicated stack is split onto its
+own stage key, cache namespace, node group and helpers, and its parameter values,
+keyframes and drivers move with the key. The live-sync rebuild also landed: the
+depsgraph is the source of truth for the prefix, every Edit Mode object syncs, a
+wedge cannot outlive a tick, a slow request supersedes itself at one second, and
+the plugin pins a solve's request id (rebuilt and deployed; **restart Rhino** to
+load it). What remains is the live acceptance pass on both batches
 (`docs/live-sync-report-2026-10-19.md` §3, Phase 7), then the S6 display half
 and S7 in the GUI, then acceptance A1–A10 for 0.3.0. The portal upload is its
 own batch (compliance Phase 1, G7 pre-ask included) and is independent.
@@ -20,17 +22,6 @@ the last three batches each looked like an afternoon and were not.
 ---
 
 ## Reliability
-
-### Blender engine — smaller
-
-- **Duplicated objects share one node group** (verified 2026-10-18 by an
-  adversarial probe of the W3/W4 batch): object duplication copies the stage
-  record, the modifier and its `persistent_uid` verbatim, and the node group
-  datablock is keyed only by the stage key — so both objects' stages resolve to
-  the same group, and every engine pass rebuilds it for whichever object ran
-  last. Both objects then draw the last-processed object's helpers. Plan §5
-  already prescribes the fix (detect shared groups each tick, give the duplicate
-  its own group, key and helpers); this is acceptance item A10.
 
 ### Grasshopper plugin
 
@@ -47,7 +38,10 @@ the last three batches each looked like an afternoon and were not.
 ## Performance
 
 Live concerns recorded 2026-10-19; no cause measured yet. Transport is ruled
-out (S3: 30 ms round trip at 100k triangles, 10 ms C# mesh build).
+out (S3: 30 ms round trip at 100k triangles, 10 ms C# mesh build). **For 0.3.0**
+both are accepted as known issues; the release notes should name them, and the
+live pass should still re-measure the instance case with the rebuilt `.gha`
+loaded.
 
 - **Stage In latency with instances (300–800 ms).** One geometry instanced 13×:
   the Stage In update in Rhino took ~300 ms typically and 800 ms at peak, while

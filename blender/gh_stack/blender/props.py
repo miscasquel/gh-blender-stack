@@ -188,6 +188,84 @@ def _remove_animation(obj, name):
     return removed
 
 
+def detach_animation(obj):
+    """Give the object its own action before its parameter paths are renamed.
+
+    Object duplication shares the action between the original and the copy
+    (``obj.copy()`` leaves ``users == 2``); rewriting an fcurve path in place
+    would then rename the original's keyframes too. Called once per split, not
+    per property.
+    """
+    animation = getattr(obj, "animation_data", None)
+    if animation is None or animation.action is None:
+        return
+    if animation.action.users > 1:
+        animation.action = animation.action.copy()
+
+
+def move_stage_params(obj, old_key, new_key):
+    """Move one stage's parameter properties to a new stage key, values, UI,
+    keyframes and drivers included.
+
+    A duplicated object carries the stage record and its ``gh/<key>/<param>``
+    custom properties verbatim. Splitting the stage onto its own key has to move
+    the properties with it, or the copy silently loses its values and its
+    animation (the old names become orphans under a key no stage owns).
+    """
+    old_prefix = stack_mod.stage_prefix(old_key)
+    new_prefix = stack_mod.stage_prefix(new_key)
+    for name in list(obj.keys()):
+        if name.startswith(old_prefix):
+            _rename_property(obj, name, new_prefix + name[len(old_prefix):])
+
+
+def _rename_property(obj, old_name, new_name):
+    """Rename one custom property, keeping its value, UI settings and animation."""
+    if old_name not in obj or old_name == new_name:
+        return
+    value = obj[old_name]
+    if hasattr(value, "to_list"):
+        value = value.to_list()
+    settings = None
+    try:
+        settings = obj.id_properties_ui(old_name).as_dict()
+    except (KeyError, TypeError):
+        pass
+    if new_name in obj:
+        # A re-split after undo/redo, or a name collision: the destination is
+        # the stage's own property now. Do not overwrite it with the stale copy.
+        _remove_animation(obj, old_name)
+        del obj[old_name]
+        return
+    obj[new_name] = value
+    if settings:
+        try:
+            obj.id_properties_ui(new_name).update(**settings)
+        except (TypeError, ValueError):
+            pass
+    _rename_animation(obj, old_name, new_name)
+    del obj[old_name]
+
+
+def _rename_animation(obj, old_name, new_name):
+    """Point one property's fcurves and drivers at its new name.
+
+    The action was detached first (see :func:`detach_animation`), so this touches
+    only the duplicate's animation. Drivers live on the object's animation data,
+    not in the action, and are copied by ``obj.copy()``.
+    """
+    old_path = '["%s"]' % old_name
+    new_path = '["%s"]' % new_name
+    for _bag, fcurve in _fcurve_slots(obj):
+        if fcurve.data_path == old_path:
+            fcurve.data_path = new_path
+    animation = getattr(obj, "animation_data", None)
+    if animation is not None:
+        for driver in animation.drivers:
+            if driver.data_path == old_path:
+                driver.data_path = new_path
+
+
 # Parameters whose keys must hold, not interpolate: an interpolated int, bool or
 # choice index is not a value Grasshopper can use (plan §7).
 CONSTANT_TYPES = ("int", "bool", "value_list")

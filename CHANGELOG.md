@@ -44,6 +44,13 @@ Notable changes to this project, following
 
 ### Fixed
 
+- **A duplicated stack gets its own stage.** Object duplication copied the stage
+  key, cache namespace and node group, so both objects rebuilt one group for
+  whichever ran last and each drew the other's helpers. The copy is now split on
+  its next pass (or on load): it gets a new stage key, cache namespace, node
+  group and helpers, shows `unbound` until it is wired into Grasshopper, and its
+  parameter values, keyframes and drivers move to the new key with the stage.
+  The original keeps its key, helpers and animation.
 - **Live updates follow Blender's dependency graph, instead of a description of
   it.** Modeling and value edits now reach Grasshopper without a Push or Pull:
   - **Edit Mode syncs while the mode is open.** Edits live in the BMesh until
@@ -119,6 +126,16 @@ Notable changes to this project, following
 - **Lost plumbing is rebuilt on load.** Helpers or a node group deleted before a
   save come back on reopen (marked `unbound` until an answer), instead of the
   stage silently evaluating the wrong prefix.
+
+### Known limitations
+
+- **Instance-heavy definitions can be slow.** One geometry instanced 13× made a
+  Stage In update take 300–800 ms in Rhino, while a plain cube stayed instant;
+  turning off component preview lowers the delay. The cause is not measured yet
+  and transport is ruled out.
+- **A choppy render viewport has been reported** with the add-on enabled and not
+  yet diagnosed. The Diagnostics trigger/send/apply counters show whether the
+  engine is still doing work at idle.
 
 ## [0.2.2] — 2026-10-18
 

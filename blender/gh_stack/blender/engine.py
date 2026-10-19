@@ -361,6 +361,10 @@ def _on_load(scene=None):
         record = stack_mod.stack_of(obj)
         if record is None:
             continue
+        # A file saved after a duplication but before a pass still carries the
+        # copy's shared key: split it before the repair loop rebuilds anything
+        # under that key.
+        _split_duplicate_stages(obj, record)
         for stage in record.stages:
             if stage.state == stack_mod.STATE_WAITING:
                 _set(stage, "state", stack_mod.STATE_IDLE)
@@ -1452,6 +1456,105 @@ def _cached_response(record, stage, rid):
 # --------------------------------------------------------------------- process
 
 
+def _stage_has_modifier(obj, stage):
+    """Whether a stage record still has its modifier (the stage is live)."""
+    return nodes.modifier_of(obj, stage) is not None or (
+        not stage.modifier_uid and nodes.modifier_by_name(obj, stage) is not None
+    )
+
+
+def _duplicate_owner(obj, stage_key):
+    """The object that keeps a shared stage key, or None when this one owns it.
+
+    A stage key is generated once per stage, so two objects carrying the same
+    key are a duplicated stack (object duplication copies the record, the
+    modifier and its group verbatim). One of them has to give up the key or both
+    keep rebuilding the same node group and Grasshopper cannot tell them apart.
+
+    The owner is the lexicographically first object name. Blender names the
+    duplicate ``<original>.001``, so the original keeps its key and the copy gets
+    a new one; the rule is deterministic across ticks and sessions, and does not
+    depend on which object happened to be dirty first.
+    """
+    owner = obj
+    for other in bpy.data.objects:
+        if other.name >= owner.name:
+            continue
+        other_stage = stack_mod.stage_of(other, stage_key)
+        if other_stage is not None and _stage_has_modifier(other, other_stage):
+            owner = other
+    return owner if owner is not obj else None
+
+
+def _split_stage(obj, stage):
+    """Give one stage of a duplicated object its own key and parameter namespace.
+
+    The caller has already given the object a fresh ``stack_id``. The node group,
+    helpers and Grasshopper wiring are rebuilt by the normal repair path on this
+    same pass; here the stage record and its parameter properties are moved
+    together, so values and animation survive the split.
+    """
+    old_key = stage.key
+    new_key = stack_mod.duplicate_stage_key(old_key, obj.name)
+    _forget_prefix(obj, old_key)
+    props.move_stage_params(obj, old_key, new_key)
+    stage.key = new_key
+    for entry in stage.params:
+        entry.stage_key = new_key
+    # A new key has no document that has answered it yet (plan §9.2).
+    _set(stage, "state", stack_mod.STATE_UNBOUND)
+    _set(stage, "rid", "")
+    _set(stage, "geom_hash", "")
+    _set(stage, "applied_out_hash", "")
+    _set(stage, "error", "")
+    _set(stage, "warnings", "")
+    _set(stage, "nonce", 0)
+    _set(stage, "generation", 0)
+
+
+def _split_duplicate_stages(obj, record):
+    """Split a duplicated stack off every stage key it shares with another object.
+
+    Runs on each pass before the stages are processed, and on load before the
+    repair loop. The duplicate gets a new stack namespace, its stages get new
+    keys, and each property carrying a parameter moves with its stage. The
+    shared group is rebuilt for its owner before the copy's old helpers are
+    removed: the last pass may have pointed it at this object's helpers.
+    Returns True when something split.
+    """
+    splits = []
+    for stage in record.stages:
+        if not stage.key or not _stage_has_modifier(obj, stage):
+            continue
+        owner = _duplicate_owner(obj, stage.key)
+        if owner is not None:
+            splits.append((stage, owner))
+    if not splits:
+        return False
+    record.stack_id = stack_mod.new_stack_id()
+    if any(
+        name.startswith(stack_mod.stage_prefix(stage.key))
+        for stage, _owner in splits
+        for name in obj.keys()
+    ):
+        # Only pay for (and decouple) the action when parameter paths move.
+        props.detach_animation(obj)
+    for stage, owner in splits:
+        old_key = stage.key
+        _split_stage(obj, stage)
+        nodes.ensure_group(owner, old_key)
+        # A reused object name can find helpers left behind by an earlier
+        # incarnation of the copy; an unbound stage must start empty, not show
+        # that output until Grasshopper answers.
+        for key in (old_key, stage.key):
+            helpers.remove_helper(obj, key)
+            for index in list(helpers.definition_collections(obj, key)):
+                helpers.remove_definition(obj, key, index)
+        _trace.append("%s: split stage %s -> %s" % (obj.name, old_key, stage.key))
+    obj.update_tag()
+    return True
+
+
 def _process_object(obj):
     record = stack_mod.stack_of(obj)
     if record is None or not record.stages:
@@ -1459,6 +1562,8 @@ def _process_object(obj):
     if not record.stack_id:
         record.stack_id = stack_mod.ensure_stack(obj).stack_id
     busy = _drop_removed_stages(obj, record)
+    if _split_duplicate_stages(obj, record):
+        busy = True
     for stage in record.stages:
         outcome = _process_stage(obj, record, stage)
         if outcome == "waiting":

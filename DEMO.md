@@ -18,10 +18,11 @@ Blender                                     Rhino / Grasshopper (wine)
 - A Rhino Brep or surface is meshed on the way out (warned); Blender has no
   B-rep. A Blender surface object is meshed on the way in, the same loss in the
   other direction.
-- No freeze, preview, or orphan list yet. The frame cache writes to disk
-  (`~/.local/share/gh-stack/`) and fills as you play and scrub; there is no bake
-  operator.
-- Undo is not specially handled; the stack records are ordinary properties.
+- There is no separate Preview operator: a stage's output is its modifier, so
+  the viewport and render toggles are the preview switch. Freeze, Pull, Key all
+  and Purge orphans live in the GH Stack panel and the Diagnostics section.
+- The frame cache writes to disk (`~/.local/share/gh-stack/`) and fills as you
+  play and scrub; there is no bake operator.
 - The `Param` component takes a **Key** input (a demo deviation from the plan's
   signature; the plan assumes one stage per document).
 - Text parameters have a plain field (not animatable, by design). A value-list
@@ -76,9 +77,10 @@ in Blender's Preferences > Add-ons. The panel is in the 3D viewport sidebar
 ## The loop
 
 1. **Blender.** Select the default cube. In the GH Stack panel press **Add Stage**.
-   A stage appears with a key like `stage-3f9a2c`, a hidden helper object (in the
-   dedicated **GH Stage** scene's `GH Stage Data` collection, so your own scene
-   stays clean) and a Geometry Nodes modifier named `GH · Stage`.
+   A stage appears with a key like `stage-3f9a2c`, hidden helper objects (one per
+   geometry kind, in the dedicated **GH Stage** scene's `GH Stage Data`
+   collection, so your own scene stays clean) and a Geometry Nodes modifier named
+   `GH · Stage`.
 
 2. **Grasshopper.** In Rhino, open Grasshopper. From the **GH Stack** tab place:
    - one **Stage In**
