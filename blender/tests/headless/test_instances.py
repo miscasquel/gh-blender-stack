@@ -1111,7 +1111,7 @@ class EnginePrefixTests(unittest.TestCase):
         return group
 
     def _scene(self):
-        from blender.gh_stack.blender import stack as stack_mod
+        from gh_stack.blender import stack as stack_mod
 
         source = _quad("prefix-source")
         points = _points("prefix-points", [(0, 0, 0), (3, 0, 0)])
@@ -1127,7 +1127,10 @@ class EnginePrefixTests(unittest.TestCase):
 
     @staticmethod
     def _prefix(holder, stage, stack_mod):
-        from blender.gh_stack.blender import engine
+        # The add-on's module copy, not `blender.gh_stack`: the registered
+        # depsgraph handler and the engine state (`_prefix_epoch`, `_dirty`,
+        # the memos) live in the module Blender enabled.
+        from gh_stack.blender import engine
 
         return engine._prefix_sections(holder, stack_mod.stack_of(holder), stage)
 
@@ -1151,19 +1154,23 @@ class EnginePrefixTests(unittest.TestCase):
     def test_graph_edit_after_the_first_read_is_seen(self):
         # The memo follows edits inside the node group: a graph that stops
         # creating instances stops shipping definitions, and one that starts
-        # again ships them (the epoch rule, exercised from the product side).
+        # again ships them. The edit is evaluated, which is what a session's
+        # event loop does between the write and the next pass; `-b` has no loop,
+        # so it is asked for explicitly.
         holder, stage, group, modifier, stack_mod = self._scene()
         _sections, _hash, _attributes, definitions = self._prefix(holder, stage, stack_mod)
         self.assertEqual(len(definitions), 1)
 
         group.nodes.clear()
         group.interface.clear()
+        bpy.context.view_layer.update()
         _sections, _hash, _attributes, definitions = self._prefix(holder, stage, stack_mod)
         self.assertEqual(definitions, [])
 
         points = bpy.data.objects["prefix-points"]
         source = bpy.data.objects["prefix-source"]
         modifier.node_group = self._instance_group("prefix-IoP2", points, source)
+        bpy.context.view_layer.update()
         _sections, _hash, _attributes, definitions = self._prefix(holder, stage, stack_mod)
         self.assertEqual(len(definitions), 1)
 
@@ -1209,8 +1216,10 @@ class EngineUpdateTests(unittest.TestCase):
 
         owner.data.vertices[0].co.x += 0.5
         owner.data.update()
-        for key in (("Mesh", owner.data.name), ("Object", object_name)):
-            engine._epochs[key] = engine._epochs.get(key, 0) + 1
+        # The engine's own writing of UI edits stands in for the tag Blender
+        # gives a real edit: one global depsgraph generation, no per-datablock
+        # counters (the live path is depsgraph-authoritative now).
+        engine._bump_epochs(None)
 
     def _collection_scene(self):
         from blender.gh_stack.blender import stack as stack_mod

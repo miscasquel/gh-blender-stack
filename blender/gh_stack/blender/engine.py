@@ -20,6 +20,7 @@ drains what the server thread decoded.
 """
 
 import time
+from collections import deque
 
 import bpy
 import numpy as np
@@ -48,13 +49,22 @@ _prefix_memo = {}  # (obj.as_pointer(), stage key) -> {"revision": tuple, "secti
 # (stack_id, stage_key) pairs allowed exactly one request while frozen: Pull.
 # Transient session state, like `_pending` — never saved, cleared on register.
 _pull_permits = set()
-# Blender's own invalidation: one counter per datablock, (type, name) -> int, moved
-# by `_bump_epochs` for everything the depsgraph tags and by `_bump_id` for the
-# engine's own writes. The prefix revision reads the counters of the names it
-# consults, so a changed input retires the memo without anyone maintaining a
-# description of what that input *is*. Names, not pointers, because the update
-# list resolves to evaluated IDs whose addresses are not the originals'.
-_epochs = {}
+# The depsgraph generation: one counter, moved by every update Blender reports
+# and by every engine write. A memoized prefix is only valid within the
+# generation that produced it, so anything the depsgraph tags retires every
+# memo. This is deliberately *one* counter and not a per-reference list: the
+# Python API has no way to ask a node tree which datablocks it depends on, so a
+# list of "what a prefix reads" is a hand-maintained description of the
+# depsgraph, and a missing entry is silent stale geometry. Tagged is tagged.
+_prefix_epoch = 0
+# (stack_id, stage_key) pairs that must ask Grasshopper even when a cached frame
+# answers the request id: a reconnect or a file load means the definition may
+# have changed while the add-on was away, and the frame cache cannot know it.
+# Consumed when the verification request is actually sent.
+_verify = set()
+# The last events the engine acted on, for the Diagnostics panel: a bounded ring
+# of "what did it see, what did it do" lines. Never saved.
+_trace = deque(maxlen=200)
 # (stack_id, stage_key) -> {rid: monotonic seconds it was sent}. At most one entry:
 # the evaluation in flight. One at a time, deliberately — a frame that arrives while
 # an answer is outstanding is not queued behind it, because Grasshopper solves in
@@ -81,8 +91,8 @@ _evaluating = False
 # idle can be asserted without guessing at Blender internals.
 stats = {
     "passes": 0,
-    "prefix_clones": 0,  # prefix evaluations that needed a clone
-    "prefix_memo_hits": 0,  # prefix evaluations served from the revision memo
+    "prefix_clones": 0,  # prefix evaluations on a clone (every non-surface read)
+    "prefix_memo_hits": 0,  # prefix evaluations served from the generation memo
     "applies": 0,  # responses written into helper objects
     "tags": 0,  # obj.update_tag() calls
     "sends": 0,  # requests actually sent
@@ -124,6 +134,58 @@ def _on_depsgraph(scene, depsgraph=None):
     _bump_epochs(depsgraph)
     _mark_dirty_all()
     _mark_hot()
+
+
+def _drain_depsgraph():
+    """Force any evaluation Blender still owes *before* this pass can clone.
+
+    The prefix clone links, evaluates and unlinks a copy, and the handler is
+    muted while it does (see `_clone_prefix`): an update delivered right there
+    would be dropped, nothing would mark the stack dirty again, and the user's
+    edit would sit until something else happened to touch the scene — the
+    "random, needs Push" failure. Draining first makes the mute safe: every
+    pending update lands in `_on_depsgraph` while the guard is down. The call is
+    free when nothing is tagged (measured ~0.002 ms) and it is the reason the
+    live path is testable headless: `-b` fires depsgraph handlers for
+    `update()` the same way the GUI does.
+    """
+    if _evaluating:
+        return
+    try:
+        bpy.context.evaluated_depsgraph_get().update()
+    except (AttributeError, RuntimeError):
+        pass
+
+
+def _flush_edit_mode():
+    """Copy the active Edit Mode mesh into its datablock before anything reads it.
+
+    While an object is in Edit Mode its edits live in the BMesh, and `obj.data`
+    is the mesh from before the session (verified in Blender 5.2: the evaluated
+    object shows the moved vertex while the datablock still has the old one).
+    The depsgraph is the source of truth for the *evaluated* object, and Blender
+    gives scripts exactly one way to make the datablock agree:
+    `update_from_editmode()`. Without this, every prefix read during modeling
+    sent the pre-edit cage — the "editing meshes does not sync" report.
+
+    Only the active edit object can be flushed, and only a stack object needs
+    it: a referenced object's edit data reaches the evaluated prefix through the
+    dependency graph itself. The flush is gated on the object being dirty —
+    that is, on the depsgraph having tagged it since the last pass — so an idle
+    Edit Mode session does not copy the mesh twice a second for nothing.
+    """
+    edit = bpy.context.edit_object
+    if edit is None or edit.mode != "EDIT":
+        return
+    if stack_mod.stack_of(edit) is None:
+        return
+    if edit.name not in _dirty:
+        return
+    try:
+        edit.update_from_editmode()
+    except RuntimeError:
+        return
+    _trace.append("flushed Edit Mode data for %s" % edit.name)
 
 
 @bpy.app.handlers.persistent
@@ -169,6 +231,11 @@ def _on_load(scene=None):
             if stage.geom_hash:
                 # We cannot know that GH kept the geometry: ask again in full.
                 stage.geom_hash = ""
+            # A saved file may meet a document that changed in between: the
+            # cache must not answer without asking once (see _verify).
+            if not record.stack_id:
+                record.stack_id = stack_mod.ensure_stack(obj).stack_id
+            _verify.add((record.stack_id, stage.key))
             # Plumbing lost with the file (helpers or the node group deleted
             # before the save) is rebuilt here and the stage marked unbound
             # until an answer arrives (plan §9.7). A missing *modifier* is not
@@ -192,6 +259,12 @@ def _timer():
     """
     try:
         stats["passes"] += 1
+        # Before anything in this pass can evaluate a clone (and mute the
+        # handler), let Blender deliver whatever is already tagged. Every
+        # trigger the add-on has funnels through here, which is what makes the
+        # depsgraph authoritative rather than best-effort.
+        _drain_depsgraph()
+        _flush_edit_mode()
         _handle_incoming()
         _nudge_stalled_waits()
         busy = False
@@ -283,7 +356,9 @@ def _on_client_hello(header):
 
     Every claimed stage also forgets its geometry hash: a `hello` is a new client
     session, so the geometry it holds is unknown, and protocol §8.8 wants the
-    next request in full.
+    next request in full. The stage is also put on `_verify`: a fresh connection
+    is the one moment the document may have changed without Blender hearing
+    about it, so the next pass must ask instead of replaying a cached frame.
     """
     doc = (header or {}).get("doc") or ""
     claimed = set()
@@ -295,6 +370,8 @@ def _on_client_hello(header):
         record = stack_mod.stack_of(obj)
         if record is None or not record.stages:
             continue
+        if not record.stack_id:
+            record.stack_id = stack_mod.ensure_stack(obj).stack_id
         if doc and claimed and any(stage.key in claimed for stage in record.stages):
             if record.connected_doc and record.connected_doc != doc:
                 for stage in record.stages:
@@ -307,7 +384,9 @@ def _on_client_hello(header):
                 _forget(record.stack_id, stage.key)
                 _set(stage, "state", stack_mod.STATE_IDLE)
             _set(stage, "geom_hash", "")
+            _verify.add((record.stack_id, stage.key))
         _dirty.add(obj.name)
+    _trace.append("client hello: %s" % (doc or "unnamed"))
     _mark_hot()
 
 
@@ -410,6 +489,7 @@ def _handle_response(header, sections):
             stats["applies"] += 1
             _set(stage, "applied_out_hash", out_hash)
             applied = True
+            _trace.append("%s: applied %s" % (stage.key, (out_hash or "")[-8:]))
         if rid == stage.rid and not applied:
             # The displayed answer is already this one, but the node group may
             # predate the current format (a group written by an older build, or
@@ -920,6 +1000,7 @@ def _bump_generation(obj, record, stage, reason=""):
     _forget_prefix(obj, stage.key)
     stage.generation += 1
     _cache.pop((record.stack_id, stage.key), None)
+    _trace.append("%s: reset (%s)" % (stage.key, reason or "definition changed"))
     try:
         removed = _store_for(record, stage).prune(generation=stage.generation)
     except OSError as exc:
@@ -1071,6 +1152,7 @@ def _drop_removed_stages(obj, record):
             continue
         _forget(record.stack_id, stage.key)
         _pull_permits.discard((record.stack_id, stage.key))
+        _verify.discard((record.stack_id, stage.key))
         _forget_prefix(obj, stage.key)
         helpers.remove_helper(obj, stage.key)
         for definition in list(helpers.definition_collections(obj, stage.key)):
@@ -1153,8 +1235,13 @@ def _process_stage(obj, record, stage):
     # long as the round trip takes. The wanted frame is fetched on the next pass,
     # from the frame cache when it is warm.
 
+    verify_key = (record.stack_id, stage.key)
     cached = _cached_response(record, stage, rid)
-    if cached is not None:
+    # A reconnect or a file load puts the stage on `_verify`: the definition may
+    # have changed while no one was listening, and a cached frame cannot know
+    # it. With a client there, ask; with none, replay the cache as usual and
+    # keep the permit for when one connects.
+    if cached is not None and (verify_key not in _verify or not bridge.state["connected"]):
         header, cached_sections = cached
         out_hash = header.get("out_hash") or ""
         _set(stage, "rid", rid)
@@ -1197,8 +1284,11 @@ def _process_stage(obj, record, stage):
         # on is requested on the first pass after this answer lands, and the answer
         # itself is stored either way, so an evaluation is never wasted.
         #
-        # A cached frame never reaches here: the lookup above answers it first, so
-        # a replay is not throttled by whatever is outstanding.
+        # A replay never reaches here — the lookup above answers it first — so a
+        # cached frame is not throttled by whatever is outstanding. The one
+        # frame that can arrive with a request in flight is a verification
+        # (reconnect or load): by then the previous request belonged to the
+        # session that just ended, and `hello`/`load` cleared it.
         sent_at = next(iter(pending.values()))
         if time.monotonic() - sent_at <= _timeout():
             return "waiting"
@@ -1238,6 +1328,10 @@ def _process_stage(obj, record, stage):
         stats["undelivered"] += 1
         _set(stage, "state", stack_mod.STATE_DISCONNECTED)
         return "idle"
+    _verify.discard(verify_key)
+    _trace.append(
+        "%s: sent %s %s" % (stage.key, mode, rid[-8:] if rid else "")
+    )
     if retry_note:
         prefs.log("[gh-stack] %s: %s" % (stage.key, retry_note), flush=True)
     stats["sends"] += 1
@@ -1258,40 +1352,44 @@ def _process_stage(obj, record, stage):
 
 def _prefix_sections(obj, record, stage):
     """The geometry a stage sees: everything before its own modifier in the
-    stack (plan §9.1), so preceding native modifiers and earlier GH stages are
-    part of the input. Returns ``(sections, geometry hash, attribute
-    descriptors, definitions)`` — the descriptors and the definition table
-    belong to the sections and travel with them, never on their own.
+    stack (plan §9.1), read from the *evaluated* object — never from the base
+    datablocks. Returns ``(sections, geometry hash, attribute descriptors,
+    definitions)``; the descriptors and the definition table belong to the
+    sections and travel with them, never on their own.
 
-    Both shapes are memoized against a revision of the datablocks they read (see
-    :func:`_prefix_revision`): with nothing before the stage the input is the base
-    datablocks, read directly and no clone evaluation; otherwise it is the
-    evaluated prefix, and the clone that produces it would tag the depsgraph and
-    wake every idle stack. When the revision is unchanged the read and the clone
-    are both skipped, and the stored hash means the pass does not pay for
-    re-serializing either.
+    The clone in :func:`_clone_prefix` is the one correct read for every case
+    the depsgraph covers: shape keys, Edit Mode data (flushed before the pass),
+    instances, and any modifier before the stage. The base-datablock read this
+    used to do for a head-of-stack stage was stale exactly while Edit Mode was
+    open and blind to shape keys — the class of "Blender changed and the addon
+    did not" this engine cannot afford. Surfaces stay on the meshing path: they
+    are rarely used and have no evaluated geometry set.
+
+    The memo is keyed by the depsgraph generation (see :func:`_prefix_revision`):
+    a hit is only possible while nothing at all has been tagged since the
+    sections were read.
     """
+    if obj.type == "SURFACE":
+        subd = bool(record.subd)
+        sections, attributes = geometry_io.object_to_sections(obj, as_subd=subd)
+        return sections, _sections_hash(sections, attributes), attributes, []
+
     modifier = nodes.modifier_of(obj, stage)
     index = _modifier_index(obj, modifier)
-    revision = _prefix_revision(obj, record, index)
+    revision = _prefix_revision(obj, record)
     # Keyed by identity, not by name: an object renamed to a name another object
     # used to hold would otherwise inherit what that object had evaluated.
     # as_pointer() is stable for the session and keeps no reference to the object,
     # so a deleted object does not live on through this dict.
     memo_key = (obj.as_pointer(), stage.key)
     memo = _prefix_memo.get(memo_key)
-    if revision is not None and memo is not None and memo["revision"] == revision:
+    if memo is not None and memo["revision"] == revision:
         stats["prefix_memo_hits"] += 1
         return memo["sections"], memo["geom_hash"], memo["attributes"], memo["definitions"]
 
     subd = bool(record.subd)
-    if index <= 0:
-        # Nothing before the stage: the base datablocks are the input.
-        sections, attributes = geometry_io.object_to_sections(obj, as_subd=subd)
-        definitions = []
-    else:
-        sections, attributes, definitions = _clone_prefix(obj, index, subd)
-        stats["prefix_clones"] += 1
+    sections, attributes, definitions = _clone_prefix(obj, index, subd)
+    stats["prefix_clones"] += 1
 
     # Blender evaluates modifier-generated attribute data (a Bevel's UVs, for
     # example) with last-bit float variation between evaluations. Hashing that
@@ -1312,19 +1410,17 @@ def _prefix_sections(obj, record, stage):
         attributes = memo["attributes"]
         definitions = memo["definitions"]
         geom_hash = memo["geom_hash"]
-        if revision is not None:
-            memo["revision"] = revision
+        memo["revision"] = revision
         return sections, geom_hash, attributes, definitions
 
     geom_hash = _sections_hash(sections, attributes, definitions)
-    if revision is not None:
-        _prefix_memo[memo_key] = {
-            "revision": revision,
-            "sections": sections,
-            "geom_hash": geom_hash,
-            "attributes": attributes,
-            "definitions": definitions,
-        }
+    _prefix_memo[memo_key] = {
+        "revision": revision,
+        "sections": sections,
+        "geom_hash": geom_hash,
+        "attributes": attributes,
+        "definitions": definitions,
+    }
     return sections, geom_hash, attributes, definitions
 
 
@@ -1381,9 +1477,23 @@ def _clone_prefix(obj, index, subd):
     stack object, indistinguishable from a real edit. That report is consumed
     here, while the guard is still up; left alone it retires the memo the engine
     is about to write, once per pass, forever.
+
+    Because the guard drops *everything*, the timer drains the depsgraph before
+    this runs (`_drain_depsgraph`): any user edit still pending is delivered to
+    `_on_depsgraph` while the guard is down, so the mute can only ever eat the
+    engine's own clone events.
     """
     global _evaluating
     clone = obj.copy()
+    # A copy that shares an Edit Mode mesh evaluates empty: the depsgraph hands
+    # the edit data to the object in Edit Mode and to nothing else. A private
+    # copy of the (already flushed) datablock evaluates like any other object,
+    # which is what keeps the prefix readable while the mode is open. The copy
+    # is owned here and removed with the clone.
+    owned_data = None
+    if obj.mode == "EDIT":
+        owned_data = obj.data.copy()
+        clone.data = owned_data
     _evaluating = True
     try:
         bpy.context.scene.collection.objects.link(clone)
@@ -1396,9 +1506,30 @@ def _clone_prefix(obj, index, subd):
         )
     finally:
         bpy.data.objects.remove(clone, do_unlink=True)
+        if owned_data is not None:
+            _drop_owned_data(owned_data)
         bpy.context.view_layer.update()
         _evaluating = False
     return sections, attributes, definitions
+
+
+# The collections an Edit Mode clone's private copy can belong to. Named by the
+# ID type's RNA identifier, which is what the copy reports.
+_OWNED_COLLECTIONS = {
+    "Mesh": "meshes",
+    "Curve": "curves",
+    "PointCloud": "pointclouds",
+}
+
+
+def _drop_owned_data(id_block):
+    """Remove the private datablock `_clone_prefix` made for an Edit Mode read."""
+    collection = getattr(bpy.data, _OWNED_COLLECTIONS.get(id_block.bl_rna.identifier, ""), None)
+    if collection is not None:
+        try:
+            collection.remove(id_block)
+        except (ReferenceError, RuntimeError):
+            pass
 
 
 def _sections_hash(sections, attributes=None, definitions=None):
@@ -1415,197 +1546,74 @@ def _sections_hash(sections, attributes=None, definitions=None):
     return hashing.geometry_hash(raw)
 
 
-def _prefix_revision(obj, record, index):
-    """What the memo compares: the epochs of every datablock the prefix reads.
+def _prefix_revision(obj, record):
+    """What the memo compares: the depsgraph generation, the SubD cage flag and
+    the frame.
 
-    Blender's dependency graph already knows what an input is, so this revision
-    holds *names* and one counter per name (see :func:`_bump_epochs`) instead of
-    a frozen copy of every value, and it reads no geometry at all. The
-    difference that matters: a frozen value cannot follow a reference. A node
-    tree that reads another object — an Object Info node, a modifier input of
-    type Object or Collection — kept sending the geometry from before that object
-    moved, because the stored name never changed; an epoch does, because Blender
-    tagged the object that moved.
+    The generation is moved by every update Blender reports (see
+    :func:`_bump_epochs`) and by every engine write a later stage in the same
+    pass must see. It is deliberately one counter for the whole graph and not a
+    per-input list: Python cannot ask a node tree which datablocks it depends
+    on, so any list of "what a prefix reads" is a hand-maintained description of
+    the depsgraph, and a missing entry is silent stale geometry. Tagged is
+    tagged: a memo is only valid while *nothing* has been tagged since it was
+    read. The price of a false alarm is one re-evaluation; the price of a miss
+    is the bug this engine kept paying for.
 
-    Three things a counter cannot cover, and are read directly instead:
-
-    - **the frame**, because a frame change tags nothing at all: the one case the
-      depsgraph is silent about, and the reason anything that reads the timeline
-      (a Scene Time node, a simulation zone, a driver) still moves the revision;
-    - **the SubD cage flag**, a stack property that tags nothing (it changes how
-      the sections are cut, so it has to be in the key);
-    - **the shape keys**, a handful of scalars, cheaper to read than to route
-      through a tag.
-
-    ``None`` means "do not memoize": surfaces are meshed on the fly and rarely
-    used.
+    Two inputs the generation cannot cover, read directly instead: the frame
+    (a frame change tags nothing at all) and the SubD cage flag (a stack
+    property that changes how the sections are cut and tags nothing).
     """
-    if obj.type == "SURFACE":
-        return None
-    return (
-        tuple((key, _epochs.get(key, 0)) for key in _prefix_references(obj, index)),
-        bool(record.subd),
-        _shapekey_state(obj),
-        bpy.context.scene.frame_float,
-    )
+    return (_prefix_epoch, bool(record.subd), bpy.context.scene.frame_float)
 
 
-def _prefix_references(obj, index):
-    """Every datablock the evaluated prefix reads, as sorted ``(type, name)``.
+def _bump_epochs(depsgraph=None):
+    """Move the generation for everything Blender tagged in this evaluation.
 
-    **This list must name every reference the prefix can read** — the same oath
-    the content revision carried, for the same reason: a reference nobody
-    consults is a reference whose changes go unnoticed. What shrank is that only
-    the *references* are enumerated now: no geometry is read, no value frozen.
+    Called from `_on_depsgraph` with the depsgraph, and with `None` from
+    `_bump_id` for the engine's own writes — the depsgraph has not seen those
+    yet when the next stage in the same pass reads its prefix.
+
+    Every entry counts, including the ones Blender reports with all three
+    update flags false: node tree edits and driver-driven ID properties are
+    reported that way, and both change the evaluated prefix. The flags describe
+    the *kind* of update, not whether an input moved. Updates the engine causes
+    itself — the prefix clone's link, evaluate and unlink — are excluded by the
+    ``_evaluating`` guard around the clone, and by nothing else: inspecting
+    entries to guess "ours" is how a real edit gets dropped.
     """
-    references = set()
-    _add_reference(references, obj)
-    for modifier in list(obj.modifiers)[:index]:
-        references.update(_modifier_references(modifier))
-    return tuple(sorted(references))
-
-
-def _modifier_references(modifier):
-    """The datablocks one modifier reads: its ID pointers, the stored datablock
-    values of its group inputs, and the datablocks its node graph names."""
-    found = set()
-    for prop in modifier.bl_rna.properties:
-        if prop.type != "POINTER":
-            continue
-        try:
-            value = getattr(modifier, prop.identifier)
-        except (AttributeError, TypeError, RuntimeError):
-            continue
-        _add_reference(found, value)
-    inputs = getattr(getattr(modifier, "properties", None), "inputs", None)
-    if inputs is not None:
-        for identifier in inputs.keys():
-            try:
-                value = inputs[identifier].to_dict().get("value")
-            except (AttributeError, TypeError, RuntimeError):
-                continue
-            _add_reference(found, value)
-    group = getattr(modifier, "node_group", None)
-    if group is not None:
-        _node_tree_references(group, found, set())
-    return found
-
-
-def _node_tree_references(tree, found, visited):
-    """One node tree's ID-valued socket defaults, recursively into nested groups.
-
-    A group node keeps its body in another tree, so the walk follows it; the
-    visited set is what makes a recursive group safe. There is no depth cap: the
-    walk collects every reference and is bounded by the graph, and a cap that
-    truncated it would silently drop references instead of guarding anything.
-    """
-    visited.add(tree.as_pointer())
-    for node in tree.nodes:
-        for socket in node.inputs:
-            try:
-                value = socket.default_value
-            except (AttributeError, RuntimeError):
-                continue
-            _add_reference(found, value)
-        try:
-            nested = node.node_tree
-        except (AttributeError, RuntimeError):
-            nested = None
-        if nested is not None and nested.as_pointer() not in visited:
-            _node_tree_references(nested, found, visited)
-    return found
-
-
-def _add_reference(found, value, visited=None):
-    """One referenced datablock, plus everything whose change alters what it
-    contributes: an object's data, and a collection's members (an instanced
-    collection *is* its objects — editing one of them must move the revision).
-
-    ``visited`` guards the recursion: a collection can nest another, and an
-    object can name a collection (object-level instancing), so a walk without
-    it would not terminate on a cycle.
-    """
-    if not isinstance(value, bpy.types.ID):
+    global _prefix_epoch
+    _prefix_epoch += 1
+    if depsgraph is None:
         return
-    if visited is None:
-        visited = set()
-    key = _id_key(value)
-    if key in visited:
-        return
-    visited.add(key)
-    found.add(key)
-    data = getattr(value, "data", None)
-    if isinstance(data, bpy.types.ID):
-        _add_reference(found, data, visited)
-    if isinstance(value, bpy.types.Collection):
-        for member in value.all_objects:
-            _add_reference(found, member, visited)
-    instance_collection = getattr(value, "instance_collection", None)
-    if isinstance(instance_collection, bpy.types.ID):
-        _add_reference(found, instance_collection, visited)
-
-
-def _id_key(id_block):
-    """The identity the depsgraph speaks in: its type and its name.
-
-    Names, not pointers: the update list resolves to *evaluated* IDs, whose
-    addresses are not the originals' — a tagged mesh and the mesh it was copied
-    from sit at different addresses — so a pointer match never matches.
-    """
-    return (id_block.bl_rna.identifier, id_block.name)
-
-
-def _bump_epochs(depsgraph):
-    """Move the counter of every datablock Blender tagged, geometry and
-    transform updates only.
-
-    A shading-only entry is bookkeeping, not a change, and the engine's own
-    prefix clone produces exactly one for the stack object on the evaluation
-    after it runs: linking and unlinking the copy re-syncs the object without
-    moving it. Counting that would retire the memo the engine just filled, once
-    per pass, and the memo would never hold. Blender states which of the three
-    kinds of update each entry is; this reads it rather than guessing.
-
-    **Accepted risk, recorded 2026-10-17 (the backlog asked for one of the
-    two):** a change that never tags the depsgraph is invisible here, and no
-    later pass catches it — a script writing mesh or point-cloud data directly
-    is verified to fire no update at all, and a rebake finishing is unverified.
-    The workarounds are an edit that does tag (any operator) or Push, which
-    retires the prefix memo. Watching for those writes would mean re-introducing
-    an input description, which is the design the depsgraph replaced in 0.1.3.
-    """
     try:
         updates = list(depsgraph.updates)
     except (AttributeError, RuntimeError, TypeError):
         return
-    for update in updates:
-        if not (update.is_updated_geometry or update.is_updated_transform):
-            continue
-        ident = getattr(update.id.bl_rna, "identifier", None)
-        if ident is not None:
-            key = (ident, update.id.name)
-            _epochs[key] = _epochs.get(key, 0) + 1
+    if not updates:
+        return
+    names = []
+    for update in updates[:3]:
+        ident = getattr(update.id.bl_rna, "identifier", None) or "?"
+        names.append("%s:%s" % (ident, update.id.name))
+    line = "depsgraph %d update(s): %s" % (len(updates), ", ".join(names))
+    # One rolling line, not one per event: a drag would flush everything else
+    # out of the ring.
+    if _trace and _trace[-1].startswith("depsgraph"):
+        _trace[-1] = line
+    else:
+        _trace.append(line)
 
 
 def _bump_id(id_block):
-    """Move a datablock's counter for the engine's own writes.
+    """Move the generation for the engine's own writes.
 
     The depsgraph has not seen a write the engine just made when the next stage
     in the same pass looks at its prefix, so the write is stamped here rather
-    than waited for. This is what the upstream-output hashes used to do.
+    than waited for. The generation is global, so one bump covers every stage
+    downstream of the written datablock.
     """
-    for target in (id_block, getattr(id_block, "data", None)):
-        if target is not None:
-            key = _id_key(target)
-            _epochs[key] = _epochs.get(key, 0) + 1
-
-
-def _shapekey_state(obj):
-    keys = getattr(obj.data, "shape_keys", None)
-    blocks = getattr(keys, "key_blocks", None) if keys is not None else None
-    if blocks is None:
-        return ()
-    return tuple((block.name, float(block.value)) for block in blocks)
+    _bump_epochs(None)
 
 
 def _modifier_index(obj, modifier):
@@ -1631,6 +1639,15 @@ def waiting_seconds(stack_id, stage_key):
     if since is None:
         return 0.0
     return time.monotonic() - since
+
+
+def recent_activity(count=8):
+    """The last events the engine acted on, oldest first.
+
+    The Diagnostics panel shows them so a sync fault is a visible chain
+    (trigger -> decision -> request -> answer) instead of a guess.
+    """
+    return list(_trace)[-count:]
 
 
 # ------------------------------------------------------------------- lifecycle
@@ -1732,7 +1749,7 @@ def register():
     _pending.clear()
     _prefix_memo.clear()
     _state_since.clear()
-    _epochs.clear()
+    _verify.clear()
     _pull_permits.clear()
     _hot_until = 0.0
     for counter in stats:

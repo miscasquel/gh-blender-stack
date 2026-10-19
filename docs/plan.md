@@ -287,7 +287,7 @@ Protocol mismatches (different `proto`) are rejected with an error message in bo
 ## 9. Engine
 
 ### 9.1 Per tick, for each enabled GH stage in stack order
-1. Evaluate the stack up to this stage on a clone: `stack.copy()`, remove the later modifiers, then read `evaluated_geometry()` for each component type.
+1. Evaluate the stack up to this stage on a clone: `stack.copy()`, remove the later modifiers, then read `evaluated_geometry()` for each component type. Always the clone, even at the head of the stack: the base datablocks are stale while Edit Mode is open and blind to shape keys, and a private copy of the flushed datablock is what the depsgraph will evaluate in Edit Mode.
 2. Read the stage's current parameter values from the custom props.
 3. Compute the request ID.
 4. If the cache holds the request ID, apply it.
@@ -305,7 +305,7 @@ A stage's prefix never includes its own parameters, so a parameter change cannot
 - Stale responses are cached, not discarded.
 
 ### 9.4 Triggers
-- Depsgraph updates, coalesced to one pass per tick.
+- Depsgraph updates, coalesced to one pass per tick. The timer drains the depsgraph before its own pass, so an update that is already tagged is delivered to the handler before a prefix clone can mute it; the active Edit Mode datablock is flushed in the same breath. Any tagged update retires every memoized prefix (one global generation; see §9.6), and a reconnect or file load verifies each stage against Grasshopper once even when a cached frame answers.
 - Frame change, which also reaches parameters through the animation system.
 - Incoming messages, drained from a queue by a main-thread timer: every 5 ms while any stage is waiting, every 50 ms otherwise. **Verified in S2:** a 4 ms timer request holds ~5 ms median in the GUI, including under a 2 MB load, so the 5 ms target is reachable. Two findings bound the design: timers only fire after a script returns to the event loop (they are inert during a blocking main-thread script), and `bpy.app.timers` does not tick at all in `blender -b`. Layer B tests therefore call the same drain function directly instead of waiting on timers.
 - Operators.
@@ -316,16 +316,17 @@ A stage's prefix never includes its own parameters, so a parameter change cannot
 - The engine retries on the next change or on Push. It does not loop on failures.
 
 ### 9.6 Loop guard and ownership
-- Engine writes are tagged and ignored by the depsgraph handler.
+- Engine writes are tagged and ignored by the depsgraph handler while the prefix clone evaluates (`_evaluating`); the timer drains pending updates first, so the mute can only eat the engine's own events.
 - A stage's input is always upstream of its output, so the engine cannot form cycles.
 - Shared node groups are detected and split on each tick.
+- The prefix memo is keyed by one global depsgraph generation, not by a list of the datablocks a prefix reads: Python cannot enumerate a node tree's dependencies, and a missing entry was silent stale geometry. Tagged is tagged; a false alarm costs one re-evaluation.
 
 ### 9.7 Undo, save, reload
 - Stage records, helper data, and node groups live in the `.blend`.
 - The disk cache is content-addressed, so restoring an earlier state is a cache hit.
 - On load, stages are re-bound by key. Missing helpers or node groups are rebuilt and marked `unbound`; a missing *modifier* is not repaired — deleting it removes the stage (§9.8).
 - The stage's modifier is linked by its `persistent_uid`, which survives a deleted or swapped node group; the group-name link stays as the fallback for records saved before the uid and for duplicated objects.
-- The engine's timer and handlers are persistent (Blender clears non-persistent ones on every file load), and a load resets mid-request stages and marks every stack for evaluation, so a reopened file talks to Grasshopper without an edit.
+- The engine's timer and handlers are persistent (Blender clears non-persistent ones on every file load), and a load resets mid-request stages, marks every stack for evaluation, and verifies each stage against Grasshopper once — cache or not — so a reopened file talks to Grasshopper without an edit and a document that changed while the file was closed cannot replay from the frame cache.
 
 ### 9.8 Operators
 Add Stage, Push, Pull, Freeze, Key all, Purge orphans. All are undo-safe. (Bake range is removed: the frame cache fills during playback, ADR 0008.)

@@ -44,6 +44,26 @@ Notable changes to this project, following
 
 ### Fixed
 
+- **Live updates follow Blender's dependency graph, instead of a description of
+  it.** Modeling and value edits now reach Grasshopper without a Push or Pull:
+  - **Edit Mode syncs while the mode is open.** Edits live in the BMesh until
+    the mesh is flushed; the engine may have been sending the pre-edit cage the
+    whole session. The prefix is now flushed, read from the evaluated object,
+    and a head-of-stack stage sees shape keys too — the base datablocks were
+    blind to them.
+  - **An edit can no longer be lost between the tag and the pass.** The engine
+    drains the depsgraph at the start of every tick, before its own prefix
+    evaluation can mute the handler — the "randomly stops until Push" failure.
+  - **Any depsgraph update retires the memoized prefix.** The old revision kept
+    a list of "what a prefix reads"; a reference nobody listed was a change
+    nobody saw. One generation counter now moves on every tagged update and
+    every engine write, so tagged is tagged.
+  - **A reconnect or a file load asks Grasshopper once** instead of replaying
+    the cached frame, so a restarted Grasshopper or a changed document no
+    longer needs a Pull.
+- **The Diagnostics panel shows the recent sync activity**: the last depsgraph
+  updates, sends, applies and resets, so a stall is a visible chain instead of
+  a guess.
 - **Documents saved before the `Attributes` output existed open and run again.**
   A Stage In loaded from such a document used to throw
   `Parameter "Attributes" does not exist` and pop a dialog on its first solve.

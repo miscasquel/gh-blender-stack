@@ -182,6 +182,13 @@ class GHSTACK_PT_diagnostics(bpy.types.Panel):
                     box.label(text=name.rsplit("/", 1)[-1])
                 box.operator("gh_stack.purge_orphans", icon="TRASH")
 
+        activity = engine.recent_activity(8)
+        if activity:
+            box = layout.box()
+            box.label(text="Recent activity", icon="INFO")
+            for line in activity:
+                box.label(text=line)
+
 
 def _state_text(stage):
     return stage.state

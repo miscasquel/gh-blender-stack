@@ -4,19 +4,22 @@ Run with:
 
     scripts/test-blender
 
-The revision memo in `engine._prefix_revision` is trusted to describe everything
-a prefix depends on. This file pins the two inputs that are easiest to leave out,
-because each one cost a release:
+The memo is only allowed to answer while *nothing* has been tagged since its
+sections were read (`engine._prefix_revision` holds the depsgraph generation).
+This file pins the inputs that are easiest to believe "Blender wouldn't tag
+that", because each one cost a release:
 
 1. A Geometry Nodes modifier's group inputs live in its stored input values
    (`modifier.properties.inputs`), which are ID properties, not RNA properties:
-   the `bl_rna` walk in `_modifier_descriptor` cannot see them, and `keys()`
-   raises on a Blender 5.2 modifier. Dragging one of those sliders left the
-   revision - and so the memoized sections, the geometry hash, the request id
-   and the frame cache - exactly where they were: the stage answered the same
-   rid with the frame from before the edit and never asked Grasshopper anything.
+   a `bl_rna` walk cannot see them, and `keys()` raises on a Blender 5.2
+   modifier. Dragging one of those sliders left the revision - and so the
+   memoized sections, the geometry hash, the request id and the frame cache -
+   exactly where they were: the stage answered the same rid with the frame from
+   before the edit and never asked Grasshopper anything.
 2. A cache reset (Push) must retire the memoized prefix as well as the frame
    store, or the "recovery" re-sends the same geometry.
+3. A prefix that reads another object must follow it: Blender tags the object
+   that moved, and any tag moves the generation.
 """
 
 import os
@@ -244,10 +247,9 @@ class ModifierInputMemoTests(unittest.TestCase):
         import gh_stack.blender.engine as engine
 
         record = bpy.context.object.gh_stack
-        index = engine._modifier_index(self.obj, engine.nodes.modifier_for(self.obj, self.stage.key))
-        first = engine._prefix_revision(self.obj, record, index)
+        first = engine._prefix_revision(self.obj, record)
         set_gn_input(self.gn, -10.0, self.obj)
-        second = engine._prefix_revision(self.obj, record, index)
+        second = engine._prefix_revision(self.obj, record)
         self.assertIsNotNone(first)
         self.assertNotEqual(
             first,
@@ -256,9 +258,9 @@ class ModifierInputMemoTests(unittest.TestCase):
         )
         set_gn_input(self.gn, 10.0, self.obj)
         self.assertNotEqual(
-            engine._prefix_revision(self.obj, record, index),
+            engine._prefix_revision(self.obj, record),
             second,
-            "moving the input again did not move the revision: an epoch only grows",
+            "moving the input again did not move the revision: a generation only grows",
         )
 
 
@@ -327,8 +329,8 @@ class ReferencedObjectTests(unittest.TestCase):
     The bug this pins: the revision froze an Object reference as its name, so a
     prefix that read another object through a node tree — an Object Info node, or
     a modifier input of type Object or Collection — kept sending the geometry from
-    before that object moved. Blender tags the object that moved; the epoch of the
-    name it is read under is what turns that tag into a new request.
+    before that object moved. Blender tags the object that moved; the tag moves
+    the global depsgraph generation, and the memo moves with it.
     """
 
     @classmethod
@@ -427,20 +429,17 @@ class ReferencedObjectTests(unittest.TestCase):
         )
         self.assertGreaterEqual(report_of(self.report).get("full", 0), 2)
 
-    def test_02_the_reference_is_consulted_by_name(self):
+    def test_02_the_generation_is_consulted(self):
         import gh_stack.blender.engine as engine
 
         record = self.obj.gh_stack
-        index = engine._modifier_index(
-            self.obj, engine.nodes.modifier_for(self.obj, self.stage.key)
-        )
-        references = engine._prefix_references(self.obj, index)
-        self.assertIn(("Object", "Referenced"), references)
-        self.assertIn(("Object", "Holder"), references)
-        # and the revision is built from their epochs, so it moves when one does
-        before = engine._prefix_revision(self.obj, record, index)
-        engine._epochs[("Object", "Referenced")] = engine._epochs.get(("Object", "Referenced"), 0) + 1
-        self.assertNotEqual(before, engine._prefix_revision(self.obj, record, index))
+        before = engine._prefix_revision(self.obj, record)
+        # Any depsgraph update retires every memo: the generation moves and the
+        # revision with it, with no list of "what this prefix reads" to keep
+        # correct. Blender tags the object that moved; the engine bumps once for
+        # the whole graph.
+        engine._bump_epochs(None)
+        self.assertNotEqual(before, engine._prefix_revision(self.obj, record))
 
 
 class UpstreamOutputTests(unittest.TestCase):
@@ -480,10 +479,7 @@ class UpstreamOutputTests(unittest.TestCase):
         import gh_stack.blender.engine as engine
 
         record = self.obj.gh_stack
-        index = engine._modifier_index(
-            self.obj, engine.nodes.modifier_for(self.obj, self.stage_b.key)
-        )
-        before = engine._prefix_revision(self.obj, record, index)
+        before = engine._prefix_revision(self.obj, record)
         # What _apply does to a helper: the write, and the stamp that stands in
         # for the tag the depsgraph has not produced yet.
         engine._apply(
@@ -497,7 +493,7 @@ class UpstreamOutputTests(unittest.TestCase):
         )
         self.assertNotEqual(
             before,
-            engine._prefix_revision(self.obj, record, index),
+            engine._prefix_revision(self.obj, record),
             "the downstream stage did not see the upstream write",
         )
 
