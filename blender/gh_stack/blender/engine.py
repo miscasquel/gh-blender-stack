@@ -177,12 +177,9 @@ def _on_depsgraph(scene, depsgraph=None):
 def _trace_guard_drop():
     """Note a depsgraph update the guard swallowed, but only when it is a symptom.
 
-    The guard exists to eat the engine's *own* clone events, and those arrive
-    while a pass is running: one trace line per pass would bury every other
-    event in the ring for no diagnosis. An update that arrives with no pass
-    running means the guard was left up by a pass that died (see
-    `_recover_stuck_guard`) — the exact mute this phase is about — so only that
-    one is named.
+    Guard events during a pass are the engine's own clone; an update with no
+    pass running means the guard was left up by a pass that died — the mute the
+    watchdog exists for — and only that one is named.
     """
     if _ticking:
         return
@@ -195,15 +192,10 @@ def _trace_guard_drop():
 def _drain_depsgraph():
     """Force any evaluation Blender still owes *before* this pass can clone.
 
-    The prefix clone links, evaluates and unlinks a copy, and the handler is
-    muted while it does (see `_clone_prefix`): an update delivered right there
-    would be dropped, nothing would mark the stack dirty again, and the user's
-    edit would sit until something else happened to touch the scene — the
-    "random, needs Push" failure. Draining first makes the mute safe: every
-    pending update lands in `_on_depsgraph` while the guard is down. The call is
-    free when nothing is tagged (measured ~0.002 ms) and it is the reason the
-    live path is testable headless: `-b` fires depsgraph handlers for
-    `update()` the same way the GUI does.
+    The clone mutes the depsgraph handler while it evaluates, so an update
+    delivered there would be dropped with nothing left to mark the stack dirty
+    — the "random, needs Push" failure. Draining first delivers every pending
+    update while the guard is down; it is free when nothing is tagged.
     """
     if _evaluating:
         return
@@ -213,35 +205,55 @@ def _drain_depsgraph():
         pass
 
 
-def _flush_edit_mode():
-    """Copy the active Edit Mode mesh into its datablock before anything reads it.
+def _edit_mode_objects():
+    """Every object currently in Edit Mode, active or not.
 
-    While an object is in Edit Mode its edits live in the BMesh, and `obj.data`
-    is the mesh from before the session (verified in Blender 5.2: the evaluated
-    object shows the moved vertex while the datablock still has the old one).
-    The depsgraph is the source of truth for the *evaluated* object, and Blender
-    gives scripts exactly one way to make the datablock agree:
-    `update_from_editmode()`. Without this, every prefix read during modeling
-    sent the pre-edit cage — the "editing meshes does not sync" report.
-
-    Only the active edit object can be flushed, and only a stack object needs
-    it: a referenced object's edit data reaches the evaluated prefix through the
-    dependency graph itself. The flush is gated on the object being dirty —
-    that is, on the depsgraph having tagged it since the last pass — so an idle
-    Edit Mode session does not copy the mesh twice a second for nothing.
+    `bpy.context.edit_object` names only the *active* one; multi-object editing
+    gives every selected object its own BMesh edits. The context list is walked
+    when present, the scene otherwise; filtering on the object's own mode keeps
+    sculpt and pose sessions out.
     """
-    edit = bpy.context.edit_object
-    if edit is None or edit.mode != "EDIT":
-        return
-    if stack_mod.stack_of(edit) is None:
-        return
-    if edit.name not in _dirty:
-        return
     try:
-        edit.update_from_editmode()
+        candidates = list(bpy.context.objects_in_mode)
+    except AttributeError:
+        candidates = list(bpy.data.objects)
+    return [obj for obj in candidates if obj.mode == "EDIT"]
+
+
+def _flush_object(obj):
+    """Copy one Edit Mode object's edits into its datablock.
+
+    Edit data lives in the BMesh, not in `obj.data`, until Blender flushes it:
+    the one script-facing way is `update_from_editmode()`. Without the flush the
+    prefix clone copies the pre-edit cage and the unchanged hash replays the
+    cached frame. A no-op outside Edit Mode, so Push/Pull can call it directly;
+    a RuntimeError leaves the datablock as it was.
+    """
+    if obj is None or obj.mode != "EDIT":
+        return False
+    try:
+        obj.update_from_editmode()
     except RuntimeError:
-        return
-    _trace.append("flushed Edit Mode data for %s" % edit.name)
+        return False
+    _trace.append("flushed Edit Mode data for %s" % obj.name)
+    return True
+
+
+def _flush_edit_mode():
+    """Flush every dirty stack object that is in Edit Mode, not only the active.
+
+    A referenced object needs no flush (its edits reach the evaluated prefix
+    through the graph), and the dirty gate keeps an idle session from copying
+    meshes for nothing. Iterating every edit object is what makes a stroke on a
+    non-active object — or behind a non-stack active object — reach Grasshopper
+    while the mode is open.
+    """
+    for obj in _edit_mode_objects():
+        if stack_mod.stack_of(obj) is None:
+            continue
+        if obj.name not in _dirty:
+            continue
+        _flush_object(obj)
 
 
 @bpy.app.handlers.persistent
@@ -320,16 +332,10 @@ def _on_load(scene=None):
 def _recover_stuck_guard():
     """Clear `_evaluating` when a previous pass left it set, and say so.
 
-    `_clone_prefix` now resets the guard in a nested `finally` that no cleanup
-    failure can skip, but the watchdog stays as the belt-and-braces: any future
-    path that sets the flag and dies before the reset would still leave it set
-    for the rest of the session. While it is set the depsgraph handler and the
-    drain both return early, so nothing ever marks a stack dirty again: the next
-    edit is silently ignored, which looks exactly like a dead add-on. A tick
-    that starts with the guard up is that state by definition — the pass that
-    owns it has ended — so the tick explains it, clears it, and marks every
-    stack dirty, which is what makes the edits dropped meanwhile reach
-    Grasshopper after all.
+    A tick that starts with the guard up cannot belong to that pass: the owner
+    has ended. While it is set every update is dropped and nothing marks a
+    stack dirty again, so the tick says who left it, clears it, and marks every
+    stack dirty to pick up the edits missed meanwhile.
     """
     global _evaluating
     age = time.monotonic() - _evaluating_since if _evaluating_since is not None else 0.0
@@ -417,22 +423,12 @@ def _timer():
 
 
 def _nudge_stalled_waits():
-    """Mark a stack object dirty when one of its stages has waited past the
-    timeout, so the retry path in `_process_stage` runs without the user
-    touching anything.
+    """Mark a stack object dirty when a stage has waited past the timeout.
 
-    The timeout itself lives in the per-stage pass, which only runs for dirty
-    objects; a lost answer (a disconnect, a dropped frame) dirties nothing, so
-    a waiting stage could sit invisible until the next edit. Checked at most
-    once a second.
-
-    The scan walks the scene's stack objects and their pending entries rather
-    than a set of object names captured at send time: a rename between the send
-    and this check made the name-keyed lookup miss the object
-    (`bpy.data.objects.get(old_name)` is None), so a lost answer never got its
-    retry until something else happened to send. `_mark_dirty_all` already
-    walks every object on each depsgraph event; once a second is nothing.
-    `_waiting_objects` is kept as a summary of what the scan found.
+    A lost answer dirties nothing, so a waiting stage could sit invisible until
+    the next edit. The scan walks the scene's stack objects and their pending
+    entries — not names captured at send time, which a rename invalidates.
+    `_waiting_objects` is only a summary; checked at most once a second.
     """
     global _last_stall_check
     now = time.monotonic()
@@ -459,14 +455,9 @@ def _nudge_stalled_waits():
 def _handle_incoming():
     """Apply every queued message, isolating one bad frame from the rest.
 
-    `drain_incoming()` empties the queue into a list first, so without a
-    per-message guard a raise in one handler (an apply failure, a schema that
-    does not fit) aborted the whole pass and every message behind it was lost.
-    A response that raises is worse: `_handle_response` forgets the pending
-    entry before `_apply`, so the stage is left `waiting` with nothing to wait
-    for, and every later pass replays the frame it just stored — and raises
-    again. Only a new rid (Push) escaped. One message failing now costs that
-    message, not the batch.
+    `drain_incoming()` empties the queue into a list, so without a per-message
+    guard a raise in one handler aborted the pass and every message behind it
+    was lost.
     """
     for header, sections in bridge.drain_incoming():
         try:
@@ -496,12 +487,9 @@ def _handle_message(header, sections):
 def _report_message_failure(header, exc):
     """Record one failed incoming message and recover what it left behind.
 
-    The failure goes to the panel state, the trace and the console (traceback
-    included), because a message the engine cannot handle is otherwise silent.
-    For a response the stage has to be recovered too: its payload was stored
-    before the apply and its pending entry was forgotten before the apply, so
-    `_clear_failed_response` drops the unusable frame and marks the stage dirty,
-    making the next pass ask again instead of replaying the same failure.
+    The panel, the trace and the console get the failure; for a response the
+    stage is put back in a retryable state through `_clear_failed_response`, so
+    one bad frame costs that frame instead of the messages behind it.
     """
     mtype = header.get("type") or "?"
     stage_key = header.get("stage")
@@ -529,13 +517,10 @@ def _report_message_failure(header, exc):
 def _clear_failed_response(stage_key, rid):
     """Put the stage of a failed response back in a retryable state.
 
-    Remove the frame first (see `_forget_frame`): a frame whose apply raised
-    would otherwise answer the next pass and raise again, which is the
-    "poisoned frame" loop. The pending entry is cleared even though
-    `_handle_response` usually did it already — idempotent — and the state is
-    brought out of `waiting`, where an empty pending map would look like an
-    answer still on its way. Frozen keeps its own state; the next pass re-parks
-    it after the retry (or the next Pull does).
+    The frame is removed first (see `_forget_frame`): a frame whose apply raised
+    would answer the next pass and raise again. Pending is cleared (idempotent)
+    and the state leaves `waiting`, where an empty pending map would look like
+    an answer still on its way.
     """
     for obj in bpy.data.objects:
         record = stack_mod.stack_of(obj)
@@ -1436,13 +1421,9 @@ def _repair_plumbing(obj, record, stage, modifier):
 def _no_send(record, stage, reason, rid=None):
     """Explain why a pass that saw the scene move sent nothing.
 
-    The mute this phase is about: an edit the engine saw but did not act on used
-    to leave no trace at all, so "nothing happened" was indistinguishable from
-    "the engine is stuck". One line per decision: repeating the same reason for
-    the same state does not append again, and a new request id (`rid` differs
-    from the last recorded one) or a new reason rewrites it. `rid` is the id
-    this pass computed — when it equals `stage.rid` the displayed state has not
-    moved, which is a no-op, not a silence, and is not recorded.
+    One line per decision: repeating the same reason for the same state does
+    not append again; a new reason or a moved request id rewrites it. `rid`
+    equal to `stage.rid` means nothing moved, which is a no-op, not silence.
     """
     if rid is not None and rid == stage.rid:
         return
@@ -1629,23 +1610,13 @@ def _process_stage(obj, record, stage):
 
 
 def _prefix_sections(obj, record, stage):
-    """The geometry a stage sees: everything before its own modifier in the
-    stack (plan §9.1), read from the *evaluated* object — never from the base
-    datablocks. Returns ``(sections, geometry hash, attribute descriptors,
-    definitions)``; the descriptors and the definition table belong to the
-    sections and travel with them, never on their own.
+    """The geometry a stage sees: everything before its own modifier.
 
-    The clone in :func:`_clone_prefix` is the one correct read for every case
-    the depsgraph covers: shape keys, Edit Mode data (flushed before the pass),
-    instances, and any modifier before the stage. The base-datablock read this
-    used to do for a head-of-stack stage was stale exactly while Edit Mode was
-    open and blind to shape keys — the class of "Blender changed and the addon
-    did not" this engine cannot afford. Surfaces stay on the meshing path: they
-    are rarely used and have no evaluated geometry set.
-
-    The memo is keyed by the depsgraph generation (see :func:`_prefix_revision`):
-    a hit is only possible while nothing at all has been tagged since the
-    sections were read.
+    Read from the evaluated clone in :func:`_clone_prefix`, never from the base
+    datablocks: shape keys, Edit Mode data and instances are all part of the
+    prefix the depsgraph evaluates. Surfaces stay on the meshing path (no
+    geometry set). The memo is keyed by the depsgraph generation, so a hit is
+    only possible while nothing has been tagged since the read.
     """
     if obj.type == "SURFACE":
         subd = bool(record.subd)
@@ -1745,32 +1716,15 @@ def _close_enough(old_values, new_values):
 
 
 def _clone_prefix(obj, index, subd, stage_key=None):
-    """The evaluated prefix of one stage: the object as it is just before the
-    stage's own modifier, which is what everything before the stage has made.
+    """The evaluated prefix of one stage: the object just before its modifier.
 
-    The copy is linked, evaluated and removed, all inside the ``_evaluating``
-    guard so the engine ignores the depsgraph events it causes — including the
-    one that arrives *after* the removal: linking and unlinking a copy is our
-    change, not the scene's, and Blender reports it as a geometry update for the
-    stack object, indistinguishable from a real edit. That report is consumed
-    here, while the guard is still up; left alone it retires the memo the engine
-    is about to write, once per pass, forever.
-
-    Because the guard drops *everything*, the timer drains the depsgraph before
-    this runs (`_drain_depsgraph`): any user edit still pending is delivered to
-    `_on_depsgraph` while the guard is down, so the mute can only ever eat the
-    engine's own clone events.
-
-    Object and stage are recorded when the guard goes up, for the watchdog only
-    (one tuple, no traceback): if the cleanup below raises before the reset, the
-    next tick can name what left the engine mute instead of guessing.
-
-    The reset itself is unskippable. The cleanup steps are guarded one by one
-    and the reset sits in its own `finally` around them, so no failure while
-    removing the clone, dropping the private datablock or updating the view
-    layer can leave `_evaluating` up. The first cleanup failure is still
-    reported (and re-raised when the read itself did not fail), so the pass
-    says what went wrong instead of pretending it succeeded.
+    The copy is linked, evaluated and removed inside the ``_evaluating`` guard:
+    link/unlink tags the stack object like a real edit, and left unmuted it
+    would retire the memo the engine is about to write, every pass. Because the
+    guard drops everything, the timer drains the depsgraph first. In Edit Mode
+    the clone gets a private copy of the flushed datablock — a shared copy
+    evaluates empty. The cleanup resets the guard even if a step fails; the
+    owner is recorded for the watchdog.
     """
     global _evaluating, _guard_owner, _evaluating_since
     clone = obj.copy()
@@ -1813,13 +1767,10 @@ def _clone_prefix(obj, index, subd, stage_key=None):
 def _cleanup_prefix_clone(clone, owned_data, stage_key):
     """Undo one prefix clone, one guarded step at a time.
 
-    Removing the clone, dropping its private Edit Mode datablock and updating
-    the view layer can each raise on their own (a freed ID, a scene mutating
-    under a load, a driver). One failing step must not skip the others — that
-    leaves the clone in the scene or the datablock behind — and, above all, must
-    not skip the guard reset, which is why the caller owns that reset rather
-    than this function. The first failure is recorded for the panel, the trace
-    and the console, and returned so the pass can report it.
+    Removing the clone, dropping its private datablock and updating the view
+    layer can each raise. One failing step must not skip the others, and must
+    not skip the guard reset — which is why the caller owns that reset. The
+    first failure is returned so the pass can report it.
     """
     steps = (
         ("remove clone", lambda: bpy.data.objects.remove(clone, do_unlink=True)),
@@ -1893,19 +1844,12 @@ def _prefix_revision(obj, record):
     """What the memo compares: the depsgraph generation, the SubD cage flag and
     the frame.
 
-    The generation is moved by every update Blender reports (see
-    :func:`_bump_epochs`) and by every engine write a later stage in the same
-    pass must see. It is deliberately one counter for the whole graph and not a
-    per-input list: Python cannot ask a node tree which datablocks it depends
-    on, so any list of "what a prefix reads" is a hand-maintained description of
-    the depsgraph, and a missing entry is silent stale geometry. Tagged is
-    tagged: a memo is only valid while *nothing* has been tagged since it was
-    read. The price of a false alarm is one re-evaluation; the price of a miss
-    is the bug this engine kept paying for.
-
-    Two inputs the generation cannot cover, read directly instead: the frame
-    (a frame change tags nothing at all) and the SubD cage flag (a stack
-    property that changes how the sections are cut and tags nothing).
+    The generation moves on every update Blender reports and on every engine
+    write a later stage must see; a memo is valid only while nothing has been
+    tagged since it was read. One counter for the whole graph, deliberately:
+    Python cannot ask a node tree what it depends on, and a hand-maintained
+    list of references is silent stale geometry when it misses one. The frame
+    (a frame change tags nothing) and the SubD cage flag are read directly.
     """
     return (_prefix_epoch, bool(record.subd), bpy.context.scene.frame_float)
 
@@ -1913,20 +1857,12 @@ def _prefix_revision(obj, record):
 def _bump_epochs(depsgraph=None):
     """Move the generation for everything Blender tagged in this evaluation.
 
-    Called from `_on_depsgraph` with the depsgraph, and with `None` from
-    `_bump_id` for the engine's own writes — the depsgraph has not seen those
-    yet when the next stage in the same pass reads its prefix.
-
-    Every entry counts, including the ones Blender reports with all three
-    update flags false: node tree edits and driver-driven ID properties are
-    reported that way, and both change the evaluated prefix. The flags describe
-    the *kind* of update, not whether an input moved. Updates the engine causes
-    itself — the prefix clone's link, evaluate and unlink — are excluded by the
-    ``_evaluating`` guard around the clone, and by nothing else: inspecting
-    entries to guess "ours" is how a real edit gets dropped.
-
-    Returns how many updates the delivery carried (0 when there are none, or no
-    depsgraph to read): `_on_depsgraph` keeps it as the heartbeat's detail.
+    Called with the depsgraph from `_on_depsgraph`, and with None from
+    `_bump_id` for engine writes a later stage in the same pass must see. Every
+    entry counts, including all-false ones (node tree edits, driver-driven ID
+    properties): the flags say what kind of update it was, not whether an input
+    moved. The engine's own clone events are excluded by the guard alone.
+    Returns the update count for the heartbeat.
     """
     global _prefix_epoch
     _prefix_epoch += 1
@@ -2006,12 +1942,8 @@ def _age(now, then):
 def trigger_health():
     """Ages of the last trigger, send and apply, for the Diagnostics panel.
 
-    The one line that separates "the engine never heard Blender" from "the
-    engine heard it and chose to stay quiet": `trigger_age` is the last depsgraph
-    update that actually reached `_on_depsgraph` (a guard-up mute makes it grow),
-    `trigger_count`/`trigger_updates` say how much arrived, and `send_age` /
-    `apply_age` are the last request that went out and the last response that
-    landed. Ages are seconds, or None when it has not happened in this session.
+    A frozen trigger age while the scene is edited is the tell for a mute; the
+    ages are seconds, or None before the event has happened this session.
     """
     now = time.monotonic()
     return {
@@ -2057,10 +1989,16 @@ def request_again(obj, stage=None, skip_frozen=False):
     """Force a fresh request without touching the frame cache: the nonce changes
     so the request id cannot collide with a cached one. Used when a stage is
     created or its identity changes, and by Pull. The memoized prefix is retired
-    with it: a fresh request must carry what the scene shows."""
+    with it: a fresh request must carry what the scene shows.
+
+    The target is flushed first when it is in Edit Mode: a request built from
+    the stale datablock is a `ref` claiming Grasshopper's copy is current, which
+    is how Push after a stroke on a non-active edit object recovered nothing.
+    """
     record = stack_mod.stack_of(obj)
     if record is None:
         return
+    _flush_object(obj)
     if not record.stack_id:
         record.stack_id = stack_mod.ensure_stack(obj).stack_id
     stages = [stage] if stage is not None else list(record.stages)

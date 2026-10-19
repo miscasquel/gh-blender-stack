@@ -36,6 +36,9 @@ Facts this file locks, each one a live report:
 10. A lost answer is still nudged after the object is renamed: the stall scan
     walks the scene, not a set of names captured at send time.
 11. A wedged guard does not survive `register()` or a file load.
+12. Every object in Edit Mode is flushed, not only the active one: a stroke on
+    a non-active stack object must reach Grasshopper while the mode is open, and
+    Push must copy the target's edit before it builds the request (F1).
 """
 
 import json
@@ -73,13 +76,13 @@ def pump(seconds=10.0, until=None):
     return until is None
 
 
-def start_fake(stage_key, report):
+def start_fake(stage_key, report, port=PORT):
     return subprocess.Popen(
         [
             sys.executable,
             os.path.join(REPO, "tools", "fake_gh", "fake_gh.py"),
             "--port",
-            str(PORT),
+            str(port),
             "--stage",
             stage_key,
             "--report",
@@ -223,6 +226,221 @@ class EditModeTests(LiveSyncTestCase):
         )
         self.assertEqual(self.obj.mode, "EDIT", "the test left Edit Mode; the point was to stay in it")
         self.assertEqual(self.stage.state, "ok", self.stage.error)
+
+
+class MultiObjectEditTests(unittest.TestCase):
+    """F1: every object in Edit Mode must be flushed, not only the active one.
+
+    Blender supports multi-object editing: `bpy.context.edit_object` is only the
+    *active* edit object, and every other selected object carries its own BMesh
+    edits next to it. The old flush copied one object per tick, so a stroke on a
+    non-active stack object never changed the datablock the prefix clone read:
+    the geometry hash stayed put and the pass replayed the cached frame. A
+    non-stack object being active had the same effect one step earlier — the
+    flush early-returned before it looked at any other edit object.
+
+    Two stack objects (A, B) and one plain object (C) live in the scene; a
+    stroke lands on B, the object that is *not* active. The fake for B's stage
+    is the witness: it must receive the changed coordinate while the mode is
+    still open.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        bpy.ops.preferences.addon_enable(module="gh_stack")
+        isolate_data_root()
+        import gh_stack.blender.engine as engine
+        import gh_stack.blender.stack as stack_mod
+
+        cls.engine = engine
+        cls.stack_mod = stack_mod
+        engine.start_server(PORT)
+        time.sleep(0.5)
+
+        cls.obj_a = cls._stack_object("MultiA", "A")
+        cls.stage_a = cls.obj_a.gh_stack.stages[0]
+        cls.obj_b = cls._stack_object("MultiB", "B")
+        cls.stage_b = cls.obj_b.gh_stack.stages[0]
+
+        bpy.ops.mesh.primitive_cube_add(size=2.0)
+        cls.obj_c = bpy.context.object
+        cls.obj_c.name = "PlainC"
+
+        cls.report_a = os.path.join(tempfile.gettempdir(), "fake_gh_multi_a.json")
+        cls.report_b = os.path.join(tempfile.gettempdir(), "fake_gh_multi_b.json")
+        for path in (cls.report_a, cls.report_b):
+            if os.path.exists(path):
+                os.remove(path)
+        # Both stages share the port: each fake answers only its own stage.
+        cls.fake_a = start_fake(cls.stage_a.key, cls.report_a)
+        cls.fake_b = start_fake(cls.stage_b.key, cls.report_b)
+
+        def settled():
+            return (
+                cls.stage_a.state == "ok"
+                and cls.stage_b.state == "ok"
+                and report_of(cls.report_a).get("responses", 0) >= 1
+                and report_of(cls.report_b).get("responses", 0) >= 1
+            )
+
+        # The same transition window the single-object suite documents: a
+        # socket from the previous class's process can swallow the first
+        # request, so re-arm once before asserting.
+        if not pump(seconds=8.0, until=settled):
+            engine.request_again(cls.obj_a)
+            engine.request_again(cls.obj_b)
+            pump(seconds=8.0, until=settled)
+
+    @classmethod
+    def _stack_object(cls, name, label):
+        bpy.ops.mesh.primitive_cube_add(size=2.0)
+        obj = bpy.context.object
+        obj.name = name
+        bpy.ops.gh_stack.add_stage(label=label)
+        return obj
+
+    @classmethod
+    def tearDownClass(cls):
+        stop_fake(cls.fake_a)
+        stop_fake(cls.fake_b)
+        bpy.ops.preferences.addon_disable(module="gh_stack")
+
+    def tearDown(self):
+        self.leave_edit_mode()
+
+    def enter_edit(self, objects, active):
+        bpy.ops.object.select_all(action="DESELECT")
+        for obj in objects:
+            obj.select_set(True)
+        bpy.context.view_layer.objects.active = active
+        bpy.ops.object.mode_set(mode="EDIT")
+
+    def leave_edit_mode(self):
+        if bpy.context.mode != "OBJECT":
+            bpy.ops.object.mode_set(mode="OBJECT")
+
+    def settle(self):
+        """Let the entry tag and every answer land, so a test measures only the
+        stroke it makes: both stages at rest and nothing marked dirty."""
+        return pump(
+            seconds=15.0,
+            until=lambda: not self.engine._dirty
+            and self.stage_a.state == "ok"
+            and self.stage_b.state == "ok",
+        )
+
+    def stroke(self, obj, delta):
+        """Move the first vertex of `obj` by `delta` in x, in the BMesh.
+
+        The datablock is deliberately not touched: only `update_from_editmode`
+        may copy the edit into it, which is exactly what the engine has to do.
+        """
+        bm = bmesh.from_edit_mesh(obj.data)
+        bm.verts.ensure_lookup_table()
+        bm.verts[0].co.x += delta
+        bmesh.update_edit_mesh(obj.data)
+
+    def flush_lines(self):
+        return [
+            line
+            for line in self.engine.recent_activity(200)
+            if line.startswith("flushed Edit Mode data")
+        ]
+
+    def test_01_a_stroke_on_the_non_active_edit_object_reaches_gh(self):
+        self.enter_edit([self.obj_a, self.obj_b], active=self.obj_a)
+        self.assertTrue(self.settle(), "entering Edit Mode never settled")
+        before = first_x(report_of(self.report_b))
+        self.assertIsNotNone(before)
+        sends = self.engine.stats["sends"]
+
+        self.stroke(self.obj_b, 5.0)
+
+        self.assertTrue(
+            pump(
+                seconds=15.0,
+                until=lambda: first_x(report_of(self.report_b)) is not None
+                and abs(first_x(report_of(self.report_b)) - (before + 5.0)) < 0.05,
+            ),
+            "a stroke on the non-active Edit Mode object never reached Grasshopper "
+            "(report=%s)" % report_of(self.report_b),
+        )
+        self.assertGreater(self.engine.stats["sends"], sends)
+        self.assertTrue(
+            any(
+                "flushed Edit Mode data for %s" % self.obj_b.name in line
+                for line in self.flush_lines()
+            ),
+            "the non-active object carried no flush line: %s" % self.flush_lines(),
+        )
+        self.assertEqual(self.obj_b.mode, "EDIT", "the test left Edit Mode; the point was to stay in it")
+        self.assertEqual(self.stage_b.state, "ok", self.stage_b.error)
+
+    def test_02_a_stack_object_behind_a_non_stack_active_is_flushed(self):
+        self.enter_edit([self.obj_b, self.obj_c], active=self.obj_c)
+        self.assertTrue(self.settle(), "entering Edit Mode never settled")
+        before = first_x(report_of(self.report_b))
+        self.assertIsNotNone(before)
+
+        self.stroke(self.obj_b, 5.0)
+
+        self.assertTrue(
+            pump(
+                seconds=15.0,
+                until=lambda: first_x(report_of(self.report_b)) is not None
+                and abs(first_x(report_of(self.report_b)) - (before + 5.0)) < 0.05,
+            ),
+            "a stack object in Edit Mode was ignored because the active object "
+            "has no stack (report=%s)" % report_of(self.report_b),
+        )
+        self.assertEqual(self.obj_c.mode, "EDIT", "the test left Edit Mode; the point was to stay in it")
+
+    def test_03_push_flushes_the_target_before_it_builds_the_request(self):
+        self.enter_edit([self.obj_a, self.obj_b], active=self.obj_a)
+        self.assertTrue(self.settle(), "entering Edit Mode never settled")
+        report = report_of(self.report_b)
+        before = first_x(report)
+        self.assertIsNotNone(before)
+        full_before = report.get("full", 0)
+
+        self.stroke(self.obj_b, 3.0)
+        # Deliberately no pump here: Push itself must copy the edit into the
+        # datablock, or the request goes out as a `ref` with the stale hash and
+        # Grasshopper never hears about the stroke.
+        self.engine.push(self.obj_b)
+
+        self.assertTrue(
+            pump(
+                seconds=15.0,
+                until=lambda: first_x(report_of(self.report_b)) is not None
+                and abs(first_x(report_of(self.report_b)) - (before + 3.0)) < 0.05,
+            ),
+            "Push sent a ref with the stale hash instead of the edited geometry "
+            "(report=%s)" % report_of(self.report_b),
+        )
+        self.assertGreaterEqual(
+            report_of(self.report_b).get("full", 0),
+            full_before + 1,
+            "Push did not send the geometry in full (report=%s)" % report_of(self.report_b),
+        )
+        self.assertEqual(self.obj_b.mode, "EDIT", "the test left Edit Mode; the point was to stay in it")
+
+    def test_04_an_idle_edit_mode_session_does_not_flush(self):
+        self.enter_edit([self.obj_a, self.obj_b], active=self.obj_a)
+        self.assertTrue(self.settle(), "entering Edit Mode never settled")
+
+        before = len(self.flush_lines())
+        for _ in range(10):
+            self.engine._timer()
+            time.sleep(0.01)
+
+        self.assertEqual(
+            len(self.flush_lines()),
+            before,
+            "an idle Edit Mode session kept copying meshes: %s" % self.flush_lines(),
+        )
+        self.assertFalse(self.engine._dirty, "an idle pass left objects dirty")
 
 
 class PendingUpdateTests(LiveSyncTestCase):
