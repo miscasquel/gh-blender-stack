@@ -39,6 +39,10 @@ Facts this file locks, each one a live report:
 12. Every object in Edit Mode is flushed, not only the active one: a stroke on
     a non-active stack object must reach Grasshopper while the mode is open, and
     Push must copy the target's edit before it builds the request (F1).
+13. A slow answer must not swallow the edits behind it: after the soft retry the
+    current state supersedes the stale request, and the bookkeeping around an
+    error or an `unknown_ref` releases its gates instead of waiting out the
+    timeout (F3).
 """
 
 import json
@@ -76,7 +80,7 @@ def pump(seconds=10.0, until=None):
     return until is None
 
 
-def start_fake(stage_key, report, port=PORT):
+def start_fake(stage_key, report, port=PORT, *extra):
     return subprocess.Popen(
         [
             sys.executable,
@@ -87,6 +91,7 @@ def start_fake(stage_key, report, port=PORT):
             stage_key,
             "--report",
             report,
+            *extra,
         ],
         env=dict(
             os.environ,
@@ -373,6 +378,11 @@ class MultiObjectEditTests(unittest.TestCase):
                 for line in self.flush_lines()
             ),
             "the non-active object carried no flush line: %s" % self.flush_lines(),
+        )
+        self.assertTrue(
+            pump(seconds=15.0, until=lambda: self.stage_b.state == "ok"),
+            "the stage never settled (state=%s, error=%s)"
+            % (self.stage_b.state, self.stage_b.error),
         )
         self.assertEqual(self.obj_b.mode, "EDIT", "the test left Edit Mode; the point was to stay in it")
         self.assertEqual(self.stage_b.state, "ok", self.stage_b.error)
@@ -1053,6 +1063,153 @@ class DiagnosticsTimingTests(LiveSyncTestCase):
         self.assertIsNotNone(health["apply_age"])
         self.assertGreaterEqual(health["trigger_count"], 1)
         self.assertGreaterEqual(health["trigger_age"], 0.0)
+
+
+class SupersedeTests(unittest.TestCase):
+    """F3: a slow answer must not swallow the edits that follow it.
+
+    While one request was outstanding every uncached edit waited for the answer
+    (or the 30 s timeout), so a stranded request looked like a dead add-on.
+    After SOFT_RETRY_SECONDS a pass supersedes the stale request with the
+    current state; the slow fake's echo proves the newest value is what gets
+    answered and applied.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        bpy.ops.preferences.addon_enable(module="gh_stack")
+        isolate_data_root()
+        import gh_stack.blender.engine as engine
+        import gh_stack.blender.stack as stack_mod
+
+        cls.engine = engine
+        cls.stack_mod = stack_mod
+        engine.start_server(PORT)
+        time.sleep(0.5)
+
+        bpy.ops.mesh.primitive_cube_add(size=2.0)
+        cls.obj = bpy.context.object
+        cls.obj.name = "Slow"
+        bpy.ops.gh_stack.add_stage(label="Slow")
+        cls.stage = cls.obj.gh_stack.stages[0]
+        cls.obj[stack_mod.param_prop_name(cls.stage.key, SCALE)] = 1.0
+
+        cls.report = os.path.join(tempfile.gettempdir(), "fake_gh_live_supersede.json")
+        if os.path.exists(cls.report):
+            os.remove(cls.report)
+        cls.fake = start_fake(cls.stage.key, cls.report, PORT, "--delay-ms", "3000")
+
+        def settled():
+            return cls.stage.state == "ok" and report_of(cls.report).get("responses", 0) >= 1
+
+        pump(seconds=20.0, until=settled)
+
+    @classmethod
+    def tearDownClass(cls):
+        stop_fake(cls.fake)
+        bpy.ops.preferences.addon_disable(module="gh_stack")
+
+    def test_01_a_new_value_supersedes_a_slow_request(self):
+        engine = self.engine
+        name = self.stack_mod.param_prop_name(self.stage.key, SCALE)
+        self.obj[name] = 2.0
+        engine._mark_object_dirty(self.obj)
+        self.assertTrue(
+            pump(seconds=5.0, until=lambda: self.stage.state == "waiting"),
+            "the slow fake never left a request outstanding",
+        )
+        sends = engine.stats["sends"]
+        pump(seconds=0.4)
+        self.assertEqual(
+            engine.stats["sends"], sends, "a request went out before the soft retry"
+        )
+        self.obj[name] = 5.0
+        engine._mark_object_dirty(self.obj)
+        self.assertTrue(
+            pump(seconds=6.0, until=lambda: engine.stats["sends"] > sends),
+            "the newer value never superseded the in-flight request",
+        )
+        self.assertTrue(
+            pump(
+                seconds=20.0,
+                until=lambda: abs(helper_max(self.obj, self.stage.key) - 5.0) < 0.01,
+            ),
+            "the newest value never applied (helper max %r)"
+            % helper_max(self.obj, self.stage.key),
+        )
+        self.assertEqual(self.stage.state, "ok", self.stage.error)
+
+
+class SelfHealingTests(LiveSyncTestCase):
+    """The bookkeeping around a failed or lost request must not gate recovery.
+
+    Three one-line holes from the audit: a standalone error left the stage
+    `waiting` for the full timeout; an `unknown_ref` resend was answered by the
+    frame cache before it could be sent; and a Pull permit was spent before the
+    send it caused, so a failed send lost the Pull silently.
+    """
+
+    def test_01_a_standalone_error_releases_the_pending_gate(self):
+        engine = self.engine
+        record = self.stack_mod.stack_of(self.obj)
+        key = (record.stack_id, self.stage.key)
+        engine._pending[key] = {"stale-rid": time.monotonic()}
+        self.stage.state = "waiting"
+
+        engine._handle_error(
+            {
+                "type": "error",
+                "code": "unknown_stage",
+                "stage": self.stage.key,
+                "message": "no claim",
+            }
+        )
+
+        self.assertFalse(engine._pending.get(key), "the error left a pending request behind")
+        self.assertEqual(self.stage.state, "error")
+        self.assertIn("unknown_stage", self.stage.error)
+
+    def test_02_an_unknown_ref_resend_bypasses_the_frame_cache(self):
+        engine = self.engine
+        record = self.stack_mod.stack_of(self.obj)
+        key = (record.stack_id, self.stage.key)
+        engine._resend_in_full(self.obj, record, self.stage, "test")
+
+        self.assertIn(key, engine._verify, "the promised full resend would be swallowed by the cache")
+        self.assertEqual(self.stage.geom_hash, "")
+        self.assertIn(self.obj.name, engine._dirty)
+
+    def test_03_a_pull_permit_survives_an_undelivered_send(self):
+        engine = self.engine
+        record = self.stack_mod.stack_of(self.obj)
+        key = (record.stack_id, self.stage.key)
+
+        self.stage.frozen = True
+        engine.freeze(self.obj, self.stage)
+        engine.request_again(self.obj, self.stage)
+        self.assertIn(key, engine._pull_permits)
+
+        real_send = engine.server.SERVER.send
+        engine.server.SERVER.send = lambda frame: False
+        try:
+            engine._mark_object_dirty(self.obj)
+            engine._timer()
+        finally:
+            engine.server.SERVER.send = real_send
+        self.assertIn(
+            key,
+            engine._pull_permits,
+            "the Pull permit was spent by a send that never left",
+        )
+
+        engine._mark_object_dirty(self.obj)
+        self.assertTrue(
+            pump(seconds=10.0, until=lambda: key not in engine._pull_permits),
+            "the armed Pull never went out after the socket recovered",
+        )
+        self.stage.frozen = False
+        engine.unfreeze(self.obj, self.stage)
 
 
 if __name__ == "__main__":

@@ -40,6 +40,12 @@ IDLE_INTERVAL = 0.05
 # scene costs nothing, because `_dirty` is emptied on every pass.
 HOT_INTERVAL = 0.005
 HOT_SECONDS = 1.0
+# A request that is still outstanding after this long may be superseded when the
+# scene has moved on (the pass asks with the current state). Grasshopper
+# coalesces solves, so the newer ask does not build a backlog, and the answer
+# arrives for the value the user is looking at instead of one round trip behind
+# it. The hard `_timeout()` still covers an answer that never comes.
+SOFT_RETRY_SECONDS = 1.0
 
 # How long a stage may wait for its outstanding answer before the request is given
 # up on and retried in full. See `_timeout()`.
@@ -423,12 +429,13 @@ def _timer():
 
 
 def _nudge_stalled_waits():
-    """Mark a stack object dirty when a stage has waited past the timeout.
+    """Mark a stack object dirty when a stage has waited past the soft retry.
 
-    A lost answer dirties nothing, so a waiting stage could sit invisible until
-    the next edit. The scan walks the scene's stack objects and their pending
-    entries — not names captured at send time, which a rename invalidates.
-    `_waiting_objects` is only a summary; checked at most once a second.
+    A waiting stage dirties nothing on its own, and the pass is what supersedes
+    a stale request with the current state (or resends at the hard timeout);
+    without the nudge a supersede would wait for an unrelated edit. The scan
+    walks the scene's stack objects — not names captured at send time, which a
+    rename invalidates — and runs at most once a second.
     """
     global _last_stall_check
     now = time.monotonic()
@@ -445,7 +452,7 @@ def _nudge_stalled_waits():
             if not pending:
                 continue
             waiting.add(obj.name)
-            if now - min(pending.values()) > _timeout():
+            if now - min(pending.values()) > SOFT_RETRY_SECONDS:
                 _dirty.add(obj.name)
                 _mark_hot()
     _waiting_objects.clear()
@@ -785,8 +792,15 @@ def _handle_error(header):
         stage = stack_mod.stage_of(obj, header.get("stage"))
         if stage is None:
             continue
+        # The request this error answers is over: without this the stage would
+        # sit `waiting` for the full timeout for an answer that is already here.
+        # The error is left on display and the stage is not dirtied — retrying
+        # here would ask a component that just failed, in a loop; the next
+        # change or Push retries (protocol §7).
+        _forget(record.stack_id, stage.key)
         _set(stage, "error", "%s: %s" % (code, message))
-        _dirty.add(obj.name)
+        if stage.state == stack_mod.STATE_WAITING:
+            _set(stage, "state", stack_mod.STATE_ERROR)
 
 
 def _resend_in_full(obj, record, stage, reason):
@@ -795,6 +809,10 @@ def _resend_in_full(obj, record, stage, reason):
     `unknown_ref` and the request timeout, because all three leave the same
     uncertainty behind (protocol §4.3, §8.8)."""
     _forget(record.stack_id, stage.key)
+    # Bypass the frame cache once: the whole point of the resend is to ask
+    # Grasshopper, and a cached frame for the same rid would answer the pass and
+    # swallow it.
+    _verify.add((record.stack_id, stage.key))
     _set(stage, "geom_hash", "")
     _set(stage, "state", stack_mod.STATE_IDLE)
     _set(stage, "error", "")
@@ -1465,8 +1483,6 @@ def _process_stage(obj, record, stage):
         _set(stage, "state", stack_mod.STATE_FROZEN)
         _no_send(record, stage, "frozen")
         return "idle"
-    _pull_permits.discard((record.stack_id, stage.key))
-
     started = time.monotonic()
     sections, geom_hash, attributes, definitions = _prefix_sections(obj, record, stage)
     _record_timing(record, stage, "prefix_ms", _timed_since(started))
@@ -1540,18 +1556,29 @@ def _process_stage(obj, record, stage):
         # frame that can arrive with a request in flight is a verification
         # (reconnect or load): by then the previous request belonged to the
         # session that just ended, and `hello`/`load` cleared it.
-        sent_at = next(iter(pending.values()))
-        if time.monotonic() - sent_at <= _timeout():
-            _no_send(record, stage, "waiting on rid %s" % next(iter(pending))[-8:], rid)
-            return "waiting"
-        # The answer never came. We cannot know whether Grasshopper received the
-        # geometry, so the retry goes out in full — the same reasoning as the
-        # unknown_ref handler. And the failure stays visible: retrying silently is
-        # what made a stage stuck in this loop look healthy.
-        _forget(record.stack_id, stage.key)
-        _set(stage, "geom_hash", "")
-        stats["timeouts"] += 1
-        retry_note = "timed out after %.0f s; requesting the geometry again" % _timeout()
+        sent_rid = next(iter(pending))
+        sent_at = pending[sent_rid]
+        age = time.monotonic() - sent_at
+        if age <= _timeout():
+            # The state may move on while an answer is in flight. After
+            # SOFT_RETRY_SECONDS a newer request supersedes the stale one: GH
+            # coalesces solves, so the ask is not a backlog, and the answer is
+            # for what the user is looking at. The same state waits: the hard
+            # timeout below is its resend.
+            if rid == sent_rid or age < SOFT_RETRY_SECONDS:
+                _no_send(record, stage, "waiting on rid %s" % sent_rid[-8:], rid)
+                return "waiting"
+            _forget(record.stack_id, stage.key)
+            _trace.append("%s: superseded %s" % (stage.key, sent_rid[-8:]))
+        else:
+            # The answer never came. We cannot know whether Grasshopper received
+            # the geometry, so the retry goes out in full — the same reasoning as
+            # the unknown_ref handler. And the failure stays visible: retrying
+            # silently is what made a stage stuck in this loop look healthy.
+            _forget(record.stack_id, stage.key)
+            _set(stage, "geom_hash", "")
+            stats["timeouts"] += 1
+            retry_note = "timed out after %.0f s; requesting the geometry again" % _timeout()
 
     mode = "full" if geom_hash != stage.geom_hash else "ref"
     header = {
@@ -1584,6 +1611,10 @@ def _process_stage(obj, record, stage):
         _no_send(record, stage, "undelivered", rid)
         return "idle"
     _verify.discard(verify_key)
+    # A Pull permit is spent by the send it caused, not before it: a send that
+    # never left (disconnected, undelivered) leaves the Pull armed for the next
+    # pass instead of losing it silently.
+    _pull_permits.discard((record.stack_id, stage.key))
     _trace.append(
         "%s: sent %s %s" % (stage.key, mode, rid[-8:] if rid else "")
     )
