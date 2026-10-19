@@ -852,9 +852,10 @@ class StallRenameTests(LiveSyncTestCase):
 class WhyNoSendTests(LiveSyncTestCase):
     """A pass that saw the scene move and sent nothing must say why.
 
-    Two decisions are covered: freeze (a state flag) and an outstanding request
-    (a state each new edit has to wait behind). Both must be recorded once per
-    decision — a line per tick would bury the rest of the ring.
+    Freeze is explained once per decision — a line per tick would bury the rest
+    of the ring. A request that is outstanding *and young* is coalesced: the
+    pass returns before reading the prefix, one explanation per wait, and the
+    supersede after the soft retry does the work once.
     """
 
     def settle(self):
@@ -917,7 +918,7 @@ class WhyNoSendTests(LiveSyncTestCase):
         finally:
             self.stage.frozen = False
 
-    def test_02_a_pending_request_explains_each_new_state_once(self):
+    def test_02_a_pending_request_is_coalesced_then_superseded(self):
         import gh_stack.blender.server as server
 
         engine = self.engine
@@ -939,30 +940,45 @@ class WhyNoSendTests(LiveSyncTestCase):
                 "a sent request was reported as a silence",
             )
 
-            # A new scene state (a different request id) behind the outstanding
-            # request: explained once, not once per tick.
-            self.obj[name] = 2.0
-            engine._mark_object_dirty(self.obj)
-            engine._timer()
-            self.assertEqual(len(self.lines("no send (waiting on rid")), 1, self.lines("no send"))
-            engine._mark_object_dirty(self.obj)
-            engine._timer()
+            # Edits inside the soft-retry window are coalesced: the pass
+            # returns before it reads the prefix, so no clone is paid and no
+            # second request goes out.
+            clones = engine.stats["prefix_clones"]
+            sends = engine.stats["sends"]
+            for value in (2.0, 3.0, 4.0):
+                self.obj[name] = value
+                engine._mark_object_dirty(self.obj)
+                engine._timer()
+            self.assertEqual(
+                engine.stats["prefix_clones"], clones,
+                "a pass while waiting re-evaluated the prefix",
+            )
+            self.assertEqual(engine.stats["sends"], sends, "a second request went out while waiting")
+            self.assertEqual(self.stage.state, "waiting")
             self.assertEqual(
                 len(self.lines("no send (waiting on rid")),
                 1,
-                "the wait repeated per tick: %s" % self.lines("no send"),
+                "the coalesced wait left no explanation: %s" % self.lines("no send"),
             )
 
-            # The state moves on again: the rid in the token changed, so the
-            # silence is a new decision and is explained again.
-            self.obj[name] = 3.0
-            engine._mark_object_dirty(self.obj)
-            engine._timer()
-            self.assertEqual(len(self.lines("no send (waiting on rid")), 2, self.lines("no send"))
+            # After the soft retry the pass supersedes the stale request with
+            # the current state, and the trace says so.
+            deadline = time.time() + 6.0
+            while time.time() < deadline and engine.stats["sends"] == sends:
+                engine._mark_object_dirty(self.obj)
+                engine._timer()
+                time.sleep(0.05)
+            self.assertGreater(
+                engine.stats["sends"], sends, "the stale request was never superseded"
+            )
+            self.assertTrue(
+                any("superseded" in line for line in engine.recent_activity(50)),
+                "the supersede left no trace: %s" % engine.recent_activity(50),
+            )
         finally:
             server.SERVER.send = real_send
 
-        # Recover: forget the swallowed wait and let the real client answer.
+        # Recover: forget the swallowed waits and let the real client answer.
         engine.request_again(self.obj)
         self.assertTrue(
             pump(seconds=15.0, until=lambda: self.stage.state == "ok"),
@@ -972,7 +988,7 @@ class WhyNoSendTests(LiveSyncTestCase):
         self.assertTrue(
             pump(
                 seconds=15.0,
-                until=lambda: abs(helper_max(self.obj, self.stage.key) - 3.0) < 0.01,
+                until=lambda: abs(helper_max(self.obj, self.stage.key) - 4.0) < 0.01,
             ),
             "the recovered value never applied",
         )

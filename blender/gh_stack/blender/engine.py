@@ -32,7 +32,10 @@ from ..core import codec, hashing
 from . import bridge, geometry_io, helpers, nodes, prefs, props, server, stack as stack_mod
 
 WAIT_INTERVAL = 0.005
-IDLE_INTERVAL = 0.05
+# The idle cadence: what a quiet session pays to notice an incoming message
+# (a GH-side edit, a reconnect). 20 ms keeps those reactive without a tick
+# budget worth measuring; the fast cadence below is what edits use.
+IDLE_INTERVAL = 0.02
 # While the scene is being edited the fast cadence applies instead of the idle
 # one: an edit keeps the engine hot for HOT_SECONDS, so a reaction costs one tick
 # rather than up to one idle interval. Playback fills frames this way — each
@@ -1525,6 +1528,18 @@ def _process_stage(obj, record, stage):
         _set(stage, "state", stack_mod.STATE_FROZEN)
         _no_send(record, stage, "frozen")
         return "idle"
+
+    # While a request is young, a pass costs nothing: the prefix does not have
+    # to be read to know nothing can go out before the soft retry. Without this
+    # every edit during a slow solve re-evaluated the whole prefix and threw it
+    # away (measured: 62 clones for 13 sends on a 51k-vertex drag).
+    pending = _pending_of(record.stack_id, stage.key)
+    if pending:
+        sent_rid = next(iter(pending))
+        if time.monotonic() - pending[sent_rid] < SOFT_RETRY_SECONDS:
+            _no_send(record, stage, "waiting on rid %s" % sent_rid[-8:])
+            return "waiting"
+
     started = time.monotonic()
     sections, geom_hash, attributes, definitions = _prefix_sections(obj, record, stage)
     _record_timing(record, stage, "prefix_ms", _timed_since(started))
