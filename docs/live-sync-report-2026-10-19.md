@@ -410,3 +410,37 @@ Edit Mode (single, multi-object, non-active), object-mode and sculpt edits,
 shape keys, modifier and parameter drags, keyframes and drivers, GH-side
 edits and restarts, file reopen, and a drag observed through the Recent
 activity ring. If anything stalls, the ring now names the link.
+
+---
+
+## 6. Open performance concerns (live, 2026-10-19)
+
+Recorded from the owner's session after phases 0–6 landed; nothing here is
+investigated yet, and no code was changed for it.
+
+- **Stage In latency with instances.** One geometry instanced 13 times: the
+  Stage In update in Rhino took ~300 ms typically and peaked at 800 ms, while a
+  plain cube is instant. Turning preview off on every Grasshopper component
+  lowers the delay. Re-testing the same file later in the session halved the
+  worst case (800 → 300 ms); the session did not record whether the rebuilt
+  `.gha` (Phase 4) had been loaded, so warm-up and deployed-version differences
+  are uncontrolled. S3 rules out transport and conversion: 30 ms round trip and
+  10 ms C# mesh build at 100k triangles.
+- **Choppy render viewport**, later in the same session. Not investigated.
+- **Owner's read:** overall definition complexity, rather than one bridge cost.
+
+Next measurement steps when this is picked up:
+
+1. Env-gated timestamps through the plugin: receive → decode → scheduled →
+   solve start → Stage In build (definitions vs rows) → Stage Out enqueue →
+   write; Blender: request bytes and actual write completion.
+2. Console benchmark of `Instances.Build` at 1 def × 1000 rows, 100 defs × 1
+   row, 100 defs × 10 rows. It uses only managed Grasshopper/RhinoCommon types,
+   so it runs in the console harness under wine without Rhino.
+3. Preview on/off as an A/B, and the document solve time from the GH profiler.
+4. Viewport choppiness: add-on disabled vs enabled, then the Diagnostics
+   trigger/tag counters at idle.
+
+Candidate fixes if the numbers match: skip stale-solve retries while a solve is
+in flight; cache definition builds by content hash; make Stage In/Out preview
+configurable (default off). Details in `docs/backlog.md` § Performance.

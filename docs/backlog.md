@@ -44,6 +44,42 @@ the last three batches each looked like an afternoon and were not.
 
 ---
 
+## Performance
+
+Live concerns recorded 2026-10-19; no cause measured yet. Transport is ruled
+out (S3: 30 ms round trip at 100k triangles, 10 ms C# mesh build).
+
+- **Stage In latency with instances (300–800 ms).** One geometry instanced 13×:
+  the Stage In update in Rhino took ~300 ms typically and 800 ms at peak, while
+  a plain cube is instant. Turning preview off on every Grasshopper component
+  lowers the delay. Re-testing the same file later halved the worst case
+  (800 → 300 ms), unexplained: the session did not record whether the rebuilt
+  `.gha` (Phase 4 rid pinning) had been loaded — Rhino scans Libraries only on
+  load. Hypotheses, in order:
+  1. **Duplicate solves.** `RetryStaleSolves` re-schedules every 250 ms while a
+     slot is `waiting` (`GhLink.cs:726`), so any solve over 250 ms runs
+     two-deep. Fix: mark the solve in flight (delegate start → `SolutionEnd`)
+     and skip retries for it; keep the budget for dropped delegates.
+  2. **Definitions rebuilt every solve.** `Instances.Build` converts each
+     `idef.<i>` group to Rhino geometry and constructs a
+     `ModelInstanceDefinition` on every solve, even when the content did not
+     change. Fix: cache by content hash (the unnamed-definition hash already
+     exists) and invalidate on change; transforms-only edits then rebuild only
+     the row list.
+  3. **The definition's solve dominates.** Then it is the Grasshopper document,
+     not the bridge; measure before changing code.
+  Measure first with the env-gated timestamps in the report §6. Preview off is
+  a usable mitigation in the meantime (a per-component toggle, or
+  `IsPreviewCapable => false` on Stage In/Out).
+- **Choppy render viewport.** Reported in the same session, not investigated.
+  Baseline with the add-on disabled vs enabled; watch `stats["tags"]`,
+  `stats["passes"]` and the Diagnostics trigger count while the viewport idles;
+  check whether the per-tick depsgraph drain (`_drain_depsgraph`) plus helper
+  writes keep re-tagging the scene. ADR 0008 promises a quiet idle, so
+  choppiness means something is still evaluating per tick.
+
+---
+
 ## Design constraints
 
 Settled by evidence; the code that rests on them must not drift from them.
