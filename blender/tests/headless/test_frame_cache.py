@@ -1091,6 +1091,19 @@ class TimeDrivenPrefixTests(FrameCacheTestCase):
         # The pass is forced the way the depsgraph handler forces it, because
         # `_timer` only touches objects something has marked dirty.
         self.at_frame(24)
+        # A replay for a state the client was not told sends a sync request. It
+        # is not an idle pass until that answer lands (a young pending would
+        # short-circuit before the prefix read and prove nothing).
+        record = self.stack_mod.stack_of(self.obj)
+        self.assertTrue(
+            pump(
+                seconds=10.0,
+                until=lambda: self.stage.state == "ok"
+                and not self.engine._dirty
+                and not self.engine._pending.get((record.stack_id, self.stage.key)),
+            ),
+            "the frame's sync request never settled",
+        )
 
         def idle_passes(count):
             for _ in range(count):

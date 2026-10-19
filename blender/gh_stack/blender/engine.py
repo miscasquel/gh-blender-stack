@@ -104,6 +104,14 @@ _timings = {}
 # is on is asked for on the first pass after the answer lands, and every answer is
 # stored either way, so nothing evaluated is wasted.
 _pending = {}
+# (stack_id, stage_key) -> (rid, geometry hash) of the last request actually
+# handed to a connected client. The stage record is saved *and undoable*: an
+# undo restores `geom_hash`/`rid` from the undo step, which says nothing about
+# what the client currently holds. This map is connection state, never saved:
+# the cache may answer a request without asking only while the client has been
+# told that exact request (see `_process_stage`), and the request mode is
+# decided against the geometry named here, not against a rolled-back field.
+_sent = {}
 _dirty = set()  # object names that need a pass
 # Object names with a request in flight, for the Diagnostics summary. Refreshed
 # from `_pending` by the once-a-second stall scan; the scan itself walks the
@@ -273,6 +281,45 @@ def _on_frame_change(scene, depsgraph=None):
     _mark_hot()
 
 
+def _after_history_step():
+    """Re-assert the client-side state after an undo or redo.
+
+    The stage record is part of the .blend, so undo/redo restores its saved
+    `geom_hash`, `rid` and `applied_out_hash` to the values captured in the
+    step. What the connected client holds did not travel with that step: after
+    undoing a move, the client still has the moved geometry. `_sent` is the
+    session truth, so the saved geometry field is put back from it (or cleared
+    when nothing was sent, which asks in full) and the next pass decides
+    full/ref correctly instead of sending a ref the client must refuse.
+
+    Marking every stack dirty also gives the step a pass even when its
+    depsgraph delivery is missed; the memo is cleared for the same reason — an
+    undo restores datablocks the memo may name.
+    """
+    for obj in bpy.data.objects:
+        record = stack_mod.stack_of(obj)
+        if record is None or not record.stages:
+            continue
+        if not record.stack_id:
+            record.stack_id = stack_mod.ensure_stack(obj).stack_id
+        for stage in record.stages:
+            sent = _sent.get((record.stack_id, stage.key))
+            _set(stage, "geom_hash", sent[1] if sent is not None else "")
+    _prefix_memo.clear()
+    _mark_dirty_all()
+    _mark_hot()
+
+
+@bpy.app.handlers.persistent
+def _on_undo(scene=None):
+    _after_history_step()
+
+
+@bpy.app.handlers.persistent
+def _on_redo(scene=None):
+    _after_history_step()
+
+
 @bpy.app.handlers.persistent
 def _on_load(scene=None):
     """A file was opened (or reverted, or Blender started with one).
@@ -297,6 +344,7 @@ def _on_load(scene=None):
     # scene: move it now, so the outliner is clean before the first apply.
     helpers.adopt_existing()
     _pending.clear()
+    _sent.clear()
     _prefix_memo.clear()
     _state_since.clear()
     _last_no_send.clear()
@@ -611,6 +659,7 @@ def _on_client_hello(header):
                 _forget(record.stack_id, stage.key)
                 _set(stage, "state", stack_mod.STATE_IDLE)
             _set(stage, "geom_hash", "")
+            _sent.pop((record.stack_id, stage.key), None)
             _verify.add((record.stack_id, stage.key))
         _dirty.add(obj.name)
     _trace.append("client hello: %s" % (doc or "unnamed"))
@@ -814,6 +863,7 @@ def _resend_in_full(obj, record, stage, reason):
     `unknown_ref` and the request timeout, because all three leave the same
     uncertainty behind (protocol §4.3, §8.8)."""
     _forget(record.stack_id, stage.key)
+    _sent.pop((record.stack_id, stage.key), None)
     # Bypass the frame cache once: the whole point of the resend is to ask
     # Grasshopper, and a cached frame for the same rid would answer the pass and
     # swallow it.
@@ -1439,6 +1489,7 @@ def _drop_removed_stages(obj, record):
             # stage — removal is data loss, and the pass repairs it.
             continue
         _forget(record.stack_id, stage.key)
+        _sent.pop((record.stack_id, stage.key), None)
         _pull_permits.discard((record.stack_id, stage.key))
         _verify.discard((record.stack_id, stage.key))
         _forget_prefix(obj, stage.key)
@@ -1557,15 +1608,22 @@ def _process_stage(obj, record, stage):
 
     verify_key = (record.stack_id, stage.key)
     cached = _cached_response(record, stage, rid)
+    connected = bool(bridge.state["connected"])
+    sent = _sent.get(verify_key)
+    # Whether the client has been told *this* request. A frame in the cache is
+    # Blender's answer, not the client's state: cancelling a transform (or an
+    # undo, or a reverted slider) returns the rid to an earlier, cached frame
+    # while the client still holds the intermediate one.
+    client_has = sent is not None and sent[0] == rid
     # A reconnect or a file load puts the stage on `_verify`: the definition may
     # have changed while no one was listening, and a cached frame cannot know
     # it. With a client there, ask; with none, replay the cache as usual and
     # keep the permit for when one connects.
-    if cached is not None and (verify_key not in _verify or not bridge.state["connected"]):
-        _no_send(record, stage, "cache hit", rid)
+    if cached is not None and (verify_key not in _verify or not connected):
         header, cached_sections = cached
         out_hash = header.get("out_hash") or ""
         _set(stage, "rid", rid)
+        applied = False
         if out_hash != stage.applied_out_hash or _payload_missing(
             obj, stage, cached_sections
         ):
@@ -1575,15 +1633,23 @@ def _process_stage(obj, record, stage):
             stats["applies"] += 1
             _set(stage, "applied_out_hash", out_hash)
             _set(stage, "warnings", _warnings_text(header))
-            _set(stage, "state", _rest_state(stage))
             _set(stage, "error", "")
-            return "busy"
-        # The cached frame is the displayed one, but the group may predate the
-        # current format: repairing it here is what lets a replay fix a stale
-        # session (see _handle_response).
-        nodes.ensure_group(obj, stage.key, _nested_rows_of(cached_sections))
-        _set(stage, "state", _rest_state(stage))
-        return "idle"
+            applied = True
+        else:
+            # The cached frame is the displayed one, but the group may predate
+            # the current format: repairing it here is what lets a replay fix a
+            # stale session (see _handle_response).
+            nodes.ensure_group(obj, stage.key, _nested_rows_of(cached_sections))
+        if not connected or client_has:
+            _no_send(record, stage, "cache hit", rid)
+            _set(stage, "state", _rest_state(stage))
+            return "busy" if applied else "idle"
+        # The frame is right for Blender, but the connected client holds some
+        # other request. Applying it is not enough: the client must also be told
+        # the inputs for this rid, or its viewport keeps the cancelled edit (and
+        # the next edit starts from geometry Blender no longer shows). Fall
+        # through and send; the answer carries the same output and is not
+        # re-applied.
 
     if not bridge.state["connected"]:
         # A miss with Grasshopper away keeps the last good output; only cached
@@ -1635,11 +1701,17 @@ def _process_stage(obj, record, stage):
             # the unknown_ref handler. And the failure stays visible: retrying
             # silently is what made a stage stuck in this loop look healthy.
             _forget(record.stack_id, stage.key)
+            _sent.pop(verify_key, None)
             _set(stage, "geom_hash", "")
             stats["timeouts"] += 1
             retry_note = "timed out after %.0f s; requesting the geometry again" % _timeout()
 
-    mode = "full" if geom_hash != stage.geom_hash else "ref"
+    # Use the session truth, not the saved stage record: undo/redo restores
+    # `stage.geom_hash` from its step, while the client keeps the geometry it
+    # was last sent. No session entry means no client has been told anything
+    # this session, so the first request must carry the geometry in full (§8.8).
+    held_geom = _sent[verify_key][1] if verify_key in _sent else ""
+    mode = "full" if geom_hash != held_geom else "ref"
     header = {
         "type": "request",
         "stage": stage.key,
@@ -1670,6 +1742,9 @@ def _process_stage(obj, record, stage):
         _no_send(record, stage, "undelivered", rid)
         return "idle"
     _verify.discard(verify_key)
+    # The client has now been told this request; from here the frame cache may
+    # answer it without a send (until a reconnect/load/refusal says otherwise).
+    _sent[verify_key] = (rid, geom_hash)
     # A Pull permit is spent by the send it caused, not before it: a send that
     # never left (disconnected, undelivered) leaves the Pull armed for the next
     # pass instead of losing it silently.
@@ -2170,6 +2245,7 @@ def register():
     _stores.clear()
     _cache.clear()
     _pending.clear()
+    _sent.clear()
     _prefix_memo.clear()
     _state_since.clear()
     _verify.clear()
@@ -2202,6 +2278,8 @@ def register():
         (bpy.app.handlers.depsgraph_update_post, _on_depsgraph),
         (bpy.app.handlers.frame_change_post, _on_frame_change),
         (bpy.app.handlers.load_post, _on_load),
+        (bpy.app.handlers.undo_post, _on_undo),
+        (bpy.app.handlers.redo_post, _on_redo),
     ):
         if handler not in handler_list:
             handler_list.append(handler)
@@ -2228,6 +2306,8 @@ def unregister():
         (bpy.app.handlers.depsgraph_update_post, _on_depsgraph),
         (bpy.app.handlers.frame_change_post, _on_frame_change),
         (bpy.app.handlers.load_post, _on_load),
+        (bpy.app.handlers.undo_post, _on_undo),
+        (bpy.app.handlers.redo_post, _on_redo),
     ):
         if handler in handler_list:
             handler_list.remove(handler)

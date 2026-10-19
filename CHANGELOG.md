@@ -84,6 +84,17 @@ Notable changes to this project, following
   - **A reconnect or a file load asks Grasshopper once** instead of replaying
     the cached frame, so a restarted Grasshopper or a changed document no
     longer needs a Pull.
+- **A cancelled transform, an undo, or a reverted parameter snaps Grasshopper
+  back.** The response cache stores Blender's output, not the client's input:
+  cancelling a move (or undoing it, redoing it, or returning a slider to an
+  earlier value) makes the request id return to a cached frame while
+  Grasshopper still holds the intermediate state, and the cached answer used
+  to suppress the send. The engine now remembers the last request the
+  connected client was told and only lets the cache answer that state;
+  otherwise it applies the cached output for Blender and still sends the
+  current state. Undo and redo also re-assert the client-side geometry
+  bookkeeping, which the saved stage record rolls back with the undo step, so
+  the first request names what Grasshopper actually holds.
 - **A solve answers the request its inputs were for** (plugin). Stage Out read
   the slot's request id at the end of its solve, so a request arriving
   mid-solve could be answered with geometry the solve had read before it: the

@@ -43,6 +43,11 @@ Facts this file locks, each one a live report:
     current state supersedes the stale request, and the bookkeeping around an
     error or an `unknown_ref` releases its gates instead of waiting out the
     timeout (F3).
+14. A cancel, undo or reverted parameter returns the request id to a cached
+    one; the cache may answer Blender but must still tell the connected client,
+    or Grasshopper keeps the intermediate state (and the next edit starts from
+    it). Undo also rolls the saved stage record back, so the client-side
+    geometry bookkeeping is re-asserted from the session on undo/redo.
 """
 
 import json
@@ -261,6 +266,171 @@ class EditModeTests(LiveSyncTestCase):
             "an Edit Mode stroke never reached Grasshopper (report=%s)" % report_of(self.report),
         )
         self.assertEqual(self.obj.mode, "EDIT", "the test left Edit Mode; the point was to stay in it")
+        self.assertEqual(self.stage.state, "ok", self.stage.error)
+
+
+class RevertedEditTests(LiveSyncTestCase):
+    """A cancel, undo or reverted parameter returns to a cached request id.
+
+    The cache stores Blender's answer, not the client's inputs. A transform is
+    cancelled by restoring the BMesh and tagging it; undo restores the mesh and
+    the saved stage record from its step; a slider returns to a value used
+    before. In all three the request id goes back to one the frame cache
+    already holds while the connected client still holds the intermediate
+    state. Serving that frame and returning used to leave Grasshopper showing
+    the cancelled edit — the reported "it does not snap back before the next
+    move" bug. The cache may answer without a send only while the client has
+    been told that exact rid.
+    """
+
+    def tearDown(self):
+        self.leave_edit_mode()
+
+    def settle(self):
+        return pump(
+            seconds=15.0,
+            until=lambda: not self.engine._dirty and self.stage.state == "ok",
+        )
+
+    def set_first_x(self, value):
+        bm = bmesh.from_edit_mesh(self.obj.data)
+        bm.verts.ensure_lookup_table()
+        bm.verts[0].co.x = value
+        bmesh.update_edit_mesh(self.obj.data)
+
+    def test_01_a_cancelled_transform_snaps_grasshopper_back(self):
+        self.assertEqual(self.stage.state, "ok", self.stage.error)
+        self.edit_mode()
+        self.assertTrue(self.settle(), "entering Edit Mode never settled")
+        base = first_x(report_of(self.report))
+        self.assertIsNotNone(base)
+        bm = bmesh.from_edit_mesh(self.obj.data)
+        bm.verts.ensure_lookup_table()
+        original = float(bm.verts[0].co.x)
+
+        self.set_first_x(original + 5.0)
+        self.assertTrue(
+            pump(
+                seconds=15.0,
+                until=lambda: first_x(report_of(self.report)) is not None
+                and abs(first_x(report_of(self.report)) - (base + 5.0)) < 0.05,
+            ),
+            "the moved vertex never reached Grasshopper (report=%s)"
+            % report_of(self.report),
+        )
+        self.assertTrue(self.settle(), "the moved state never settled")
+        sends = self.engine.stats["sends"]
+
+        # Esc: the operator restores the BMesh to its pre-transform values and
+        # tags the mesh; the request id returns to the original, cached one.
+        self.set_first_x(original)
+        self.assertTrue(
+            pump(
+                seconds=15.0,
+                until=lambda: first_x(report_of(self.report)) is not None
+                and abs(first_x(report_of(self.report)) - base) < 0.05
+                and self.stage.state == "ok"
+                and not self.engine._dirty,
+            ),
+            "a cancelled transform did not reach Grasshopper; it still holds the "
+            "moved geometry (report=%s)" % report_of(self.report),
+        )
+        self.assertGreater(
+            self.engine.stats["sends"],
+            sends,
+            "the revert was answered from the cache without telling Grasshopper",
+        )
+        self.assertEqual(self.obj.mode, "EDIT", "the test left Edit Mode; the point was to stay in it")
+        self.assertEqual(self.stage.state, "ok", self.stage.error)
+
+    def test_02_a_reverted_parameter_reaches_grasshopper(self):
+        name = self.stack_mod.param_prop_name(self.stage.key, SCALE)
+        self.obj[name] = 2.0
+        self.engine._mark_object_dirty(self.obj)
+        self.assertTrue(
+            pump(
+                seconds=15.0,
+                until=lambda: abs(helper_max(self.obj, self.stage.key) - 2.0) < 0.01
+                and self.stage.state == "ok",
+            ),
+            "the moved parameter never applied (helper max %r)"
+            % helper_max(self.obj, self.stage.key),
+        )
+
+        refs = report_of(self.report).get("ref", 0)
+        self.obj[name] = 1.0
+        self.engine._mark_object_dirty(self.obj)
+        self.assertTrue(
+            pump(
+                seconds=15.0,
+                until=lambda: abs(helper_max(self.obj, self.stage.key) - 1.0) < 0.01
+                and self.stage.state == "ok"
+                and report_of(self.report).get("ref", 0) > refs,
+            ),
+            "a reverted parameter was answered from the cache without telling "
+            "Grasshopper (report=%s, helper max %r)"
+            % (report_of(self.report), helper_max(self.obj, self.stage.key)),
+        )
+        self.assertEqual(self.stage.state, "ok", self.stage.error)
+
+    def test_03_undo_reasserts_the_client_geometry_bookkeeping(self):
+        # Undo rolls the saved stage record back to its undo step, including
+        # `geom_hash`; the connected client still holds the moved geometry. The
+        # undo handler must put the session truth back, so the first request is
+        # a full for what GH actually holds instead of a ref it must refuse.
+        self.assertEqual(self.stage.state, "ok", self.stage.error)
+        self.edit_mode()
+        self.assertTrue(self.settle(), "entering Edit Mode never settled")
+        base = first_x(report_of(self.report))
+        self.assertIsNotNone(base)
+        bm = bmesh.from_edit_mesh(self.obj.data)
+        bm.verts.ensure_lookup_table()
+        original = float(bm.verts[0].co.x)
+        before_edit_hash = self.stage.geom_hash
+        before_edit_rid = self.stage.rid
+
+        self.set_first_x(original + 5.0)
+        self.assertTrue(
+            pump(
+                seconds=15.0,
+                until=lambda: first_x(report_of(self.report)) is not None
+                and abs(first_x(report_of(self.report)) - (base + 5.0)) < 0.05,
+            ),
+            "the moved vertex never reached Grasshopper (report=%s)"
+            % report_of(self.report),
+        )
+        self.assertTrue(self.settle(), "the moved state never settled")
+        report = report_of(self.report)
+        fulls = report.get("full", 0)
+        refusals = report.get("refusals", 0)
+
+        # What Ctrl+Z restores: the BMesh, and the stage fields from the step.
+        self.set_first_x(original)
+        self.stage.geom_hash = before_edit_hash
+        self.stage.rid = before_edit_rid
+        self.engine._on_undo()
+
+        self.assertTrue(
+            pump(
+                seconds=15.0,
+                until=lambda: first_x(report_of(self.report)) is not None
+                and abs(first_x(report_of(self.report)) - base) < 0.05
+                and self.stage.state == "ok"
+                and not self.engine._dirty,
+            ),
+            "the undo never reached Grasshopper (report=%s)" % report_of(self.report),
+        )
+        self.assertGreaterEqual(
+            report_of(self.report).get("full", 0),
+            fulls + 1,
+            "the undo sent a ref for geometry Grasshopper did not hold",
+        )
+        self.assertEqual(
+            report_of(self.report).get("refusals", 0),
+            refusals,
+            "the undo made Grasshopper refuse a stale ref (report=%s)"
+            % report_of(self.report),
+        )
         self.assertEqual(self.stage.state, "ok", self.stage.error)
 
 
@@ -1043,22 +1213,36 @@ class SessionResetTests(LiveSyncTestCase):
             engine._guard_owner = ("Wedged", self.stage.key)
             engine._evaluating_since = time.monotonic()
             engine._ticking = True
+            engine._sent[("Wedged", self.stage.key)] = ("rid", "hash")
 
             engine.register()
             self.assertFalse(engine._evaluating, "register() kept a wedged prefix guard")
             self.assertIsNone(engine._guard_owner)
             self.assertIsNone(engine._evaluating_since)
             self.assertFalse(engine._ticking, "register() kept the previous session's tick flag")
+            self.assertFalse(engine._sent, "register() kept the previous session's client state")
 
             # A retry of register() (a partial failure is the reason it can run
             # again) must not append the same handler twice.
             handlers = len(bpy.app.handlers.depsgraph_update_post)
+            undos = len(bpy.app.handlers.undo_post)
+            redos = len(bpy.app.handlers.redo_post)
             engine._registered = False
             engine.register()
             self.assertEqual(
                 len(bpy.app.handlers.depsgraph_update_post),
                 handlers,
                 "a second register() duplicated the depsgraph handler",
+            )
+            self.assertEqual(
+                len(bpy.app.handlers.undo_post),
+                undos,
+                "a second register() duplicated the undo handler",
+            )
+            self.assertEqual(
+                len(bpy.app.handlers.redo_post),
+                redos,
+                "a second register() duplicated the redo handler",
             )
         finally:
             engine.start_server = real_start
@@ -1071,12 +1255,14 @@ class SessionResetTests(LiveSyncTestCase):
         engine._guard_owner = ("Wedged", self.stage.key)
         engine._evaluating_since = time.monotonic()
         engine._ticking = True
+        engine._sent[("Wedged", self.stage.key)] = ("rid", "hash")
 
         engine._on_load()
         self.assertFalse(engine._evaluating, "_on_load() kept a wedged prefix guard")
         self.assertIsNone(engine._guard_owner)
         self.assertIsNone(engine._evaluating_since)
         self.assertFalse(engine._ticking, "_on_load() kept the previous session's tick flag")
+        self.assertFalse(engine._sent, "_on_load() kept the previous session's client state")
 
 
 class DiagnosticsTimingTests(LiveSyncTestCase):
