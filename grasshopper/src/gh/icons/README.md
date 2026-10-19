@@ -22,9 +22,17 @@ magick <name>.png -resize 24x24 <name>.png
 
 Used by:
 
-| Icon | Component |
-|---|---|
-| `import` | Stage In |
-| `export` | Stage Out |
-| `driver` | Param |
-| `geometry_nodes` | the spike geometry component |
+| Icon | Blender glyph | Used by |
+|---|---|---|
+| `import` | `IMPORT` | Stage In |
+| `export` | `EXPORT` | Stage Out |
+| `preset` | `PRESET` | Param |
+| `pointcloud_data` | `POINTCLOUD_DATA` | Point Cloud Points |
+| `spreadsheet` | `SPREADSHEET` | Attribute Get |
+| `mod_data_transfer` | `MOD_DATA_TRANSFER` | Attribute Set |
+| `file_blend` | `FILE_BLEND` | the Grasshopper ribbon tab |
+
+The Blender panel uses the same glyphs where it mirrors these concepts:
+`IMPORT_EXPORT` for a stage row and `PRESET` for its Parameters header.
+`IMPORT_EXPORT` only exists after Blender 5.2, so the panel falls back to
+`ARROW_LEFTRIGHT` on 5.2 (the manifest's floor).

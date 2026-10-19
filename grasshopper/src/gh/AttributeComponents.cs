@@ -253,7 +253,7 @@ namespace GhStack
 
         protected override System.Drawing.Bitmap Icon
         {
-            get { return Icons.Get("driver"); }
+            get { return Icons.Get("spreadsheet"); }
         }
 
         protected override void RegisterInputParams(GH_InputParamManager p)
@@ -335,7 +335,7 @@ namespace GhStack
 
         protected override System.Drawing.Bitmap Icon
         {
-            get { return Icons.Get("import"); }
+            get { return Icons.Get("mod_data_transfer"); }
         }
 
         protected override void RegisterInputParams(GH_InputParamManager p)

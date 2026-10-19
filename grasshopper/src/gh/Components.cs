@@ -382,7 +382,7 @@ namespace GhStack
 
         protected override Bitmap Icon
         {
-            get { return Icons.Get("driver"); }
+            get { return Icons.Get("preset"); }
         }
 
         private Guid _paramId = Guid.NewGuid();
@@ -572,7 +572,7 @@ namespace GhStack
 
         protected override System.Drawing.Bitmap Icon
         {
-            get { return Icons.Get("geometry_nodes"); }
+            get { return Icons.Get("pointcloud_data"); }
         }
 
         protected override void RegisterInputParams(GH_InputParamManager p)

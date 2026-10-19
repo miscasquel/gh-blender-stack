@@ -1,14 +1,24 @@
 """The N-panel: connection status, stages, parameters (plan §11, demo v0/S5).
 
 Icons are Blender's own icon names, the same glyphs the Grasshopper components
-carry (see grasshopper/src/gh/icons). Value rows follow Blender's own layout:
-a split label/widget column, no icons on the values themselves, and the standard
-property decorators.
+carry (see grasshopper/src/gh/icons); where this Blender build lacks one (the
+two-way IMPORT_EXPORT glyph on 5.2) the closest built-in is used. Value rows
+follow Blender's own layout: a split label/widget column, no icons on the values
+themselves, and the standard property decorators.
 """
 
 import bpy
 
 from . import bridge, engine, prefs, props, server as server_mod, stack as stack_mod
+
+# IMPORT_EXPORT (the two-way glyph) landed after Blender 5.2. Keep the N-panel
+# drawable on the declared floor: fall back to the bidirectional arrow when this
+# Blender build does not register the newer icon.
+_ICON_NAMES = {
+    item.identifier
+    for item in bpy.types.UILayout.bl_rna.functions["label"].parameters["icon"].enum_items
+}
+_STAGE_ICON = "IMPORT_EXPORT" if "IMPORT_EXPORT" in _ICON_NAMES else "ARROW_LEFTRIGHT"
 
 
 class GHSTACK_PT_panel(bpy.types.Panel):
@@ -61,7 +71,7 @@ class GHSTACK_PT_panel(bpy.types.Panel):
         # Enable, disable, reorder and remove are the modifier's own controls
         # (plan §11): the row carries only what the modifiers panel cannot —
         # Pull, Freeze, and the key to paste into Grasshopper.
-        row.label(text=stage.label or stage.key, icon="GEOMETRY_NODES")
+        row.label(text=stage.label or stage.key, icon=_STAGE_ICON)
         row.label(text=_state_text(stage), icon=_state_icon(stage))
         row.operator("gh_stack.pull", text="", icon="IMPORT").index = index
         row.operator("gh_stack.freeze", text="", icon="FREEZE", depress=stage.frozen).index = index
@@ -79,7 +89,7 @@ class GHSTACK_PT_panel(bpy.types.Panel):
         if stage.params:
             params_box = box.box()
             row = params_box.row()
-            row.label(text="Parameters", icon="DRIVER")
+            row.label(text="Parameters", icon="PRESET")
             row.operator("gh_stack.key_all", text="Key all").index = index
             # Group labels come from the Param component's Group input; parameters
             # with no group sit directly under the header, in schema order.
