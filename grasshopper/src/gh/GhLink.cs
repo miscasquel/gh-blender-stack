@@ -24,6 +24,12 @@ namespace GhStack
     public class StageSlot
     {
         public string Rid = "";
+        /// <summary>The rid the current solve is answering. Pinned when a solve
+        /// is scheduled, because a request can overwrite `Rid` while the
+        /// solve's inputs have already been read: answering the newer rid would
+        /// label old geometry as the new request's answer. Empty outside a
+        /// solve, when the slot's own `Rid` is the answer.</summary>
+        public string SolveRid = "";
         private volatile Dictionary<string, object> _params = new Dictionary<string, object>();
         /// <summary>The request's parameter values. The socket thread publishes a
         /// fresh dictionary per request and never mutates it afterwards; the
@@ -252,6 +258,14 @@ namespace GhStack
                 }
                 return slot;
             }
+        }
+
+        /// <summary>The rid a solve answers: the pinned one when the solve was
+        /// scheduled from a request, the slot's own rid otherwise.</summary>
+        public static string AnswerRid(StageSlot slot)
+        {
+            if (slot == null) return "";
+            return string.IsNullOrEmpty(slot.SolveRid) ? slot.Rid : slot.SolveRid;
         }
 
         /// <summary>The slot for a key, or null. Never creates one: used by paths
@@ -598,6 +612,12 @@ namespace GhStack
                     d.SolutionEnd += OnSolutionEnd;
                     lock (Gate)
                     {
+                        // Pin the rid each solve is answering before the inputs
+                        // are read: a request arriving mid-solve overwrites
+                        // slot.Rid, and answering that newer rid would label the
+                        // old-geometry answer as the new request's (F5).
+                        foreach (KeyValuePair<string, StageSlot> pair in Slots)
+                            pair.Value.SolveRid = pair.Value.Rid;
                         foreach (GH_Component c in Components) c.ExpireSolution(true);
                     }
                 });
@@ -612,6 +632,13 @@ namespace GhStack
         {
             GH_Document document = sender as GH_Document;
             if (document != null) document.SolutionEnd -= OnSolutionEnd;
+            lock (Gate)
+            {
+                // The solve is over: the pins must not leak into the next
+                // (unsolicited) solve, whose answer is the slot's latest rid.
+                foreach (KeyValuePair<string, StageSlot> pair in Slots)
+                    pair.Value.SolveRid = "";
+            }
             ReconcileOwnership();
         }
 

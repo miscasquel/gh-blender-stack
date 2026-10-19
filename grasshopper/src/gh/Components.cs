@@ -291,7 +291,7 @@ namespace GhStack
                     var header = new Dictionary<string, object>();
                     header["type"] = "response";
                     header["stage"] = key;
-                    header["rid"] = slot.Rid;
+                    header["rid"] = GhLink.AnswerRid(slot);
                     header["out_hash"] = outHash;
                     header["status"] = "ok";
                     header["warnings"] = warningList;
@@ -332,7 +332,7 @@ namespace GhStack
                         var errorHeader = new Dictionary<string, object>();
                         errorHeader["type"] = "response";
                         errorHeader["stage"] = key;
-                        errorHeader["rid"] = slot.Rid;
+                        errorHeader["rid"] = GhLink.AnswerRid(slot);
                         errorHeader["out_hash"] = "";
                         errorHeader["status"] = "error";
                         errorHeader["error"] = error;

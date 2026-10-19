@@ -138,6 +138,16 @@ namespace GhStack.Tests.Console
                     WaitFor(delegate { return GhLink.FindSlot("k1").Status == "waiting"; }), "");
                 Check("same-rid re-send keeps the rid", GhLink.FindSlot("k1").Rid == "sha256:r1", "");
 
+                // 7b. the solve pins its rid: a request landing mid-solve must
+                //     not relabel the answer, and outside a solve the slot's
+                //     own rid is the answer. (The snapshot itself happens on
+                //     the GH UI thread; this locks the choice of rid.)
+                var pin = new StageSlot();
+                pin.Rid = "sha256:latest";
+                Check("answer rid falls back to the slot", GhLink.AnswerRid(pin) == "sha256:latest", "");
+                pin.SolveRid = "sha256:solving";
+                Check("answer rid uses the pinned rid", GhLink.AnswerRid(pin) == "sha256:solving", "");
+
                 // 8. a standalone error from Blender lands on the stage, and a
                 //    later request with a new rid recovers it.
                 var error = new Dictionary<string, object>();
