@@ -711,7 +711,9 @@ def _handle_response(header, sections):
         if sent_at is not None:
             _record_timing(record, stage, "rtt_ms", _timed_since(sent_at))
         applied = False
-        if rid == stage.rid and out_hash != stage.applied_out_hash:
+        if rid == stage.rid and (
+            out_hash != stage.applied_out_hash or _payload_missing(obj, stage, sections)
+        ):
             started = time.monotonic()
             _apply(obj, stage, sections, header.get("attributes"))
             _record_timing(record, stage, "apply_ms", _timed_since(started))
@@ -831,6 +833,46 @@ def _warnings_text(header):
         if text:
             lines.append(text)
     return "\n".join(lines)
+
+
+def _sections_have_geometry(sections):
+    """Whether a frame's sections name geometry a helper should hold."""
+    return any(
+        name.startswith(("mesh.", "subd.", "crv.", "pts.", "inst.", "idef."))
+        for name in sections
+    )
+
+
+def _helpers_empty(obj, stage):
+    """Whether every top-level helper of a stage holds nothing.
+
+    A cheap guard against an out-of-band clear (a script, an undo): the applied
+    hash still names an output that is no longer on screen, and without this
+    every response and replay would be skipped — Push included.
+    """
+    for kind in helpers.KINDS:
+        helper = helpers.helper_for(obj, stage.key, kind)
+        if helper is None:
+            continue
+        data = helper.data
+        if kind == "mesh" and len(data.vertices):
+            return False
+        if kind == "curves" and len(data.splines):
+            return False
+        if kind == "points" and len(data.points):
+            return False
+    return True
+
+
+def _payload_missing(obj, stage, sections):
+    """Whether a frame that names geometry is displayed over empty helpers.
+
+    The one case the applied hash cannot see: the helpers were emptied while
+    the hash stayed, so the skip rule would refuse every response — and Push
+    too. A frame that carries geometry over empty helpers is re-applied
+    instead, which is idempotent when the output really is empty.
+    """
+    return _sections_have_geometry(sections) and _helpers_empty(obj, stage)
 
 
 def _apply(obj, stage, sections, attributes=None):
@@ -1509,7 +1551,9 @@ def _process_stage(obj, record, stage):
         header, cached_sections = cached
         out_hash = header.get("out_hash") or ""
         _set(stage, "rid", rid)
-        if out_hash != stage.applied_out_hash:
+        if out_hash != stage.applied_out_hash or _payload_missing(
+            obj, stage, cached_sections
+        ):
             started = time.monotonic()
             _apply(obj, stage, cached_sections, header.get("attributes"))
             _record_timing(record, stage, "apply_ms", _timed_since(started))

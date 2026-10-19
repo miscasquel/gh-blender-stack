@@ -1212,5 +1212,35 @@ class SelfHealingTests(LiveSyncTestCase):
         engine.unfreeze(self.obj, self.stage)
 
 
+class HashTrustTests(LiveSyncTestCase):
+    """F4: an emptied helper with an unchanged applied hash must be re-applied.
+
+    The skip rule (`out_hash == applied_out_hash`) assumes the helpers still
+    display that output. When they are emptied out of band the rule refuses
+    every response and replay — and Push sends a new rid with the same hash, so
+    it is refused too. A frame that names geometry over empty helpers is
+    re-applied instead.
+    """
+
+    def test_01_a_cleared_helper_is_reapplied_from_the_frame(self):
+        import gh_stack.blender.helpers as helpers
+
+        engine = self.engine
+        helper = helpers.helper_for(self.obj, self.stage.key, "mesh")
+        self.assertIsNotNone(helper)
+        self.assertGreater(len(helper.data.vertices), 0)
+        applies = engine.stats["applies"]
+
+        helper.data.clear_geometry()
+        engine._mark_object_dirty(self.obj)
+        self.assertTrue(
+            pump(seconds=10.0, until=lambda: engine.stats["applies"] > applies),
+            "the frame was skipped over an emptied helper",
+        )
+        helper = helpers.helper_for(self.obj, self.stage.key, "mesh")
+        self.assertGreater(len(helper.data.vertices), 0, "the helper stayed empty")
+        self.assertEqual(self.stage.state, "ok", self.stage.error)
+
+
 if __name__ == "__main__":
     unittest.main()
