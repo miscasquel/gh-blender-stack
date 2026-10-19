@@ -65,11 +65,13 @@ loaded.
   Measure first with the env-gated timestamps in the report §6. Preview off is
   a usable mitigation in the meantime (a per-component toggle, or
   `IsPreviewCapable => false` on Stage In/Out).
-- **Choppy render viewport.** Reported in the same session, not investigated.
-  Baseline with the add-on disabled vs enabled; watch `stats["tags"]`,
-  `stats["passes"]` and the Diagnostics trigger count while the viewport idles;
-  check whether the per-tick depsgraph drain (`_drain_depsgraph`) plus helper
-  writes keep re-tagging the scene. ADR 0008 promises a quiet idle, so
+- **Choppy render viewport.** Reported in the same session. Mitigated
+  (unreleased): an idle tick in the GUI no longer calls `_drain_depsgraph`, so it
+  does not force a depsgraph evaluation 50× a second; the background path keeps
+  the unconditional drain because the tests drive the timer directly. Confirm on
+  the live pass before closing. If it persists, baseline with the add-on disabled
+  vs enabled and watch the Diagnostics trigger/send/apply ages and the recent
+  activity ring while the viewport idles. ADR 0008 promises a quiet idle, so
   choppiness means something is still evaluating per tick.
 
 ---

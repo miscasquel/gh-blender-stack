@@ -44,6 +44,13 @@ Notable changes to this project, following
 
 ### Fixed
 
+- **An idle session no longer forces a depsgraph evaluation every tick.** The
+  drain that keeps a pending edit from being swallowed by the prefix clone now
+  runs only when the pass has work. In the GUI Blender's event loop delivers the
+  update itself; the per-tick `update()` was a main-thread cost the viewport felt
+  as choppiness. An idle tick also skips the Edit Mode scan. Diagnostics now
+  shows the session's clone, apply and send counts, so work that climbs while
+  nothing is being edited is visible.
 - **A duplicated stack gets its own stage.** Object duplication copied the stage
   key, cache namespace and node group, so both objects rebuilt one group for
   whichever ran last and each drew the other's helpers. The copy is now split on

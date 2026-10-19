@@ -170,6 +170,16 @@ class GHSTACK_PT_diagnostics(bpy.types.Panel):
                 _age_text(health["apply_age"]),
             )
         )
+        # Work counters, for the quiet viewport: a clone count that climbs while
+        # nothing is being edited names the engine as the cost.
+        layout.label(
+            text="clones %d · applies %d · sends %d"
+            % (
+                engine.stats["prefix_clones"],
+                engine.stats["applies"],
+                engine.stats["sends"],
+            )
+        )
         if state.get("error"):
             layout.label(text=state["error"], icon="ERROR")
 

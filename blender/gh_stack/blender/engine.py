@@ -265,6 +265,9 @@ def _flush_edit_mode():
     non-active object — or behind a non-stack active object — reach Grasshopper
     while the mode is open.
     """
+    if not _dirty:
+        # Nothing is waiting for a flush; skip the mode scan on every idle tick.
+        return
     for obj in _edit_mode_objects():
         if stack_mod.stack_of(obj) is None:
             continue
@@ -436,10 +439,26 @@ def _timer():
         # handler), let Blender deliver whatever is already tagged. Every
         # trigger the add-on has funnels through here, which is what makes the
         # depsgraph authoritative rather than best-effort.
-        _drain_depsgraph()
-        _flush_edit_mode()
+        #
+        # Only pay for it when there is work: a tick with nothing to process
+        # must not force an evaluation. Forcing one every idle interval is a
+        # main-thread cost the viewport feels as choppiness, and there is
+        # nothing a clone could swallow if no clone is going to run.
+        dirty_before = bool(_dirty)
+        # In the GUI Blender's own event loop delivers a tagged update to
+        # `_on_depsgraph`; draining with nothing to process only forces an
+        # evaluation the viewport feels as choppiness. Background sessions have
+        # no such loop (and the tests drive this timer directly), so they keep
+        # the unconditional drain that makes a pending edit visible.
+        if dirty_before or bpy.app.background:
+            _drain_depsgraph()
         _handle_incoming()
         _nudge_stalled_waits()
+        if _dirty and not dirty_before:
+            # Handling a message or the stall scan can produce work after the
+            # gate above. Drain before the clone this pass is now about to run.
+            _drain_depsgraph()
+        _flush_edit_mode()
         busy = False
         for name in list(_dirty):
             obj = bpy.data.objects.get(name)
