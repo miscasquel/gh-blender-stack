@@ -403,20 +403,27 @@ The adaptive snapshot throttle from Phase 6's plan is deliberately deferred:
 the wait window is free now, and throttling cached replays would trade
 playback smoothness for a cost the Diagnostics timings can prove first.
 
-**Pending: the live acceptance pass** (Blender restarted so the add-on
-reloads; Rhino restarted so the rebuilt `.gha` loads; the Diagnostics "Recent
-activity" box present is the tell). Walk the checklist in §3 Phase 7:
-Edit Mode (single, multi-object, non-active), object-mode and sculpt edits,
-shape keys, modifier and parameter drags, keyframes and drivers, GH-side
-edits and restarts, file reopen, and a drag observed through the Recent
-activity ring. If anything stalls, the ring now names the link.
+**Live acceptance passed 2026-10-19.** Blender and Rhino were restarted so the
+add-on and the rebuilt `.gha` loaded, and the Diagnostics "Recent activity" box
+was present. The Phase 7 checklist passed: Edit Mode (single, multi-object,
+non-active), object-mode and sculpt edits, shape keys, modifier and parameter
+drags, keyframes and drivers, GH-side edits and restarts, file reopen, and the
+drag observed through the Recent activity ring. The choppy viewport recorded in
+§6 after Phase 6 was the unconditional per-tick `_drain_depsgraph`; gating it on
+work (`f69f5fc`) removed the cost and the viewport is smooth.
+
+Remaining before 0.3.0: the S6 display half, S7, and acceptance A1–A10 (A10 is
+covered headless by `blender/tests/headless/test_duplicates.py`; the rest are
+GUI confirmations).
 
 ---
 
 ## 6. Open performance concerns (live, 2026-10-19)
 
-Recorded from the owner's session after phases 0–6 landed; nothing here is
-investigated yet, and no code was changed for it.
+Recorded from the owner's session after phases 0–6 landed. The viewport
+choppiness reported in the same session was investigated and fixed (§5); the
+instance latency below is the remaining concern and is accepted as a 0.3.0
+known issue.
 
 - **Stage In latency with instances.** One geometry instanced 13 times: the
   Stage In update in Rhino took ~300 ms typically and peaked at 800 ms, while a
@@ -426,7 +433,6 @@ investigated yet, and no code was changed for it.
   `.gha` (Phase 4) had been loaded, so warm-up and deployed-version differences
   are uncontrolled. S3 rules out transport and conversion: 30 ms round trip and
   10 ms C# mesh build at 100k triangles.
-- **Choppy render viewport**, later in the same session. Not investigated.
 - **Owner's read:** overall definition complexity, rather than one bridge cost.
 
 Next measurement steps when this is picked up:
@@ -438,8 +444,6 @@ Next measurement steps when this is picked up:
    row, 100 defs × 10 rows. It uses only managed Grasshopper/RhinoCommon types,
    so it runs in the console harness under wine without Rhino.
 3. Preview on/off as an A/B, and the document solve time from the GH profiler.
-4. Viewport choppiness: add-on disabled vs enabled, then the Diagnostics
-   trigger/tag counters at idle.
 
 Candidate fixes if the numbers match: skip stale-solve retries while a solve is
 in flight; cache definition builds by content hash; make Stage In/Out preview

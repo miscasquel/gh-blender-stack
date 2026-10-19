@@ -10,7 +10,11 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] — 2026-10-20
+
+The live-sync release: edits reach Grasshopper as they happen, stages gain a
+full lifecycle (Pull, Freeze, Key all, Purge orphans), duplicated stacks become
+independent, and the add-on and plugin share Blender's icon set.
 
 ### Added
 
@@ -140,9 +144,6 @@ Notable changes to this project, following
   Stage In update take 300–800 ms in Rhino, while a plain cube stayed instant;
   turning off component preview lowers the delay. The cause is not measured yet
   and transport is ruled out.
-- **A choppy render viewport has been reported** with the add-on enabled and not
-  yet diagnosed. The Diagnostics trigger/send/apply counters show whether the
-  engine is still doing work at idle.
 
 ## [0.2.2] — 2026-10-18
 
@@ -643,3 +644,4 @@ First public release: a working demo of the Blender ↔ Grasshopper loop.
 [0.2.0]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.2.0
 [0.2.1]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.2.1
 [0.2.2]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.2.2
+[0.3.0]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.3.0

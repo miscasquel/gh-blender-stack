@@ -5,16 +5,13 @@ measured evidence behind the bigger items lives in `polish-plan.md`, which is a
 record of one review rather than a plan. If something is not here, it is either
 done or was judged not worth doing — it is not missing.
 
-**Next session:** A10 is done (unreleased): a duplicated stack is split onto its
-own stage key, cache namespace, node group and helpers, and its parameter values,
-keyframes and drivers move with the key. The live-sync rebuild also landed: the
-depsgraph is the source of truth for the prefix, every Edit Mode object syncs, a
-wedge cannot outlive a tick, a slow request supersedes itself at one second, and
-the plugin pins a solve's request id (rebuilt and deployed; **restart Rhino** to
-load it). What remains is the live acceptance pass on both batches
-(`docs/live-sync-report-2026-10-19.md` §3, Phase 7), then the S6 display half
-and S7 in the GUI, then acceptance A1–A10 for 0.3.0. The portal upload is its
-own batch (compliance Phase 1, G7 pre-ask included) and is independent.
+**Next session:** Phase 7 live acceptance passed 2026-10-19
+(`docs/live-sync-report-2026-10-19.md` §5). The viewport choppiness was the
+unconditional per-tick depsgraph drain; gating it on work fixed it. A10 is done
+and covered headless, the icon pass is in, and 0.3.0 is versioned and packaged.
+What remains before the tag is the S6 display half, S7, and acceptance A1–A10
+(A10's live check included), then `v0.3.0`. The portal upload is its own batch
+(compliance Phase 1, G7 pre-ask included) and is independent.
 
 Each item says what it is, where, and why it matters. Effort is not estimated:
 the last three batches each looked like an afternoon and were not.
@@ -37,11 +34,12 @@ the last three batches each looked like an afternoon and were not.
 
 ## Performance
 
-Live concerns recorded 2026-10-19; no cause measured yet. Transport is ruled
+Live concern recorded 2026-10-19; no cause measured yet. Transport is ruled
 out (S3: 30 ms round trip at 100k triangles, 10 ms C# mesh build). **For 0.3.0**
-both are accepted as known issues; the release notes should name them, and the
-live pass should still re-measure the instance case with the rebuilt `.gha`
-loaded.
+the instance latency is accepted as a known issue (the release notes name it);
+the live pass should still re-measure it with the rebuilt `.gha` loaded. The
+viewport choppiness from the same session was the unconditional idle depsgraph
+drain; gating it on work (`f69f5fc`) fixed it.
 
 - **Stage In latency with instances (300–800 ms).** One geometry instanced 13×:
   the Stage In update in Rhino took ~300 ms typically and 800 ms at peak, while
@@ -65,14 +63,6 @@ loaded.
   Measure first with the env-gated timestamps in the report §6. Preview off is
   a usable mitigation in the meantime (a per-component toggle, or
   `IsPreviewCapable => false` on Stage In/Out).
-- **Choppy render viewport.** Reported in the same session. Mitigated
-  (unreleased): an idle tick in the GUI no longer calls `_drain_depsgraph`, so it
-  does not force a depsgraph evaluation 50× a second; the background path keeps
-  the unconditional drain because the tests drive the timer directly. Confirm on
-  the live pass before closing. If it persists, baseline with the add-on disabled
-  vs enabled and watch the Diagnostics trigger/send/apply ages and the recent
-  activity ring while the viewport idles. ADR 0008 promises a quiet idle, so
-  choppiness means something is still evaluating per tick.
 
 ---
 
