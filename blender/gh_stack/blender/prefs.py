@@ -34,9 +34,19 @@ def refresh_log_level():
 def log(*args, **kwargs):
     """A gated `print` for the `[gh-stack]` diagnostics: `quiet` silences them,
     `info` (the default) prints. Errors still surface in the panel state either
-    way; this only controls the system console."""
+    way; this only controls the system console.
+
+    Never raises. This is the last statement of the engine timer's failure path,
+    and a console that is already gone (Blender quitting, closed stdout, EPIPE)
+    would otherwise turn a diagnostics line into a timer exception — and Blender
+    unregisters a timer that raises, which is exactly the silence the engine
+    spends the rest of its code preventing.
+    """
     if _log_info:
-        print(*args, **kwargs)
+        try:
+            print(*args, **kwargs)
+        except Exception:
+            pass
 
 
 class GhStackPreferences(bpy.types.AddonPreferences):

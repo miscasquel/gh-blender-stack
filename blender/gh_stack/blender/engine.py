@@ -19,6 +19,7 @@ Nothing here touches the socket directly: it posts frames through the bridge and
 drains what the server thread decoded.
 """
 
+import sys
 import time
 from collections import deque
 
@@ -95,7 +96,11 @@ _timings = {}
 # stored either way, so nothing evaluated is wasted.
 _pending = {}
 _dirty = set()  # object names that need a pass
-_waiting_objects = set()  # object names with a request in flight (stall retry)
+# Object names with a request in flight, for the Diagnostics summary. Refreshed
+# from `_pending` by the once-a-second stall scan; the scan itself walks the
+# scene rather than trusting this set, because a rename between send and check
+# would leave the old name in here (see `_nudge_stalled_waits`).
+_waiting_objects = set()
 _last_stall_check = 0.0
 _registered = False
 # Monotonic deadline until which the engine runs at the fast cadence; see
@@ -264,6 +269,7 @@ def _on_load(scene=None):
     next request go out with `geom.mode = "full"`, which is what protocol §8.8
     already prescribes for the first request after a connection.
     """
+    global _evaluating, _guard_owner, _evaluating_since, _ticking
     if not bpy.app.timers.is_registered(_timer):
         bpy.app.timers.register(_timer, first_interval=IDLE_INTERVAL, persistent=True)
     # A file from before the stage scene still has its plumbing in the user's
@@ -274,6 +280,14 @@ def _on_load(scene=None):
     _state_since.clear()
     _last_no_send.clear()
     _timings.clear()
+    # The guard belongs to the session that just ended. A pass can only be
+    # running on the main thread, but a load (a new file, a revert) must not
+    # inherit the previous file's wedge: with `_evaluating` set the depsgraph
+    # handler would drop every edit in the new file until the watchdog fired.
+    _evaluating = False
+    _guard_owner = None
+    _evaluating_since = None
+    _ticking = False
     for obj in bpy.data.objects:
         record = stack_mod.stack_of(obj)
         if record is None:
@@ -306,20 +320,27 @@ def _on_load(scene=None):
 def _recover_stuck_guard():
     """Clear `_evaluating` when a previous pass left it set, and say so.
 
-    `_clone_prefix` sets the guard and clears it as the *last* statement of its
-    `finally`; a raise above that statement (removing the clone, dropping the
-    private datablock, the view-layer update) leaves it set for the rest of the
-    session. While it is set the depsgraph handler and the drain both return
-    early, so nothing ever marks a stack dirty again: the next edit is silently
-    ignored, which looks exactly like a dead add-on. A tick that starts with the
-    guard up is that state by definition — the pass that owns it has ended — so
-    the tick explains it, clears it, and marks every stack dirty, which is what
-    makes the edits dropped meanwhile reach Grasshopper after all.
+    `_clone_prefix` now resets the guard in a nested `finally` that no cleanup
+    failure can skip, but the watchdog stays as the belt-and-braces: any future
+    path that sets the flag and dies before the reset would still leave it set
+    for the rest of the session. While it is set the depsgraph handler and the
+    drain both return early, so nothing ever marks a stack dirty again: the next
+    edit is silently ignored, which looks exactly like a dead add-on. A tick
+    that starts with the guard up is that state by definition — the pass that
+    owns it has ended — so the tick explains it, clears it, and marks every
+    stack dirty, which is what makes the edits dropped meanwhile reach
+    Grasshopper after all.
     """
     global _evaluating
     age = time.monotonic() - _evaluating_since if _evaluating_since is not None else 0.0
     where = "%s (stage %s)" % _guard_owner if _guard_owner else "unknown"
     _evaluating = False
+    # Every depsgraph update the guard swallowed was dropped *before* it could
+    # move the generation, so a memo written before the leak still looks
+    # current even though the scene moved. Clearing them is what makes the
+    # "mark dirty" below read the edited scene instead of replaying the stale
+    # prefix (and the old rid) one more time.
+    _prefix_memo.clear()
     _mark_dirty_all()
     line = (
         "guard watchdog: prefix guard left up by %s %.2f s ago; cleared and all stacks marked dirty"
@@ -379,10 +400,17 @@ def _timer():
             return HOT_INTERVAL
         return IDLE_INTERVAL
     except Exception as exc:
-        bridge.state["error"] = "engine error: %r" % (exc,)
-        import traceback
+        # The last-resort handler must not raise itself: Blender unregisters a
+        # timer whose callback raises, and then the engine is gone for the rest
+        # of the session. `prefs.log` is already print-safe; this guard also
+        # covers the state write and anything a future edit adds here.
+        try:
+            bridge.state["error"] = "engine error: %r" % (exc,)
+            import traceback
 
-        prefs.log("[gh-stack] engine error:\n%s" % traceback.format_exc(), flush=True)
+            prefs.log("[gh-stack] engine error:\n%s" % traceback.format_exc(), flush=True)
+        except Exception:
+            pass
         return IDLE_INTERVAL
     finally:
         _ticking = False
@@ -397,45 +425,156 @@ def _nudge_stalled_waits():
     objects; a lost answer (a disconnect, a dropped frame) dirties nothing, so
     a waiting stage could sit invisible until the next edit. Checked at most
     once a second.
+
+    The scan walks the scene's stack objects and their pending entries rather
+    than a set of object names captured at send time: a rename between the send
+    and this check made the name-keyed lookup miss the object
+    (`bpy.data.objects.get(old_name)` is None), so a lost answer never got its
+    retry until something else happened to send. `_mark_dirty_all` already
+    walks every object on each depsgraph event; once a second is nothing.
+    `_waiting_objects` is kept as a summary of what the scan found.
     """
     global _last_stall_check
     now = time.monotonic()
     if now - _last_stall_check < 1.0:
         return
     _last_stall_check = now
-    for name in list(_waiting_objects):
-        obj = bpy.data.objects.get(name)
-        if obj is None:
-            _waiting_objects.discard(name)
-            continue
+    waiting = set()
+    for obj in bpy.data.objects:
         record = stack_mod.stack_of(obj)
         if record is None or not record.stages:
-            _waiting_objects.discard(name)
             continue
-        waiting = False
         for stage in record.stages:
             pending = _pending.get((record.stack_id, stage.key))
             if not pending:
                 continue
-            waiting = True
+            waiting.add(obj.name)
             if now - min(pending.values()) > _timeout():
-                _dirty.add(name)
+                _dirty.add(obj.name)
                 _mark_hot()
-        if not waiting:
-            _waiting_objects.discard(name)
+    _waiting_objects.clear()
+    _waiting_objects.update(waiting)
 
 
 def _handle_incoming():
+    """Apply every queued message, isolating one bad frame from the rest.
+
+    `drain_incoming()` empties the queue into a list first, so without a
+    per-message guard a raise in one handler (an apply failure, a schema that
+    does not fit) aborted the whole pass and every message behind it was lost.
+    A response that raises is worse: `_handle_response` forgets the pending
+    entry before `_apply`, so the stage is left `waiting` with nothing to wait
+    for, and every later pass replays the frame it just stored — and raises
+    again. Only a new rid (Push) escaped. One message failing now costs that
+    message, not the batch.
+    """
     for header, sections in bridge.drain_incoming():
-        mtype = header.get("type")
-        if mtype == "schema":
-            _handle_schema(header)
-        elif mtype == "response":
-            _handle_response(header, sections)
-        elif mtype == "error":
-            _handle_error(header)
-        elif mtype == "hello":
-            _on_client_hello(header)
+        try:
+            _handle_message(header, sections)
+        except Exception as exc:
+            try:
+                _report_message_failure(header, exc)
+            except Exception:
+                # The reporter is the last thing between one bad message and
+                # the next one: if it fails too, the rest of the batch still
+                # matters more than the report.
+                _trace.append("incoming message failed and could not be reported")
+
+
+def _handle_message(header, sections):
+    mtype = header.get("type")
+    if mtype == "schema":
+        _handle_schema(header)
+    elif mtype == "response":
+        _handle_response(header, sections)
+    elif mtype == "error":
+        _handle_error(header)
+    elif mtype == "hello":
+        _on_client_hello(header)
+
+
+def _report_message_failure(header, exc):
+    """Record one failed incoming message and recover what it left behind.
+
+    The failure goes to the panel state, the trace and the console (traceback
+    included), because a message the engine cannot handle is otherwise silent.
+    For a response the stage has to be recovered too: its payload was stored
+    before the apply and its pending entry was forgotten before the apply, so
+    `_clear_failed_response` drops the unusable frame and marks the stage dirty,
+    making the next pass ask again instead of replaying the same failure.
+    """
+    mtype = header.get("type") or "?"
+    stage_key = header.get("stage")
+    where = "%s %s" % (mtype, stage_key or "?")
+    message = "incoming %s failed: %r" % (where, exc)
+    bridge.state["error"] = message
+    if not _trace or _trace[-1] != message:
+        _trace.append(message)
+    import traceback
+
+    prefs.log("[gh-stack] incoming %s failed:\n%s" % (where, traceback.format_exc()), flush=True)
+    if mtype == "response" and stage_key:
+        try:
+            _clear_failed_response(stage_key, header.get("rid"))
+        except Exception as recovery:
+            # Best-effort, like the cleanup: a stage that cannot be recovered
+            # must not cost the *other* messages their chance to be handled.
+            prefs.log(
+                "[gh-stack] could not recover the failed response for %s: %r"
+                % (stage_key, recovery),
+                flush=True,
+            )
+
+
+def _clear_failed_response(stage_key, rid):
+    """Put the stage of a failed response back in a retryable state.
+
+    Remove the frame first (see `_forget_frame`): a frame whose apply raised
+    would otherwise answer the next pass and raise again, which is the
+    "poisoned frame" loop. The pending entry is cleared even though
+    `_handle_response` usually did it already — idempotent — and the state is
+    brought out of `waiting`, where an empty pending map would look like an
+    answer still on its way. Frozen keeps its own state; the next pass re-parks
+    it after the retry (or the next Pull does).
+    """
+    for obj in bpy.data.objects:
+        record = stack_mod.stack_of(obj)
+        if record is None or not record.stages:
+            continue
+        stage = stack_mod.stage_of(obj, stage_key)
+        if stage is None:
+            continue
+        _forget(record.stack_id, stage.key)
+        if rid:
+            _forget_frame(record, stage, rid)
+        _set(
+            stage,
+            "state",
+            stack_mod.STATE_FROZEN if stage.frozen else stack_mod.STATE_IDLE,
+        )
+        _dirty.add(obj.name)
+        _mark_hot()
+
+
+def _forget_frame(record, stage, rid):
+    """Drop one stored frame — hot cache and disk — so it cannot be replayed.
+
+    `_handle_response` stores the payload before it applies it, exactly so a
+    stale rid's answer is still cached. When the apply fails, that order means
+    the frame is a trap: the next pass for the same rid finds it, applies it and
+    raises again, forever. Removing it turns the retry into a real request,
+    which is the only thing that can heal a transient apply fault.
+    """
+    cache = _cache.get((record.stack_id, stage.key))
+    if cache is not None:
+        cache.pop(rid, None)
+    try:
+        _store_for(record, stage).remove(rid)
+    except OSError as exc:
+        prefs.log(
+            "[gh-stack] could not drop a failed frame for %s: %r" % (stage.key, exc),
+            flush=True,
+        )
 
 
 def _on_client_hello(header):
@@ -1625,6 +1764,13 @@ def _clone_prefix(obj, index, subd, stage_key=None):
     Object and stage are recorded when the guard goes up, for the watchdog only
     (one tuple, no traceback): if the cleanup below raises before the reset, the
     next tick can name what left the engine mute instead of guessing.
+
+    The reset itself is unskippable. The cleanup steps are guarded one by one
+    and the reset sits in its own `finally` around them, so no failure while
+    removing the clone, dropping the private datablock or updating the view
+    layer can leave `_evaluating` up. The first cleanup failure is still
+    reported (and re-raised when the read itself did not fail), so the pass
+    says what went wrong instead of pretending it succeeded.
     """
     global _evaluating, _guard_owner, _evaluating_since
     clone = obj.copy()
@@ -1650,12 +1796,56 @@ def _clone_prefix(obj, index, subd, stage_key=None):
             geometry, as_subd=subd
         )
     finally:
-        bpy.data.objects.remove(clone, do_unlink=True)
-        if owned_data is not None:
-            _drop_owned_data(owned_data)
-        bpy.context.view_layer.update()
-        _evaluating = False
+        # The primary failure, if any, is captured before cleanup runs: a
+        # cleanup failure must not mask it, and the guard reset must happen
+        # either way. The reset is the inner `finally` of the two, so it runs
+        # even if `_cleanup_prefix_clone` itself surprises us.
+        primary_failed = sys.exc_info()[0] is not None
+        try:
+            cleanup_failure = _cleanup_prefix_clone(clone, owned_data, stage_key)
+        finally:
+            _evaluating = False
+        if cleanup_failure is not None and not primary_failed:
+            raise cleanup_failure
     return sections, attributes, definitions
+
+
+def _cleanup_prefix_clone(clone, owned_data, stage_key):
+    """Undo one prefix clone, one guarded step at a time.
+
+    Removing the clone, dropping its private Edit Mode datablock and updating
+    the view layer can each raise on their own (a freed ID, a scene mutating
+    under a load, a driver). One failing step must not skip the others — that
+    leaves the clone in the scene or the datablock behind — and, above all, must
+    not skip the guard reset, which is why the caller owns that reset rather
+    than this function. The first failure is recorded for the panel, the trace
+    and the console, and returned so the pass can report it.
+    """
+    steps = (
+        ("remove clone", lambda: bpy.data.objects.remove(clone, do_unlink=True)),
+        (
+            "drop private data",
+            (lambda: _drop_owned_data(owned_data)) if owned_data is not None else None,
+        ),
+        ("update view layer", lambda: bpy.context.view_layer.update()),
+    )
+    failure = None
+    for name, step in steps:
+        if step is None:
+            continue
+        try:
+            step()
+        except Exception as exc:
+            if failure is None:
+                failure = exc
+            message = "prefix cleanup failed (%s): %r" % (name, exc)
+            bridge.state["error"] = message
+            if not _trace or _trace[-1] != message:
+                _trace.append(message)
+            import traceback
+
+            prefs.log("[gh-stack] %s\n%s" % (message, traceback.format_exc()), flush=True)
+    return failure
 
 
 # The collections an Edit Mode clone's private copy can belong to. Named by the
@@ -1668,13 +1858,21 @@ _OWNED_COLLECTIONS = {
 
 
 def _drop_owned_data(id_block):
-    """Remove the private datablock `_clone_prefix` made for an Edit Mode read."""
-    collection = getattr(bpy.data, _OWNED_COLLECTIONS.get(id_block.bl_rna.identifier, ""), None)
-    if collection is not None:
-        try:
+    """Remove the private datablock `_clone_prefix` made for an Edit Mode read.
+
+    The `bl_rna` read is inside the guard on purpose: Blender frees the copy
+    along with some object removals, and reading `bl_rna` on a freed ID raises
+    `ReferenceError`. Outside the try that raise escaped into the clone's
+    cleanup, which is how a best-effort delete could leave the prefix guard up.
+    """
+    try:
+        collection = getattr(
+            bpy.data, _OWNED_COLLECTIONS.get(id_block.bl_rna.identifier, ""), None
+        )
+        if collection is not None:
             collection.remove(id_block)
-        except (ReferenceError, RuntimeError):
-            pass
+    except (ReferenceError, RuntimeError):
+        pass
 
 
 def _sections_hash(sections, attributes=None, definitions=None):
@@ -1933,6 +2131,7 @@ def _mark_object_dirty(obj):
 
 def register():
     global _registered, _hot_until
+    global _evaluating, _guard_owner, _evaluating_since, _ticking
     if _registered:
         return
     # Everything the last registration learned belongs to the session that just
@@ -1949,6 +2148,14 @@ def register():
     _pull_permits.clear()
     _last_no_send.clear()
     _timings.clear()
+    # The prefix guard and the tick flag are session state too: a wedge used to
+    # survive disable/enable, so re-enabling the add-on inherited a mute that
+    # dropped every edit until the watchdog fired. Registering is a clean start;
+    # the watchdog stays as the belt-and-braces for a leak within a session.
+    _evaluating = False
+    _guard_owner = None
+    _evaluating_since = None
+    _ticking = False
     for field in _heartbeat:
         _heartbeat[field] = 0 if field in ("trigger_count", "trigger_updates") else None
     _hot_until = 0.0
@@ -1957,13 +2164,29 @@ def register():
     # A UI-driven parameter write (the choice dropdown) must reach the engine.
     stack_mod.set_param_changed_hook(_mark_object_dirty)
     # Persistent: Blender clears non-persistent timers and handlers on every
-    # file load, which would otherwise silence the engine on reopen.
-    bpy.app.timers.register(_timer, first_interval=IDLE_INTERVAL, persistent=True)
-    bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph)
-    bpy.app.handlers.frame_change_post.append(_on_frame_change)
-    bpy.app.handlers.load_post.append(_on_load)
+    # file load, which would otherwise silence the engine on reopen. The
+    # membership checks make a second register() harmless: appending the same
+    # handler twice would run the depsgraph path twice per update, and a leaked
+    # duplicate outlives the next disable.
+    if not bpy.app.timers.is_registered(_timer):
+        bpy.app.timers.register(_timer, first_interval=IDLE_INTERVAL, persistent=True)
+    for handler_list, handler in (
+        (bpy.app.handlers.depsgraph_update_post, _on_depsgraph),
+        (bpy.app.handlers.frame_change_post, _on_frame_change),
+        (bpy.app.handlers.load_post, _on_load),
+    ):
+        if handler not in handler_list:
+            handler_list.append(handler)
     _registered = True
-    start_server()
+    try:
+        start_server()
+    except Exception as exc:
+        # A socket that cannot start is a visible error state (the panel shows
+        # it), not a reason to abort registration half-way: the timer, handlers
+        # and `_registered` must stay paired so unregister can tear them down.
+        # The user's Start/retry goes through the same `start_server`.
+        bridge.state["error"] = "server start failed: %r" % (exc,)
+        prefs.log("[gh-stack] server start failed: %r" % (exc,), flush=True)
 
 
 def unregister():

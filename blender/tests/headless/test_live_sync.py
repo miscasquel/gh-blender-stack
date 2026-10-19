@@ -28,6 +28,14 @@ Facts this file locks, each one a live report:
 7. Trigger health and per-stage timings are visible in Diagnostics, so "the
    engine never heard Blender" is distinguishable from "the engine stayed
    quiet", and a slow round trip names its slowest part.
+8. The clone guard is reset in a nested `finally`, so no cleanup failure can
+   leave the engine mute; the watchdog remains as belt-and-braces.
+9. One bad incoming message does not eat the rest of the batch, and a response
+   whose apply failed clears its pending entry and poisoned frame so the next
+   pass retries instead of replaying the failure.
+10. A lost answer is still nudged after the object is renamed: the stall scan
+    walks the scene, not a set of names captured at send time.
+11. A wedged guard does not survive `register()` or a file load.
 """
 
 import json
@@ -288,15 +296,13 @@ class EvaluatedHeadTests(LiveSyncTestCase):
 
 
 class GuardWatchdogTests(LiveSyncTestCase):
-    """F2: a raise between setting the clone guard and clearing it must not mute
-    the engine for the rest of the session.
+    """F2: a guard left up by a dead pass must not mute the engine.
 
-    The fault is injected where the report found it: `_drop_owned_data` is the
-    first statement after the clone is removed, before the guard reset. With
-    `_evaluating` stuck, `_on_depsgraph` and `_drain_depsgraph` return early, so
-    nothing ever marks a stack dirty again. The test drives that failure, then
-    one tick that must notice it, clear it, say so in the trace, and process the
-    edit that was dropped in the meantime.
+    Since the cleanup reset cannot be skipped, the watchdog's input is injected
+    directly: any future leak must still be noticed, explained, cleared, and
+    the edit dropped while it was up must still be sent. The second test drives
+    the cleanup fault that used to wedge the guard and asserts it no longer can
+    — the reset happens before any watchdog can see it.
     """
 
     def tearDown(self):
@@ -306,36 +312,17 @@ class GuardWatchdogTests(LiveSyncTestCase):
         engine = self.engine
         self.assertEqual(self.stage.state, "ok", self.stage.error)
         sends = engine.stats["sends"]
-        self.edit_mode()
 
-        real_drop = engine._drop_owned_data
-        calls = {"n": 0}
+        # A guard a dead pass left up. No tick is running, so this is the wedge.
+        engine._evaluating = True
+        engine._guard_owner = (self.obj.name, self.stage.key)
+        engine._evaluating_since = time.monotonic()
 
-        def flaky(id_block):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                raise RuntimeError("test: cleanup fault")
-            return real_drop(id_block)
-
-        engine._drop_owned_data = flaky
-        try:
-            bm = bmesh.from_edit_mesh(self.obj.data)
-            bm.verts.ensure_lookup_table()
-            bm.verts[0].co.x += 4.0
-            bmesh.update_edit_mesh(self.obj.data)
-            bpy.context.view_layer.update()
-            self.assertTrue(
-                pump(seconds=10.0, until=lambda: engine._evaluating),
-                "the cleanup fault never fired; the guard was not left up",
-            )
-            self.assertEqual(engine.stats["sends"], sends, "a request went out despite the fault")
-        finally:
-            engine._drop_owned_data = real_drop
-
-        # While the guard is up, the handler drops an update it has to assume is
-        # ours: the trace must name that exact mute.
+        # An edit made while the guard is up: the handler must drop it (that is
+        # the mute) and say so in the trace.
         epoch = engine._prefix_epoch
-        engine._on_depsgraph(bpy.context.scene)
+        self.obj.data.vertices[0].co.x += 2.0
+        bpy.context.view_layer.update()
         self.assertEqual(engine._prefix_epoch, epoch, "a dropped update still moved the epoch")
         self.assertTrue(
             any("guard up" in line for line in engine.recent_activity(50)),
@@ -355,8 +342,56 @@ class GuardWatchdogTests(LiveSyncTestCase):
             sends,
             "the dropped edit was not sent after the watchdog cleared the guard",
         )
+        self.assertTrue(
+            pump(seconds=15.0, until=lambda: self.stage.state == "ok"),
+            "the recovered stage never settled (state=%s, error=%s)"
+            % (self.stage.state, self.stage.error),
+        )
 
-        # And a stroke after recovery goes out too.
+    def test_02_a_cleanup_raise_clears_the_guard_without_the_watchdog(self):
+        import gh_stack.blender.bridge as bridge
+
+        engine = self.engine
+        self.assertEqual(self.stage.state, "ok", self.stage.error)
+        self.edit_mode()
+        watchdog_lines = sum(
+            "guard watchdog" in line for line in engine.recent_activity(200)
+        )
+
+        real_drop = engine._drop_owned_data
+
+        def failing_drop(id_block):
+            raise RuntimeError("test: cleanup fault")
+
+        engine._drop_owned_data = failing_drop
+        try:
+            bm = bmesh.from_edit_mesh(self.obj.data)
+            bm.verts.ensure_lookup_table()
+            bm.verts[0].co.x += 4.0
+            bmesh.update_edit_mesh(self.obj.data)
+            # One pass, driven directly: the cleanup fault must fail the pass
+            # but the guard must already be down when `_timer` returns.
+            engine._mark_object_dirty(self.obj)
+            engine._timer()
+        finally:
+            engine._drop_owned_data = real_drop
+
+        self.assertFalse(
+            engine._evaluating, "a cleanup raise left the prefix guard up"
+        )
+        self.assertEqual(
+            sum("guard watchdog" in line for line in engine.recent_activity(200)),
+            watchdog_lines,
+            "the watchdog, not the nested finally, cleared the guard",
+        )
+        self.assertIn(
+            "cleanup fault",
+            bridge.state["error"],
+            "the cleanup failure was not recorded: %r" % (bridge.state["error"],),
+        )
+
+        # The next edit is processed and reaches Grasshopper: the earlier +4
+        # stroke was never sent, so the fake must see the whole current mesh.
         sends = engine.stats["sends"]
         bm = bmesh.from_edit_mesh(self.obj.data)
         bm.verts.ensure_lookup_table()
@@ -365,18 +400,225 @@ class GuardWatchdogTests(LiveSyncTestCase):
         bpy.context.view_layer.update()
         self.assertTrue(
             pump(seconds=15.0, until=lambda: engine.stats["sends"] > sends),
-            "the first edit after recovery was not sent",
+            "the first edit after a cleanup failure was not sent",
         )
+        # The pump's pass flushed Edit Mode into the datablock, so the expected
+        # value is readable here (the class's earlier tests moved the vertex
+        # too; an absolute would depend on test order).
+        expected = float(self.obj.data.vertices[0].co.x)
         self.assertTrue(
             pump(
                 seconds=15.0,
                 until=lambda: first_x(report_of(self.report)) is not None
-                and abs(first_x(report_of(self.report)) - 4.0) < 0.05,
+                and abs(first_x(report_of(self.report)) - expected) < 0.05,
             ),
             "the edit after recovery never reached Grasshopper (report=%s)"
             % report_of(self.report),
         )
         self.assertEqual(self.obj.mode, "EDIT", "the test left Edit Mode; the point was to stay in it")
+
+
+class BatchIsolationTests(LiveSyncTestCase):
+    """F4: a bad frame must not eat the messages behind it.
+
+    `_handle_incoming` drains the queue into a list, so without a per-message
+    guard a raise in `_apply` aborted the pass. `_handle_response` also stores
+    the payload and forgets the pending entry *before* applying, so the old
+    failure left the stage `waiting` with nothing outstanding and replayed the
+    poisoned frame on every later pass. Now the failing message is reported,
+    the poisoned frame is dropped, the stage is dirty, and the next message in
+    the same batch is still handled.
+    """
+
+    def test_01_one_bad_response_does_not_eat_the_batch(self):
+        import gh_stack.blender.bridge as bridge
+        import gh_stack.blender.server as server
+
+        engine = self.engine
+        self.assertEqual(self.stage.state, "ok", self.stage.error)
+        record = self.stack_mod.stack_of(self.obj)
+
+        # Put the stage in flight without letting the real client answer, so
+        # the rid belongs to a wait this test controls.
+        real_send = server.SERVER.send
+        server.SERVER.send = lambda frame: True
+        try:
+            engine.request_again(self.obj)
+            engine._timer()
+        finally:
+            server.SERVER.send = real_send
+        self.assertEqual(self.stage.state, "waiting", self.stage.error)
+        pending = engine._pending_of(record.stack_id, self.stage.key)
+        self.assertTrue(pending, "the swallowed send recorded no pending request")
+        rid = next(iter(pending))
+
+        sections = {
+            "mesh.verts": np.array(
+                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32
+            ),
+            "mesh.face_counts": np.array([3], dtype=np.uint32),
+            "mesh.face_indices": np.array([0, 1, 2], dtype=np.uint32),
+        }
+        response = {
+            "type": "response",
+            "stage": self.stage.key,
+            "rid": rid,
+            "out_hash": "test-poisoned-frame",
+            "status": "ok",
+            "error": None,
+            "warnings": [],
+        }
+
+        real_apply = engine._apply
+        calls = {"n": 0}
+
+        def failing_apply(obj, stage, payload, attributes=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("test: apply fault")
+            return real_apply(obj, stage, payload, attributes)
+
+        engine._apply = failing_apply
+        try:
+            bridge.post_incoming(response, sections)
+            # The second message of the same batch must still be handled.
+            bridge.post_incoming(
+                {"type": "hello", "doc": "batch.gh", "stages": [{"key": self.stage.key}]},
+                {},
+            )
+            engine._handle_incoming()
+        finally:
+            engine._apply = real_apply
+
+        self.assertEqual(calls["n"], 1, "the poisoned frame was applied twice")
+        self.assertIn(
+            "apply fault",
+            bridge.state["error"],
+            "the failed message was not recorded: %r" % (bridge.state["error"],),
+        )
+        self.assertTrue(
+            any("client hello" in line for line in engine.recent_activity(50)),
+            "the message after the failure was dropped: %s" % engine.recent_activity(50),
+        )
+        self.assertFalse(
+            engine._pending_of(record.stack_id, self.stage.key),
+            "the stage was left waiting with an empty pending map",
+        )
+        self.assertNotEqual(
+            self.stage.state,
+            self.stack_mod.STATE_WAITING,
+            "the failed response left the stage in waiting",
+        )
+        self.assertIn(self.obj.name, engine._dirty, "the failed stage was not marked dirty")
+        self.assertIsNone(
+            engine._cached_response(record, self.stage, rid),
+            "the frame whose apply failed was kept and would replay the failure",
+        )
+
+        # The next pass asks again, and the real client answers.
+        self.assertTrue(
+            pump(seconds=15.0, until=lambda: self.stage.state == "ok"),
+            "the stage never recovered after the apply failure (state=%s, error=%s)"
+            % (self.stage.state, self.stage.error),
+        )
+        self.assertGreaterEqual(engine.stats["applies"], 1)
+
+
+class StallRenameTests(LiveSyncTestCase):
+    """A rename between send and stall check must not hide a lost answer.
+
+    The old stall set was keyed by the name recorded at send time; renaming the
+    object made `bpy.data.objects.get(old_name)` fail, the name was discarded,
+    and the lost request never got its retry nudge until the next send. The
+    scan now walks the scene's stack objects and their pending entries.
+    """
+
+    def test_01_a_renamed_object_still_gets_its_stall_nudge(self):
+        import gh_stack.blender.server as server
+
+        engine = self.engine
+        prefs = bpy.context.preferences.addons["gh_stack"].preferences
+        original_name = self.obj.name
+        original_timeout = prefs.timeout
+        real_send = server.SERVER.send
+        try:
+            self.assertEqual(self.stage.state, "ok", self.stage.error)
+            record = self.stack_mod.stack_of(self.obj)
+
+            # A request whose answer never comes: swallow the socket write.
+            server.SERVER.send = lambda frame: True
+            engine.request_again(self.obj)
+            engine._timer()
+            self.assertEqual(self.stage.state, "waiting", self.stage.error)
+            pending = engine._pending_of(record.stack_id, self.stage.key)
+            self.assertTrue(pending, "the swallowed send recorded no pending request")
+
+            # Rename after the send: a name captured then is now stale.
+            self.obj.name = original_name + "Renamed"
+            self.assertIn("Renamed", self.obj.name)
+
+            prefs.timeout = 1.0
+            for key in list(pending):
+                pending[key] = time.monotonic() - 5.0
+            engine._dirty.discard(self.obj.name)
+            engine._last_stall_check = 0.0
+            engine._nudge_stalled_waits()
+            self.assertIn(
+                self.obj.name,
+                engine._dirty,
+                "the renamed object missed the stall nudge",
+            )
+
+            # Restore the socket and recover: the pass must not leave the stage
+            # waiting on a request nobody can answer. (The rename also makes
+            # the pass rebuild its plumbing, which forgets the wait itself —
+            # either way, the stage settles.)
+            server.SERVER.send = real_send
+            self.assertTrue(
+                pump(seconds=15.0, until=lambda: self.stage.state == "ok"),
+                "the stage did not recover after the rename and nudge (state=%s, error=%s)"
+                % (self.stage.state, self.stage.error),
+            )
+
+            # A lost answer under the *new* name, no rename this time: the nudge
+            # must reach `_process_stage`'s timeout, which resends in full
+            # (the timeout cannot know what GH still holds).
+            record = self.stack_mod.stack_of(self.obj)
+            server.SERVER.send = lambda frame: True
+            engine.request_again(self.obj)
+            engine._timer()
+            self.assertEqual(self.stage.state, "waiting", self.stage.error)
+            pending = engine._pending_of(record.stack_id, self.stage.key)
+            self.assertTrue(pending, "the swallowed send recorded no pending request")
+            for key in list(pending):
+                pending[key] = time.monotonic() - 5.0
+            engine._dirty.discard(self.obj.name)
+            engine._last_stall_check = 0.0
+            engine._nudge_stalled_waits()
+            self.assertIn(self.obj.name, engine._dirty)
+
+            server.SERVER.send = real_send
+            sends = engine.stats["sends"]
+            self.assertTrue(
+                pump(seconds=15.0, until=lambda: engine.stats["sends"] > sends),
+                "the timed-out stage did not retry",
+            )
+            self.assertTrue(
+                pump(seconds=15.0, until=lambda: self.stage.state == "ok"),
+                "the full retry never landed (state=%s, error=%s)"
+                % (self.stage.state, self.stage.error),
+            )
+            self.assertGreaterEqual(
+                report_of(self.report).get("full", 0),
+                2,
+                "the timeout retry did not resend the geometry in full",
+            )
+        finally:
+            server.SERVER.send = real_send
+            prefs.timeout = original_timeout
+            if self.obj.name != original_name:
+                self.obj.name = original_name
+
 
 
 class WhyNoSendTests(LiveSyncTestCase):
@@ -506,6 +748,64 @@ class WhyNoSendTests(LiveSyncTestCase):
             ),
             "the recovered value never applied",
         )
+
+
+class SessionResetTests(LiveSyncTestCase):
+    """A wedged guard must not survive a new session (F2).
+
+    The guard used to outlive disable/enable and a file reload: the add-on came
+    back mute and dropped every edit until the watchdog's first tick. Both entry
+    points now clear the whole session state, including the tick flag.
+
+    No socket work is needed here, so `start_server` is stubbed: `register()`
+    would otherwise stop the class's server (it follows the port preference,
+    not the test port) and strand the fake client.
+    """
+
+    def test_01_register_clears_a_wedged_guard(self):
+        engine = self.engine
+        real_start = engine.start_server
+        engine.unregister()
+        engine.start_server = lambda port=None: False
+        try:
+            engine._evaluating = True
+            engine._guard_owner = ("Wedged", self.stage.key)
+            engine._evaluating_since = time.monotonic()
+            engine._ticking = True
+
+            engine.register()
+            self.assertFalse(engine._evaluating, "register() kept a wedged prefix guard")
+            self.assertIsNone(engine._guard_owner)
+            self.assertIsNone(engine._evaluating_since)
+            self.assertFalse(engine._ticking, "register() kept the previous session's tick flag")
+
+            # A retry of register() (a partial failure is the reason it can run
+            # again) must not append the same handler twice.
+            handlers = len(bpy.app.handlers.depsgraph_update_post)
+            engine._registered = False
+            engine.register()
+            self.assertEqual(
+                len(bpy.app.handlers.depsgraph_update_post),
+                handlers,
+                "a second register() duplicated the depsgraph handler",
+            )
+        finally:
+            engine.start_server = real_start
+            if not engine._registered:
+                engine.register()
+
+    def test_02_a_file_load_clears_a_wedged_guard(self):
+        engine = self.engine
+        engine._evaluating = True
+        engine._guard_owner = ("Wedged", self.stage.key)
+        engine._evaluating_since = time.monotonic()
+        engine._ticking = True
+
+        engine._on_load()
+        self.assertFalse(engine._evaluating, "_on_load() kept a wedged prefix guard")
+        self.assertIsNone(engine._guard_owner)
+        self.assertIsNone(engine._evaluating_since)
+        self.assertFalse(engine._ticking, "_on_load() kept the previous session's tick flag")
 
 
 class DiagnosticsTimingTests(LiveSyncTestCase):
