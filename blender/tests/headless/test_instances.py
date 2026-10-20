@@ -985,6 +985,43 @@ class InstanceApplyTests(unittest.TestCase):
         self.assertEqual(helpers.definition_collections(obj, stage.key), {})
         self.assertEqual(helpers.instance_clouds(obj, stage.key), {})
 
+    def test_a_definition_only_output_is_not_reapplied_forever(self):
+        # The 2026-10-20 FiraTower report: a stage whose output is only
+        # definitions + rows has empty top-level helpers. The old emptiness
+        # check looked only there, so every pass looked "missing" and applied
+        # the same frame again. Check the helper each section actually writes.
+        from blender.gh_stack.blender import engine, helpers
+
+        obj, stage = self._stage()
+        sections = dict(self._quad_sections("idef.0."))
+        sections["inst.ref_def"] = np.array([0], dtype=np.uint32)
+        sections["inst.transforms"] = self._wire_transform((0, 0, 0))
+        engine._apply(obj, stage, sections, None)
+
+        self.assertFalse(engine._payload_missing(obj, stage, sections))
+
+        # Clear only the definition prototype: the frame still names geometry
+        # the helper no longer holds, so a replay must repair it.
+        definition = bpy.data.objects[helpers.definition_name(obj, stage.key, 0)]
+        definition.data.clear_geometry()
+        self.assertTrue(engine._payload_missing(obj, stage, sections))
+
+    def test_a_mixed_frame_still_reapplies_a_cleared_base_helper(self):
+        # Definition helpers must not mask a missing base helper: both are
+        # checked against the sections that name them.
+        from blender.gh_stack.blender import engine, helpers
+
+        obj, stage = self._stage()
+        sections = dict(self._quad_sections())
+        sections.update(self._quad_sections("idef.0."))
+        sections["inst.ref_def"] = np.array([0], dtype=np.uint32)
+        sections["inst.transforms"] = self._wire_transform((0, 0, 0))
+        engine._apply(obj, stage, sections, None)
+        self.assertFalse(engine._payload_missing(obj, stage, sections))
+
+        helpers.helper_for(obj, stage.key, "mesh").data.clear_geometry()
+        self.assertTrue(engine._payload_missing(obj, stage, sections))
+
     def test_apply_clears_definitions_that_go_away(self):
         from blender.gh_stack.blender import engine
 

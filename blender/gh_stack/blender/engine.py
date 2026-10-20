@@ -908,33 +908,46 @@ def _warnings_text(header):
     return "\n".join(lines)
 
 
-def _sections_have_geometry(sections):
-    """Whether a frame's sections name geometry a helper should hold."""
-    return any(
-        name.startswith(("mesh.", "subd.", "crv.", "pts.", "inst.", "idef."))
-        for name in sections
+def _group_has_geometry(sections, prefix, kind):
+    """Whether one section group carries geometry that a helper must hold."""
+    if kind == "mesh":
+        for name in ("mesh.verts", "subd.verts"):
+            values = sections.get(prefix + name)
+            if values is not None and len(values) >= 3:
+                return True
+        return False
+    if kind == "curves":
+        values = sections.get(prefix + "crv.points")
+        return values is not None and len(values) >= 4
+    values = sections.get(prefix + "pts.positions")
+    return values is not None and len(values) >= 3
+
+
+def _helper_has_data(helper, kind):
+    if helper is None:
+        return False
+    data = helper.data
+    if kind == "mesh":
+        return len(data.vertices) > 0
+    if kind == "curves":
+        return len(data.splines) > 0
+    return len(data.points) > 0
+
+
+def _definition_helper(obj, stage, index, kind):
+    return bpy.data.objects.get(
+        helpers.definition_name(obj, stage.key, index, kind)
     )
 
 
-def _helpers_empty(obj, stage):
-    """Whether every top-level helper of a stage holds nothing.
-
-    A cheap guard against an out-of-band clear (a script, an undo): the applied
-    hash still names an output that is no longer on screen, and without this
-    every response and replay would be skipped — Push included.
-    """
-    for kind in helpers.KINDS:
-        helper = helpers.helper_for(obj, stage.key, kind)
-        if helper is None:
-            continue
-        data = helper.data
-        if kind == "mesh" and len(data.vertices):
-            return False
-        if kind == "curves" and len(data.splines):
-            return False
-        if kind == "points" and len(data.points):
-            return False
-    return True
+def _cloud_has_rows(obj, stage, index, nested=False):
+    name = (
+        helpers.nested_name(obj, stage.key, index)
+        if nested
+        else helpers.instance_name(obj, stage.key, index)
+    )
+    cloud = bpy.data.objects.get(name)
+    return cloud is not None and len(cloud.data.points) > 0
 
 
 def _payload_missing(obj, stage, sections):
@@ -944,8 +957,45 @@ def _payload_missing(obj, stage, sections):
     the hash stayed, so the skip rule would refuse every response — and Push
     too. A frame that carries geometry over empty helpers is re-applied
     instead, which is idempotent when the output really is empty.
+
+    Every section group is checked against the helper it actually writes:
+    top-level base geometry against the top-level helper, `idef.<i>.*` against
+    definition i's helper, and `inst.*` rows against the row clouds. A
+    definition-only output has empty top-level helpers and used to look
+    "missing" on every pass, so it was re-applied forever.
     """
-    return _sections_have_geometry(sections) and _helpers_empty(obj, stage)
+    for name in sections:
+        index, rest = _definition_split(name)
+        if index is None:
+            if rest.startswith("inst."):
+                refs = sections.get("inst.ref_def")
+                if refs is not None and len(refs):
+                    for target in set(int(value) for value in refs):
+                        if not _cloud_has_rows(obj, stage, target):
+                            return True
+                continue
+            kind = _kind_of(rest)
+            if kind is not None and _group_has_geometry(sections, "", kind):
+                if not _helper_has_data(
+                    helpers.helper_for(obj, stage.key, kind), kind
+                ):
+                    return True
+            continue
+
+        prefix = "idef.%d." % index
+        if rest.startswith("inst."):
+            refs = sections.get(prefix + "inst.ref_def")
+            if refs is not None and len(refs):
+                if not _cloud_has_rows(obj, stage, index, nested=True):
+                    return True
+            continue
+        kind = _kind_of(rest)
+        if kind is not None and _group_has_geometry(sections, prefix, kind):
+            if not _helper_has_data(
+                _definition_helper(obj, stage, index, kind), kind
+            ):
+                return True
+    return False
 
 
 def _apply(obj, stage, sections, attributes=None):
