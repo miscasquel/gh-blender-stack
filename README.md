@@ -54,7 +54,7 @@ Blender                                          Rhino / Grasshopper (wine)
   ranges, a value-list dropdown, keyframe decorators, and drivers.
 - **Protocol.** Binary frames with a canonical JSON header; geometry and
   parameters in the same stream. The Python and C# codecs are checked against
-  eleven shared golden fixtures.
+  twelve shared golden fixtures.
 - **Lifecycle.** States (`waiting`, `ok`, `error`, `disconnected`, `disabled`,
   `frozen`, `unbound`), timeouts, latest-wins requests, and reconnect with
   backoff. The stage's modifier is its lifecycle: its toggles enable and disable

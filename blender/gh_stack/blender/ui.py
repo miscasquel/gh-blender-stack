@@ -72,7 +72,7 @@ class GHSTACK_PT_panel(bpy.types.Panel):
         # (plan §11): the row carries only what the modifiers panel cannot —
         # Pull, Freeze, and the key to paste into Grasshopper.
         row.label(text=stage.label or stage.key, icon=_STAGE_ICON)
-        row.label(text=_state_text(stage), icon=_state_icon(stage))
+        row.label(text=stage.state, icon=_state_icon(stage))
         row.operator("gh_stack.pull", text="", icon="IMPORT").index = index
         row.operator("gh_stack.freeze", text="", icon="FREEZE", depress=stage.frozen).index = index
         row.operator("gh_stack.copy_key", text="", icon="COPYDOWN").index = index
@@ -225,10 +225,6 @@ class GHSTACK_PT_diagnostics(bpy.types.Panel):
             box.label(text="Recent activity", icon="INFO")
             for line in activity:
                 box.label(text=line)
-
-
-def _state_text(stage):
-    return stage.state
 
 
 def _age_text(age):

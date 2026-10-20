@@ -50,9 +50,6 @@ HOT_SECONDS = 1.0
 # it. The hard `_timeout()` still covers an answer that never comes.
 SOFT_RETRY_SECONDS = 1.0
 
-# How long a stage may wait for its outstanding answer before the request is given
-# up on and retried in full. See `_timeout()`.
-
 _cache = {}  # (stack_id, stage_key) -> {rid: (header, sections)}; the hot path
 _stores = {}  # (stack_id, stage_key) -> ResponseStore; the backing store
 _prefix_memo = {}  # (obj.as_pointer(), stage key) -> {"revision": tuple, "sections": list}
@@ -766,7 +763,7 @@ def _handle_response(header, sections):
             stored_out = memory[rid][0].get("out_hash") or ""
         else:
             try:
-                entry = _store_for(record, stage).scan().index.get(rid)
+                entry = _store_for(record, stage).entry(rid)
             except OSError:
                 entry = None
             if entry is not None:
@@ -1331,11 +1328,11 @@ def _store_for(record, stage):
     root = prefs.data_root()
     store = _stores.get(key)
     limit = prefs.cache_size_bytes()
-    if store is None or store.index.base_dir != root:
+    if store is None or store.base_dir != root:
         store = frame_cache.ResponseStore(root, record.stack_id, stage.key, limit)
         _stores[key] = store
     else:
-        store.index.size_limit = limit
+        store.size_limit = limit
     return store
 
 

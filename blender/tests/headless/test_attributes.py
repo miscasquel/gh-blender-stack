@@ -173,6 +173,15 @@ class AttributeIOTests(unittest.TestCase):
         self.assertEqual(names, ["glow"])
         self.assertEqual(next(d for d in descriptors if d["name"] == "glow")["type"], "FLOAT_COLOR")
 
+    def test_every_wire_type_has_a_foreach_spec(self):
+        """The wire vocabulary and the Blender foreach table must not drift.
+
+        STRING is the one type with no foreach path: it is read and written
+        element by element in geometry_io, so it is intentionally absent from
+        ``_FOREACH``.
+        """
+        self.assertEqual(set(geometry_io._FOREACH) | {"STRING"}, set(attr_mod.WIRE_TYPES))
+
 
 def _buffer_dtype(dtype):
     return {

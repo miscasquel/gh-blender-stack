@@ -5,6 +5,8 @@ module is the pure logic of that mapping: given a GH-ish schema, produce values 
 are safe to put on the wire, and cast what comes back.
 """
 
+from . import codec
+
 # The GH parameter types, as published in the schema (protocol §4.2).
 PARAM_FLOAT = "float"
 PARAM_INT = "int"
@@ -117,8 +119,4 @@ def _clamp_one(v, lo, hi):
 
 def canonical_param_json(schema, values):
     """Canonical parameter JSON, used verbatim in the request ID hash (§6.2)."""
-    import json
-
-    return json.dumps(
-        cast_params(schema, values), sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    )
+    return codec.canonical_json(cast_params(schema, values))

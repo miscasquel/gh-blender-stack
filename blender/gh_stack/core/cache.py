@@ -151,6 +151,24 @@ class ResponseStore(object):
         self.index = CacheIndex(base_dir, stack_id, stage_key, size_limit)
         self._scanned = False
 
+    @property
+    def base_dir(self):
+        """The root directory the store was created under."""
+        return self.index.base_dir
+
+    @property
+    def size_limit(self):
+        return self.index.size_limit
+
+    @size_limit.setter
+    def size_limit(self, value):
+        self.index.size_limit = value
+
+    def entry(self, rid):
+        """The index entry for a rid, or None. Scans the disk on first use."""
+        self.scan()
+        return self.index.get(rid)
+
     # ----------------------------------------------------------------- scanning
     def scan(self):
         """Load the index from disk (once). Orphan frame files and stale temp

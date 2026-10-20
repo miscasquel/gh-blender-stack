@@ -390,11 +390,13 @@ namespace GhStack.Core
             }
         }
 
+        private static readonly byte[] Zero = new byte[] { 0 };
+
         private static void UpdateSection(HashAlgorithm sha, Section s)
         {
             byte[] name = Encoding.UTF8.GetBytes(s.Name);
             sha.TransformBlock(name, 0, name.Length, null, 0);
-            sha.TransformBlock(new byte[] { 0 }, 0, 1, null, 0);
+            sha.TransformBlock(Zero, 0, 1, null, 0);
             sha.TransformBlock(s.Raw, 0, s.Raw.Length, null, 0);
         }
 

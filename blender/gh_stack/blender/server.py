@@ -14,7 +14,6 @@ import threading
 
 import bpy
 
-from .. import core  # noqa: F401
 from ..core import codec
 from . import bridge, prefs
 

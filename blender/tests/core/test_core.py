@@ -314,6 +314,14 @@ class ResponseStoreTests(unittest.TestCase):
 
         return ResponseStore(base or self.tmp.name, "stack1", "panelize-3f9a", **kwargs)
 
+    def test_store_exposes_base_dir_and_size_limit(self):
+        store = self._store(size_limit=1234)
+        self.assertEqual(store.base_dir, self.tmp.name)
+        self.assertEqual(store.size_limit, 1234)
+        store.size_limit = 99
+        self.assertEqual(store.index.size_limit, 99)
+        self.assertIsNone(store.entry("sha256:missing"))
+
     def test_store_and_load_round_trip(self):
         store = self._store()
         store.store("sha256:aa", b"frame-bytes", generation=3, definition="def-1", out_hash="sha256:o1")

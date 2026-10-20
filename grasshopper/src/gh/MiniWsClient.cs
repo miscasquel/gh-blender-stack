@@ -1,5 +1,5 @@
-// A minimal WebSocket client for the S1 spike: one binary message in each
-// direction, small payloads, loopback. RFC 6455 framing with client-side masking.
+// A minimal WebSocket client for the GH Stack link: one binary message in each
+// direction, loopback. RFC 6455 framing with client-side masking.
 //
 // This file has no Grasshopper references, so it can be built and run headlessly
 // (spikes/s1/build-wstest.sh) without Rhino. Findings about Mono and
@@ -61,13 +61,8 @@ namespace GhStack
             string line;
             while ((line = ReadLine()) != null && line.Length > 0)
             {
-                // Headers such as Sec-WebSocket-Accept are not verified by the spike.
+                // Headers such as Sec-WebSocket-Accept are not verified by this client.
             }
-        }
-
-        public bool Connected
-        {
-            get { return _tcp != null && _tcp.Connected; }
         }
 
         /// <summary>Sends one binary (opcode 2) WebSocket message.</summary>
