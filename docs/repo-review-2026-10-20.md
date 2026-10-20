@@ -5,8 +5,9 @@
 > for it. The live work list remains `docs/backlog.md`; items already recorded
 > there are cross-referenced rather than duplicated.
 >
-> **Follow-up (2026-10-20).** The Tier 1 batch from §7 has since been applied
-> and verified; see §13. The findings below describe the pre-fix tree.
+> **Follow-up (2026-10-20).** The Tier 1 batch from §7 was applied and
+> verified; see §13. Phase 2A followed; see §14. The findings below describe the
+> pre-fix tree.
 
 ## 1. Verdict
 
@@ -1170,3 +1171,32 @@ a text edit). `C-CONV-1` is corrected above: `SectionsFromMesh` is used by the
 S1 spike, so it is not a pure deletion; it stays until the spike support is
 moved or retired.
 
+## 14. Phase 2A follow-up (applied 2026-10-20)
+
+Phase 2A covered the small, testable items that did not need an architectural
+change.
+
+| Finding | Applied change |
+|---|---|
+| `C-CORE-3` | `codec.canonical_json` now sets `allow_nan=False`; `encode_frame` turns the resulting `ValueError` into `HeaderError`. `params.cast` rejects non-finite float, int, value-list, vector and colour values with `SchemaError`, so `props._safe_values` falls back to the schema default instead of sending an invalid number. |
+| `C-ATT-1` | Replaced `KindOf`, `ComponentsOf` and `LabelOf` with one `TypeInfo` table (`kind`, `components`, `label`). `Label`, `Set`, `Attach`, `Decode`, `Collect` and `Encode` all read it. |
+| `C-ATT-3` | `AttributeStore.Attach` builds a name → `Section` dictionary once instead of calling `Find` for every descriptor and offsets section; the private `Find` is gone. |
+| `C-LINK-2` | `GhLink.Loop` wraps `ReceiveLoop` in `try/finally`, so `stopSend.Set()` and `sender.Join(500)` always run. A small `ActiveSenders` counter and a `FakeServer.ResetClient()` (RST, not clean close) drive a new link regression test. |
+
+Verification after Phase 2A:
+
+```text
+scripts/test-core        57 tests pass
+scripts/test-blender     184 tests pass
+scripts/test-gha        12 fixtures, attribute store, link round-trip: pass
+                        link sender lifecycle: one sender after connect,
+                        reset takes the exception path, sender stops with the
+                        failed connection, one sender after reconnect
+```
+
+Deliberately deferred from Phase 2A: `C-ATT-2` (STRING offset validation), the
+rest of the boundary work (`C-CORE-1`, `C-CORE-2`, `C-CORE-6`), `C-COMP-2`
+(there is no existing harness for Stage In's malformed-frame path), and the
+Phase 2B build-tooling batch (`S-1`, `S-2`). The performance and structural
+items (`B-ENG-2`, `B-ENG-4`, `C-LINK-1`, `B-ENG-1`, `B-ENG-3`, `B-HELP-1`)
+remain later phases.

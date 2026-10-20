@@ -62,9 +62,17 @@ def canonical_json(obj):
     """Encode JSON the way the protocol demands: sorted keys, tight separators.
 
     ``separators=(",", ":")`` and UTF-8. Fixtures compare bytes, so this has to be
-    byte-identical on every platform.
+    byte-identical on every platform. Non-finite numbers are rejected: ``NaN``
+    and ``Infinity`` are Python json extensions, not JSON, and the C# decoder
+    rejects them too.
     """
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(
+        obj,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
 
 
 _DTYPE_FMT = {
@@ -168,7 +176,10 @@ def encode_frame(header, sections=None):
     else:
         header.pop("sections", None)
 
-    head = canonical_json(header).encode("utf-8")
+    try:
+        head = canonical_json(header).encode("utf-8")
+    except ValueError as exc:
+        raise HeaderError("bad_frame: header contains a non-finite number: %s" % (exc,))
     if len(head) > MAX_HEADER_BYTES:
         raise HeaderError("header too large: %d bytes" % len(head))
     frame = _HEADER_LEN.pack(len(head)) + head + body

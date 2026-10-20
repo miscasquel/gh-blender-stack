@@ -31,60 +31,46 @@ namespace GhStack.Core
     {
         public const string RootKey = "GHStack.Attributes";
 
-        // Blender data type -> [storage kind, components per element].
-        private static readonly Dictionary<string, string> KindOf = new Dictionary<string, string>
+        // Blender data type -> storage kind, components per element and the
+        // name Blender's own UI uses. The wire keeps the internal ids; the
+        // label is what the graph sees.
+        private sealed class TypeInfo
         {
-            { "FLOAT", "double" },
-            { "INT", "int" },
-            { "BOOLEAN", "bool" },
-            { "FLOAT_VECTOR", "double" },
-            { "FLOAT2", "double" },
-            { "FLOAT4", "double" },
-            { "FLOAT_COLOR", "double" },
-            { "BYTE_COLOR", "byte" },
-            { "QUATERNION", "double" },
-            { "FLOAT4X4", "double" },
-            { "INT8", "int" },
-            { "INT16_2D", "int" },
-            { "INT32_2D", "int" },
-            { "STRING", "string" },
-        };
+            public readonly string Kind;
+            public readonly int Components;
+            public readonly string Label;
 
-        private static readonly Dictionary<string, int> ComponentsOf = new Dictionary<string, int>
-        {
-            { "FLOAT", 1 }, { "INT", 1 }, { "BOOLEAN", 1 },
-            { "FLOAT_VECTOR", 3 }, { "FLOAT2", 2 }, { "FLOAT4", 4 },
-            { "FLOAT_COLOR", 4 }, { "BYTE_COLOR", 4 }, { "QUATERNION", 4 },
-            { "FLOAT4X4", 16 }, { "INT8", 1 }, { "INT16_2D", 2 }, { "INT32_2D", 2 },
-            { "STRING", 1 },
-        };
+            public TypeInfo(string kind, int components, string label)
+            {
+                Kind = kind;
+                Components = components;
+                Label = label;
+            }
+        }
 
-        // The names Blender's own UI uses for the data types (its "Store Named
-        // Attribute" menu and the mesh Attributes panel). The wire keeps the
-        // internal ids above; this is what the graph sees.
-        private static readonly Dictionary<string, string> LabelOf = new Dictionary<string, string>
+        private static readonly Dictionary<string, TypeInfo> Types = new Dictionary<string, TypeInfo>
         {
-            { "FLOAT", "Float" },
-            { "INT", "Integer" },
-            { "BOOLEAN", "Boolean" },
-            { "FLOAT_VECTOR", "Vector" },
-            { "FLOAT2", "2D Vector" },
-            { "FLOAT4", "4D Vector" },
-            { "FLOAT_COLOR", "Color" },
-            { "BYTE_COLOR", "Byte Color" },
-            { "QUATERNION", "Quaternion" },
-            { "FLOAT4X4", "4x4 Matrix" },
-            { "INT8", "8-Bit Integer" },
-            { "INT16_2D", "2D Integer Vector" },
-            { "INT32_2D", "2D Integer Vector" },
-            { "STRING", "String" },
+            { "FLOAT", new TypeInfo("double", 1, "Float") },
+            { "INT", new TypeInfo("int", 1, "Integer") },
+            { "BOOLEAN", new TypeInfo("bool", 1, "Boolean") },
+            { "FLOAT_VECTOR", new TypeInfo("double", 3, "Vector") },
+            { "FLOAT2", new TypeInfo("double", 2, "2D Vector") },
+            { "FLOAT4", new TypeInfo("double", 4, "4D Vector") },
+            { "FLOAT_COLOR", new TypeInfo("double", 4, "Color") },
+            { "BYTE_COLOR", new TypeInfo("byte", 4, "Byte Color") },
+            { "QUATERNION", new TypeInfo("double", 4, "Quaternion") },
+            { "FLOAT4X4", new TypeInfo("double", 16, "4x4 Matrix") },
+            { "INT8", new TypeInfo("int", 1, "8-Bit Integer") },
+            { "INT16_2D", new TypeInfo("int", 2, "2D Integer Vector") },
+            { "INT32_2D", new TypeInfo("int", 2, "2D Integer Vector") },
+            { "STRING", new TypeInfo("string", 1, "String") },
         };
 
         /// <summary>The Blender UI name of a wire type id ("FLOAT" -> "Float").</summary>
         public static string Label(string type)
         {
-            string label;
-            return LabelOf.TryGetValue(type ?? "", out label) ? label : type;
+            TypeInfo info;
+            return Types.TryGetValue(type ?? "", out info) ? info.Label : type;
         }
 
         /// <summary>The domain as a display word ("POINT" -> "Point"). The wire
@@ -135,12 +121,12 @@ namespace GhStack.Core
         /// <summary>Store one attribute (values as a flat native array).</summary>
         public static void Set(ArchivableDictionary root, string name, string type, string domain, object values)
         {
-            if (!KindOf.ContainsKey(type))
+            if (!Types.ContainsKey(type))
                 throw new FrameException("bad_attribute", "unknown attribute type " + type);
             var record = new ArchivableDictionary();
             record.Set("type", type);
             record.Set("domain", domain ?? "");
-            record.Set("components", ComponentsOf[type]);
+            record.Set("components", Types[type].Components);
             SetValues(record, values);
             root.Set(name, record);
         }
@@ -172,6 +158,10 @@ namespace GhStack.Core
                                   long? definition = null)
         {
             if (root == null || descriptors == null || sections == null) return;
+            var byName = new Dictionary<string, Section>();
+            foreach (Section section in sections)
+                byName[section.Name] = section;
+
             foreach (Dictionary<string, object> descriptor in descriptors)
             {
                 if (Json.GetString(descriptor, "group") != group) continue;
@@ -179,12 +169,19 @@ namespace GhStack.Core
                 string type = Json.GetString(descriptor, "type");
                 string name = Json.GetString(descriptor, "name");
                 string domain = Json.GetString(descriptor, "domain");
-                if (string.IsNullOrEmpty(type) || string.IsNullOrEmpty(name) || !KindOf.ContainsKey(type))
+                if (string.IsNullOrEmpty(type) || string.IsNullOrEmpty(name) || !Types.ContainsKey(type))
                     continue;
-                Section values = Find(sections, Json.GetString(descriptor, "section"));
-                if (values == null) continue;
+                Section values;
+                if (!byName.TryGetValue(Json.GetString(descriptor, "section") ?? "", out values)
+                    || values == null)
+                    continue;
 
-                object flat = Decode(type, values, Find(sections, Json.GetString(descriptor, "offsets")));
+                Section offsets = null;
+                string offsetsName = Json.GetString(descriptor, "offsets");
+                if (!string.IsNullOrEmpty(offsetsName))
+                    byName.TryGetValue(offsetsName, out offsets);
+
+                object flat = Decode(type, values, offsets);
                 if (flat != null)
                     Set(root, name, type, domain, flat);
             }
@@ -200,7 +197,7 @@ namespace GhStack.Core
 
         private static object Decode(string type, Section values, Section offsets)
         {
-            switch (KindOf[type])
+            switch (Types[type].Kind)
             {
                 case "double":
                     {
@@ -256,10 +253,10 @@ namespace GhStack.Core
                 ArchivableDictionary record;
                 if (!root.TryGetDictionary(name, out record) || record == null) continue;
                 string type = record.GetString("type", "");
-                if (!KindOf.ContainsKey(type)) continue;
+                if (!Types.ContainsKey(type)) continue;
                 object values;
                 if (!record.TryGetValue("values", out values) || values == null) continue;
-                int components = ComponentsOf[type];
+                int components = Types[type].Components;
                 int count = ElementCount(values, components);
                 int index = descriptors.Count;
                 string sectionName = prefix + "attr." + index + ".values";
@@ -292,7 +289,7 @@ namespace GhStack.Core
 
         private static Section Encode(string type, object values, string name)
         {
-            switch (KindOf[type])
+            switch (Types[type].Kind)
             {
                 case "double":
                     {
@@ -331,14 +328,6 @@ namespace GhStack.Core
             if (values is byte[]) return ((byte[])values).Length / components;
             if (values is string[]) return ((string[])values).Length;
             return 0;
-        }
-
-        private static Section Find(List<Section> sections, string name)
-        {
-            if (string.IsNullOrEmpty(name)) return null;
-            foreach (Section section in sections)
-                if (section.Name == name) return section;
-            return null;
         }
 
         // ------------------------------------------------------- geometry glue

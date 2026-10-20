@@ -94,6 +94,13 @@ namespace GhStack
         private static Worker _worker;      // under Gate
         private static Thread _thread;      // under Gate
         private static volatile bool _connected;
+        private static int _activeSenders;
+        // Test/diagnostic: one sender loop per connection. It must not outlive
+        // the connection that started it.
+        internal static int ActiveSenders
+        {
+            get { return Interlocked.Add(ref _activeSenders, 0); }
+        }
         // Published once per connection; read and reserved under Gate (P3-4).
         private static bool _publishedThisConnection = false;
         private static MiniWsClient _client;  // under Gate; Stop disposes it
@@ -365,9 +372,18 @@ namespace GhStack
                     sender.IsBackground = true;
                     sender.Name = "GhStack-sender";
                     sender.Start();
-                    ReceiveLoop(client, worker);
-                    stopSend.Set();
-                    sender.Join(500);
+                    try
+                    {
+                        ReceiveLoop(client, worker);
+                    }
+                    finally
+                    {
+                        // Always stop the sender with the connection. A receive
+                        // exception used to skip both lines, leaving the old
+                        // sender alive to publish on the next connection.
+                        stopSend.Set();
+                        sender.Join(500);
+                    }
                     Note("connection closed; retrying");
                 }
                 catch (Exception ex)
@@ -731,6 +747,19 @@ namespace GhStack
         }
 
         private static void SendLoop(MiniWsClient client, ManualResetEvent stop, Worker worker)
+        {
+            Interlocked.Increment(ref _activeSenders);
+            try
+            {
+                SendLoopCore(client, stop, worker);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _activeSenders);
+            }
+        }
+
+        private static void SendLoopCore(MiniWsClient client, ManualResetEvent stop, Worker worker)
         {
             var handles = new WaitHandle[] { OutboxSignal, stop };
             while (worker.Running)

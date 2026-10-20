@@ -17,6 +17,14 @@ class CanonicalJsonTests(unittest.TestCase):
         head = json.loads(codec.canonical_json({"type": "ping", "v": 2}))
         self.assertEqual(head["v"], 2)
 
+    def test_non_finite_numbers_are_not_json(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    codec.canonical_json({"t": value})
+                with self.assertRaises(codec.HeaderError):
+                    codec.encode_frame({"type": "ping", "t": value})
+
 
 class FrameRoundTripTests(unittest.TestCase):
     def test_round_trip_without_sections(self):
@@ -216,6 +224,21 @@ class ParamsTests(unittest.TestCase):
     def test_cast_rejects_short_vectors(self):
         with self.assertRaises(params.SchemaError):
             params.cast("vector3", (1, 2))
+
+    def test_cast_rejects_non_finite_numbers(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                for param_type in ("float", "int", "value_list"):
+                    with self.assertRaises(params.SchemaError):
+                        params.cast(param_type, value)
+                with self.assertRaises(params.SchemaError):
+                    params.cast("vector3", (0.0, value, 0.0))
+                with self.assertRaises(params.SchemaError):
+                    params.cast("color", (0.0, 0.0, value))
+
+    def test_canonical_param_json_rejects_non_finite(self):
+        with self.assertRaises(params.SchemaError):
+            params.canonical_param_json(self._schema(), {"aaa": float("nan")})
 
     def test_cast_params_uses_defaults(self):
         schema = self._schema()

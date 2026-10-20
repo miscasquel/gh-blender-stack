@@ -111,7 +111,7 @@ Settled by evidence; the code that rests on them must not drift from them.
 - `docs/repo-review-2026-10-20.md` — a code-quality, leanness and
   efficiency review of the v0.3.0 tree, written read-only. It carries the
   per-module scores, the `B-*`/`C-*`/`P-*` finding IDs and a prioritised
-  remediation table. The Tier 1 polish batch has since been applied (review
-  §13); its P0/P1 findings have not been triaged into this list yet, and the
-  items that were already known here are cross-referenced in the review rather
-  than duplicated.
+  remediation table. The Tier 1 and Phase 2A batches have since been applied
+  (review §§13–14); its P0/P1 findings have not been triaged into this list yet,
+  and the items that were already known here are cross-referenced in the review
+  rather than duplicated.

@@ -242,6 +242,8 @@ namespace GhStack.Tests.Console
                 server.Dispose();
             }
 
+            RunSenderLifecycle();
+
             System.Console.WriteLine();
             if (_failures == 0)
             {
@@ -253,6 +255,55 @@ namespace GhStack.Tests.Console
         }
 
         // ------------------------------------------------------------ helpers
+
+        /// <summary>A receive-loop exception must stop the sender with its
+        /// connection. Without the finally in GhLink.Loop the old sender stays
+        /// alive across the reconnect and can steal the new connection's first
+        /// publication.</summary>
+        private static void RunSenderLifecycle()
+        {
+            System.Console.WriteLine("link sender lifecycle");
+            Notes.Clear();
+            var server = new FakeServer();
+            try
+            {
+                GhLink.Endpoint = "ws://127.0.0.1:" + server.Port + "/";
+                GhLink.Start();
+                server.Accept();
+                ReadUntil(server, "hello");
+                Check("one sender after connect",
+                    WaitFor(delegate { return GhLink.ActiveSenders == 1; }),
+                    "senders=" + GhLink.ActiveSenders);
+                // A reset, not a clean close: ReceiveBinary throws and Loop takes
+                // its catch path, which is the path that used to leak the sender.
+                server.ResetClient();
+                Check("reset took the exception path",
+                    WaitFor(delegate
+                    {
+                        CollectNotes();
+                        return HasNote("connect failed");
+                    }),
+                    string.Join(" | ", Notes));
+                Check("sender stops with the failed connection",
+                    WaitFor(delegate { return GhLink.ActiveSenders == 0; }),
+                    "senders=" + GhLink.ActiveSenders);
+                server.Accept();
+                ReadUntil(server, "hello");
+                Check("one sender after reconnect",
+                    WaitFor(delegate { return GhLink.ActiveSenders == 1; }),
+                    "senders=" + GhLink.ActiveSenders);
+            }
+            catch (Exception ex)
+            {
+                _failures++;
+                System.Console.WriteLine("FAIL sender lifecycle: " + ex);
+            }
+            finally
+            {
+                GhLink.Stop();
+                server.Dispose();
+            }
+        }
 
         private static Dictionary<string, object> Header(string type, string stage, string rid)
         {
@@ -432,6 +483,20 @@ namespace GhStack.Tests.Console
                     + "Upgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
                 _stream.Write(response, 0, response.Length);
                 _stream.Flush();
+            }
+
+            public void ResetClient()
+            {
+                try
+                {
+                    if (_client != null)
+                        _client.Client.LingerState = new LingerOption(true, 0);
+                }
+                catch (Exception) { }
+                try { if (_client != null) _client.Client.Close(); } catch (Exception) { }
+                try { if (_stream != null) _stream.Dispose(); } catch (Exception) { }
+                _client = null;
+                _stream = null;
             }
 
             public void Send(byte[] payload)
