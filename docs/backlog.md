@@ -5,10 +5,12 @@ measured evidence behind the bigger items lives in `polish-plan.md`, which is a
 record of one review rather than a plan. If something is not here, it is either
 done or was judged not worth doing — it is not missing.
 
-**Next session:** The Stage In/GhLink batch from the 2026-10-20 review is applied
-(`C-LINK-1`, `C-COMP-2`, `C-LINK-3`, `C-LINK-4`, `C-ATT-2`; review §16). The
-engine batch remains: `B-ENG-4` first, then `B-ENG-2`, `B-ENG-3`, and `B-ENG-1`
-last. 0.3.0 is ready to publish. Phase 7 live acceptance passed 2026-10-19; the
+**Next session:** The Stage In/GhLink batch (`C-LINK-1`, `C-COMP-2`, `C-LINK-3`,
+`C-LINK-4`, `C-ATT-2`; review §16) and the engine batch (`B-ENG-4`, `B-ENG-2`,
+`B-ENG-3`, `B-ENG-1`; review §17) are applied. The remaining performance item is
+the edit-time prefix clone cost: on FiraTower each Cube stage costs 37–39 ms per
+dirty pass, which is separate from the fixed definition-only reapply loop. 0.3.0
+is ready to publish. Phase 7 live acceptance passed 2026-10-19; the
 S6 display half, S7 and acceptance A1–A10 passed 2026-10-20
 (`docs/live-sync-report-2026-10-19.md` §5). The viewport choppiness was the
 unconditional per-tick depsgraph drain; gating it on work fixed it. A10 is done
@@ -112,7 +114,6 @@ Settled by evidence; the code that rests on them must not drift from them.
 - `docs/repo-review-2026-10-20.md` — a code-quality, leanness and
   efficiency review of the v0.3.0 tree, written read-only. It carries the
   per-module scores, the `B-*`/`C-*`/`P-*` finding IDs and a prioritised
-  remediation table. The Tier 1, Phase 2A, Phase 2B and Phase 3A batches have
-  since been applied (review §§13–16); the remaining engine findings are the
-  next batch, and the items that were already known here are cross-referenced in
-  the review rather than duplicated.
+  remediation table. The Tier 1, Phase 2A, Phase 2B, Phase 3A and Phase 3B
+  batches have since been applied (review §§13–17); the items that were already
+  known here are cross-referenced in the review rather than duplicated.

@@ -1263,3 +1263,33 @@ New regression coverage:
 
 Still open from §7: `B-ENG-4`, `B-ENG-2`, `B-ENG-3`, then `B-ENG-1`, plus the
 unrelated P2/P3 findings.
+
+## 17. Phase 3B follow-up (applied 2026-10-20)
+
+Phase 3B covered the engine batch.
+
+| Finding | Applied change |
+|---|---|
+| `B-ENG-4` | Every apply now reconciles generic attributes against the frame's descriptors, including definition helpers. Absent attributes are removed; the native `Col` channel is cleared when `mesh.colors`/`pts.colors` is absent. `crease_edge`, leading-dot internals, `position` and the native colour channel are protected. |
+| `B-ENG-2` | The hot cache stores the received wire frame plus its output hash, with a running byte total per stage cache. Eviction is O(1) on insert/remove; replay decodes the bytes. The socket path passes the raw frame through `bridge.py`, so the disk store no longer re-encodes it. `B-ENG-5` cleanup and `B-ENG-6` raw-byte reuse are folded in. |
+| `B-ENG-3` | Added a direct-reference stage index plus a stack-object list, rebuilt on register/load/undo and patched on stage add/remove/split. Response, schema, hello, error, failed-apply and stall paths now use it; `_mark_dirty_all` and frame changes use the stack list. A new `test_stage_index.py` proves warm message paths do not rebuild the index and that rename/new-object cases are picked up. |
+| `B-ENG-1` | `engine.py` became the `engine/` package: `triggers`, `messages`, `request`, `apply`, `cache_ops`, `lifecycle` and `diagnostics`, with `__init__.py` keeping the state and registration facade. The split is behaviour-preserving; every module is under ~600 lines. |
+
+Verification after Phase 3B:
+
+```text
+scripts/test-core        57 tests pass
+scripts/test-blender     193 tests pass
+scripts/test-gha        pass (C# unchanged in this batch)
+scripts/test-extension  installed extension round trip: pass
+build-gha.sh            GhStack.gha built
+```
+
+FiraTower re-check: all four stages report `_payload_missing = False`, the first
+dirty pass costs ~115 ms (prefix clones), and repeated idle passes settle at
+1–2 ms with zero applies. That confirms the definition-only reapply loop stays
+fixed through the cache/index refactor.
+
+The remaining performance item is the prefix clone itself: ~37–39 ms per Cube
+stage on a dirty pass. That is separate from Phase 3B and is the next candidate
+for the deferred adaptive snapshot throttle or `C-INST-2`.

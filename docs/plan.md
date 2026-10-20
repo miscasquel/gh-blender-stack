@@ -402,7 +402,15 @@ blender/gh_stack/
     nodes.py                     templates, ownership, Join and Object Info wiring
     helpers.py                   helper objects, definitions, row clouds (GH Stage scene)
     props.py                     parameter custom props and UI ranges
-    engine.py                    tick loop, states, triggers, guard, frame cache
+    engine/                      tick loop, states, triggers, guard, frame cache
+      __init__.py                facade: state, registration, re-exports
+      triggers.py                handlers, timer, depsgraph/edit-mode triggers
+      messages.py                schema, response, error and hello handling
+      request.py                 prefix evaluation, request IDs, sends
+      apply.py                   response sections -> hidden helpers
+      cache_ops.py               hot cache and disk-backed response store
+      lifecycle.py               stage/stack index and lifecycle entry points
+      diagnostics.py             trace, heartbeat, timings, wait ages
     ops.py, ui.py, prefs.py
   vendor/websockets/             pure-Python wheel
 blender/tests/
