@@ -145,6 +145,31 @@ class AttributeIOTests(unittest.TestCase):
         self.assertIn("too_many", notes[0])
         self.assertIsNone(target.attributes.get("too_many"))
 
+    def test_malformed_string_offsets_are_skipped_with_a_note(self):
+        target = quad_mesh("target")
+        bad = attr_mod.descriptor("mesh", "bad_string", "POINT", "STRING", 1, 0)
+        notes = geometry_io.write_attributes(target, [(
+            bad,
+            np.frombuffer(b"abc", dtype=np.uint8),
+            np.asarray([4], dtype=np.uint32),
+        )])
+        self.assertEqual(len(notes), 1)
+        self.assertIn("runs past", notes[0])
+        self.assertIsNone(target.attributes.get("bad_string"))
+
+    def test_string_offsets_must_cover_the_values_exactly(self):
+        target = quad_mesh("target")
+        short = attr_mod.descriptor("mesh", "short_string", "POINT", "STRING", 1, 0)
+        good = attr_mod.descriptor("mesh", "weight", "POINT", "FLOAT", 4, 1)
+        notes = geometry_io.write_attributes(target, [
+            (short, np.frombuffer(b"abcd", dtype=np.uint8), np.asarray([2], dtype=np.uint32)),
+            (good, np.asarray([1.0, 2.0, 3.0, 4.0], dtype=np.float32), None),
+        ])
+        self.assertEqual(len(notes), 1)
+        self.assertIn("offsets cover", notes[0])
+        self.assertIsNone(target.attributes.get("short_string"))
+        self.assertIsNotNone(target.attributes.get("weight"))
+
     def test_native_channels_travel_once(self):
         """The active colour attribute and the crease attribute go through
         mesh.colors / the crease sections, never as generic attributes."""

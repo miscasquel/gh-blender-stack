@@ -40,7 +40,7 @@ namespace GhStack
                 Mesh mesh = Conversion.MeshFromSections(frame, scale);
                 if (mesh != null && mesh.Vertices.Count > 0)
                 {
-                    AttributeStore.Attach(mesh, "mesh", attributes, frame.Sections);
+                    AttributeStore.Attach(mesh, "mesh", attributes, frame.Sections, null, note);
                     geometry.Add(new GH_Mesh(mesh));
                 }
             }
@@ -53,7 +53,7 @@ namespace GhStack
                     if (note != null) note(warning.Message);
                 if (subd != null)
                 {
-                    AttributeStore.Attach(subd, "subd", attributes, frame.Sections);
+                    AttributeStore.Attach(subd, "subd", attributes, frame.Sections, null, note);
                     geometry.Add(new GH_SubD(subd));
                 }
             }
@@ -68,7 +68,7 @@ namespace GhStack
             PointCloud cloud = Conversion.PointCloudFromSections(frame, scale);
             if (cloud != null)
             {
-                AttributeStore.Attach(cloud, "pts", attributes, frame.Sections);
+                AttributeStore.Attach(cloud, "pts", attributes, frame.Sections, null, note);
                 geometry.Add(new GH_PointCloud(cloud));
             }
 

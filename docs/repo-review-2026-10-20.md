@@ -1227,3 +1227,39 @@ The same `blender … | grep … || true` pattern still exists in
 `scripts/build-extension`, `scripts/install-extension` and
 `scripts/test-extension`. It is a separate packaging-script change and remains
 a follow-up; Phase 2B deliberately stayed with the C# build path.
+
+## 16. Phase 3A follow-up (applied 2026-10-20)
+
+Phase 3A covered the Stage In and GhLink correctness batch. It deliberately
+stopped before the engine changes.
+
+| Finding | Applied change |
+|---|---|
+| `C-LINK-1` | Added `HeldFrame`, one immutable snapshot holding sections, attributes, definitions, geometry hash and rid. `StageSlot` publishes it with one reference assignment; `ref` reuses the geometry lists under a new rid. Stage In reads the frame once and reports that frame's rid; Stage Out keeps `AnswerRid`. |
+| `C-COMP-2` | `StageBuildGuard.Try` wraps `StageGeometry.Build`. Stage In reports a runtime error and `error` status without letting the exception escape `SolveInstance`; it does not write the shared slot status (a newer request may already own it). |
+| `C-LINK-3` | `SendPublication` caches a canonical per-stage schema signature and enqueues only when it changes. Signatures are cleared on reconnect, `Stop`, and the last unregister; periodic `hello` remains. |
+| `C-LINK-4` | A scheduled solve is marked in flight from the `ScheduleSolution` delegate to `SolutionEnd`; `RetryStaleSolves` skips it. A 30 s watchdog recovers a missed `SolutionEnd`, and the attempt budget remains for delegates that never start. |
+| `C-ATT-2` | C# `SplitStrings` and Python `_decode_strings` now require every declared length to fit and the offsets to cover the value bytes exactly. A malformed STRING is skipped with a note; valid attributes in the same frame still attach. |
+
+Verification after Phase 3A:
+
+```text
+scripts/test-core        57 tests pass
+scripts/test-blender     186 tests pass
+scripts/test-gha        12 fixtures, attribute store, link round-trip,
+                        solve retry, stage build guard: pass
+build-gha.sh            GhStack.gha built
+```
+
+New regression coverage:
+
+- `LinkTests`: an old frame stays coherent after a newer full request; an
+  unchanged schema sends nothing and a changed one is sent; an in-flight solve
+  is not retried and a lost `SolutionEnd` does not block the retry.
+- `AttrTests`: overlong, sum-mismatched and missing-offset STRINGs are skipped
+  with notes while a valid neighbour survives.
+- `StageTests`: the guard returns the build error instead of throwing.
+- `test_attributes.py`: the Python side validates the same offset rules.
+
+Still open from §7: `B-ENG-4`, `B-ENG-2`, `B-ENG-3`, then `B-ENG-1`, plus the
+unrelated P2/P3 findings.

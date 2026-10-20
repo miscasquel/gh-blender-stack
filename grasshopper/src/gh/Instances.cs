@@ -180,7 +180,7 @@ namespace GhStack
                     Mesh mesh = Conversion.MeshFromSections(_frame, _scale, prefix);
                     if (mesh != null && mesh.Vertices.Count > 0)
                     {
-                        AttributeStore.Attach(mesh, "mesh", _attributes, _frame.Sections, index);
+                        AttributeStore.Attach(mesh, "mesh", _attributes, _frame.Sections, index, _note);
                         AddObject(objects, new GH_Mesh(mesh), "mesh");
                     }
                     foreach (Curve curve in Conversion.CurvesFromSections(_frame, _scale, prefix))
@@ -188,7 +188,7 @@ namespace GhStack
                     PointCloud cloud = Conversion.PointCloudFromSections(_frame, _scale, prefix);
                     if (cloud != null)
                     {
-                        AttributeStore.Attach(cloud, "pts", _attributes, _frame.Sections, index);
+                        AttributeStore.Attach(cloud, "pts", _attributes, _frame.Sections, index, _note);
                         AddObject(objects, new GH_PointCloud(cloud), "point cloud");
                     }
 

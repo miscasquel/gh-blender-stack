@@ -106,38 +106,55 @@ namespace GhStack
             GhLink.PublishStage(this, key, enabled);
 
             StageSlot slot = GhLink.Slot(key);
-            var geometry = new List<IGH_Goo>();
+            // Read the frame once: a request arriving during this solve must
+            // not pair its sections with this frame's attributes or rid.
+            HeldFrame held = slot.Frame;
             string status = slot.Status;
-            if (slot.Sections != null && slot.Sections.Count > 0)
+            string message = slot.Message;
+            string requestRid = held.Rid;
+            var geometry = new List<IGH_Goo>();
+            if (held.Sections.Count > 0)
             {
                 // The frame header carries the instance-definition table
-                // (protocol §5.2). The slot holds it beside the sections; a stage
-                // that rebuilt the frame from Sections alone silently dropped
-                // every block (found live, 2026-10-16: the owner's plane with an
-                // Instance-on-Elements modifier crossed as mesh only). The list
-                // is copied into the wire shape (List<object>) on purpose:
-                // readers of rebuilt headers cast to that, and a typed
-                // List<Dictionary<...>> never casts across (invariance).
+                // (protocol §5.2). A stage that rebuilt the frame from Sections
+                // alone silently dropped every block (found live, 2026-10-16:
+                // the owner's plane with an Instance-on-Elements modifier
+                // crossed as mesh only).
                 var frameHeader = new Dictionary<string, object>();
-                if (slot.Definitions != null && slot.Definitions.Count > 0)
-                    frameHeader["definitions"] = new List<object>(slot.Definitions);
-                var frame = DecodedFrame.FromSections(frameHeader, slot.Sections);
+                if (held.Definitions.Count > 0)
+                    frameHeader["definitions"] = held.Definitions;
+                var frame = DecodedFrame.FromSections(frameHeader, held.Sections);
                 double scale = GhLink.DocumentScale();
-                geometry = StageGeometry.Build(frame, scale, slot.Attributes, delegate(string note)
+                string error;
+                if (!StageBuildGuard.Try(delegate
+                    {
+                        geometry = StageGeometry.Build(frame, scale, held.Attributes,
+                            delegate(string note)
+                            {
+                                AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, note);
+                            });
+                    }, out error))
                 {
-                    AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, note);
-                });
+                    // A malformed frame must not escape SolveInstance: Stage In
+                    // has no response channel, so report a readable stage error
+                    // and keep the component alive for the next frame.
+                    status = "error";
+                    message = error;
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Error,
+                        "Stage In: " + error);
+                }
             }
             else
             {
                 status = GhLink.Connected ? "waiting" : "disconnected";
+                if (string.IsNullOrEmpty(requestRid)) requestRid = slot.Rid;
             }
             da.SetDataList("Geometry", geometry);
-            da.SetData("Request ID", slot.Rid);
+            da.SetData("Request ID", requestRid);
             da.SetData("Status", status);
-            da.SetData("Message", slot.Message);
+            da.SetData("Message", message);
             if (HasOutput("Attributes"))
-                da.SetDataList("Attributes", StageGeometry.AttributeNames(slot.Attributes));
+                da.SetDataList("Attributes", StageGeometry.AttributeNames(held.Attributes));
             Message = GhLink.Connected ? status : "disconnected";
             // Blocks on the output at a glance: an instance row that never made
             // it into Geometry is otherwise invisible (the live "no instances"

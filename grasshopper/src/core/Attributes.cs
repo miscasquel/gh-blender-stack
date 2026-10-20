@@ -155,7 +155,7 @@ namespace GhStack.Core
         /// frame's own (the ones without a definition marker).</summary>
         public static void Attach(ArchivableDictionary root, string group,
                                   List<Dictionary<string, object>> descriptors, List<Section> sections,
-                                  long? definition = null)
+                                  long? definition = null, Action<string> note = null)
         {
             if (root == null || descriptors == null || sections == null) return;
             var byName = new Dictionary<string, Section>();
@@ -181,7 +181,23 @@ namespace GhStack.Core
                 if (!string.IsNullOrEmpty(offsetsName))
                     byName.TryGetValue(offsetsName, out offsets);
 
-                object flat = Decode(type, values, offsets);
+                object flat;
+                if (Types[type].Kind == "string")
+                {
+                    string problem;
+                    flat = SplitStrings(values.Raw, offsets, out problem);
+                    if (flat == null)
+                    {
+                        // A malformed STRING is one bad attribute, not a bad
+                        // frame: skip it and let the component report why.
+                        if (note != null) note("attribute " + name + ": " + problem);
+                        continue;
+                    }
+                }
+                else
+                {
+                    flat = Decode(type, values, offsets);
+                }
                 if (flat != null)
                     Set(root, name, type, domain, flat);
             }
@@ -217,22 +233,48 @@ namespace GhStack.Core
                     }
                 case "byte":
                     return values.Raw;
-                default: // string
-                    return SplitStrings(values.Raw, offsets);
+                default: // strings are split by Attach, which owns the notes
+                    return null;
             }
         }
 
-        private static string[] SplitStrings(byte[] raw, Section offsets)
+        /// <summary>The wire's concatenated UTF-8 bytes plus per-string lengths.
+        /// Returns null with a reason when the lengths are out of range or do
+        /// not describe exactly the value bytes; a short slice would otherwise
+        /// pass as a valid string and resurrect corrupted data.</summary>
+        private static string[] SplitStrings(byte[] raw, Section offsets, out string problem)
         {
-            if (offsets == null) return new string[0];
+            problem = "";
+            if (offsets == null)
+            {
+                if (raw.Length == 0) return new string[0];
+                problem = "STRING values have no offsets section";
+                return null;
+            }
             uint[] lengths = offsets.ToU32();
             var strings = new string[lengths.Length];
-            int at = 0;
+            long at = 0;
             for (int i = 0; i < lengths.Length; i++)
             {
-                int length = (int)lengths[i];
-                strings[i] = Encoding.UTF8.GetString(raw, at, Math.Min(length, raw.Length - at));
+                uint length = lengths[i];
+                if (length > int.MaxValue)
+                {
+                    problem = "length " + length + " at offset " + at + " exceeds int.MaxValue";
+                    return null;
+                }
+                if (length > raw.Length - at)
+                {
+                    problem = "length " + length + " at offset " + at
+                              + " runs past the " + raw.Length + " value bytes";
+                    return null;
+                }
+                strings[i] = Encoding.UTF8.GetString(raw, (int)at, (int)length);
                 at += length;
+            }
+            if (at != raw.Length)
+            {
+                problem = "offsets cover " + at + " of " + raw.Length + " value bytes";
+                return null;
             }
             return strings;
         }
@@ -345,11 +387,11 @@ namespace GhStack.Core
 
         public static void Attach(GeometryBase geometry, string group,
                                   List<Dictionary<string, object>> descriptors, List<Section> sections,
-                                  long? definition = null)
+                                  long? definition = null, Action<string> note = null)
         {
             ArchivableDictionary existing = Root(geometry, false);
             if (existing == null && (descriptors == null || descriptors.Count == 0)) return;
-            Attach(Root(geometry, true), group, descriptors, sections, definition);
+            Attach(Root(geometry, true), group, descriptors, sections, definition, note);
         }
 
         public static void Collect(GeometryBase geometry, string group,

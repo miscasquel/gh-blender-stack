@@ -20,16 +20,51 @@ using GhStack.Core;
 
 namespace GhStack
 {
+    /// <summary>One complete request frame, published as a single reference.
+    ///
+    /// A solve reads Sections, Attributes, Definitions, GeometryHash and Rid
+    /// together. Keeping them as separate fields let a request arriving between
+    /// the reads pair old sections with a new attribute list or a new rid (F5).
+    /// The lists are never mutated after construction; a `ref` publishes a new
+    /// object that reuses the previous geometry lists and carries the new rid.</summary>
+    public sealed class HeldFrame
+    {
+        public readonly string Rid;
+        public readonly List<Section> Sections;
+        public readonly List<Dictionary<string, object>> Attributes;
+        /// <summary>The instance-definition table in wire shape (`List<object>`),
+        /// because rebuilt headers are read through casts to that shape.</summary>
+        public readonly List<object> Definitions;
+        /// <summary>The `geom.hash` the held sections were sent for. A `ref` for
+        /// any other hash cannot be served and must be refused.</summary>
+        public readonly string GeometryHash;
+
+        public HeldFrame(string rid, List<Section> sections,
+                         List<Dictionary<string, object>> attributes,
+                         List<object> definitions, string geometryHash)
+        {
+            Rid = rid ?? "";
+            Sections = sections ?? new List<Section>();
+            Attributes = attributes ?? new List<Dictionary<string, object>>();
+            Definitions = definitions ?? new List<object>();
+            GeometryHash = geometryHash ?? "";
+        }
+
+        public static readonly HeldFrame Empty = new HeldFrame(
+            "", new List<Section>(), new List<Dictionary<string, object>>(),
+            new List<object>(), "");
+    }
+
     /// <summary>What one stage has been told by Blender.</summary>
     public class StageSlot
     {
-        public string Rid = "";
+        public volatile string Rid = "";
         /// <summary>The rid the current solve is answering. Pinned when a solve
         /// is scheduled, because a request can overwrite `Rid` while the
         /// solve's inputs have already been read: answering the newer rid would
         /// label old geometry as the new request's answer. Empty outside a
         /// solve, when the slot's own `Rid` is the answer.</summary>
-        public string SolveRid = "";
+        public volatile string SolveRid = "";
         private volatile Dictionary<string, object> _params = new Dictionary<string, object>();
         /// <summary>The request's parameter values. The socket thread publishes a
         /// fresh dictionary per request and never mutates it afterwards; the
@@ -40,21 +75,23 @@ namespace GhStack
             get { return _params; }
             set { _params = value; }
         }
-        public List<Section> Sections;
-        /// <summary>Attribute descriptors of the held sections (protocol §5).
-        /// Written under Gate together with Sections; read during a solve.</summary>
-        public List<Dictionary<string, object>> Attributes = new List<Dictionary<string, object>>();
-        /// <summary>Instance-definition table of the held sections (protocol
-        /// §5.2). It lives in the frame header, so holding only Sections would
-        /// drop it: Stage In rebuilds the frame from this on every solve.</summary>
-        public List<Dictionary<string, object>> Definitions = new List<Dictionary<string, object>>();
-        /// <summary>The `geom.hash` the held sections were sent for. A `ref` for
-        /// any other hash cannot be served and must be refused.</summary>
-        public string GeometryHash = "";
-        public string Status = "waiting";
-        public string Message = "";
+        private volatile HeldFrame _frame = HeldFrame.Empty;
+        /// <summary>The current request frame. Written under Gate and read once
+        /// by a solve, so the geometry and its rid are one snapshot.</summary>
+        public HeldFrame Frame
+        {
+            get { return _frame; }
+            internal set { _frame = value; }
+        }
+        public volatile string Status = "waiting";
+        public volatile string Message = "";
         public DateTime RequestedAt = DateTime.UtcNow;
         public int ResolveAttempts = 0;
+        /// <summary>True while the solve scheduled for this slot is running.
+        /// RetryStaleSolves must not schedule a second one for a solve that is
+        /// merely slow (the instance-latency double-solve).</summary>
+        internal bool SolveInFlight = false;
+        internal DateTime SolveStartedAt = DateTime.MinValue;
         /// <summary>True while the request was accepted for a key no component
         /// has claimed yet: the first request can arrive while the document is
         /// still loading, before the first solve publishes the keys. The solve
@@ -95,12 +132,22 @@ namespace GhStack
         private static Thread _thread;      // under Gate
         private static volatile bool _connected;
         private static int _activeSenders;
+        private static int _retryRequests;
         // Test/diagnostic: one sender loop per connection. It must not outlive
         // the connection that started it.
         internal static int ActiveSenders
         {
             get { return Interlocked.Add(ref _activeSenders, 0); }
         }
+        internal static int RetryRequests
+        {
+            get { return Interlocked.Add(ref _retryRequests, 0); }
+        }
+        // A solve that has not reached SolutionEnd after this long is treated as
+        // lost: retrying is the only way out, and a second solve is better than
+        // a stage that waits forever. The normal path clears the flag in
+        // OnSolutionEnd; this only covers a missed event or a wedged document.
+        private const double SolveWatchdogSeconds = 30.0;
         // Published once per connection; read and reserved under Gate (P3-4).
         private static bool _publishedThisConnection = false;
         private static MiniWsClient _client;  // under Gate; Stop disposes it
@@ -165,6 +212,7 @@ namespace GhStack
                     StageEnabled.Clear();
                     StageParams.Clear();
                     _lastStages.Clear();
+                    _lastSchema.Clear();
                     _publishedThisConnection = false;
                 }
             }
@@ -346,6 +394,15 @@ namespace GhStack
             {
                 Outbox.Clear();
                 OutboxBytes = 0;
+                _lastSchema.Clear();
+                // No solve scheduled for the old session may suppress the next
+                // session's retry.
+                foreach (StageSlot slot in Slots.Values)
+                {
+                    slot.SolveInFlight = false;
+                    slot.SolveStartedAt = DateTime.MinValue;
+                    slot.SolveRid = "";
+                }
             }
         }
 
@@ -361,7 +418,14 @@ namespace GhStack
                     client.Connect();
                     lock (Gate) { _client = client; }
                     _connected = true;
-                    lock (Gate) { _publishedThisConnection = false; }
+                    lock (Gate)
+                    {
+                        _publishedThisConnection = false;
+                        // A new connection must republish every schema; the
+                        // previous connection's signatures describe a peer that
+                        // no longer exists.
+                        _lastSchema.Clear();
+                    }
                     backoffMs = 500;
                     Note("connected to " + Endpoint);
                     // Publish from this thread: waiting for the next solve would
@@ -543,17 +607,28 @@ namespace GhStack
                     ? new Dictionary<string, object>()
                     : new Dictionary<string, object>(paramsObj);
                 slot.Params = incoming;
-                if (mode == "full")
-                {
-                    slot.Sections = decoded.Sections;
-                    slot.Attributes = AttributeList(header);
-                    slot.Definitions = HeaderList(header, "definitions");
-                    slot.GeometryHash = hash ?? "";
-                }
+
+                HeldFrame current = slot.Frame;
                 // A ref is servable only for the geometry we actually hold. A
                 // missing hash (an older client) falls back to "do we hold any".
-                canServe = slot.Sections != null && slot.Sections.Count > 0
-                           && (string.IsNullOrEmpty(hash) || hash == slot.GeometryHash);
+                canServe = current != null && current.Sections.Count > 0
+                           && (string.IsNullOrEmpty(hash) || hash == current.GeometryHash);
+
+                // Publish one complete frame: a full request replaces the
+                // geometry, attributes and definitions; a ref keeps them and
+                // carries the new rid. Never fill a live frame field by field.
+                if (mode == "full")
+                {
+                    slot.Frame = new HeldFrame(
+                        rid, decoded.Sections, AttributeList(header),
+                        HeaderObjects(header, "definitions"), hash ?? "");
+                }
+                else if (canServe)
+                {
+                    slot.Frame = new HeldFrame(
+                        rid, current.Sections, current.Attributes,
+                        current.Definitions, current.GeometryHash);
+                }
             }
 
             if (mode == "ref" && !canServe)
@@ -599,6 +674,16 @@ namespace GhStack
             return list;
         }
 
+        /// <summary>One header list kept in wire shape. Stage In hands this
+        /// straight to `DecodedFrame.FromSections`; readers cast the header
+        /// value to `IList`, and a typed list does not cast across (invariance).</summary>
+        private static List<object> HeaderObjects(
+            Dictionary<string, object> header, string key)
+        {
+            var raw = Json.Get(header, key) as List<object>;
+            return raw == null ? new List<object>() : new List<object>(raw);
+        }
+
         private static void RequestSolve()
         {
             GH_Component origin;
@@ -632,8 +717,16 @@ namespace GhStack
                         // are read: a request arriving mid-solve overwrites
                         // slot.Rid, and answering that newer rid would label the
                         // old-geometry answer as the new request's (F5).
+                        DateTime started = DateTime.UtcNow;
                         foreach (KeyValuePair<string, StageSlot> pair in Slots)
+                        {
                             pair.Value.SolveRid = pair.Value.Rid;
+                            // The solve is now in flight. RetryStaleSolves must
+                            // not schedule a second one merely because this one
+                            // takes longer than its 250 ms retry interval.
+                            pair.Value.SolveInFlight = true;
+                            pair.Value.SolveStartedAt = started;
+                        }
                         foreach (GH_Component c in Components) c.ExpireSolution(true);
                     }
                 });
@@ -650,10 +743,15 @@ namespace GhStack
             if (document != null) document.SolutionEnd -= OnSolutionEnd;
             lock (Gate)
             {
-                // The solve is over: the pins must not leak into the next
-                // (unsolicited) solve, whose answer is the slot's latest rid.
+                // The solve is over: the pins and the in-flight marker must not
+                // leak into the next (unsolicited) solve, whose answer is the
+                // slot's latest rid.
                 foreach (KeyValuePair<string, StageSlot> pair in Slots)
+                {
                     pair.Value.SolveRid = "";
+                    pair.Value.SolveInFlight = false;
+                    pair.Value.SolveStartedAt = DateTime.MinValue;
+                }
             }
             ReconcileOwnership();
         }
@@ -779,23 +877,40 @@ namespace GhStack
         /// <summary>Re-asks for a solve when a request has been waiting a while.
         /// ScheduleSolution calls coalesce: rapid edits can leave a request with no
         /// solve, and without this the stage would sit `waiting` until a Push.</summary>
-        private static void RetryStaleSolves()
+        internal static void RetryStaleSolves()
         {
             bool retry = false;
+            bool watchdog = false;
+            DateTime now = DateTime.UtcNow;
             lock (Gate)
             {
                 foreach (var kv in Slots)
                 {
                     StageSlot slot = kv.Value;
                     if (slot.Status != "waiting") continue;
-                    if ((DateTime.UtcNow - slot.RequestedAt).TotalMilliseconds < 250) continue;
+                    if (slot.SolveInFlight)
+                    {
+                        if ((now - slot.SolveStartedAt).TotalSeconds < SolveWatchdogSeconds)
+                            continue;
+                        // The solve never reached SolutionEnd. Let the retry
+                        // path take over rather than leaving the stage silent.
+                        slot.SolveInFlight = false;
+                        watchdog = true;
+                    }
+                    if ((now - slot.RequestedAt).TotalMilliseconds < 250) continue;
                     if (slot.ResolveAttempts >= 8) continue;
                     slot.ResolveAttempts++;
-                    slot.RequestedAt = DateTime.UtcNow;
+                    slot.RequestedAt = now;
                     retry = true;
                 }
             }
-            if (retry) RequestSolve();
+            if (watchdog)
+                Note("a solve did not report SolutionEnd; retrying the waiting stage");
+            if (retry)
+            {
+                Interlocked.Increment(ref _retryRequests);
+                RequestSolve();
+            }
         }
 
         private static void SendFrames(MiniWsClient client)
@@ -929,8 +1044,32 @@ namespace GhStack
                 lock (Gate) { _lastStages = new Dictionary<string, bool>(stages); }
             }
 
+            lock (Gate)
+            {
+                // A stage removed from the document must not leave a signature
+                // behind that could suppress its schema after it comes back.
+                foreach (string key in new List<string>(_lastSchema.Keys))
+                    if (!paramsByStage.ContainsKey(key)) _lastSchema.Remove(key);
+            }
+
             foreach (var kv in paramsByStage)
             {
+                // The heartbeat used to enqueue one schema per stage every two
+                // seconds, even when nothing had changed; Blender then decoded
+                // each frame and scanned the scene just to skip the UI work.
+                // Keep the periodic hello as the safety net, and gate the schema
+                // on its canonical content.
+                string signature = Json.WriteCanonical(kv.Value);
+                bool changed;
+                lock (Gate)
+                {
+                    string previous;
+                    changed = !_lastSchema.TryGetValue(kv.Key, out previous)
+                              || previous != signature;
+                    if (changed) _lastSchema[kv.Key] = signature;
+                }
+                if (!changed) continue;
+
                 var schema = new Dictionary<string, object>();
                 schema["type"] = "schema";
                 schema["stage"] = kv.Key;
@@ -942,6 +1081,10 @@ namespace GhStack
         }
 
         private static Dictionary<string, bool> _lastStages = new Dictionary<string, bool>();
+        // Last schema declaration published per stage, by canonical JSON. Under
+        // Gate; cleared on a new connection.
+        private static readonly Dictionary<string, string> _lastSchema =
+            new Dictionary<string, string>();
 
         private static bool StagesChangedLocked(Dictionary<string, bool> stages)
         {

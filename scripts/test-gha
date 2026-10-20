@@ -31,6 +31,12 @@ if [ -f grasshopper/build/out/GhStackLinkTests.exe ]; then
     "$(win_path "$PWD/grasshopper/build/out/GhStackLinkTests.exe")" >>"$LOG" 2>&1
   CODE=$(( CODE | $? ))
 fi
+# Stage In's build guard, without a Grasshopper document or a solve.
+if [ -f grasshopper/build/out/GhStackStageTests.exe ]; then
+  run_wine \
+    "$(win_path "$PWD/grasshopper/build/out/GhStackStageTests.exe")" >>"$LOG" 2>&1
+  CODE=$(( CODE | $? ))
+fi
 set -e
 
 grep -vE 'fixme:|MESA-EGL|pci id|^$' "$LOG" || true

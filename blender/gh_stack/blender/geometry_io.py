@@ -284,7 +284,12 @@ def write_attributes(owner, entries):
             continue
 
         if type_name == "STRING":
-            data, lengths = _decode_strings(values, offsets)
+            try:
+                data, lengths = _decode_strings(values, offsets)
+            except GeometryIOError as exc:
+                # One malformed STRING must not take the whole frame down.
+                notes.append("attribute %r: %s" % (name, exc))
+                continue
             if len(data) != target:
                 notes.append(
                     "attribute %r: %d strings for %d %s elements"
@@ -361,18 +366,36 @@ def _domain_length(owner, domain):
 
 
 def _decode_strings(values, offsets):
-    """The wire's concatenated UTF-8 bytes plus per-string lengths, as bytes."""
+    """The wire's concatenated UTF-8 bytes plus per-string lengths, as bytes.
+
+    The declared lengths must cover the value bytes exactly. A short slice or a
+    sum mismatch used to pass silently and resurrect a truncated string, so a
+    malformed STRING raises and the caller skips just that attribute.
+    """
     raw = (
         np.asarray(values, dtype=np.uint8).tobytes()
         if not isinstance(values, (bytes, bytearray))
         else bytes(values)
     )
-    lengths = () if offsets is None else [int(length) for length in offsets]
+    if offsets is None:
+        if raw:
+            raise GeometryIOError("STRING values have no offsets section")
+        return [], []
+    lengths = [int(length) for length in offsets]
     data = []
     at = 0
     for length in lengths:
+        if length < 0 or at + length > len(raw):
+            raise GeometryIOError(
+                "length %d at offset %d runs past the %d value bytes"
+                % (length, at, len(raw))
+            )
         data.append(raw[at : at + length])
         at += length
+    if at != len(raw):
+        raise GeometryIOError(
+            "offsets cover %d of %d value bytes" % (at, len(raw))
+        )
     return data, lengths
 
 

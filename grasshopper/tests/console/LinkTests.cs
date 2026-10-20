@@ -99,6 +99,21 @@ namespace GhStack.Tests.Console
                     && Convert.ToDouble(Json.Get(first, "default"), System.Globalization.CultureInfo.InvariantCulture) == 2.0,
                     "params=" + Json.WriteCanonical(schemaParams));
 
+                // 4b. an unchanged schema is quiet; a changed declaration is
+                //     sent again. The periodic hello remains the safety net.
+                GhLink.Publish(null);
+                Check("unchanged schema is quiet", NoFrameOfType(server, "schema", 600), "");
+                declaration["default"] = 3.0;
+                GhLink.PublishParam(stage, "k1", declaration);
+                GhLink.Publish(null);
+                schema = ReadUntil(server, "schema");
+                var changedParams = (List<object>)Json.Get(schema, "params");
+                Check("changed schema is sent",
+                    changedParams.Count == 1
+                    && Convert.ToDouble(Json.Get(changedParams[0], "default"),
+                        System.Globalization.CultureInfo.InvariantCulture) == 3.0,
+                    "params=" + Json.WriteCanonical(changedParams));
+
                 // 5. a full request lands in the slot with its parameter
                 //    snapshot and geometry hash.
                 var requestHeader = Header("request", "k1", "sha256:r1");
@@ -111,11 +126,12 @@ namespace GhStack.Tests.Console
                 StageSlot slot = GhLink.FindSlot("k1");
                 Check("slot rid", slot.Rid == "sha256:r1", "rid=" + slot.Rid);
                 Check("slot waiting", slot.Status == "waiting", "status=" + slot.Status);
-                Check("slot geometry hash", slot.GeometryHash == "sha256:h1", "hash=" + slot.GeometryHash);
+                Check("slot geometry hash", slot.Frame.GeometryHash == "sha256:h1",
+                    "hash=" + slot.Frame.GeometryHash);
                 Check("slot params snapshot", slot.Params != null && slot.Params.ContainsKey("p1")
                     && Convert.ToDouble(slot.Params["p1"], System.Globalization.CultureInfo.InvariantCulture) == 2.5,
                     "params=" + Json.WriteCanonical(slot.Params));
-                Check("slot sections kept", slot.Sections != null && slot.Sections.Count == 3, "");
+                Check("slot sections kept", slot.Frame.Sections.Count == 3, "");
 
                 // 6. a ref for geometry the slot does not hold is refused with
                 //    unknown_ref before any timeout can start.
@@ -137,6 +153,52 @@ namespace GhStack.Tests.Console
                 Check("same-rid re-send returns to waiting",
                     WaitFor(delegate { return GhLink.FindSlot("k1").Status == "waiting"; }), "");
                 Check("same-rid re-send keeps the rid", GhLink.FindSlot("k1").Rid == "sha256:r1", "");
+
+                // 7a. a held frame is one immutable snapshot: publishing a new
+                //     request replaces it whole, and a reader that took the old
+                //     reference still sees the old sections, attributes, hash
+                //     and rid together.
+                HeldFrame firstFrame = GhLink.FindSlot("k1").Frame;
+                var secondHeader = Header("request", "k1", "sha256:r1b");
+                secondHeader["geom"] = Geom("full", "sha256:h1b");
+                secondHeader["attributes"] = new List<object>
+                {
+                    new Dictionary<string, object>
+                    {
+                        { "group", "mesh" }, { "name", "panel_id" },
+                        { "type", "INT" }, { "domain", "POINT" },
+                    },
+                };
+                secondHeader["definitions"] = new List<object>
+                {
+                    new Dictionary<string, object> { { "name", "block" } },
+                };
+                server.Send(Frame(secondHeader, MeshSections()));
+                Check("new full request replaces the frame",
+                    WaitFor(delegate { return GhLink.FindSlot("k1").Frame.GeometryHash == "sha256:h1b"; }), "");
+                Check("old frame stays coherent", firstFrame.Rid == "sha256:r1"
+                    && firstFrame.GeometryHash == "sha256:h1"
+                    && firstFrame.Attributes.Count == 0
+                    && firstFrame.Definitions.Count == 0, "");
+                Check("new frame carries its own header",
+                    GhLink.FindSlot("k1").Frame.Rid == "sha256:r1b"
+                    && GhLink.FindSlot("k1").Frame.Attributes.Count == 1
+                    && GhLink.FindSlot("k1").Frame.Definitions.Count == 1, "");
+
+                // A ref keeps the geometry but carries the new rid in a fresh
+                // snapshot, so Stage In can label the same output correctly.
+                HeldFrame fullFrame = GhLink.FindSlot("k1").Frame;
+                var refFrameHeader = Header("request", "k1", "sha256:r1c");
+                refFrameHeader["geom"] = Geom("ref", "sha256:h1b");
+                server.Send(Frame(refFrameHeader, null));
+                Check("ref publishes a new rid",
+                    WaitFor(delegate { return GhLink.FindSlot("k1").Frame.Rid == "sha256:r1c"; }), "");
+                HeldFrame refFrame = GhLink.FindSlot("k1").Frame;
+                Check("ref reuses the geometry snapshot",
+                    object.ReferenceEquals(refFrame.Sections, fullFrame.Sections)
+                    && object.ReferenceEquals(refFrame.Attributes, fullFrame.Attributes)
+                    && object.ReferenceEquals(refFrame.Definitions, fullFrame.Definitions)
+                    && refFrame.GeometryHash == "sha256:h1b", "");
 
                 // 7b. the solve pins its rid: a request landing mid-solve must
                 //     not relabel the answer, and outside a solve the slot's
@@ -243,6 +305,7 @@ namespace GhStack.Tests.Console
             }
 
             RunSenderLifecycle();
+            RunSolveRetry();
 
             System.Console.WriteLine();
             if (_failures == 0)
@@ -303,6 +366,39 @@ namespace GhStack.Tests.Console
                 GhLink.Stop();
                 server.Dispose();
             }
+        }
+
+        /// <summary>A slow solve must not be scheduled a second time by the
+        /// 250 ms retry loop; the attempt budget stays for a delegate that never
+        /// starts, and a lost SolutionEnd is recovered by the watchdog.</summary>
+        private static void RunSolveRetry()
+        {
+            System.Console.WriteLine("link solve retry");
+            StageSlot slot = GhLink.Slot("retry-test");
+            slot.Status = "waiting";
+            slot.RequestedAt = DateTime.UtcNow.AddSeconds(-1);
+            slot.ResolveAttempts = 0;
+            slot.SolveInFlight = true;
+            slot.SolveStartedAt = DateTime.UtcNow;
+            int retries = GhLink.RetryRequests;
+            GhLink.RetryStaleSolves();
+            Check("in-flight solve is not retried",
+                slot.ResolveAttempts == 0 && GhLink.RetryRequests == retries,
+                "attempts=" + slot.ResolveAttempts + " retries=" + GhLink.RetryRequests);
+
+            slot.SolveInFlight = false;
+            GhLink.RetryStaleSolves();
+            Check("waiting solve is retried once",
+                slot.ResolveAttempts == 1 && GhLink.RetryRequests == retries + 1,
+                "attempts=" + slot.ResolveAttempts + " retries=" + GhLink.RetryRequests);
+
+            slot.ResolveAttempts = 0;
+            slot.RequestedAt = DateTime.UtcNow.AddSeconds(-1);
+            slot.SolveInFlight = true;
+            slot.SolveStartedAt = DateTime.UtcNow.AddSeconds(-31);
+            GhLink.RetryStaleSolves();
+            Check("a lost SolutionEnd does not block the retry",
+                slot.ResolveAttempts == 1, "attempts=" + slot.ResolveAttempts);
         }
 
         private static Dictionary<string, object> Header(string type, string stage, string rid)
@@ -410,6 +506,12 @@ namespace GhStack.Tests.Console
         /// heartbeat's hello/schema frames are ignored.</summary>
         private static bool NoErrorFrame(FakeServer server, int windowMs)
         {
+            return NoFrameOfType(server, "error", windowMs);
+        }
+
+        /// <summary>True when no frame of one type arrives within the window.</summary>
+        private static bool NoFrameOfType(FakeServer server, string type, int windowMs)
+        {
             DateTime end = DateTime.UtcNow.AddMilliseconds(windowMs);
             while (DateTime.UtcNow < end)
             {
@@ -421,7 +523,7 @@ namespace GhStack.Tests.Console
                     continue;
                 }
                 var decoded = FrameCodec.Decode(frame);
-                if (Json.GetString(decoded.Header, "type") == "error") return false;
+                if (Json.GetString(decoded.Header, "type") == type) return false;
             }
             return true;
         }

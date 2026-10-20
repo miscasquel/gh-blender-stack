@@ -78,3 +78,15 @@ if [ -f "$GH_DLL" ] && [ -f "$GHIO_DLL" ] && [ -f "$RC_DLL" ]; then
 else
   echo "note: no Grasshopper/RhinoCommon under the prefix; link tests not built" >&2
 fi
+
+# Stage In's build guard. It has no Rhino types, so it builds and runs without
+# a Rhino process; the same guard wraps the real conversion in the component.
+STAGE_OUT="$OUT_DIR/GhStackStageTests.exe"
+rm -f "$STAGE_OUT"
+run_csc \
+  /nologo /target:exe \
+  /out:"$(win_path "$STAGE_OUT")" \
+  "$(win_path "$REPO/grasshopper/src/gh/StageBuildGuard.cs")" \
+  "$(win_path "$REPO/grasshopper/tests/console/StageTests.cs")"
+[ -f "$STAGE_OUT" ] || { echo "build failed: $STAGE_OUT not produced" >&2; exit 1; }
+echo "built $STAGE_OUT ($(stat -c%s "$STAGE_OUT") bytes)"

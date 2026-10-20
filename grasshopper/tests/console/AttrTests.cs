@@ -37,6 +37,7 @@ namespace GhStack.Tests.Console
             CheckLabelsMatchBlender();
             CheckDefinitionAttributes();
             CheckWireTransforms();
+            CheckMalformedStringOffsets();
 
             System.Console.WriteLine();
             if (_failures == 0)
@@ -315,6 +316,103 @@ namespace GhStack.Tests.Console
                 prefixed.Count == 1 && prefixed[0].Name == "idef.2.mesh.verts"
                 && prefixed[0].Dtype == "f32" && prefixed[0].Raw.Length == 12,
                 prefixed.Count == 1 ? prefixed[0].Name : "none");
+        }
+
+        private static void CheckMalformedStringOffsets()
+        {
+            // A malformed STRING is skipped with a note; a valid attribute in
+            // the same frame still attaches. Neither overlong nor sum-mismatched
+            // offsets may silently produce a short string.
+            var sections = new List<Section>();
+            var descriptors = new List<Dictionary<string, object>>();
+            AddAttribute(sections, descriptors, "mesh", "weight", "POINT", "FLOAT",
+                Section.Floats("attr.0.values", new float[] { 1.5f }));
+
+            AddStringDescriptor(sections, descriptors, "short", new uint[] { 4 },
+                System.Text.Encoding.UTF8.GetBytes("abc"));
+            AddStringDescriptor(sections, descriptors, "good", new uint[] { 2, 2 },
+                System.Text.Encoding.UTF8.GetBytes("abcd"));
+
+            var notes = new List<string>();
+            var root = new ArchivableDictionary();
+            AttributeStore.Attach(root, "mesh", descriptors, sections, null,
+                delegate(string note) { notes.Add(note); });
+
+            string type, domain;
+            object values;
+            Check("malformed string is skipped with a note",
+                notes.Count == 1 && notes[0].IndexOf("runs past", StringComparison.Ordinal) >= 0,
+                string.Join(" | ", notes));
+            Check("malformed string did not attach",
+                !AttributeStore.TryGet(root, "short", out type, out domain, out values), DescribeRoot(root));
+            Check("valid neighbours still attach",
+                AttributeStore.TryGet(root, "weight", out type, out domain, out values)
+                && AttributeStore.TryGet(root, "good", out type, out domain, out values),
+                DescribeRoot(root));
+
+            // A uint length above int.MaxValue used to cast negative and make
+            // GetString throw.
+            var hugeSections = new List<Section>();
+            var hugeDescriptors = new List<Dictionary<string, object>>();
+            AddStringDescriptor(hugeSections, hugeDescriptors, "huge",
+                new uint[] { uint.MaxValue }, System.Text.Encoding.UTF8.GetBytes("abc"));
+            notes.Clear();
+            var hugeRoot = new ArchivableDictionary();
+            AttributeStore.Attach(hugeRoot, "mesh", hugeDescriptors, hugeSections, null,
+                delegate(string note) { notes.Add(note); });
+            Check("a length above int.MaxValue is rejected",
+                notes.Count == 1 && notes[0].IndexOf("int.MaxValue", StringComparison.Ordinal) >= 0,
+                string.Join(" | ", notes));
+
+            // The offsets must cover the value bytes exactly.
+            var sumSections = new List<Section>();
+            var sumDescriptors = new List<Dictionary<string, object>>();
+            AddStringDescriptor(sumSections, sumDescriptors, "sum", new uint[] { 2 },
+                System.Text.Encoding.UTF8.GetBytes("abcd"));
+            notes.Clear();
+            var sumRoot = new ArchivableDictionary();
+            AttributeStore.Attach(sumRoot, "mesh", sumDescriptors, sumSections, null,
+                delegate(string note) { notes.Add(note); });
+            Check("offsets must cover every value byte",
+                notes.Count == 1 && notes[0].IndexOf("offsets cover", StringComparison.Ordinal) >= 0,
+                string.Join(" | ", notes));
+
+            // Values without offsets are not zero strings.
+            var noOffsetSections = new List<Section>();
+            var noOffsetDescriptors = new List<Dictionary<string, object>>();
+            var noOffsets = new Dictionary<string, object>();
+            noOffsets["group"] = "mesh";
+            noOffsets["name"] = "no_offsets";
+            noOffsets["domain"] = "POINT";
+            noOffsets["type"] = "STRING";
+            noOffsets["section"] = "noff.values";
+            noOffsetSections.Add(Section.Bytes("noff.values",
+                System.Text.Encoding.UTF8.GetBytes("abc")));
+            noOffsetDescriptors.Add(noOffsets);
+            notes.Clear();
+            var noOffsetRoot = new ArchivableDictionary();
+            AttributeStore.Attach(noOffsetRoot, "mesh", noOffsetDescriptors, noOffsetSections, null,
+                delegate(string note) { notes.Add(note); });
+            Check("string without offsets is rejected",
+                notes.Count == 1 && notes[0].IndexOf("no offsets", StringComparison.Ordinal) >= 0,
+                string.Join(" | ", notes));
+        }
+
+        private static void AddStringDescriptor(List<Section> sections,
+                                                List<Dictionary<string, object>> descriptors,
+                                                string name, uint[] offsets, byte[] valueBytes)
+        {
+            int index = descriptors.Count;
+            sections.Add(Section.Bytes("attr." + index + ".values", valueBytes));
+            sections.Add(Section.U32("attr." + index + ".offsets", offsets));
+            var entry = new Dictionary<string, object>();
+            entry["group"] = "mesh";
+            entry["name"] = name;
+            entry["domain"] = "POINT";
+            entry["type"] = "STRING";
+            entry["section"] = "attr." + index + ".values";
+            entry["offsets"] = "attr." + index + ".offsets";
+            descriptors.Add(entry);
         }
 
         private static string DescribeRoot(ArchivableDictionary root)

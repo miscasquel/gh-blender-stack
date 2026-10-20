@@ -5,8 +5,11 @@ measured evidence behind the bigger items lives in `polish-plan.md`, which is a
 record of one review rather than a plan. If something is not here, it is either
 done or was judged not worth doing — it is not missing.
 
-**Next session:** 0.3.0 is ready to publish. Phase 7 live acceptance passed
-2026-10-19; the S6 display half, S7 and acceptance A1–A10 passed 2026-10-20
+**Next session:** The Stage In/GhLink batch from the 2026-10-20 review is applied
+(`C-LINK-1`, `C-COMP-2`, `C-LINK-3`, `C-LINK-4`, `C-ATT-2`; review §16). The
+engine batch remains: `B-ENG-4` first, then `B-ENG-2`, `B-ENG-3`, and `B-ENG-1`
+last. 0.3.0 is ready to publish. Phase 7 live acceptance passed 2026-10-19; the
+S6 display half, S7 and acceptance A1–A10 passed 2026-10-20
 (`docs/live-sync-report-2026-10-19.md` §5). The viewport choppiness was the
 unconditional per-tick depsgraph drain; gating it on work fixed it. A10 is done
 and covered headless, the icon pass is in, and 0.3.0 is versioned, built and
@@ -49,10 +52,11 @@ depsgraph drain; gating it on work (`f69f5fc`) fixed it.
   (800 → 300 ms), unexplained: the session did not record whether the rebuilt
   `.gha` (Phase 4 rid pinning) had been loaded — Rhino scans Libraries only on
   load. Hypotheses, in order:
-  1. **Duplicate solves.** `RetryStaleSolves` re-schedules every 250 ms while a
-     slot is `waiting` (`GhLink.cs:726`), so any solve over 250 ms runs
-     two-deep. Fix: mark the solve in flight (delegate start → `SolutionEnd`)
-     and skip retries for it; keep the budget for dropped delegates.
+  1. **Duplicate solves.** `RetryStaleSolves` re-scheduled every 250 ms while a
+     slot was `waiting` (`GhLink.cs:726`), so any solve over 250 ms ran
+     two-deep. The solve is now marked in flight from the delegate start to
+     `SolutionEnd` and retries skip it (`C-LINK-4`, review §16); the latency
+     re-measure is still pending.
   2. **Definitions rebuilt every solve.** `Instances.Build` converts each
      `idef.<i>` group to Rhino geometry and constructs a
      `ModelInstanceDefinition` on every solve, even when the content did not
@@ -108,7 +112,7 @@ Settled by evidence; the code that rests on them must not drift from them.
 - `docs/repo-review-2026-10-20.md` — a code-quality, leanness and
   efficiency review of the v0.3.0 tree, written read-only. It carries the
   per-module scores, the `B-*`/`C-*`/`P-*` finding IDs and a prioritised
-  remediation table. The Tier 1, Phase 2A and Phase 2B batches have since been
-  applied (review §§13–15); its P0/P1 findings have not been triaged into this
-  list yet, and the items that were already known here are cross-referenced in
+  remediation table. The Tier 1, Phase 2A, Phase 2B and Phase 3A batches have
+  since been applied (review §§13–16); the remaining engine findings are the
+  next batch, and the items that were already known here are cross-referenced in
   the review rather than duplicated.
