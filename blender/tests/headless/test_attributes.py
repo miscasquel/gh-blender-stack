@@ -333,6 +333,31 @@ class AttributeEngineTests(unittest.TestCase):
         glass = mesh.attributes["is_glass"]
         self.assertTrue(glass.data[0].value)
 
+    def test_02b_a_response_without_attributes_clears_them(self):
+        # Absent means none: the helper must not keep the previous response's
+        # generic attributes or native colour channel.
+        from blender.gh_stack.blender import engine, helpers
+
+        helper = helpers.helper_for(self.obj, self.stage.key, "mesh")
+        mesh = helper.data
+        mesh.color_attributes.new("Col", "BYTE_COLOR", "POINT")
+        self.assertIsNotNone(mesh.attributes.get("panel_id"))
+
+        sections = {
+            name: values
+            for name, _dtype, values in geometry_io.mesh_to_sections(self.obj.data)
+        }
+        engine._apply(self.obj, self.stage, sections, None)
+
+        self.assertIsNone(mesh.attributes.get("panel_id"))
+        self.assertIsNone(mesh.attributes.get("part"))
+        self.assertIsNone(mesh.color_attributes.get("Col"))
+
+        # A second identical response must not resurrect them.
+        engine._apply(self.obj, self.stage, sections, None)
+        self.assertIsNone(mesh.attributes.get("panel_id"))
+        self.assertIsNone(mesh.color_attributes.get("Col"))
+
     def test_03_an_attribute_value_change_is_new_geometry(self):
         """Attribute values are part of the geometry hash: editing one makes the
         stage request again instead of hitting the cache."""

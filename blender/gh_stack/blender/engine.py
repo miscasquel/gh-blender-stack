@@ -50,7 +50,8 @@ HOT_SECONDS = 1.0
 # it. The hard `_timeout()` still covers an answer that never comes.
 SOFT_RETRY_SECONDS = 1.0
 
-_cache = {}  # (stack_id, stage_key) -> {rid: (header, sections)}; the hot path
+_cache = {}  # (stack_id, stage_key) -> {rid: (raw frame, out_hash)}; the hot path
+_cache_bytes = {}  # (stack_id, stage_key) -> bytes currently held by its cache
 _stores = {}  # (stack_id, stage_key) -> ResponseStore; the backing store
 _prefix_memo = {}  # (obj.as_pointer(), stage key) -> {"revision": tuple, "sections": list}
 # (stack_id, stage_key) pairs allowed exactly one request while frozen: Pull.
@@ -110,6 +111,13 @@ _pending = {}
 # decided against the geometry named here, not against a rolled-back field.
 _sent = {}
 _dirty = set()  # object names that need a pass
+# Stage and stack lookup, rebuilt on load/undo and patched as stages change.
+# The handlers run on the main thread, so direct object references are safe;
+# a rename follows the reference, unlike a name-keyed index.
+_stage_index = {}  # stage_key -> [object]
+_stack_objects = []  # every object with at least one stage
+_index_dirty = True
+_index_object_count = -1
 # Object names with a request in flight, for the Diagnostics summary. Refreshed
 # from `_pending` by the once-a-second stall scan; the scan itself walks the
 # scene rather than trusting this set, because a rename between send and check
@@ -147,6 +155,7 @@ stats = {
     "sends": 0,  # requests actually sent
     "timeouts": 0,  # requests given up on after the timeout and retried in full
     "undelivered": 0,  # requests not even sent: no client socket to carry them
+    "index_rebuilds": 0,  # full-scene index scans (diagnostics/tests)
 }
 
 
@@ -164,10 +173,91 @@ def _forget(stack_id, stage_key):
 # --------------------------------------------------------------------- triggers
 
 
-def _mark_dirty_all():
+def _rebuild_index():
+    """One full-scene scan: every object with stages, and every stage key.
+
+    Lifecycle paths (register, load, undo, a stage being added) invalidate the
+    index; message paths call :func:`_ensure_index` and then search only the
+    matching stages. The old handlers walked every object in the blend for each
+    response and schema heartbeat.
+    """
+    global _index_dirty, _index_object_count
+    _stage_index.clear()
+    del _stack_objects[:]
+    _index_object_count = len(bpy.data.objects)
     for obj in bpy.data.objects:
-        if stack_mod.stack_of(obj) is not None and len(obj.gh_stack.stages):
-            _dirty.add(obj.name)
+        record = stack_mod.stack_of(obj)
+        if record is None or not len(record.stages):
+            continue
+        _stack_objects.append(obj)
+        for stage in record.stages:
+            if not stage.key:
+                continue
+            objects = _stage_index.setdefault(stage.key, [])
+            if not any(other is obj for other in objects):
+                objects.append(obj)
+    _index_dirty = False
+    stats["index_rebuilds"] += 1
+
+
+def _ensure_index():
+    if _index_dirty or len(bpy.data.objects) != _index_object_count:
+        _rebuild_index()
+
+
+def _reindex_object(obj):
+    """Patch one object after its stage list or one of its keys changed."""
+    global _index_dirty
+    try:
+        record = stack_mod.stack_of(obj)
+    except ReferenceError:
+        _index_dirty = True
+        return
+    if obj in _stack_objects:
+        del _stack_objects[_stack_objects.index(obj)]
+    for key in list(_stage_index):
+        objects = _stage_index[key]
+        objects[:] = [other for other in objects if other is not obj]
+        if not objects:
+            del _stage_index[key]
+    if record is None or not len(record.stages):
+        return
+    _stack_objects.append(obj)
+    for stage in record.stages:
+        if stage.key:
+            _stage_index.setdefault(stage.key, []).append(obj)
+
+
+def _stage_views(key):
+    """Yield ``(object, record, stage)`` for every live stage with this key."""
+    _ensure_index()
+    for obj in list(_stage_index.get(key, ())):
+        try:
+            record = stack_mod.stack_of(obj)
+            stage = stack_mod.stage_of(obj, key) if record is not None else None
+        except ReferenceError:
+            _index_dirty = True
+            continue
+        if record is not None and stage is not None:
+            yield obj, record, stage
+
+
+def _all_stack_objects():
+    """Every object with a stage, refreshing the index if a datablock vanished."""
+    _ensure_index()
+    for obj in list(_stack_objects):
+        try:
+            record = stack_mod.stack_of(obj)
+        except ReferenceError:
+            _index_dirty = True
+            continue
+        if record is not None and len(record.stages):
+            yield obj
+
+
+def _mark_dirty_all():
+    for obj in _all_stack_objects():
+        _dirty.add(obj.name)
 
 
 def _mark_hot():
@@ -296,10 +386,9 @@ def _after_history_step():
     depsgraph delivery is missed; the memo is cleared for the same reason — an
     undo restores datablocks the memo may name.
     """
-    for obj in bpy.data.objects:
+    _rebuild_index()
+    for obj in list(_stack_objects):
         record = stack_mod.stack_of(obj)
-        if record is None or not record.stages:
-            continue
         if not record.stack_id:
             record.stack_id = stack_mod.ensure_stack(obj).stack_id
         for stage in record.stages:
@@ -383,6 +472,7 @@ def _on_load(scene=None):
             modifier = nodes.modifier_of(obj, stage)
             if modifier is not None:
                 _repair_plumbing(obj, record, stage, modifier)
+    _rebuild_index()
     _mark_dirty_all()
     _mark_hot()
 
@@ -514,10 +604,8 @@ def _nudge_stalled_waits():
         return
     _last_stall_check = now
     waiting = set()
-    for obj in bpy.data.objects:
+    for obj in _all_stack_objects():
         record = stack_mod.stack_of(obj)
-        if record is None or not record.stages:
-            continue
         for stage in record.stages:
             pending = _pending.get((record.stack_id, stage.key))
             if not pending:
@@ -537,9 +625,9 @@ def _handle_incoming():
     guard a raise in one handler aborted the pass and every message behind it
     was lost.
     """
-    for header, sections in bridge.drain_incoming():
+    for header, sections, raw in bridge.drain_incoming():
         try:
-            _handle_message(header, sections)
+            _handle_message(header, sections, raw)
         except Exception as exc:
             try:
                 _report_message_failure(header, exc)
@@ -550,12 +638,12 @@ def _handle_incoming():
                 _trace.append("incoming message failed and could not be reported")
 
 
-def _handle_message(header, sections):
+def _handle_message(header, sections, raw=None):
     mtype = header.get("type")
     if mtype == "schema":
         _handle_schema(header)
     elif mtype == "response":
-        _handle_response(header, sections)
+        _handle_response(header, sections, raw)
     elif mtype == "error":
         _handle_error(header)
     elif mtype == "hello":
@@ -600,13 +688,7 @@ def _clear_failed_response(stage_key, rid):
     and the state leaves `waiting`, where an empty pending map would look like
     an answer still on its way.
     """
-    for obj in bpy.data.objects:
-        record = stack_mod.stack_of(obj)
-        if record is None or not record.stages:
-            continue
-        stage = stack_mod.stage_of(obj, stage_key)
-        if stage is None:
-            continue
+    for obj, record, stage in _stage_views(stage_key):
         _forget(record.stack_id, stage.key)
         if rid:
             _forget_frame(record, stage, rid)
@@ -628,9 +710,7 @@ def _forget_frame(record, stage, rid):
     raises again, forever. Removing it turns the retry into a real request,
     which is the only thing that can heal a transient apply fault.
     """
-    cache = _cache.get((record.stack_id, stage.key))
-    if cache is not None:
-        cache.pop(rid, None)
+    _drop_hot(record, stage, rid)
     try:
         _store_for(record, stage).remove(rid)
     except OSError as exc:
@@ -661,10 +741,8 @@ def _on_client_hello(header):
         key = entry.get("key") if isinstance(entry, dict) else None
         if key:
             claimed.add(key)
-    for obj in bpy.data.objects:
+    for obj in _all_stack_objects():
         record = stack_mod.stack_of(obj)
-        if record is None or not record.stages:
-            continue
         if not record.stack_id:
             record.stack_id = stack_mod.ensure_stack(obj).stack_id
         if doc and claimed and any(stage.key in claimed for stage in record.stages):
@@ -690,49 +768,38 @@ def _handle_schema(header):
     key = header.get("stage")
     params = header.get("params") or []
     matched = False
-    for obj in bpy.data.objects:
-        record = stack_mod.stack_of(obj)
-        if record is None:
-            continue
-        stage = stack_mod.stage_of(obj, key)
-        if stage is not None:
-            matched = True
-            if not record.stack_id:
-                record.stack_id = stack_mod.ensure_stack(obj).stack_id
-            try:
-                # The plugin re-publishes on a heartbeat; only touch the UI when
-                # the schema actually changed.
-                if props.schema_signature(stage) == props.incoming_signature(params):
-                    continue
-                props.apply_schema(obj, stage, params)
-            except Exception as exc:
-                # One bad schema must not take the engine down.
-                bridge.state["error"] = "schema for %s failed: %r" % (key, exc)
-                import traceback
-
-                prefs.log("[gh-stack] schema error:\n%s" % traceback.format_exc(), flush=True)
+    for obj, record, stage in _stage_views(key):
+        matched = True
+        if not record.stack_id:
+            record.stack_id = stack_mod.ensure_stack(obj).stack_id
+        try:
+            # The plugin re-publishes on a heartbeat; only touch the UI when
+            # the schema actually changed.
+            if props.schema_signature(stage) == props.incoming_signature(params):
                 continue
-            # A changed schema is a changed definition: frames cached against
-            # the old one must not replay.
-            _bump_generation(obj, record, stage, "schema changed")
-            _dirty.add(obj.name)
-            obj.update_tag()
+            props.apply_schema(obj, stage, params)
+        except Exception as exc:
+            # One bad schema must not take the engine down.
+            bridge.state["error"] = "schema for %s failed: %r" % (key, exc)
+            import traceback
+
+            prefs.log("[gh-stack] schema error:\n%s" % traceback.format_exc(), flush=True)
+            continue
+        # A changed schema is a changed definition: frames cached against
+        # the old one must not replay.
+        _bump_generation(obj, record, stage, "schema changed")
+        _dirty.add(obj.name)
+        obj.update_tag()
     if not matched:
         # A schema for a stage no object has: usually a key pasted into GH that
         # does not belong to any stack, or a stage removed in Blender.
         prefs.log("[gh-stack] schema for unknown stage %r ignored" % (key,), flush=True)
 
 
-def _handle_response(header, sections):
+def _handle_response(header, sections, raw=None):
     key = header.get("stage")
     rid = header.get("rid")
-    for obj in bpy.data.objects:
-        record = stack_mod.stack_of(obj)
-        if record is None or not record.stages:
-            continue
-        stage = stack_mod.stage_of(obj, key)
-        if stage is None:
-            continue
+    for obj, record, stage in _stage_views(key):
         if not record.stack_id:
             record.stack_id = stack_mod.ensure_stack(obj).stack_id
 
@@ -760,7 +827,7 @@ def _handle_response(header, sections):
         stored_out = None
         memory = _cache.get((record.stack_id, key))
         if memory is not None and rid in memory:
-            stored_out = memory[rid][0].get("out_hash") or ""
+            stored_out = memory[rid][1] or ""
         else:
             try:
                 entry = _store_for(record, stage).entry(rid)
@@ -774,8 +841,8 @@ def _handle_response(header, sections):
             # that does not touch Blender's inputs). Everything cached for this
             # stage is suspect.
             _bump_generation(obj, record, stage, "Grasshopper's answer changed")
-        _remember(record, stage, rid, header, sections)
-        _store_frame(record, stage, rid, header, sections)
+        _remember(record, stage, rid, header, sections, raw)
+        _store_frame(record, stage, rid, header, sections, raw)
 
         was_pending = rid in _pending_of(record.stack_id, key)
         sent_at = _pending_of(record.stack_id, key).get(rid) if was_pending else None
@@ -845,13 +912,7 @@ def _handle_error(header):
     message = header.get("message") or code or "protocol error"
     if code == "unknown_ref":
         matched = False
-        for obj in bpy.data.objects:
-            record = stack_mod.stack_of(obj)
-            if record is None or not record.stages:
-                continue
-            stage = stack_mod.stage_of(obj, header.get("stage"))
-            if stage is None:
-                continue
+        for obj, record, stage in _stage_views(header.get("stage")):
             matched = True
             _resend_in_full(obj, record, stage, "unknown_ref")
         if not matched:
@@ -859,13 +920,7 @@ def _handle_error(header):
         return
 
     prefs.log("[gh-stack] protocol error %s: %s" % (code, message), flush=True)
-    for obj in bpy.data.objects:
-        record = stack_mod.stack_of(obj)
-        if record is None or not record.stages:
-            continue
-        stage = stack_mod.stage_of(obj, header.get("stage"))
-        if stage is None:
-            continue
+    for obj, record, stage in _stage_views(header.get("stage")):
         # The request this error answers is over: without this the stage would
         # sit `waiting` for the full timeout for an answer that is already here.
         # The error is left on display and the stage is not dirtied — retrying
@@ -1246,20 +1301,34 @@ def _write_rows_cloud(cloud, rows, stage_key, with_child=False):
     cloud.update_tag()
 
 
+def _has_generic_attributes(owner):
+    """Whether the owner still carries a stage-owned generic attribute."""
+    for attr in owner.attributes:
+        name = attr.name
+        if name.startswith(".") or name in attributes_mod.SKIP_NAMES:
+            continue
+        if name in (geometry_io.CREASE_ATTRIBUTE, geometry_io.COLOR_ATTRIBUTE):
+            continue
+        return True
+    return False
+
+
 def _apply_attributes(obj, stage, sections, attributes):
-    """Write the frame's attribute sections into the helper they belong to.
+    """Reconcile the frame's attribute sections with the helpers they belong to.
 
     mesh and subd share the mesh helper (a SubD cage is a mesh); points go to
     the point cloud helper. A descriptor with a ``definition`` index targets
     that definition's helper instead (protocol §5.2). Curve attributes are not
     transferred yet — Blender's curve helper is a legacy Curve datablock, which
     cannot store attributes.
+
+    Absent means none: a helper the frame gives no descriptors is pruned of
+    its previous generic attributes. The native colour channel is handled by
+    the geometry write path, and the crease attribute by ``write_creases``.
     """
-    if not attributes:
-        return
     kinds = {"mesh": "mesh", "subd": "mesh", "pts": "points"}
     grouped = {}
-    for descriptor in attributes:
+    for descriptor in attributes or []:
         kind = kinds.get(descriptor.get("group"))
         if kind is None:
             continue
@@ -1270,14 +1339,31 @@ def _apply_attributes(obj, stage, sections, attributes):
         definition = descriptor.get("definition")
         grouped.setdefault((definition, kind), []).append((descriptor, values, offsets))
 
-    for (definition, kind), entries in grouped.items():
+    targets = {(None, "mesh"), (None, "points")}
+    for index in helpers.definition_collections(obj, stage.key):
+        targets.add((int(index), "mesh"))
+        targets.add((int(index), "points"))
+    targets.update(grouped)
+
+    def order(target):
+        definition, kind = target
+        return (definition is not None, -1 if definition is None else int(definition), kind)
+
+    for definition, kind in sorted(targets, key=order):
         if definition is None:
-            helper = helpers.ensure_helper(obj, stage.key, kind)
+            helper = helpers.helper_for(obj, stage.key, kind)
         else:
-            _collection, objects = helpers.ensure_definition(obj, stage.key, int(definition))
+            _collection, objects = helpers.ensure_definition(
+                obj, stage.key, int(definition)
+            )
             helper = objects[kind]
+        if helper is None:
+            continue
+        entries = grouped.get((definition, kind), [])
+        if not entries and not _has_generic_attributes(helper.data):
+            continue
         _bump_id(helper)
-        for note in geometry_io.write_attributes(helper.data, entries):
+        for note in geometry_io.write_attributes(helper.data, entries, prune=True):
             prefs.log("[gh-stack] %s: %s" % (stage.key, note), flush=True)
         helper.update_tag()
 
@@ -1408,6 +1494,7 @@ def _bump_generation(obj, record, stage, reason=""):
     _forget_prefix(obj, stage.key)
     stage.generation += 1
     _cache.pop((record.stack_id, stage.key), None)
+    _cache_bytes.pop((record.stack_id, stage.key), None)
     _trace.append("%s: reset (%s)" % (stage.key, reason or "definition changed"))
     try:
         removed = _store_for(record, stage).prune(generation=stage.generation)
@@ -1422,20 +1509,50 @@ def _bump_generation(obj, record, stage, reason=""):
         )
 
 
-def _store_frame(record, stage, rid, header, sections):
-    """Persist a response as the raw protocol frame plus a metadata sidecar."""
-    if header.get("status") != "ok":
-        return
+def _frame_bytes(header, sections):
+    """Encode one decoded frame for storage.
+
+    The socket path normally hands over the exact bytes it received; this is the
+    fallback for tests and any in-process caller that only has decoded sections.
+    """
     entries = []
     for entry in header.get("sections") or []:
         name = entry.get("name")
         if name in sections:
             entries.append((name, entry.get("dtype"), sections[name]))
-    try:
-        raw = codec.encode_frame(header, entries)
-    except (codec.CodecError, KeyError, TypeError) as exc:
-        prefs.log("[gh-stack] could not store a frame for %s: %r" % (stage.key, exc), flush=True)
+    return codec.encode_frame(header, entries)
+
+
+def _drop_hot(record, stage, rid):
+    """Remove one hot entry and keep its running byte total exact."""
+    key = (record.stack_id, stage.key)
+    cache = _cache.get(key)
+    if cache is None:
         return
+    entry = cache.pop(rid, None)
+    if entry is None:
+        return
+    total = max(0, _cache_bytes.get(key, 0) - len(entry[0]) - len(entry[1]))
+    if cache:
+        _cache_bytes[key] = total
+    else:
+        _cache.pop(key, None)
+        _cache_bytes.pop(key, None)
+
+
+def _store_frame(record, stage, rid, header, sections, raw=None):
+    """Persist a response as the raw protocol frame plus a metadata sidecar."""
+    if header.get("status") != "ok":
+        return
+    if raw is None:
+        try:
+            raw = _frame_bytes(header, sections)
+        except (codec.CodecError, KeyError, TypeError) as exc:
+            prefs.log(
+                "[gh-stack] could not store a frame for %s: %r" % (stage.key, exc),
+                flush=True,
+            )
+            return
     try:
         _store_for(record, stage).store(
             rid,
@@ -1448,43 +1565,47 @@ def _store_frame(record, stage, rid, header, sections):
         prefs.log("[gh-stack] cache write failed for %s: %r" % (stage.key, exc), flush=True)
 
 
-def _remember(record, stage, rid, header, sections):
-    """Put a decoded response in the hot memory cache, bounded by the same byte
-    budget as the disk store (FIFO over insertion order; the disk is the
-    backing store, so an evicted frame just loads again)."""
-    cache = _cache.setdefault((record.stack_id, stage.key), {})
-    cache[rid] = (header, sections)
+def _remember(record, stage, rid, header, sections, raw=None):
+    """Put a response in the hot memory cache, bounded by the same byte budget
+    as the disk store (FIFO over insertion order; the disk is the backing store,
+    so an evicted frame just loads again).
+
+    The entry holds the wire bytes, not the decoded Python tuples. The tuples
+    are several times larger than the frame and were the reason the old
+    wire-size accounting could exceed the bound by a wide margin. A replay
+    decodes the bytes again; the apply path already dominates that cost.
+    """
+    if raw is None:
+        try:
+            raw = _frame_bytes(header, sections)
+        except (codec.CodecError, KeyError, TypeError) as exc:
+            prefs.log(
+                "[gh-stack] could not cache a frame for %s: %r" % (stage.key, exc),
+                flush=True,
+            )
+            return
+    key = (record.stack_id, stage.key)
+    cache = _cache.setdefault(key, {})
+    if key not in _cache_bytes:
+        total = sum(len(entry[0]) + len(entry[1]) for entry in cache.values())
+    else:
+        total = _cache_bytes[key]
+    if not cache:
+        total = 0  # a direct test clear resets the accounting with it
+    old = cache.get(rid)
+    if old is not None:
+        total -= len(old[0]) + len(old[1])
+    entry = (raw, header.get("out_hash") or "")
+    cache[rid] = entry
+    total += len(entry[0]) + len(entry[1])
     limit = prefs.cache_size_bytes()
-    while len(cache) > 1 and _memory_usage(cache) > limit:
+    while len(cache) > 1 and total > limit:
         oldest = next(iter(cache))
         if oldest == rid:
             break
-        del cache[oldest]
-
-
-def _memory_usage(cache):
-    """Approximate bytes of a memory-cache entry set. Attribute sections get
-    their real dtype from the frame's descriptors; everything else from its
-    name. The number only drives eviction, so a small overestimate is fine —
-    a wrong *underestimate* would let the cache grow past its bound."""
-    total = 0
-    for header, sections in cache.values():
-        dtypes = {}
-        for descriptor in header.get("attributes") or []:
-            name = descriptor.get("section")
-            if name:
-                spec = attributes_mod.WIRE_TYPES.get(descriptor.get("type"), ("f32",))
-                dtypes[name] = spec[0]
-            offsets = descriptor.get("offsets")
-            if offsets:
-                dtypes[offsets] = "u32"
-        for name, values in sections.items():
-            dtype = dtypes.get(name) or _dtype_of(name)
-            try:
-                total += len(values) * (1 if dtype == "u8" else 4)
-            except TypeError:
-                continue
-    return total
+        dropped = cache.pop(oldest)
+        total -= len(dropped[0]) + len(dropped[1])
+    _cache_bytes[key] = total
 
 
 def _cached_response(record, stage, rid):
@@ -1494,7 +1615,20 @@ def _cached_response(record, stage, rid):
     if memory is not None:
         hit = memory.get(rid)
         if hit is not None:
-            return hit
+            try:
+                header, sections = codec.decode_frame(hit[0])
+            except codec.CodecError as exc:
+                prefs.log(
+                    "[gh-stack] dropping a corrupt hot frame for %s: %r"
+                    % (stage.key, exc),
+                    flush=True,
+                )
+                _drop_hot(record, stage, rid)
+                return None
+            if header.get("status") != "ok" or header.get("stage") != stage.key:
+                _drop_hot(record, stage, rid)
+                return None
+            return header, sections
     try:
         store = _store_for(record, stage)
         entry = store.valid(rid, generation=stage.generation, definition=_definition(stage))
@@ -1515,7 +1649,7 @@ def _cached_response(record, stage, rid):
     if header.get("status") != "ok" or header.get("stage") != stage.key:
         store.remove(rid)
         return None
-    _remember(record, stage, rid, header, sections)
+    _remember(record, stage, rid, header, sections, raw)
     return header, sections
 
 
@@ -1543,11 +1677,10 @@ def _duplicate_owner(obj, stage_key):
     depend on which object happened to be dirty first.
     """
     owner = obj
-    for other in bpy.data.objects:
-        if other.name >= owner.name:
+    for other, _record, other_stage in _stage_views(stage_key):
+        if other is obj or other.name >= owner.name:
             continue
-        other_stage = stack_mod.stage_of(other, stage_key)
-        if other_stage is not None and _stage_has_modifier(other, other_stage):
+        if _stage_has_modifier(other, other_stage):
             owner = other
     return owner if owner is not obj else None
 
@@ -1617,6 +1750,7 @@ def _split_duplicate_stages(obj, record):
             for index in list(helpers.definition_collections(obj, key)):
                 helpers.remove_definition(obj, key, index)
         _trace.append("%s: split stage %s -> %s" % (obj.name, old_key, stage.key))
+    _reindex_object(obj)
     obj.update_tag()
     return True
 
@@ -1659,10 +1793,17 @@ def _drop_removed_stages(obj, record):
             # too: the modifier is there but has nothing to match on. Keep the
             # stage — removal is data loss, and the pass repairs it.
             continue
+        key = (record.stack_id, stage.key)
         _forget(record.stack_id, stage.key)
-        _sent.pop((record.stack_id, stage.key), None)
-        _pull_permits.discard((record.stack_id, stage.key))
-        _verify.discard((record.stack_id, stage.key))
+        _sent.pop(key, None)
+        _cache.pop(key, None)
+        _cache_bytes.pop(key, None)
+        _stores.pop(key, None)
+        _state_since.pop(key, None)
+        _timings.pop(key, None)
+        _last_no_send.pop(key, None)
+        _pull_permits.discard(key)
+        _verify.discard(key)
         _forget_prefix(obj, stage.key)
         helpers.remove_helper(obj, stage.key)
         for definition in list(helpers.definition_collections(obj, stage.key)):
@@ -1672,6 +1813,7 @@ def _drop_removed_stages(obj, record):
         record.stages.remove(index)
         removed = True
     if removed:
+        _reindex_object(obj)
         obj.update_tag()
     return removed
 
@@ -2350,6 +2492,7 @@ def request_again(obj, stage=None, skip_frozen=False):
             _set(item, "state", stack_mod.STATE_FROZEN)
         else:
             _set(item, "state", stack_mod.STATE_IDLE)
+    _reindex_object(obj)
     _dirty.add(obj.name)
     _mark_hot()
 
@@ -2404,10 +2547,13 @@ def _mark_object_dirty(obj):
 
 
 def register():
-    global _registered, _hot_until
+    global _registered, _hot_until, _index_dirty
     global _evaluating, _guard_owner, _evaluating_since, _ticking
     if _registered:
         return
+    _stage_index.clear()
+    del _stack_objects[:]
+    _index_dirty = True
     # Everything the last registration learned belongs to the session that just
     # ended: a decoded frame, an evaluated prefix, a request in flight, a counter.
     # Leaving them behind served a stale prefix and stale counters across a
@@ -2415,6 +2561,7 @@ def register():
     # own, and clearing it could skip the first pass a stack needs.
     _stores.clear()
     _cache.clear()
+    _cache_bytes.clear()
     _pending.clear()
     _sent.clear()
     _prefix_memo.clear()

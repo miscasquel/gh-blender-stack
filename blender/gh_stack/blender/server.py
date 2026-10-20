@@ -191,7 +191,7 @@ class GhServer(object):
                     continue
                 if header.get("type") == "hello":
                     bridge.set_connected(header.get("doc", ""))
-                bridge.post_incoming(header, sections)
+                bridge.post_incoming(header, sections, message)
         except Exception as exc:
             # An abrupt disconnect is normal (GH closed, Blender quit); a handler
             # bug is not. Only the latter deserves a traceback in the log.

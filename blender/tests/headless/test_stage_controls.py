@@ -244,6 +244,13 @@ class StageControlTests(unittest.TestCase):
         import gh_stack.blender.helpers as helpers
 
         record = self.obj.gh_stack
+        key = (record.stack_id, self.stage.key)
+        # Seed the session maps a live stage can own; removal must clear them
+        # rather than leave the cache and timing entries behind.
+        self.engine._cache[key] = {"sha256:" + "0" * 64: (b"x", "")}
+        self.engine._cache_bytes[key] = 1
+        self.engine._state_since[key] = 0.0
+        self.engine._timings[key] = {"prefix_ms": 1.0}
         modifier = self.nodes.modifier_of(self.obj, self.stage)
         helper_name = helpers.helper_name(self.obj, self.stage.key)
         self.obj.modifiers.remove(modifier)
@@ -258,6 +265,10 @@ class StageControlTests(unittest.TestCase):
             bpy.data.node_groups.get(self.nodes.group_name(self.stage.key)),
             "the node group survived removal",
         )
+        self.assertNotIn(key, self.engine._cache, "the hot cache entry survived removal")
+        self.assertNotIn(key, self.engine._cache_bytes, "the cache accounting survived removal")
+        self.assertNotIn(key, self.engine._state_since, "the wait stamp survived removal")
+        self.assertNotIn(key, self.engine._timings, "the timings survived removal")
 
 
 if __name__ == "__main__":

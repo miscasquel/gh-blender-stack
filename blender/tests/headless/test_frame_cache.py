@@ -598,6 +598,15 @@ class EvictionTests(FrameCacheTestCase):
         stop_fake(getattr(cls, "fake", None))
         super().tearDownClass()
 
+    def test_00_hot_cache_stores_wire_bytes_with_an_exact_total(self):
+        key = (self.obj.gh_stack.stack_id, self.stage.key)
+        cache = self.engine._cache.get(key, {})
+        self.assertTrue(cache)
+        total = sum(len(raw) + len(out_hash) for raw, out_hash in cache.values())
+        self.assertEqual(self.engine._cache_bytes.get(key), total)
+        for raw, _out_hash in cache.values():
+            self.assertIsInstance(raw, (bytes, bytearray))
+
     def test_01_eviction_keeps_the_budget(self):
         self.assertGreaterEqual(requests_of(self.report), 4)
         # Four ~1 MB frames do not fit a 1 MB budget: only the newest survives.
@@ -775,9 +784,9 @@ class OneRequestOutstandingTests(FrameCacheTestCase):
                 seen["peak"] = max(seen["peak"], seen["outstanding"])
             return sent
 
-        def counting_response(header, sections):
+        def counting_response(header, sections, raw=None):
             seen["outstanding"] = max(0, seen["outstanding"] - 1)
-            return real_response(header, sections)
+            return real_response(header, sections, raw)
 
         server.SERVER.send = counting_send
         engine._handle_response = counting_response

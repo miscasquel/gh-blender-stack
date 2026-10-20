@@ -261,15 +261,21 @@ def points_attributes(cloud, index0=0, prefix="", definition=None):
     )
 
 
-def write_attributes(owner, entries):
+def write_attributes(owner, entries, prune=False):
     """Create or update attributes from decoded wire sections.
 
     ``entries`` is ``(descriptor, values, offsets)`` per attribute, straight
     from a decoded frame. Values that do not fit the target domain are dropped
     with a note in the returned list — a wrong count is a topology mismatch, and
     writing it anyway would be silent corruption.
+
+    ``prune`` removes stage-owned generic attributes the frame no longer
+    carries. The native colour channel and the crease attribute are managed by
+    their own paths and are never removed here; leading-dot names are Blender's
+    internals.
     """
     notes = []
+    written = set()
     for descriptor, values, offsets in entries:
         name = descriptor.get("name") or "?"
         domain = descriptor.get("domain") or "POINT"
@@ -299,6 +305,7 @@ def write_attributes(owner, entries):
             attr = _attribute_for(owner, name, domain, type_name)
             for i, raw in enumerate(data):
                 attr.data[i].value = raw
+            written.add(name)
             continue
 
         comps = spec[1]
@@ -327,6 +334,24 @@ def write_attributes(owner, entries):
             attr.data.foreach_set("value", arr.reshape(-1).astype(np.int32))
         else:  # FLOAT, QUATERNION, FLOAT4X4
             attr.data.foreach_set("value", arr.reshape(-1).astype(np.float32))
+        written.add(name)
+
+    if prune:
+        keep = written
+        for attr in list(owner.attributes):
+            name = attr.name
+            if name in keep:
+                continue
+            if name.startswith(".") or name in attr_mod.SKIP_NAMES:
+                continue
+            if name in (COLOR_ATTRIBUTE, CREASE_ATTRIBUTE):
+                continue
+            try:
+                owner.attributes.remove(attr)
+            except RuntimeError:
+                # Blender marks some channels required (for example a point
+                # cloud's position). They are internal and cannot be removed.
+                pass
     return notes
 
 
@@ -1042,8 +1067,11 @@ def sections_to_mesh(mesh, sections):
         faces = _faces_from(counts, indices)
         mesh.from_pydata(verts.tolist(), [], faces)
 
-    if "mesh.colors" in by_name:
-        write_colors(mesh, np.asarray(by_name["mesh.colors"], dtype=np.uint8))
+    colors = by_name.get("mesh.colors")
+    write_colors(
+        mesh,
+        None if colors is None else np.asarray(colors, dtype=np.uint8),
+    )
 
     creases = None
     if "subd.crease_edges" in by_name and "subd.crease_values" in by_name:
@@ -1066,7 +1094,16 @@ def _faces_from(counts, indices):
 
 
 def write_colors(mesh, colors):
-    """Create or update the byte-colour attribute from u8 N×4 data."""
+    """Create or update the byte-colour attribute from u8 N×4 data.
+
+    ``None`` removes the stage's native colour channel: an absent
+    ``mesh.colors`` section means "no colour", not "keep the previous one".
+    """
+    if colors is None:
+        attr = mesh.color_attributes.get(COLOR_ATTRIBUTE)
+        if attr is not None and attr.name == COLOR_ATTRIBUTE:
+            mesh.color_attributes.remove(attr)
+        return
     if colors.ndim != 2 or colors.shape[1] != 4:
         raise GeometryIOError("mesh.colors must be N x 4")
     attr = mesh.color_attributes.get(COLOR_ATTRIBUTE)
@@ -1232,13 +1269,25 @@ def sections_to_points(cloud, sections):
             cloud.points.foreach_set("radius", radii)
     cloud.points.update()
 
-    if "pts.colors" in by_name:
-        write_point_colors(cloud, np.asarray(by_name["pts.colors"], dtype=np.uint8))
+    colors = by_name.get("pts.colors")
+    write_point_colors(
+        cloud,
+        None if colors is None else np.asarray(colors, dtype=np.uint8),
+    )
     return cloud
 
 
 def write_point_colors(cloud, colors):
-    """Create or update the byte-colour attribute of a point cloud."""
+    """Create or update the byte-colour attribute of a point cloud.
+
+    ``None`` removes the native colour channel when the frame no longer
+    carries ``pts.colors``.
+    """
+    if colors is None:
+        attr = cloud.color_attributes.get(COLOR_ATTRIBUTE)
+        if attr is not None and attr.name == COLOR_ATTRIBUTE:
+            cloud.color_attributes.remove(attr)
+        return
     if colors.ndim != 2 or colors.shape[1] != 4:
         raise GeometryIOError("pts.colors must be N x 4")
     attr = cloud.color_attributes.get(COLOR_ATTRIBUTE)
