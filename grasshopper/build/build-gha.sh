@@ -3,25 +3,14 @@
 #
 #     grasshopper/build/build-gha.sh
 #
-# Uses Mono's real csc.exe (see build-core.sh for why wine's Framework wrapper
+# Uses Mono's real csc.exe (see wine-env.sh for why wine's Framework wrapper
 # is not used). References: Grasshopper, GH_IO, RhinoCommon, System.Drawing.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-REPO="$(cd "$HERE/../.." && pwd)"
-PREFIX="${WINEPREFIX:-$HOME/.local/share/wineprefixes/rhino8}"
-WINE="${WINE:-$HOME/.local/share/wine-rhino/bin/wine}"
-CSC_PATH="$(find /usr/share/wine/mono -maxdepth 6 -path '*/lib/mono/4.5/csc.exe' | head -1)"
-[ -f "$CSC_PATH" ] || { echo "mono csc.exe not found" >&2; exit 1; }
-CSC="$(WINEPREFIX="$PREFIX" "$WINE" winepath -w "$CSC_PATH")"
+source "$HERE/wine-env.sh"
 OUT="$HERE/out/GhStack.gha"
 
-win_path() { WINEPREFIX="$PREFIX" "$WINE" winepath -w "$1"; }
-
-RHINO="$PREFIX/drive_c/Program Files/Rhino 8"
-GH_DLL="$RHINO/Plug-ins/Grasshopper/Grasshopper.dll"
-GHIO_DLL="$RHINO/Plug-ins/Grasshopper/GH_IO.dll"
-RC_DLL="$RHINO/System/RhinoCommon.dll"
 for f in "$GH_DLL" "$GHIO_DLL" "$RC_DLL"; do
   [ -f "$f" ] || { echo "missing $f" >&2; exit 1; }
 done
@@ -41,12 +30,12 @@ for png in "$REPO"/grasshopper/src/gh/icons/*.png; do
   RESOURCES+=("/resource:$(win_path "$png"),GhStack.icons.$name.png")
 done
 
-WINEPREFIX="$PREFIX" "$WINE" "$CSC" \
+run_csc \
   /nologo /target:library \
   /out:"$(win_path "$OUT")" \
   /r:"$(win_path "$GH_DLL")" /r:"$(win_path "$GHIO_DLL")" /r:"$(win_path "$RC_DLL")" \
   /r:System.Drawing.dll \
-  "${SOURCES[@]}" "${RESOURCES[@]}" 2>&1 | grep -vE 'fixme:|MESA-EGL|pci id|^$' || true
+  "${SOURCES[@]}" "${RESOURCES[@]}"
 
 [ -f "$OUT" ] || { echo "build failed: $OUT not produced" >&2; exit 1; }
 echo "built $OUT ($(stat -c%s "$OUT") bytes)"

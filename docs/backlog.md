@@ -95,9 +95,6 @@ Settled by evidence; the code that rests on them must not drift from them.
 
 ## Polish
 
-- **Build scripts share a strain of boilerplate.** `grasshopper/build/*.sh`
-  repeat the same wine/`csc.exe` setup; one shared helper would keep the wine
-  trap handling (match whichever wineserver owns the prefix) in one place.
 - **The vendored wheel.** `blender/gh_stack/vendor/websockets` is now
   development- and test-only (the shipped zip carries the official wheel from
   PyPI, digest-pinned in `scripts/build-extension`). The Linux-only speedups
@@ -111,7 +108,7 @@ Settled by evidence; the code that rests on them must not drift from them.
 - `docs/repo-review-2026-10-20.md` — a code-quality, leanness and
   efficiency review of the v0.3.0 tree, written read-only. It carries the
   per-module scores, the `B-*`/`C-*`/`P-*` finding IDs and a prioritised
-  remediation table. The Tier 1 and Phase 2A batches have since been applied
-  (review §§13–14); its P0/P1 findings have not been triaged into this list yet,
-  and the items that were already known here are cross-referenced in the review
-  rather than duplicated.
+  remediation table. The Tier 1, Phase 2A and Phase 2B batches have since been
+  applied (review §§13–15); its P0/P1 findings have not been triaged into this
+  list yet, and the items that were already known here are cross-referenced in
+  the review rather than duplicated.

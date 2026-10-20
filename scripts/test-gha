@@ -5,10 +5,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-PREFIX="${WINEPREFIX:-$HOME/.local/share/wineprefixes/rhino8}"
-WINE="${WINE:-$HOME/.local/share/wine-rhino/bin/wine}"
-
-win_path() { WINEPREFIX="$PREFIX" "$WINE" winepath -w "$1"; }
+source grasshopper/build/wine-env.sh
 
 grasshopper/build/build.sh
 
@@ -18,19 +15,19 @@ scripts/check-deployed || true
 
 LOG="$(mktemp)"
 set +e
-WINEPREFIX="$PREFIX" "$WINE" \
+run_wine \
   "$(win_path "$PWD/grasshopper/build/out/GhStackCoreTests.exe")" \
   "$(win_path "$PWD/protocol/fixtures")" >"$LOG" 2>&1
 CODE=$?
 if [ -f grasshopper/build/out/GhStackAttrTests.exe ]; then
-  WINEPREFIX="$PREFIX" "$WINE" \
+  run_wine \
     "$(win_path "$PWD/grasshopper/build/out/GhStackAttrTests.exe")" >>"$LOG" 2>&1
   CODE=$(( CODE | $? ))
 fi
 # The link half: the real GhLink against a scripted fake server (the socket
 # thread, slots, notes, outbox and receive paths; no Rhino document).
 if [ -f grasshopper/build/out/GhStackLinkTests.exe ]; then
-  WINEPREFIX="$PREFIX" "$WINE" \
+  run_wine \
     "$(win_path "$PWD/grasshopper/build/out/GhStackLinkTests.exe")" >>"$LOG" 2>&1
   CODE=$(( CODE | $? ))
 fi

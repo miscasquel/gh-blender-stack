@@ -6,8 +6,8 @@
 > there are cross-referenced rather than duplicated.
 >
 > **Follow-up (2026-10-20).** The Tier 1 batch from §7 was applied and
-> verified; see §13. Phase 2A followed; see §14. The findings below describe the
-> pre-fix tree.
+> verified; see §13. Phase 2A followed in §14, and the Phase 2B build tooling in
+> §15. The findings below describe the pre-fix tree.
 
 ## 1. Verdict
 
@@ -1200,3 +1200,30 @@ rest of the boundary work (`C-CORE-1`, `C-CORE-2`, `C-CORE-6`), `C-COMP-2`
 Phase 2B build-tooling batch (`S-1`, `S-2`). The performance and structural
 items (`B-ENG-2`, `B-ENG-4`, `C-LINK-1`, `B-ENG-1`, `B-ENG-3`, `B-HELP-1`)
 remain later phases.
+
+## 15. Phase 2B follow-up (applied 2026-10-20)
+
+Phase 2B replaced the duplicated wine/Mono setup with one sourced helper and
+made compiler failures visible.
+
+| Finding | Applied change |
+|---|---|
+| `S-2` | Added `grasshopper/build/wine-env.sh`: prefix, wine, Mono `csc.exe`, Rhino library paths, `win_path`, `run_csc` and `run_wine` live there. `build.sh`, `build-core.sh`, `build-gha.sh` and `scripts/test-gha` source it. |
+| `S-1` | `run_csc` captures the compiler log, filters only the known wine noise, preserves the caller's errexit state, and returns `csc`'s own exit status. The build scripts no longer pipe `csc` through a filter that swallowed its status. |
+
+Verification:
+
+```text
+bash -n                 wine-env.sh, build.sh, build-core.sh, build-gha.sh, test-gha
+scripts/test-gha       12 fixtures, attribute store, link round-trip: pass
+build-core.sh          GhStack.Core.dll built
+build-gha.sh           GhStack.gha built
+negative compile       deliberate syntax error returns status 1 and prints
+                       CS1519/CS1002/CS1040 instead of falling through to
+                       "output not produced"
+```
+
+The same `blender … | grep … || true` pattern still exists in
+`scripts/build-extension`, `scripts/install-extension` and
+`scripts/test-extension`. It is a separate packaging-script change and remains
+a follow-up; Phase 2B deliberately stayed with the C# build path.
