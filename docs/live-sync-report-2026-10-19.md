@@ -383,7 +383,7 @@ Live checklist under GH (restart Blender first; confirm the Diagnostics
 
 ---
 
-## 5. Implementation status (2026-10-19)
+## 5. Implementation and acceptance status (2026-10-20)
 
 Phases 0–6 are implemented, each as its own reviewed and tested commit:
 
@@ -412,9 +412,9 @@ drag observed through the Recent activity ring. The choppy viewport recorded in
 §6 after Phase 6 was the unconditional per-tick `_drain_depsgraph`; gating it on
 work (`f69f5fc`) removed the cost and the viewport is smooth.
 
-Remaining before 0.3.0: the S6 display half, S7, and acceptance A1–A10 (A10 is
-covered headless by `blender/tests/headless/test_duplicates.py`; the rest are
-GUI confirmations).
+The S6 display half, S7 and acceptance A1–A10 passed 2026-10-20; A10 is also
+covered headless by `blender/tests/headless/test_duplicates.py`. The extension
+zip and `.gha` are built and verified: 0.3.0 is ready to tag and publish.
 
 ---
 

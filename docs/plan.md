@@ -1,6 +1,6 @@
 # GH Stack — Project Plan (rev 2)
 
-**Status:** rev 2 approved. M0 done (2026-10-10): repository skeleton, this plan, protocol draft (`docs/protocol.md`), decision records (`docs/decisions/`), spike scripts (`spikes/`). **S2 passed 2026-10-11** (transport on a background thread, `spikes/results/s2-gui.txt`, `s2-background.txt`): `websockets` 17.2 runs on a plain thread in Blender 5.2, queue handoff works, and a 4 ms `bpy.app.timers` drain holds ~5 ms median under a 2 MB load. **S1 passed 2026-10-11** (the transport gate, `spikes/results/s1.txt`): a C# `.gha` under wine connects, a background message triggers `SolveInstance` on the UI thread through `ScheduleSolution`, replies come back in 20–65 ms, and save/reopen reconnects with no dialog. The plan's `ClientWebSocket` choice was replaced by a TcpClient client (see §19). **M2 done 2026-10-11**: protocol core, ten golden fixtures verified by both codecs. **S3 passed 2026-10-11** (`spikes/results/s3.txt`): mesh round trips match exactly at 1k/10k/100k; 100k costs 30.3 ms end to end, inside the §13 budget. **S4 passed 2026-10-11** (`spikes/results/s4.txt`): the SubD tag setter works, cage SubDs are valid, curve conversion is lossless except when weights are dropped. **Demo v0 works** (`DEMO.md`): a mesh in Blender driven through Stage In/Out and a Param in Grasshopper. **S5 passed 2026-10-12**: the parameter UI (keyframes, decorators, arrays, value-list dropdown) is confirmed in the GUI. **v0.1.0 published on GitHub 2026-10-12** (ADR 0007). **S6 conversions passed 2026-10-12** (`spikes/results/s6.txt`): curves, points, SubD cages with tags, and Breps round-trip through the product conversions inside Rhino. Curves became exact by construction — each piecewise-Bezier span is a single rational Bezier Blender holds exactly — after the live run exposed a homogeneous-vs-Euclidean coordinate mix-up that distorted every rational curve. **S8 passed 2026-10-12**: the add-on ships as a Blender extension with the official pure-Python `websockets` wheel. **Prefix evaluation done 2026-10-12**: a stage sees everything before its own modifier (`GH → GN → GH` chains), a waiting stage pauses the ones after it, and layer B covers the chain (54 headless tests); reconnect resends (§8.8) and `unknown_ref` full resends (§4.3) are implemented. **W2 done 2026-10-12** (ADR 0008): the simulation-style frame cache replaced the bake operator — frames fill as the user plays/scrubs, live on disk under the data root, reset per stage on a Grasshopper-side change, schema change, document change or Push, replay with Grasshopper closed, and idle passes write nothing so Cycles accumulates (60 core + 69 headless tests). **0.3.0 prep (2026-10-19):** W3/W4, the live-sync rebuild, A10, the icon pass and the idle/choppiness fix are in; the Phase 7 live acceptance passed. Next: the S6 display half, S7, and acceptance A1–A10, then the 0.3.0 release.
+**Status:** rev 2 approved. M0 done (2026-10-10): repository skeleton, this plan, protocol draft (`docs/protocol.md`), decision records (`docs/decisions/`), spike scripts (`spikes/`). **S2 passed 2026-10-11** (transport on a background thread, `spikes/results/s2-gui.txt`, `s2-background.txt`): `websockets` 17.2 runs on a plain thread in Blender 5.2, queue handoff works, and a 4 ms `bpy.app.timers` drain holds ~5 ms median under a 2 MB load. **S1 passed 2026-10-11** (the transport gate, `spikes/results/s1.txt`): a C# `.gha` under wine connects, a background message triggers `SolveInstance` on the UI thread through `ScheduleSolution`, replies come back in 20–65 ms, and save/reopen reconnects with no dialog. The plan's `ClientWebSocket` choice was replaced by a TcpClient client (see §19). **M2 done 2026-10-11**: protocol core, ten golden fixtures verified by both codecs. **S3 passed 2026-10-11** (`spikes/results/s3.txt`): mesh round trips match exactly at 1k/10k/100k; 100k costs 30.3 ms end to end, inside the §13 budget. **S4 passed 2026-10-11** (`spikes/results/s4.txt`): the SubD tag setter works, cage SubDs are valid, curve conversion is lossless except when weights are dropped. **Demo v0 works** (`DEMO.md`): a mesh in Blender driven through Stage In/Out and a Param in Grasshopper. **S5 passed 2026-10-12**: the parameter UI (keyframes, decorators, arrays, value-list dropdown) is confirmed in the GUI. **v0.1.0 published on GitHub 2026-10-12** (ADR 0007). **S6 conversions passed 2026-10-12** (`spikes/results/s6.txt`): curves, points, SubD cages with tags, and Breps round-trip through the product conversions inside Rhino. Curves became exact by construction — each piecewise-Bezier span is a single rational Bezier Blender holds exactly — after the live run exposed a homogeneous-vs-Euclidean coordinate mix-up that distorted every rational curve. **S8 passed 2026-10-12**: the add-on ships as a Blender extension with the official pure-Python `websockets` wheel. **Prefix evaluation done 2026-10-12**: a stage sees everything before its own modifier (`GH → GN → GH` chains), a waiting stage pauses the ones after it, and layer B covers the chain (54 headless tests); reconnect resends (§8.8) and `unknown_ref` full resends (§4.3) are implemented. **W2 done 2026-10-12** (ADR 0008): the simulation-style frame cache replaced the bake operator — frames fill as the user plays/scrubs, live on disk under the data root, reset per stage on a Grasshopper-side change, schema change, document change or Push, replay with Grasshopper closed, and idle passes write nothing so Cycles accumulates (60 core + 69 headless tests). **0.3.0 ready to publish (2026-10-20):** W3/W4, the live-sync rebuild, A10, the icon pass and the idle/choppiness fix are in. Phase 7 live acceptance, the S6 display half, S7 and acceptance A1–A10 all passed; the extension and `.gha` are built and verified. Next: tag `v0.3.0` and publish the release.
 **Authoritative copy:** `docs/plan.md` in the repository.
 **Date:** 2026-10-10.
 **Replaces:** `handoff-1-grasshopper-3dm-plugin.md` and `handoff-2-blender-3dm-addon.md` (deleted; their useful facts are in §19).
@@ -44,7 +44,8 @@ Drive Grasshopper definitions from Blender as stackable modifiers, alongside nat
   Curve attributes are read-only for now: Blender's curve datablock cannot store
   them.
 - Parameters: float, int, bool, vector3, color, value list. Text parameters are supported but not animatable.
-- Mid-stack GH stages (`GH → GN → GH`), enable/disable, reorder, freeze, preview.
+- Instances: Blender's instanced geometry crosses as Grasshopper block definitions and instances, nested both ways.
+- Mid-stack GH stages (`GH → GN → GH`), enable/disable, reorder, Pull, Freeze, Key all and orphan purge. A stage's modifier visibility is its preview; there is no separate Preview operator.
 - Keyframes, drivers, and playback from the frame cache.
 - Undo and redo, save and reload.
 - Units in meters on the wire.
@@ -54,7 +55,6 @@ Drive Grasshopper definitions from Blender as stackable modifiers, alongside nat
 - GH → Blender values as drivers. Planned for v1.1 as read-only outputs.
 - Materials, layers, and named object identity from GH.
 - Multiple GH documents answering one stage key.
-- Instancing.
 - Windows-native Rhino as a tested target. The code is written to allow it, tested later.
 
 ---
@@ -192,7 +192,7 @@ It outputs the value Blender sends when connected, or the default otherwise.
 **Blender side.** The schema becomes custom props on the stack object, named `gh/<stage_key>/<param_id>`:
 
 | GH type | Blender representation | Animatable | Notes |
-|---|---|---|---|
+|---|---|:--|---|
 | Float | Float property | Yes | |
 | Int | Int-valued float property | Yes, constant interpolation | Cast to int on the GH side. |
 | Bool | 0/1 property | Yes, constant interpolation | |
@@ -215,7 +215,7 @@ It outputs the value Blender sends when connected, or the default otherwise.
 
 ---
 
-## 8. Protocol v2
+## 8. Protocol
 
 ### 8.1 Transport
 - Blender runs the server on `127.0.0.1:59130` (configurable), using the `websockets` package. Version 17.2 is pure Python (`py3-none-any`) and was tested on Python 3.14.7.
@@ -518,8 +518,8 @@ GH solve time will dominate real definitions. The transport is not the bottlenec
 | **S3** | Geometry round trip with the C# side at 10k and 100k triangles. | Budgets in §13 met or revised with data. **Passed 2026-10-11**: geometry matches at 1k/10k/100k; the 100k round trip is 30.3 ms (C# 10.0 + 5.1 ms, 1.61 MB each way). `spikes/results/s3.txt` |
 | **S4** | SubD: can `SubDEdge.Tag` be set? Does `SubD.CreateFromMesh` produce a usable SubD from a cage? Are the curve approximation paths behaving? | Setter exists: tags round-trip. No setter: tags are dropped on Blender → GH with a warning (D2). **Passed 2026-10-11**: setter works, cage SubD is valid, `MakePiecewiseBezier` is lossless; the loss is dropping weights (0.73 units at radius 5). `spikes/results/s4.txt` |
 | **S5** | Parameter UI in the GUI: keyframe and driver decorators on custom props, vector and color arrays per component, value-list dropdown. | Decorators and arrays work, or the UI is adjusted. **Passed 2026-10-12**: keyframes animate the GH output live, decorators sit on Blender's split rows, per-component vector keys and drivers are covered by `blender/tests/headless/test_param_ui.py`, and the value-list dropdown works end to end (index on the wire). |
-| **S6** | Mixed output (mesh plus curves) through a stage on a mesh stack: display, native modifiers, and what `evaluated_geometry()` returns downstream. | Behaves as §6 says, or the mixed-output rules are revised. **Conversions passed 2026-10-12** (`spikes/results/s6.txt`): curves, points, SubD cages with tag creases, and Breps all round-trip through the product code inside Rhino. The live run drove a rewrite: curves are exact by construction (one wire curve per piecewise-Bezier span, weights kept), the homogeneous-vs-Euclidean coordinate mix-up was fixed, and all curve goos dispatch. **Update 2026-10-18:** cyclic uniform NURBS curves are exact too, and travel as one NURBS instead of a span split; the S6 checks gained cyclic cases (see `docs/handoff-2026-10-18-nurbs-lossless.md`). The display half — mixed output through a stage with native modifiers and `evaluated_geometry()` downstream — is covered headless by `blender/tests/headless/test_geometry_kinds.py`; the GUI pass remains. |
-| **S7** | Helpers in the GUI: Object Info in Original space for mesh, curve, and point helpers. Duplicate and reload ownership. | Works in the GUI. |
+| **S6** | Mixed output (mesh plus curves) through a stage on a mesh stack: display, native modifiers, and what `evaluated_geometry()` returns downstream. | Behaves as §6 says, or the mixed-output rules are revised. **Conversions passed 2026-10-12** (`spikes/results/s6.txt`): curves, points, SubD cages with tag creases, and Breps all round-trip through the product code inside Rhino. The live run drove a rewrite: curves are exact by construction (one wire curve per piecewise-Bezier span, weights kept), the homogeneous-vs-Euclidean coordinate mix-up was fixed, and all curve goos dispatch. **Update 2026-10-18:** cyclic uniform NURBS curves are exact too, and travel as one NURBS instead of a span split; the S6 checks gained cyclic cases (CHANGELOG 0.2.2). **Display half passed 2026-10-20**: mixed output through a stage with native modifiers and `evaluated_geometry()` downstream, plus the headless coverage in `blender/tests/headless/test_geometry_kinds.py`. |
+| **S7** | Helpers in the GUI: Object Info in Original space for mesh, curve, and point helpers. Duplicate and reload ownership. | **Passed 2026-10-20**: the helpers display in Original space for mesh, curve and point, and duplicated/reloaded stages keep their own ownership. |
 | **S8** | Extension install on 5.2 with the vendored `websockets` wheel. | Installs. Fallback is `vendor/`. **Passed 2026-10-12**: `blender_manifest.toml` with the official pure-Python wheel; `scripts/test-extension` installs into a throwaway config and completes a `fake_gh` round trip from the installed extension (websockets imported from the wheel's site-packages). |
 
 **Milestones**
@@ -531,9 +531,9 @@ GH solve time will dominate real definitions. The transport is not the bottlenec
 | M2 | Protocol v2 core, golden frames, rules | Layer A green. **Done 2026-10-11**: codec, hashing, params, rules, cache (43 tests), ten golden fixtures verified by both the Python codec (`scripts/test-core`, 50 tests) and the C# codec under wine (`scripts/test-gha`) |
 | M3 | Engine against `tools/fake_gh` | Layer B green, including the frame cache, undo, save and reload |
 | M4 | GH plugin: Stage In, Stage Out, Param | Layer C green: live round trip, parameter change, save and reopen, GH closed and reopened |
-| M5 | End-to-end with real definitions | Acceptance A1–A10 pass. Latency reported |
-| M6 | UI: stack panel, parameter panel, add stage, status, preferences, preview, freeze | Manual checklist on this machine |
-| M7 | Hardening: large meshes, multiple stacks, GH and Blender restarts, extension build, docs | Release notes. Optional Windows-native pass |
+| M5 | End-to-end with real definitions | Acceptance A1–A10 pass. Latency reported. **Done 2026-10-20**: all ten passed; latency minimal, with the earlier measured figures still standing |
+| M6 | UI: stack panel, parameter panel, add stage, status, preferences, Pull, Freeze, Key all, orphan purge | Manual checklist on this machine. **Done 2026-10-20** (S6/S7 GUI pass included) |
+| M7 | Hardening: large meshes, multiple stacks, GH and Blender restarts, extension build, docs | Release notes. Optional Windows-native pass. **0.3.0 ready 2026-10-20**: extension and `.gha` built and verified; Windows-native pass still out |
 
 ---
 
@@ -548,7 +548,13 @@ GH solve time will dominate real definitions. The transport is not the bottlenec
 - **A7, persistence.** Undo and redo are consistent. Save and reload keep keyframes and bindings. Renaming a parameter in GH keeps its keyframes.
 - **A8, GH lifecycle.** GH closed shows `disconnected` and keeps the last good output. Reopening GH resyncs with no manual step.
 - **A9, snappiness.** Measured against the §13 budgets and reported.
-- **A10, duplicates.** Duplicated stacks and stages get independent keys and helpers, with no cross-talk. Covered headless by `blender/tests/headless/test_duplicates.py` (key, namespace, group, helpers, parameter values/keyframes/drivers, load split); the live pass remains.
+- **A10, duplicates.** Duplicated stacks and stages get independent keys and helpers, with no cross-talk. Covered headless by `blender/tests/headless/test_duplicates.py` (key, namespace, group, helpers, parameter values/keyframes/drivers, load split); the live check passed 2026-10-20.
+
+**Acceptance passed 2026-10-20.** All ten checks ran on this machine. A9 reported
+minimal latency and no budget regression; the measured baseline remains 30.3 ms
+for a 100k-triangle round trip and ~10% engine main-thread share on the 60-edit
+drag. Instance-heavy definitions remain the one accepted performance limitation
+(CHANGELOG known limitations).
 
 ---
 
@@ -577,11 +583,11 @@ GH solve time will dominate real definitions. The transport is not the bottlenec
 ## 18. Non-goals and later
 
 - SubD semi-sharp creases and vertex creases, if RhinoCommon ever exposes them.
-- GH → Blender values as drivers (v1.1): read-only outputs on the stack.
+- GH → Blender values as drivers read-only outputs on the stack.
 - Materials, layers, and object identity from GH.
 - Multiple GH documents per stage key.
 - A tested Windows-native Rhino pass (designed for now).
-- Native B-rep, instancing.
+- Native B-rep.
 - A Portal bridge, if ever needed.
 
 ---
@@ -604,6 +610,8 @@ Facts this plan relies on, and how each was checked. Scratch scripts live in `/t
 - `sharp_face` and `UVMap` stay in the generic attribute path (measured 2026-10-17, 100k triangles): UVMap adds 1.61 MB per frame (1.61 → 3.22 MB) and ~0.9 ms (hash + encode + read: 8.2 → 9.1 ms against the 16 ms tick budget); `sharp_face` adds ~50 KB and ~0.02 ms. A triangulated 100k (301k loops) leaves ~2 ms tick headroom; the round-trip figure is extrapolated, not measured. Decision: keep both.
 - GN PLY import caches by path. Rewriting the same path leaves stale geometry.
 - Setting an object-typed modifier input from Python hung headless evaluation.
+- **Instances and blocks (verified 2026-10-16/17).** Definitions are named graph-side `ModelInstanceDefinition`s (the Model Block Definition route): valid, previewing and baking with no document write at solve time. Nested placements are one `Instance on Points` per distinct child fed by placement clouds; Blender 5.2 cannot evaluate recursive node groups, so the chains are shared and static (`nodes.GROUP_FORMAT` 3). A `List<T>` never casts to `List<object>`: wire-parsed headers must be read through non-generic `IList` or kept in wire shape (two silent block drops). Blender does not draw instances that reference a viewport-hidden datablock: prototypes reach `Instance on Points` through Object Info + Join copies, not Collection Info references (A/B render: 0 vs 1613 lit pixels). A referenced collection's members are references too.
+- **Live debugging recipes.** Open the autosave/`quit.blend`, enable the add-on and call `engine._prefix_sections(obj, record, stage)` to see exactly what Blender would send. Decode the newest cache file under `~/.local/share/gh-stack/cache/<stack_id>/<stage_key>/` with `codec.decode_frame` to see what Grasshopper answered. Push forces a fresh exchange; a tiny Cycles render with lit pixels counted proves drawing, not just evaluation.
 - Blender ships Python 3.14.7 with numpy.
 - **S2 (2026-10-11):** `websockets` 17.2 runs on a plain background thread in Blender 5.2, with queue handoff; a 4 ms `bpy.app.timers` request holds ~5 ms median under a 2 MB stream load (max 73 ms). Two bounds: timers only fire once a script returns to the event loop, and `bpy.app.timers` is inert under `blender -b`, so layer B tests call the drain directly instead.
 - **S1 build (2026-10-11):** the wine `csc.exe` is **Mono's mcs**, not Microsoft's compiler. `ClientWebSocket` exists in Mono's real `System.dll`, but referencing it makes mcs import two `System.dll`s and fail on ambiguous types, and `/nostdlib` is not honoured by this build. The spike therefore uses a hand-rolled client over `TcpClient` (`spikes/s1/miniws.cs`), which compiles with `/sdk:4.5` and runs. `DataContractJsonSerializer` works via `/r:System.ServiceModel.Web.dll` + `/r:System.Runtime.Serialization.dll`. M4 must revisit the client choice before the transport is settled.
@@ -662,5 +670,8 @@ the lifecycle (its toggles enable, drag reorders, X removes); the `frozen` and
 A10 landed with it: a duplicated stack is split onto its own key, cache
 namespace, group and helpers, with its parameter animation moved along. The
 live-sync Phase 7 acceptance passed 2026-10-19
-(`docs/live-sync-report-2026-10-19.md` §5). Next: the S6 display half and S7 in
-the GUI, then acceptance A1–A10 (M5–M7), and the 0.3.0 release.
+(`docs/live-sync-report-2026-10-19.md` §5), and the S6 display half, S7 and
+acceptance A1–A10 passed 2026-10-20. The extension zip and `.gha` are built and
+verified; 0.3.0 is ready to tag and publish. After the release the backlog holds
+the instance-latency investigation, the old-component migration, the build-script
+dedup and the independent extensions-platform upload.

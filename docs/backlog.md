@@ -5,13 +5,14 @@ measured evidence behind the bigger items lives in `polish-plan.md`, which is a
 record of one review rather than a plan. If something is not here, it is either
 done or was judged not worth doing — it is not missing.
 
-**Next session:** Phase 7 live acceptance passed 2026-10-19
+**Next session:** 0.3.0 is ready to publish. Phase 7 live acceptance passed
+2026-10-19; the S6 display half, S7 and acceptance A1–A10 passed 2026-10-20
 (`docs/live-sync-report-2026-10-19.md` §5). The viewport choppiness was the
 unconditional per-tick depsgraph drain; gating it on work fixed it. A10 is done
-and covered headless, the icon pass is in, and 0.3.0 is versioned and packaged.
-What remains before the tag is the S6 display half, S7, and acceptance A1–A10
-(A10's live check included), then `v0.3.0`. The portal upload is its own batch
-(compliance Phase 1, G7 pre-ask included) and is independent.
+and covered headless, the icon pass is in, and 0.3.0 is versioned, built and
+packaged. After the tag the list is the instance-latency investigation, the
+old-component migration, the build-script dedup and the independent portal
+upload (compliance Phase 1, G7 pre-ask included).
 
 Each item says what it is, where, and why it matters. Effort is not estimated:
 the last three batches each looked like an afternoon and were not.
@@ -37,9 +38,9 @@ the last three batches each looked like an afternoon and were not.
 Live concern recorded 2026-10-19; no cause measured yet. Transport is ruled
 out (S3: 30 ms round trip at 100k triangles, 10 ms C# mesh build). **For 0.3.0**
 the instance latency is accepted as a known issue (the release notes name it);
-the live pass should still re-measure it with the rebuilt `.gha` loaded. The
-viewport choppiness from the same session was the unconditional idle depsgraph
-drain; gating it on work (`f69f5fc`) fixed it.
+the post-release investigation starts by re-measuring it with the rebuilt `.gha`
+loaded. The viewport choppiness from the same session was the unconditional idle
+depsgraph drain; gating it on work (`f69f5fc`) fixed it.
 
 - **Stage In latency with instances (300–800 ms).** One geometry instanced 13×:
   the Stage In update in Rhino took ~300 ms typically and 800 ms at peak, while
