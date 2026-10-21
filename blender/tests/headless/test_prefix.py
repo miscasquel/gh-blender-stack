@@ -195,6 +195,34 @@ class PrefixChainTests(unittest.TestCase):
         self.assertEqual(report_of(self.report_b).get("responses", 0), responses_b)
         self.assertFalse(self.engine._dirty)
 
+    def test_05_one_depsgraph_update_serves_every_stage_prefix(self):
+        # Link every stage's clone first, then evaluate them in one update.
+        # The old path paid one full update per stage (~17 ms each on FiraTower).
+        engine = self.engine
+        calls = []
+        original = engine._clone_prefixes
+
+        def counting(obj, stages, subd):
+            calls.append(len(stages))
+            return original(obj, stages, subd)
+
+        engine._clone_prefixes = counting
+        try:
+            engine._bump_epochs(None)
+            engine._prefix_memo.clear()
+            engine._prefix_batch.clear()
+            engine._prefix_batch_built = False
+            engine._pending.clear()
+            engine._sent.clear()
+            engine._dirty.add(self.obj.name)
+            engine._process_object(self.obj)
+        finally:
+            engine._clone_prefixes = original
+
+        self.assertEqual(calls, [2])
+        self.assertFalse(engine._prefix_batching)
+        self.assertEqual(engine._prefix_batch, {})
+
 
 class WaitingPrefixTests(unittest.TestCase):
     """A slow stage A stops stage B until A has answered.

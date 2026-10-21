@@ -1290,6 +1290,43 @@ dirty pass costs ~115 ms (prefix clones), and repeated idle passes settle at
 1–2 ms with zero applies. That confirms the definition-only reapply loop stays
 fixed through the cache/index refactor.
 
-The remaining performance item is the prefix clone itself: ~37–39 ms per Cube
-stage on a dirty pass. That is separate from Phase 3B and is the next candidate
-for the deferred adaptive snapshot throttle or `C-INST-2`.
+The remaining performance item was the prefix clone itself: ~37–39 ms per Cube
+stage on a dirty pass. §18 covers the follow-up that batches those reads.
+
+## 18. Prefix batch follow-up (applied 2026-10-21)
+
+The FiraTower pass cloned and evaluated one object per stage, and every clone
+paid a full `evaluated_depsgraph_get()` update. On the 73-object scene that was
+~17 ms per stage; three stages plus cleanup made a Cube pass ~115 ms.
+
+The engine now builds all missing prefixes for one object in one batch:
+
+- `request._build_prefix_batch` collects every stage's modifier index.
+- `request._clone_prefixes` links all clones, performs one depsgraph update,
+  reads each evaluated geometry set, then removes the clones in one guarded
+  cleanup. The per-clone `view_layer.update()` is omitted because the next
+  depsgraph read sees the removals.
+- `_process_object` marks the batch lifetime; the cache is cleared when the
+  object pass ends. Single-stage objects and surfaces keep the old path.
+
+FiraTower measurements:
+
+```text
+before    Cube dirty pass ~115 ms (3 depsgraph updates)
+after     Cube dirty pass  ~26 ms (1 depsgraph update)
+idle      ~1.5 ms per pass, zero applies
+```
+
+The batched section hashes were identical to the per-stage hashes for all four
+FiraTower stages. `test_prefix.test_05` now asserts that a two-stage chain makes
+one batch call and clears the batch state afterwards.
+
+Verification after the follow-up:
+
+```text
+scripts/test-blender     194 tests pass
+```
+
+Residual cost is now the one depsgraph update plus the geometry read/apply. A
+single-stage complex object still pays one update; a definition-heavy GH solve
+still belongs to `C-INST-2`.

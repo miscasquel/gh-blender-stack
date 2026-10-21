@@ -204,14 +204,22 @@ def _process_object(obj):
     busy = engine._drop_removed_stages(obj, record)
     if engine._split_duplicate_stages(obj, record):
         busy = True
-    for stage in record.stages:
-        outcome = engine._process_stage(obj, record, stage)
-        if outcome == "waiting":
-            # Later stages would run on a prefix that is not final yet (§9.1.5).
-            busy = True
-            break
-        if outcome == "busy":
-            busy = True
+    engine._prefix_batch.clear()
+    engine._prefix_batch_built = False
+    engine._prefix_batching = True
+    try:
+        for stage in record.stages:
+            outcome = engine._process_stage(obj, record, stage)
+            if outcome == "waiting":
+                # Later stages would run on a prefix that is not final yet (§9.1.5).
+                busy = True
+                break
+            if outcome == "busy":
+                busy = True
+    finally:
+        engine._prefix_batching = False
+        engine._prefix_batch.clear()
+        engine._prefix_batch_built = False
     return busy
 
 

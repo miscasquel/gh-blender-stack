@@ -54,6 +54,11 @@ _cache = {}  # (stack_id, stage_key) -> {rid: (raw frame, out_hash)}; the hot pa
 _cache_bytes = {}  # (stack_id, stage_key) -> bytes currently held by its cache
 _stores = {}  # (stack_id, stage_key) -> ResponseStore; the backing store
 _prefix_memo = {}  # (obj.as_pointer(), stage key) -> {"revision": tuple, "sections": list}
+# One depsgraph evaluation can serve every stage prefix on an object. The batch
+# is built on the first cache miss in a pass and cleared when that pass ends.
+_prefix_batch = {}  # (obj.as_pointer(), stage key) -> (sections, attributes, definitions)
+_prefix_batch_built = False
+_prefix_batching = False
 # (stack_id, stage_key) pairs allowed exactly one request while frozen: Pull.
 # Transient session state, like `_pending` — never saved, cleared on register.
 _pull_permits = set()
@@ -399,6 +404,7 @@ _OWNED_COLLECTIONS = {
 def register():
     global _registered, _hot_until, _index_dirty
     global _evaluating, _guard_owner, _evaluating_since, _ticking
+    global _prefix_batch_built, _prefix_batching
     if _registered:
         return
     _stage_index.clear()
@@ -415,6 +421,9 @@ def register():
     _pending.clear()
     _sent.clear()
     _prefix_memo.clear()
+    _prefix_batch.clear()
+    _prefix_batch_built = False
+    _prefix_batching = False
     _state_since.clear()
     _verify.clear()
     _pull_permits.clear()
@@ -523,10 +532,12 @@ from .apply import (
     _write_rows_cloud,
 )
 from .request import (
+    _build_prefix_batch,
     _bump_epochs,
     _bump_id,
     _cleanup_prefix_clone,
     _clone_prefix,
+    _clone_prefixes,
     _close_enough,
     _drop_owned_data,
     _modifier_index,

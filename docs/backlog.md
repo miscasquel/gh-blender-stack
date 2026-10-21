@@ -6,11 +6,12 @@ record of one review rather than a plan. If something is not here, it is either
 done or was judged not worth doing — it is not missing.
 
 **Next session:** The Stage In/GhLink batch (`C-LINK-1`, `C-COMP-2`, `C-LINK-3`,
-`C-LINK-4`, `C-ATT-2`; review §16) and the engine batch (`B-ENG-4`, `B-ENG-2`,
-`B-ENG-3`, `B-ENG-1`; review §17) are applied. The remaining performance item is
-the edit-time prefix clone cost: on FiraTower each Cube stage costs 37–39 ms per
-dirty pass, which is separate from the fixed definition-only reapply loop. 0.3.0
-is ready to publish. Phase 7 live acceptance passed 2026-10-19; the
+`C-LINK-4`, `C-ATT-2`; review §16), the engine batch (`B-ENG-4`, `B-ENG-2`,
+`B-ENG-3`, `B-ENG-1`; review §17) and the prefix batch (review §18) are applied.
+On FiraTower a dirty Cube pass is now ~26 ms (was ~115 ms) because the three
+stage prefixes share one depsgraph update; idle passes are ~1.5 ms. The residual
+cost is the single update plus geometry read/apply. 0.3.0 is ready to publish.
+Phase 7 live acceptance passed 2026-10-19; the
 S6 display half, S7 and acceptance A1–A10 passed 2026-10-20
 (`docs/live-sync-report-2026-10-19.md` §5). The viewport choppiness was the
 unconditional per-tick depsgraph drain; gating it on work fixed it. A10 is done
@@ -70,6 +71,12 @@ depsgraph drain; gating it on work (`f69f5fc`) fixed it.
   Measure first with the env-gated timestamps in the report §6. Preview off is
   a usable mitigation in the meantime (a per-component toggle, or
   `IsPreviewCapable => false` on Stage In/Out).
+- **A multi-stage dirty pass paid one depsgraph update per stage (fixed
+  2026-10-21).** FiraTower's three Cube stages each called
+  `evaluated_depsgraph_get()` on their own clone, ~17 ms per stage plus cleanup,
+  for ~115 ms per dirty pass. The prefixes are now cloned together and read
+  after one update; the same pass is ~26 ms and the idle pass ~1.5 ms (review
+  §18). The residual cost is the single update and geometry read/apply.
 
 ---
 
