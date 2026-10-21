@@ -68,3 +68,105 @@ def recent_activity(count=8):
     """
     return list(engine._trace)[-count:]
 
+
+_HANDLER_NAMES = (
+    "depsgraph_update_post",
+    "frame_change_post",
+    "load_post",
+    "undo_post",
+    "redo_post",
+)
+# The engine package is loaded as `gh_stack.blender.engine` by the development
+# install and as `bl_ext.<repo>.gh_stack.blender.engine` by an extension. Both
+# can exist on disk at once, so a registration check must see both. A filter on
+# `startswith("gh_stack")` misses every extension handler.
+_ENGINE_MODULE_TAIL = "gh_stack.blender.engine"
+
+
+def _is_engine_module(module):
+    """Whether a module name belongs to any GH Stack engine generation."""
+    if not module:
+        return False
+    if module == _ENGINE_MODULE_TAIL or module.startswith(_ENGINE_MODULE_TAIL + "."):
+        return True
+    return module.endswith("." + _ENGINE_MODULE_TAIL) or (
+        "." + _ENGINE_MODULE_TAIL + "."
+    ) in module
+
+
+def _enabled_gh_stack_addons():
+    """The enabled add-on modules that look like a GH Stack install."""
+    try:
+        addons = engine.bpy.context.preferences.addons
+    except AttributeError:
+        return []
+    return sorted(item.module for item in addons if "gh_stack" in item.module)
+
+
+def registration_report():
+    """A read-only snapshot of who is registered, for the reload investigation.
+
+    The handoff's first check counted handlers by module name; this reports the
+    same thing plus the pieces that decide whether the engine can be trusted:
+    the module path actually loaded, the timer in this generation, the stack
+    index, the hot deadline and the dirty set. It never writes engine state.
+
+    Handler counts are the visible part of a leaked generation. Timers cannot be
+    enumerated through `bpy.app.timers`; `tick_rate` measures this generation
+    only, so a stale timer with its own module state is invisible there. A
+    leaked generation with handlers still attached is the reliable signal.
+    """
+    now = engine.time.monotonic()
+    handlers = {}
+    counts = {}
+    for name in _HANDLER_NAMES:
+        entries = []
+        for handler in getattr(engine.bpy.app.handlers, name):
+            module = getattr(handler, "__module__", "")
+            if not _is_engine_module(module):
+                continue
+            timer = getattr(handler, "_gh_stack_engine_timer", None)
+            entries.append(
+                {
+                    "module": module,
+                    "name": getattr(handler, "__name__", repr(handler)),
+                    "id": id(handler),
+                    "timer_id": id(timer) if timer is not None else None,
+                }
+            )
+        handlers[name] = entries
+        counts[name] = len(entries)
+    return {
+        "engine_file": getattr(engine, "__file__", ""),
+        "engine_package": __package__,
+        "timer_module": getattr(engine._timer, "__module__", ""),
+        "timer_id": id(engine._timer),
+        "timer_registered": bool(engine.bpy.app.timers.is_registered(engine._timer)),
+        "registered": bool(engine._registered),
+        "enabled_addons": _enabled_gh_stack_addons(),
+        "handler_counts": counts,
+        "handlers": handlers,
+        "stack_objects": len(engine._stack_objects),
+        "index_dirty": bool(engine._index_dirty),
+        "dirty": sorted(engine._dirty),
+        "hot_seconds": max(0.0, engine._hot_until - now),
+        "passes": engine.stats["passes"],
+    }
+
+
+def tick_rate(seconds=5.0):
+    """Timer passes per second, sampled by blocking the caller.
+
+    `bpy.app.timers` has no public callback list, and a stale timer keeps its
+    own module's `stats`; this measures the current generation only. It is still
+    the way to tell an idle cadence from a hot one. Call it from Blender's
+    Python console; it sleeps, so the window is unresponsive for ``seconds``.
+    In a background session the timer is inert and the result is zero.
+    """
+    seconds = max(0.1, float(seconds))
+    before = engine.stats["passes"]
+    started = engine.time.monotonic()
+    engine.time.sleep(seconds)
+    elapsed = engine.time.monotonic() - started
+    return (engine.stats["passes"] - before) / elapsed if elapsed else 0.0
+

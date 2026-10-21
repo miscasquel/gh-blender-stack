@@ -166,7 +166,7 @@ def _on_load(scene=None):
     already prescribes for the first request after a connection.
     """
     if not engine.bpy.app.timers.is_registered(engine._timer):
-        engine.bpy.app.timers.engine.register(engine._timer, first_interval=engine.IDLE_INTERVAL, persistent=True)
+        engine.bpy.app.timers.register(engine._timer, first_interval=engine.IDLE_INTERVAL, persistent=True)
     # A file from before the stage scene still has its plumbing in the user's
     # scene: move it now, so the outliner is clean before the first apply.
     engine.helpers.adopt_existing()

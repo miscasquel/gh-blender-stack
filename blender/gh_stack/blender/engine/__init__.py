@@ -492,10 +492,13 @@ def unregister():
 
 from .diagnostics import (
     _age,
+    _is_engine_module,
     _record_timing,
     _timed_since,
     recent_activity,
+    registration_report,
     stage_timings,
+    tick_rate,
     trigger_health,
     waiting_seconds,
 )

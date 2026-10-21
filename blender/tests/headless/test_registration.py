@@ -86,3 +86,100 @@ class RegistrationOrderTests(unittest.TestCase):
         finally:
             prefs.port = original
             engine.start_server()
+
+
+class RegistrationReportTests(unittest.TestCase):
+    """The Phase 0 report: one visible generation, both install paths, no writes.
+
+    The reload investigation starts by counting handlers. This report is the
+    console-facing tripwire; if it says two, the handoff's duplicate-generation
+    cause is confirmed before any fix is written.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        bpy.ops.preferences.addon_enable(module="gh_stack")
+
+    @classmethod
+    def tearDownClass(cls):
+        bpy.ops.preferences.addon_disable(module="gh_stack")
+
+    def test_report_finds_one_engine_generation(self):
+        import gh_stack.blender.engine as engine
+
+        report = engine.registration_report()
+        self.assertTrue(report["timer_registered"], "the timer is not registered")
+        self.assertEqual(
+            report["handler_counts"],
+            {
+                "depsgraph_update_post": 1,
+                "frame_change_post": 1,
+                "load_post": 1,
+                "undo_post": 1,
+                "redo_post": 1,
+            },
+        )
+        self.assertEqual(report["enabled_addons"], ["gh_stack"])
+        self.assertTrue(
+            os.path.normpath(report["engine_file"]).endswith(
+                os.path.join("engine", "__init__.py")
+            ),
+            report["engine_file"],
+        )
+        self.assertEqual(report["timer_module"], "gh_stack.blender.engine.triggers")
+        self.assertEqual(report["stack_objects"], 0)
+
+    def test_a_foreign_handler_is_not_counted(self):
+        import gh_stack.blender.engine as engine
+
+        def foreign(scene, depsgraph=None):
+            return None
+
+        foreign.__module__ = "other_addon.handlers"
+        handlers = bpy.app.handlers.depsgraph_update_post
+        handlers.append(foreign)
+        try:
+            report = engine.registration_report()
+            self.assertEqual(len(handlers), 2)
+            self.assertEqual(report["handler_counts"]["depsgraph_update_post"], 1)
+        finally:
+            handlers.remove(foreign)
+
+    def test_load_restores_a_missing_timer(self):
+        import gh_stack.blender.engine as engine
+
+        bpy.app.timers.unregister(engine._timer)
+        try:
+            engine._on_load()
+            self.assertTrue(
+                bpy.app.timers.is_registered(engine._timer),
+                "a file load did not re-register the lost engine timer",
+            )
+        finally:
+            if not bpy.app.timers.is_registered(engine._timer):
+                bpy.app.timers.register(
+                    engine._timer,
+                    first_interval=engine.IDLE_INTERVAL,
+                    persistent=True,
+                )
+
+    def test_predicate_covers_development_and_extension_installs(self):
+        import gh_stack.blender.engine as engine
+
+        for module in (
+            "gh_stack.blender.engine",
+            "gh_stack.blender.engine.triggers",
+            "bl_ext.user_default.gh_stack.blender.engine",
+            "bl_ext.user_default.gh_stack.blender.engine.triggers",
+            "bl_ext.system.gh_stack.blender.engine.messages",
+        ):
+            self.assertTrue(engine._is_engine_module(module), module)
+        for module in (
+            "",
+            "other.addon",
+            "gh_stack.blender.engine_extra",
+            "other.gh_stack.blender.engine_extra",
+            "my_gh_stack.blender.engine",
+        ):
+            self.assertFalse(engine._is_engine_module(module), module)
