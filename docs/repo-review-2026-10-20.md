@@ -1304,8 +1304,10 @@ The engine now builds all missing prefixes for one object in one batch:
 - `request._build_prefix_batch` collects every stage's modifier index.
 - `request._clone_prefixes` links all clones, performs one depsgraph update,
   reads each evaluated geometry set, then removes the clones in one guarded
-  cleanup. The per-clone `view_layer.update()` is omitted because the next
-  depsgraph read sees the removals.
+  cleanup. One `view_layer.update()` flushes the removals while the guard is
+  still up; skipping it made the live depsgraph deliver the clone link/remove
+  tags after the guard dropped, marking every stack dirty and rebuilding the
+  batch (a live-only feedback loop).
 - `_process_object` marks the batch lifetime; the cache is cleared when the
   object pass ends. Single-stage objects and surfaces keep the old path.
 
@@ -1313,7 +1315,7 @@ FiraTower measurements:
 
 ```text
 before    Cube dirty pass ~115 ms (3 depsgraph updates)
-after     Cube dirty pass  ~26 ms (1 depsgraph update)
+after     Cube dirty pass  ~46 ms (1 depsgraph update + one cleanup flush)
 idle      ~1.5 ms per pass, zero applies
 ```
 

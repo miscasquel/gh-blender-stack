@@ -447,6 +447,25 @@ def _clone_prefixes(obj, stages, subd):
                 )
                 if cleanup_failure is None:
                     cleanup_failure = failure
+            try:
+                # Flush the removals while the guard is still up. Without this
+                # the depsgraph delivers the clone link/remove tags after the
+                # guard drops, marks every stack dirty, and the next pass builds
+                # another batch: a live-session feedback loop.
+                engine.bpy.context.view_layer.update()
+            except Exception as exc:
+                if cleanup_failure is None:
+                    cleanup_failure = exc
+                message = "prefix cleanup failed (update view layer): %r" % (exc,)
+                engine.bridge.state["error"] = message
+                if not engine._trace or engine._trace[-1] != message:
+                    engine._trace.append(message)
+                import traceback
+
+                engine.prefs.log(
+                    "[gh-stack] %s\n%s" % (message, traceback.format_exc()),
+                    flush=True,
+                )
         finally:
             engine._evaluating = False
         if cleanup_failure is not None and not primary_failed:
