@@ -5,20 +5,20 @@ measured evidence behind the bigger items lives in `polish-plan.md`, which is a
 record of one review rather than a plan. If something is not here, it is either
 done or was judged not worth doing — it is not missing.
 
-**Next session:** The Stage In/GhLink batch (`C-LINK-1`, `C-COMP-2`, `C-LINK-3`,
-`C-LINK-4`, `C-ATT-2`; review §16), the engine batch (`B-ENG-4`, `B-ENG-2`,
-`B-ENG-3`, `B-ENG-1`; review §17) and the prefix batch (review §18) are applied.
-On FiraTower a dirty Cube pass is now ~46 ms (was ~115 ms) because the three
-stage prefixes share one depsgraph update; idle passes are ~1.5 ms. The
-residual cost is the single update, the cleanup flush and geometry read/apply. 0.3.0 is ready to publish.
-Phase 7 live acceptance passed 2026-10-19; the
-S6 display half, S7 and acceptance A1–A10 passed 2026-10-20
+**Next session:** v0.3.1 is published (2026-10-21). The post-0.3.0 review
+batches are in it: the Stage In/GhLink batch (`C-LINK-1`, `C-COMP-2`,
+`C-LINK-3`, `C-LINK-4`, `C-ATT-2`; review §16), the engine batch (`B-ENG-4`,
+`B-ENG-2`, `B-ENG-3`, `B-ENG-1`; review §17), the prefix batch (review §18) and
+the Phase 0 registration diagnostics. On FiraTower a dirty Cube pass is now
+~46 ms (was ~115 ms) because the three stage prefixes share one depsgraph
+update; idle passes are ~1.5 ms. The residual cost is the single update, the
+cleanup flush and geometry read/apply. Phase 7 live acceptance passed
+2026-10-19; the S6 display half, S7 and acceptance A1–A10 passed 2026-10-20
 (`docs/live-sync-report-2026-10-19.md` §5). The viewport choppiness was the
 unconditional per-tick depsgraph drain; gating it on work fixed it. A10 is done
-and covered headless, the icon pass is in, and 0.3.0 is versioned, built and
-packaged. After the tag the list is the instance-latency investigation, the
-old-component migration, the build-script dedup and the independent portal
-upload (compliance Phase 1, G7 pre-ask included).
+and covered headless, and the icon pass is in. The next work is the
+extensions-platform upload (compliance Phase 1, G7 pre-ask included), the
+instance-latency re-measure and the old-component migration.
 
 Each item says what it is, where, and why it matters. Effort is not estimated:
 the last three batches each looked like an afternoon and were not.
@@ -42,9 +42,9 @@ the last three batches each looked like an afternoon and were not.
 ## Performance
 
 Live concern recorded 2026-10-19; no cause measured yet. Transport is ruled
-out (S3: 30 ms round trip at 100k triangles, 10 ms C# mesh build). **For 0.3.0**
-the instance latency is accepted as a known issue (the release notes name it);
-the post-release investigation starts by re-measuring it with the rebuilt `.gha`
+out (S3: 30 ms round trip at 100k triangles, 10 ms C# mesh build). **In 0.3.1**
+the instance latency is still accepted as a known issue (the release notes name
+it); the investigation starts by re-measuring it with the rebuilt `.gha`
 loaded. The viewport choppiness from the same session was the unconditional idle
 depsgraph drain; gating it on work (`f69f5fc`) fixed it.
 
@@ -77,12 +77,17 @@ depsgraph drain; gating it on work (`f69f5fc`) fixed it.
   for ~115 ms per dirty pass. The prefixes are now cloned together and read
   after one update; the same pass is ~46 ms and the idle pass ~1.5 ms (review
   §18). The single evaluation and the cleanup flush are the residual cost.
-- **Reload-only viewport stutter (open).** After a module reload/reinstall, the
-  engine can have more than one timer/handler generation alive; a full Blender
-  restart or disable/re-enable clears it. This is separate from the prefix
-  pass and reproduces in empty files. Reproduction, evidence and the proposed
-  reload-safe registration/dormant-engine work are in
-  `docs/handoff-viewport-stutter-2026-10-21.md`.
+- **Viewport stutter (parked 2026-10-21).** Panning hitched intermittently
+  after reloads, but Phase 0 found no duplicate generation: one enabled
+  install, one handler set, one registered timer, no dirty/hot state and two
+  stack objects. A 60 s trace while smooth showed 34–50 idle passes/s and zero
+  prefix clones, applies or sends. The hitch also appeared with both installs
+  disabled while Rhino/Wine and a browser GPU process kept the host busy, and
+  the extension and development engine code were identical apart from the
+  Phase 0 diagnostics and the later load-timer fallback fix. Assumed
+  external/system-side; re-open only if it
+  reproduces with both installs disabled and the host quiet. Reproduction and
+  the diagnostics are in `docs/handoff-viewport-stutter-2026-10-21.md`.
 
 ---
 

@@ -1036,7 +1036,7 @@ namespace GhStack
                 hello["type"] = "hello";
                 // Keep in sync with blender_manifest.toml (the release path
                 // enforces that one) and the example in docs/protocol.md.
-                hello["client"] = "GhStack 0.3.0";
+                hello["client"] = "GhStack 0.3.1";
                 hello["doc"] = _lastDocName;
                 hello["doc_units"] = UnitsName();
                 hello["stages"] = list;

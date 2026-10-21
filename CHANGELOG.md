@@ -10,6 +10,83 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-10-21
+
+The post-0.3.0 review pass: a multi-stage dirty pass is about 2.5× faster, an
+answer that drops an attribute no longer leaves the old one behind, Stage In
+survives a malformed frame, and a file load restores a lost engine timer. The
+wire protocol is unchanged, so the add-on and plugin upgrade independently;
+rebuild and redeploy the `.gha` for the plugin fixes and restart Rhino.
+
+### Added
+
+- **A registration report and a tick-rate probe for the Python console.**
+  `engine.registration_report()` names the loaded engine module, the registered
+  timer, the handler counts (both the development and the extension install
+  path), the stage index, the dirty set and the hot deadline;
+  `engine.tick_rate()` measures this generation's timer passes per second. They
+  make a session that behaves differently after a reload diagnosable without
+  guessing. The reload-only viewport hitch they were built for remains parked:
+  the first trace found one engine generation and no clone, apply or send work
+  while it happened.
+
+### Changed
+
+- **One depsgraph update serves every stage prefix on a dirty pass.** On
+  FiraTower's 73-object scene three Cube stages paid a clone, an update and a
+  cleanup each (~115 ms per dirty pass); the prefixes are now cloned together,
+  read after one update, and removed in one guarded cleanup. The same pass
+  costs ~46 ms and an idle pass ~1.5 ms (measured 2026-10-21). A single-stage
+  object still pays its one update.
+- **A schema is published only when it changes.** A stage's parameter list is
+  no longer re-published on every solve; reconnect, Stop and unregister clear
+  the cached signature.
+
+### Fixed
+
+- **An answer that drops an attribute removes it.** Generic attributes are
+  reconciled against the frame's descriptors on every apply, definition helpers
+  included, and the native colour channel is cleared when the answer carries no
+  colours. `crease_edge`, `position` and leading-dot internals stay protected.
+  A removed attribute or colour used to survive on the helper.
+- **A definition-only answer is applied once.** The missing-payload check now
+  looks at the helper each section group actually writes — base geometry,
+  `idef.<i>` definitions and instance rows — so an output made only of block
+  definitions is no longer re-applied on every pass.
+- **Stage In survives a malformed frame.** Building the stage geometry is
+  guarded: a bad frame becomes a stage `error` with a runtime message and the
+  component stays alive for the next answer. A malformed string attribute is
+  skipped with a note while valid attributes in the same frame still attach.
+- **One solve per slot.** A scheduled solve is in flight from the delegate
+  start to `SolutionEnd`, and the 250 ms retry skips it; a 30 s watchdog
+  recovers a missed end. That removes the duplicate solves that were the first
+  hypothesis for the 300–800 ms instance latency; the live re-measure is still
+  pending.
+- **A non-finite parameter no longer produces an invalid frame.** NaN and the
+  infinities fall back to the schema default, and frame encoding classifies the
+  failure as `bad_frame`, instead of emitting JSON the C# side rejects.
+- **A reconnect always stops its sender.** The receive loop stops and joins its
+  sender on every exit path, so an abrupt reset no longer leaves the old sender
+  alive beside the new one.
+- **A warm cache stays bounded.** The hot cache keeps the received frames plus a
+  running byte total, evicts in O(1), and replays by decoding, so a long session
+  no longer accumulates Python object graphs.
+- **Message handling uses a stage index instead of scanning the scene.** The
+  response, schema, hello, error and stall paths resolve a key through a direct
+  index rebuilt on register, load and undo and patched on add, remove and split;
+  a renamed or newly added object is picked up without a full-scene scan per
+  message.
+- **A file load restores a lost engine timer.** The fallback called
+  `bpy.app.timers.engine.register`, which does not exist, so a load that had
+  lost the persistent timer raised instead of re-registering it.
+
+### Known limitations
+
+- **The instance-latency re-measure is still pending.** Duplicate solves are
+  fixed, but the 300–800 ms Stage In update with one geometry instanced 13× has
+  not been re-measured with the rebuilt `.gha`; preview off remains the
+  mitigation.
+
 ## [0.3.0] — 2026-10-20
 
 The live-sync release: edits reach Grasshopper as they happen, stages gain a
@@ -645,3 +722,4 @@ First public release: a working demo of the Blender ↔ Grasshopper loop.
 [0.2.1]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.2.1
 [0.2.2]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.2.2
 [0.3.0]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.3.0
+[0.3.1]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.3.1

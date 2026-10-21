@@ -1,11 +1,45 @@
-# Handoff: viewport stutter after add-on reload (2026-10-21)
+# Handoff: viewport stutter (2026-10-21)
 
-**Status:** open investigation; the stutter is gone after a full Blender restart.
-The suspected cause is stale/duplicated engine registration, not steady-state
-engine work.
+**Status:** parked 2026-10-21. The evidence gathered after this handoff does not
+support the duplicate-generation theory, and the stutter could not be tied to
+engine work. It is treated as external/system-side for now. Re-open only if it
+reproduces with both GH Stack installs disabled and the host otherwise quiet.
 
-**Current tree:** `ee5ed15` (`Add-on: flush prefix clones before dropping the
-guard`). Working tree clean.
+**Current tree:** v0.3.1, which carries the Phase 0 diagnostics described below.
+
+## Phase 0 outcome (2026-10-21)
+
+- A clean session with only the development add-on enabled reported one
+  handler per list, one registered timer, no duplicate module generation, and
+  two stack objects.
+- A 60-second panning trace with the engine smooth showed 34–50 timer passes
+  per second, **zero prefix clones, zero applies and zero sends**, `hot 0` and
+  `dirty 0` throughout. The trace ring held only the startup/load triggers,
+  the initial `hello` and four full sends.
+- Two isolated four-clone bursts appeared in an earlier 15-second sample, with
+  no sends or applies and no reproducible stutter around them.
+- With both the development add-on and the extension disabled, `enabled_addons`
+  and `sys.modules` were empty of GH Stack, no process listened on port 59130,
+  and no stutter appeared during the observation.
+- At the time of the comparison, the installed extension and the development
+  tree differed only in the Phase 0 diagnostics; their runtime engine code was
+  identical. The development tree has since gained the load-time timer fallback
+  fix below, which only affects a timer that was already lost. Switching between
+  the two installs therefore cannot explain a behavioural difference.
+- The host was busy throughout: Rhino and Wine together used roughly one core,
+  a browser GPU process held a large share of the GPU, the GPU sat around
+  30–40% at low clocks, and Sunshine was running. That leaves a credible
+  external cause for an intermittent viewport hitch.
+- A dual-install state was observed once: the extension owned port 59130 with a
+  connected client while the development package was loaded but disabled.
+  Stopping the development server could not close the extension's socket. A
+  clean restart cleared it, but it did not reproduce as the stutter cause.
+
+Separately, the review found and fixed a load-time regression in
+`engine/triggers.py`: the missing-timer fallback called
+`bpy.app.timers.engine.register`, which does not exist. A file load that lost the
+persistent timer would have raised instead of re-registering it. That fix is
+covered by `test_registration.py`; it is unrelated to the stutter.
 
 **Related work already landed:**
 
@@ -111,7 +145,46 @@ bpy.app.timers.unregister(engine._timer)
 Then remove the depsgraph handler only. This separates timer cadence from
 handler work. Do not leave the add-on in that state for normal use.
 
-## Proposed changes
+### 4. Registration report (Phase 0 helper)
+
+Run this in Blender's Python console at each step of the reproduction:
+
+```python
+import pprint
+from gh_stack.blender import engine
+
+pprint.pp(engine.registration_report(), sort_dicts=False)
+print("passes/s:", engine.tick_rate(5.0))
+```
+
+What to read:
+
+- `handler_counts`: all five should be 1. The report matches both
+  `gh_stack.blender.engine` and `bl_ext.*.gh_stack.blender.engine`, so a
+  development install and an extension install cannot hide each other.
+- `timer_registered`: should be True.
+- `engine_file`: should end in `engine/__init__.py`; if it points at an old
+  `engine.py`, the running session is on pre-split code and needs a restart.
+- `enabled_addons`: should name exactly one GH Stack install.
+- `tick_rate`: the idle cadence is 20 ms, about 50 passes/s. A hot engine is
+  5 ms, about 200/s. It measures **this** generation only; a stale timer with
+  its own module state is invisible to it, which is why `handler_counts` is the
+  primary signal. `tick_rate` blocks the console for its duration; in
+  `blender -b` it is 0 because timers are inert.
+- `hot_seconds`: a positive value in an empty file means something is still
+  calling `_mark_hot()` with no stages.
+- `index_dirty` may be True until the first tick; it is not a fault by itself.
+
+Record the numbers after a fresh restart, after `scripts/install-addon` plus
+Reload Scripts, after an in-place extension reinstall, and after
+disable/enable. Do not write the fix until that comparison says whether the
+problem is handler generations, timer cadence, or neither.
+
+## Proposed changes (preserved, not pursued while parked)
+
+None of the changes below was implemented for this investigation. They remain a
+starting point if the stutter re-opens with a clean disabled baseline showing
+engine involvement.
 
 ### A. Reload-safe registration
 
