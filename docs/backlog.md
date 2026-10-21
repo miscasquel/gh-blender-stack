@@ -77,6 +77,12 @@ depsgraph drain; gating it on work (`f69f5fc`) fixed it.
   for ~115 ms per dirty pass. The prefixes are now cloned together and read
   after one update; the same pass is ~46 ms and the idle pass ~1.5 ms (review
   §18). The single evaluation and the cleanup flush are the residual cost.
+- **Reload-only viewport stutter (open).** After a module reload/reinstall, the
+  engine can have more than one timer/handler generation alive; a full Blender
+  restart or disable/re-enable clears it. This is separate from the prefix
+  pass and reproduces in empty files. Reproduction, evidence and the proposed
+  reload-safe registration/dormant-engine work are in
+  `docs/handoff-viewport-stutter-2026-10-21.md`.
 
 ---
 
