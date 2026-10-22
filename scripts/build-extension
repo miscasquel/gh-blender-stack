@@ -22,7 +22,9 @@ run_blender() {
   local log code
   log="$(mktemp)"
   set +e
-  blender "$@" >"$log" 2>&1
+  # --factory-startup keeps the build independent of the user's enabled add-ons
+  # and of the stale add-on entries a rebrand leaves behind.
+  blender --factory-startup "$@" >"$log" 2>&1
   code=$?
   set -e
   grep -v '^DEBUG' "$log" || true
