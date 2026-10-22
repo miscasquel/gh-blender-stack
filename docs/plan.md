@@ -41,8 +41,9 @@ Drive Grasshopper definitions from Blender as stackable modifiers, alongside nat
 - Brep, converted to mesh on the GH side (lossy by nature; warned).
 - Attributes: Blender's named attributes (every type, mesh POINT/EDGE/FACE/CORNER
   domains, SubD cages, point clouds) travel with the geometry in both directions.
-  Curve attributes are read-only for now: Blender's curve datablock cannot store
-  them.
+  Curves components carry `CURVE` and `POINT` (curve-point) attributes from
+  Blender to Grasshopper; returning curve attributes to Blender is still out of
+  scope because the stage helper is a legacy Curve datablock.
 - Parameters: float, int, bool, vector3, color, value list. Text parameters are supported but not animatable.
 - Instances: Blender's instanced geometry crosses as Grasshopper block definitions and instances, nested both ways.
 - Mid-stack GH stages (`GH → GN → GH`), enable/disable, reorder, Pull, Freeze, Key all and orphan purge. A stage's modifier visibility is its preview; there is no separate Preview operator.

@@ -183,8 +183,16 @@ namespace GhStack
                         AttributeStore.Attach(mesh, "mesh", _attributes, _frame.Sections, index, _note);
                         AddObject(objects, new GH_Mesh(mesh), "mesh");
                     }
-                    foreach (Curve curve in Conversion.CurvesFromSections(_frame, _scale, prefix))
-                        AddObject(objects, new GH_Curve(curve), "curve");
+                    var curves = Conversion.CurvesFromSections(_frame, _scale, prefix);
+                    if (curves.Count > 0)
+                    {
+                        Section countsSection = _frame.Find(prefix + "crv.counts");
+                        uint[] counts = countsSection != null ? countsSection.ToU32() : null;
+                        AttributeStore.AttachCurves(curves, counts, _attributes,
+                                                    _frame.Sections, index, _note);
+                        foreach (Curve curve in curves)
+                            AddObject(objects, new GH_Curve(curve), "curve");
+                    }
                     PointCloud cloud = Conversion.PointCloudFromSections(_frame, _scale, prefix);
                     if (cloud != null)
                     {

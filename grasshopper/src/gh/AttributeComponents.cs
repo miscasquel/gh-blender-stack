@@ -33,6 +33,8 @@ namespace GhStack
             if (subd != null) return subd.Value;
             GH_PointCloud cloud = goo as GH_PointCloud;
             if (cloud != null) return cloud.Value;
+            GH_Curve curve = goo as GH_Curve;
+            if (curve != null) return curve.Value;
             GeometryBase geometry;
             return goo.CastTo<GeometryBase>(out geometry) ? geometry : null;
         }
@@ -231,6 +233,13 @@ namespace GhStack
             }
             PointCloud cloud = geometry as PointCloud;
             if (cloud != null && count == cloud.Count) matches.Add("POINT");
+            Curve curve = geometry as Curve;
+            if (curve != null)
+            {
+                if (count == 1) matches.Add("CURVE");
+                NurbsCurve nurbs = curve.ToNurbsCurve();
+                if (nurbs != null && count == nurbs.Points.Count) matches.Add("CURVE_POINT");
+            }
             return matches;
         }
     }

@@ -36,6 +36,7 @@ namespace GhStack.Tests.Console
             CheckEveryTypeRoundTrips();
             CheckLabelsMatchBlender();
             CheckDefinitionAttributes();
+            CheckCurveAttributes();
             CheckWireTransforms();
             CheckMalformedStringOffsets();
 
@@ -230,6 +231,7 @@ namespace GhStack.Tests.Console
                 new string[] { "FACE", "Face" },
                 new string[] { "CORNER", "Corner" },
                 new string[] { "CURVE", "Curve" },
+                new string[] { "CURVE_POINT", "Curve Point" },
                 new string[] { "INSTANCE", "Instance" },
             };
             string firstDomain = null;
@@ -284,6 +286,47 @@ namespace GhStack.Tests.Console
                 && Json.GetLong(outDescriptors[0], "definition") == 0
                 && (string)outDescriptors[0]["section"] == "idef.0.attr.0.values",
                 Describe(outDescriptors));
+        }
+
+        private static void CheckCurveAttributes()
+        {
+            var roots = new List<ArchivableDictionary>
+            {
+                new ArchivableDictionary(),
+                new ArchivableDictionary(),
+            };
+
+            var sections = new List<Section>();
+            var descriptors = new List<Dictionary<string, object>>();
+            AddAttribute(sections, descriptors, "crv", "class", "CURVE", "BOOLEAN",
+                Section.Bytes("unused", new byte[] { 1, 0 }));
+            AddAttribute(sections, descriptors, "crv", "pidx", "POINT", "INT",
+                Section.Ints("unused", new int[] { 10, 11, 12, 20, 21 }));
+
+            AttributeStore.AttachCurves(roots, new uint[] { 3, 2 }, descriptors, sections);
+
+            string type, domain;
+            object values;
+            bool gotClass0 = AttributeStore.TryGet(roots[0], "class", out type, out domain, out values);
+            Check("curve: per-curve value is one item",
+                gotClass0 && type == "BOOLEAN" && domain == "CURVE"
+                && values is bool[] && ((bool[])values).Length == 1 && ((bool[])values)[0],
+                gotClass0 ? type + "/" + domain + "/" + ValuesName(values) : "missing");
+            bool gotClass1 = AttributeStore.TryGet(roots[1], "class", out type, out domain, out values);
+            Check("curve: second per-curve value is separate",
+                gotClass1 && values is bool[] && ((bool[])values).Length == 1 && !((bool[])values)[0],
+                gotClass1 ? ValuesName(values) : "missing");
+
+            bool gotPoints0 = AttributeStore.TryGet(roots[0], "pidx", out type, out domain, out values);
+            Check("curve: per-point values are one list per curve",
+                gotPoints0 && domain == "CURVE_POINT" && values is int[]
+                && string.Join(",", Array.ConvertAll((int[])values, v => v.ToString())) == "10,11,12",
+                gotPoints0 ? ValuesName(values) : "missing");
+            bool gotPoints1 = AttributeStore.TryGet(roots[1], "pidx", out type, out domain, out values);
+            Check("curve: second per-point list is sliced by crv.counts",
+                gotPoints1 && values is int[]
+                && string.Join(",", Array.ConvertAll((int[])values, v => v.ToString())) == "20,21",
+                gotPoints1 ? ValuesName(values) : "missing");
         }
 
         private static void CheckWireTransforms()

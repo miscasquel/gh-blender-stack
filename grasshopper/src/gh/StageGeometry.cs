@@ -40,6 +40,8 @@ namespace GhStack
                 Mesh mesh = Conversion.MeshFromSections(frame, scale);
                 if (mesh != null && mesh.Vertices.Count > 0)
                 {
+                    if (mesh.Faces.Count == 0 && note != null)
+                        note("mesh has no faces; its edges are not carried by the mesh wire");
                     AttributeStore.Attach(mesh, "mesh", attributes, frame.Sections, null, note);
                     geometry.Add(new GH_Mesh(mesh));
                 }
@@ -58,8 +60,15 @@ namespace GhStack
                 }
             }
 
-            foreach (Curve curve in Conversion.CurvesFromSections(frame, scale))
-                geometry.Add(new GH_Curve(curve));
+            var curves = Conversion.CurvesFromSections(frame, scale);
+            if (curves.Count > 0)
+            {
+                Section countsSection = frame.Find("crv.counts");
+                uint[] counts = countsSection != null ? countsSection.ToU32() : null;
+                AttributeStore.AttachCurves(curves, counts, attributes, frame.Sections, null, note);
+                foreach (Curve curve in curves)
+                    geometry.Add(new GH_Curve(curve));
+            }
 
             // Points travel as one point cloud item: it is the geometry kind
             // Blender sends (`pts.*` is a point cloud), it carries point colours

@@ -35,7 +35,10 @@ Blender                                          Rhino / Grasshopper (wine)
   edge-crease tags, and Breps/surfaces (meshed on the way out, lossy). Stage In
   delivers everything through one generic `Geometry` output — mesh, SubD cage,
   curves, point cloud, in that order; Stage Out takes any of them on one generic
-  input.
+  input. A wire mesh (no faces, e.g. a truss line network) travels as one
+  two-point curve per loose edge plus a point cloud for vertices with no edge,
+  so EDGE attributes stay one-per-curve and POINT attributes stay lists per
+  curve; you do not need a `Mesh to Curve` node.
 - **Attributes.** Blender's named attributes (floats, ints, booleans, strings,
   vectors, colours, quaternions, matrices — every type, on every mesh domain)
   travel with the geometry: Stage In attaches them to the Rhino geometry and

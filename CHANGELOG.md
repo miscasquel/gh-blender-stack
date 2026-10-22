@@ -10,6 +10,27 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Curves and curve points carry attributes.** Stage In attaches `crv`-group
+  attributes to each curve: `CURVE` values one per curve, `POINT` values sliced
+  by `crv.counts` into one list per curve. `Attribute Get` now reads them from
+  curves; `Attribute Set` recognises the `CURVE`/`POINT` domains on a curve.
+- **Wire meshes export as curves and points.** A mesh with no faces sends one
+  two-point curve per loose edge, so EDGE attributes (`Top`, `Diag`, ...) stay
+  one-per-curve, and vertices with no edge become a point cloud. Loose edges and
+  vertices beside a face mesh take the same path. A `Mesh to Curve` node is no
+  longer needed and is now lossy for edge attributes.
+
+### Fixed
+
+- **A face-less mesh no longer silently disappears.** `BuildMesh` only
+  compacts when the mesh has faces; otherwise `Compact()` removed every
+  unreferenced vertex. A face-less mesh that still reaches Stage In also adds a
+  runtime note.
+
 ## [0.3.1] — 2026-10-21
 
 The post-0.3.0 review pass: a multi-stage dirty pass is about 2.5× faster, an

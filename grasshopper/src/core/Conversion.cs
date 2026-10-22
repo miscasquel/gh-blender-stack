@@ -101,7 +101,11 @@ namespace GhStack.Core
             if (colors != null) SetMeshColors(mesh, colors);
 
             mesh.Normals.ComputeNormals();
-            mesh.Compact();
+            // Compact removes unreferenced vertices. A face-less mesh has no
+            // face/edge references, so Compact would delete every vertex and
+            // make the geometry disappear. The exporter now sends wire meshes
+            // as curves, but another sender can still reach this path.
+            if (mesh.Faces.Count > 0) mesh.Compact();
             return mesh;
         }
 

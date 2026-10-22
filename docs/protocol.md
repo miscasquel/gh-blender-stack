@@ -171,7 +171,12 @@ Rules:
 - A section is present only if it has data. Absent sections mean "none".
 - `*.face_indices` length equals the sum of the matching `*.face_counts`.
 - Curve `crv.points` length equals the sum of `crv.counts`.
-- Blender sends `subd.*` for a mesh its stack object flags as SubD (the `gh_subd` marker, §6 of the plan). Otherwise it sends `mesh.*`.
+- Blender sends `subd.*` for a mesh its stack object flags as SubD (the `gh_subd` marker, §6 of the plan). A plain mesh with faces sends `mesh.*`; a face-less mesh uses the wire rule below.
+- A Blender mesh with no faces is a wire network: each loose edge travels
+  as one two-point `crv.*` polyline, and vertices with no edge travel as a
+  `pts.*` point cloud. Loose edges and vertices beside a face mesh use the
+  same path; the faces stay `mesh.*`. The exporter never sends a face-less
+  `mesh.*` group.
 - `subd.colors` does not exist in v2.
 - `i32` is the signed 32-bit dtype, four bytes per element. It exists for Blender's signed `INT` attribute type.
 
@@ -202,6 +207,16 @@ attribute contributes one `attr.<i>.values` section plus one entry in the frame'
   everything else through this format; Rhino attaches each attribute to the
   geometry object (UserDictionary), so it rides along with duplication and
   transforms.
+- For `group: "crv"`, `domain: "CURVE"` means one value per curve and
+  `domain: "POINT"` means one value per curve point. The wire is a flat array;
+  `crv.counts` gives the per-curve point shape. A reader slices the point values
+  into one list per curve, so four curves with N points each yield four lists of
+  N values, not one flat list of 4N. For `group: "pts"`, `domain: "POINT"` is
+  one list for the point cloud.
+- A Blender wire mesh maps its EDGE attributes to `group: "crv"`,
+  `domain: "CURVE"` (one value per edge/curve) and its POINT attributes to
+  `group: "crv"`, `domain: "POINT"` (two values per edge, in edge order `a, b`).
+  Vertices with no edge map to `group: "pts"`, `domain: "POINT"`.
 
 ### 5.2 Instances
 

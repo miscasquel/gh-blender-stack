@@ -78,6 +78,10 @@ namespace GhStack.Core
         public static string DomainLabel(string domain)
         {
             if (string.IsNullOrEmpty(domain)) return "";
+            // Two POINT domains exist on the wire: group crv means per curve
+            // point, group pts means per point-cloud point. The curve-local
+            // dictionary keeps the distinction so Attribute Get can say which.
+            if (domain == "CURVE_POINT") return "Curve Point";
             return char.ToUpperInvariant(domain[0]) + domain.Substring(1).ToLowerInvariant();
         }
 
@@ -392,6 +396,160 @@ namespace GhStack.Core
             ArchivableDictionary existing = Root(geometry, false);
             if (existing == null && (descriptors == null || descriptors.Count == 0)) return;
             Attach(Root(geometry, true), group, descriptors, sections, definition, note);
+        }
+
+        /// <summary>Attach a frame's crv-group attributes to each curve.
+        ///
+        /// A per-curve attribute (domain CURVE) is stored as a one-element
+        /// array on that curve's dictionary. A per-point attribute (domain
+        /// POINT) is sliced by crv.counts and stored as one array of N values
+        /// per curve, so Attribute Get returns a list per curve rather than one
+        /// flat list for the whole component. The wire itself stays flat; the
+        /// grouping is exactly the same counts section that rebuilds the curves.
+        /// </summary>
+        public static void AttachCurves(IList<Curve> curves, uint[] counts,
+                                        List<Dictionary<string, object>> descriptors,
+                                        List<Section> sections,
+                                        long? definition = null, Action<string> note = null)
+        {
+            if (curves == null || curves.Count == 0) return;
+            var roots = new List<ArchivableDictionary>(curves.Count);
+            foreach (Curve curve in curves) roots.Add(Root(curve, true));
+            AttachCurves(roots, counts, descriptors, sections, definition, note);
+        }
+
+        /// <summary>The root-level half of <see cref="AttachCurves(IList{Curve}, uint[], List{Dictionary{string, object}}, List{Section}, long?, Action{string})"/>.
+        /// Kept separate so the slicing logic can be tested without constructing
+        /// native Rhino geometry.</summary>
+        internal static void AttachCurves(IList<ArchivableDictionary> roots, uint[] counts,
+                                          List<Dictionary<string, object>> descriptors,
+                                          List<Section> sections,
+                                          long? definition = null, Action<string> note = null)
+        {
+            if (roots == null || roots.Count == 0 || descriptors == null || sections == null)
+                return;
+
+            var byName = new Dictionary<string, Section>();
+            foreach (Section section in sections) byName[section.Name] = section;
+
+            int totalPoints = 0;
+            if (counts != null)
+                foreach (uint count in counts) totalPoints += (int)count;
+
+            foreach (Dictionary<string, object> descriptor in descriptors)
+            {
+                if (Json.GetString(descriptor, "group") != "crv") continue;
+                if (DefinitionOf(descriptor) != (definition ?? -1)) continue;
+                string type = Json.GetString(descriptor, "type");
+                string name = Json.GetString(descriptor, "name");
+                string domain = Json.GetString(descriptor, "domain");
+                if (string.IsNullOrEmpty(type) || string.IsNullOrEmpty(name) || !Types.ContainsKey(type))
+                    continue;
+
+                Section values;
+                if (!byName.TryGetValue(Json.GetString(descriptor, "section") ?? "", out values)
+                    || values == null)
+                    continue;
+
+                Section offsets = null;
+                string offsetsName = Json.GetString(descriptor, "offsets");
+                if (!string.IsNullOrEmpty(offsetsName)) byName.TryGetValue(offsetsName, out offsets);
+
+                object flat;
+                if (Types[type].Kind == "string")
+                {
+                    string problem;
+                    flat = SplitStrings(values.Raw, offsets, out problem);
+                    if (flat == null)
+                    {
+                        if (note != null) note("attribute " + name + ": " + problem);
+                        continue;
+                    }
+                }
+                else
+                {
+                    flat = Decode(type, values, offsets);
+                }
+                if (flat == null) continue;
+
+                int components = Types[type].Components;
+                int count = (int)Json.GetLong(descriptor, "count");
+                if (domain == "CURVE" || domain == "EDGE")
+                {
+                    if (count != roots.Count)
+                    {
+                        if (note != null)
+                            note("attribute " + name + ": " + count + " values for "
+                                 + roots.Count + " curves");
+                        continue;
+                    }
+                    for (int i = 0; i < roots.Count; i++)
+                        Set(roots[i], name, type, "CURVE",
+                            Slice(flat, i, 1, components));
+                }
+                else if (domain == "POINT")
+                {
+                    if (counts == null || counts.Length != roots.Count || count != totalPoints)
+                    {
+                        if (note != null)
+                            note("attribute " + name + ": " + count + " values for "
+                                 + totalPoints + " curve points");
+                        continue;
+                    }
+                    int at = 0;
+                    for (int i = 0; i < roots.Count; i++)
+                    {
+                        int n = (int)counts[i];
+                        Set(roots[i], name, type, "CURVE_POINT",
+                            Slice(flat, at, n, components));
+                        at += n;
+                    }
+                }
+                else if (note != null)
+                {
+                    note("attribute " + name + ": unsupported curve domain " + domain);
+                }
+            }
+        }
+
+        private static object Slice(object flat, int start, int count, int components)
+        {
+            var doubles = flat as double[];
+            if (doubles != null)
+            {
+                var result = new double[count * components];
+                Array.Copy(doubles, start * components, result, 0, result.Length);
+                return result;
+            }
+            var ints = flat as int[];
+            if (ints != null)
+            {
+                var result = new int[count * components];
+                Array.Copy(ints, start * components, result, 0, result.Length);
+                return result;
+            }
+            var bools = flat as bool[];
+            if (bools != null)
+            {
+                var result = new bool[count * components];
+                Array.Copy(bools, start * components, result, 0, result.Length);
+                return result;
+            }
+            var bytes = flat as byte[];
+            if (bytes != null)
+            {
+                var result = new byte[count * components];
+                Array.Copy(bytes, start * components, result, 0, result.Length);
+                return result;
+            }
+            var strings = flat as string[];
+            if (strings != null)
+            {
+                var result = new string[count];
+                Array.Copy(strings, start, result, 0, count);
+                return result;
+            }
+            return null;
         }
 
         public static void Collect(GeometryBase geometry, string group,

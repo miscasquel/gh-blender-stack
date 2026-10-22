@@ -103,9 +103,10 @@ Settled by evidence; the code that rests on them must not drift from them.
   paired objects, and reaches a nested block through the `GH_InstanceReference`
   goo cast (`CastTo<InstanceReferenceGeometry>` refuses a block-instance
   ModelObject). Do not reintroduce the document write at solve time.
-- **Curve attributes are read-only** (the legacy Curve helper cannot store them;
-  also in `docs/plan.md` §6, README and code). Revisit only if curves matter — it
-  means changing the curve helper representation.
+- **Curve attributes are one-way (Blender → GH) for now** (the legacy Curve
+  helper cannot store them on the return path; also in `docs/plan.md` §6, README
+  and code). Revisit only if returning curves matters — it means changing the
+  curve helper representation.
 - **`sharp_face`/`UVMap` stay in the generic attribute path.** Measured
   2026-10-17 at 100k triangles: UVMap adds 1.61 MB per frame and ~0.9 ms
   (tick 9.1 ms of the 16 ms budget), `sharp_face` ~50 KB and ~0.02 ms; a

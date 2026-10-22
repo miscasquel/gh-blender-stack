@@ -33,6 +33,18 @@ CURVE_POLY = 0
 CURVE_BEZIER = 1
 CURVE_NURBS = 2
 
+# The Curves component's own channels are the geometry, not user attributes.
+# They are already carried by crv.* and must not be duplicated as generic ones.
+CURVE_INTERNAL_ATTRIBUTES = (
+    "curve_type",
+    "nurbs_weight",
+    "nurbs_order",
+    "knots_mode",
+    "cyclic",
+    "handle_left",
+    "handle_right",
+)
+
 KNOTS_NORMAL = 0
 KNOTS_ENDPOINT = 1
 KNOTS_BEZIER = 2
@@ -171,6 +183,69 @@ _FOREACH = {
 }
 
 
+def _attribute_values(attr):
+    """One attribute's values in wire form.
+
+    Non-STRING attributes come back as a flat numpy array in the wire dtype
+    (u8 for BOOLEAN/BYTE_COLOR, i32 for INT8, f32 otherwise); STRING comes back
+    as a list of byte strings. Keeping this in one place lets the mesh and curve
+    readers reindex values without duplicating the Blender type handling.
+    """
+    type_name = attr.data_type
+    if type_name == "STRING":
+        # Strings have no foreach path; element access is the only way and
+        # the counts are small by nature.
+        return [bytes(element.value) for element in attr.data]
+
+    prop, buf_dtype = _FOREACH[type_name]
+    comps = attr_mod.components(type_name)
+    buf = np.zeros(len(attr.data) * comps, dtype=buf_dtype)
+    attr.data.foreach_get(prop, buf)
+    if type_name == "BYTE_COLOR":
+        return np.clip(np.rint(buf * 255.0), 0.0, 255.0).astype(np.uint8)
+    if type_name == "BOOLEAN":
+        return buf.astype(np.uint8)
+    if type_name == "INT8":
+        return buf.astype(np.int32)
+    return np.ascontiguousarray(buf)
+
+
+def _take_attribute_values(values, indices, comps):
+    """The values at ``indices``, flattened in that order.
+
+    ``values`` is either the numpy array or string list ``_attribute_values``
+    returned. This is how a mesh attribute is reindexed onto the curves and
+    points the exporter emits.
+    """
+    if isinstance(values, list):
+        return [values[int(index)] for index in indices]
+    if len(indices) == 0:
+        return values[:0]
+    return np.ascontiguousarray(values.reshape(-1, comps)[indices].reshape(-1))
+
+
+def _emit_attribute(group, name, domain, type_name, values, index, prefix="", definition=None):
+    """Sections plus descriptor for one already-read attribute value array."""
+    value_section, offsets_section = attr_mod.section_names(index, prefix)
+    if type_name == "STRING":
+        data = values
+        raw = np.frombuffer(b"".join(data), dtype=np.uint8) if data else np.zeros(0, np.uint8)
+        sections = [
+            (value_section, "u8", raw),
+            (offsets_section, "u32", np.asarray([len(item) for item in data], dtype=np.uint32)),
+        ]
+        count = len(data)
+    else:
+        sections = [(value_section, attr_mod.wire_dtype(type_name), values)]
+        count = len(values) // attr_mod.components(type_name)
+
+    descriptor = attr_mod.descriptor(
+        group, name, domain, type_name, count, index,
+        prefix=prefix, definition=definition,
+    )
+    return sections, descriptor
+
+
 def read_attributes(owner, group, index0=0, skip=(), prefix="", definition=None):
     """Every transportable attribute of one geometry data owner, as
     ``(sections, descriptors)``.
@@ -197,39 +272,12 @@ def read_attributes(owner, group, index0=0, skip=(), prefix="", definition=None)
         if type_name not in attr_mod.WIRE_TYPES:
             continue
         index = index0 + len(descriptors)
-        value_section, offsets_section = attr_mod.section_names(index, prefix)
-        n = len(attr.data)
-        comps = attr_mod.components(type_name)
-
-        if type_name == "STRING":
-            # Strings have no foreach path; element access is the only way and
-            # the counts are small by nature.
-            data = [bytes(element.value) for element in attr.data]
-            raw = np.frombuffer(b"".join(data), dtype=np.uint8) if data else np.zeros(0, np.uint8)
-            sections.append((value_section, "u8", raw))
-            sections.append(
-                (offsets_section, "u32", np.asarray([len(item) for item in data], dtype=np.uint32))
-            )
-        else:
-            prop, buf_dtype = _FOREACH[type_name]
-            buf = np.zeros(n * comps, dtype=buf_dtype)
-            attr.data.foreach_get(prop, buf)
-            if type_name == "BYTE_COLOR":
-                values = np.clip(np.rint(buf * 255.0), 0.0, 255.0).astype(np.uint8)
-            elif type_name == "BOOLEAN":
-                values = buf.astype(np.uint8)
-            elif type_name == "INT8":
-                values = buf.astype(np.int32)
-            else:
-                values = np.ascontiguousarray(buf)
-            sections.append((value_section, attr_mod.wire_dtype(type_name), values))
-
-        descriptors.append(
-            attr_mod.descriptor(
-                group, name, attr.domain, type_name, n, index,
-                prefix=prefix, definition=definition,
-            )
+        attribute_sections, descriptor = _emit_attribute(
+            group, name, attr.domain, type_name, _attribute_values(attr), index,
+            prefix=prefix, definition=definition,
         )
+        sections += attribute_sections
+        descriptors.append(descriptor)
     return sections, descriptors
 
 
@@ -246,6 +294,150 @@ def mesh_attributes(mesh, as_subd=False, index0=0, prefix="", definition=None):
         mesh, "subd" if as_subd else "mesh", index0=index0, skip=skip,
         prefix=prefix, definition=definition,
     )
+
+
+def loose_edge_indices(mesh):
+    """The mesh edges that belong to no face, as a u32 array.
+
+    A face-less mesh is all wire. For a mesh with faces, ``is_loose`` is read
+    through ``foreach_get``: the per-edge Python property costs a round trip for
+    every edge of every face mesh, which is measurable on large stages.
+    """
+    n = len(mesh.edges)
+    if n == 0:
+        return np.zeros(0, dtype=np.uint32)
+    if len(mesh.polygons) == 0:
+        return np.arange(n, dtype=np.uint32)
+    mask = np.empty(n, dtype=bool)
+    mesh.edges.foreach_get("is_loose", mask)
+    return np.nonzero(mask)[0].astype(np.uint32)
+
+
+def isolated_vertex_indices(mesh):
+    """Vertices referenced by no edge, as a u32 array."""
+    n = len(mesh.vertices)
+    if n == 0:
+        return np.zeros(0, dtype=np.uint32)
+    if len(mesh.edges) == 0:
+        return np.arange(n, dtype=np.uint32)
+    edge_verts = np.empty(len(mesh.edges) * 2, dtype=np.uint32)
+    mesh.edges.foreach_get("vertices", edge_verts)
+    degree = np.bincount(edge_verts, minlength=n)
+    return np.nonzero(degree == 0)[0].astype(np.uint32)
+
+
+def wire_mesh_to_sections(mesh, index0=0, prefix="", definition=None):
+    """Loose mesh edges and vertices as curves and points, plus their attributes.
+
+    Each loose edge becomes one two-point polyline. That is the only lossless
+    mapping for an EDGE attribute: the value belongs to exactly one curve, so
+    ``Top``/``Diag``-style booleans stay one-per-curve instead of being averaged
+    or folded into a merged chain. Vertices with no edge become a point cloud.
+
+    Returns ``(sections, attributes)``. A mesh with faces keeps its ``mesh.*``
+    sections elsewhere; this function only carries the loose remainder.
+    """
+    loose = loose_edge_indices(mesh)
+    isolated = isolated_vertex_indices(mesh)
+    if not len(loose) and not len(isolated):
+        return [], []
+
+    n_verts = len(mesh.vertices)
+    edge_verts = np.empty(len(mesh.edges) * 2, dtype=np.uint32)
+    mesh.edges.foreach_get("vertices", edge_verts)
+    edge_verts = edge_verts.reshape(-1, 2)
+
+    verts = np.empty(n_verts * 3, dtype=np.float32)
+    mesh.vertices.foreach_get("co", verts)
+    verts = verts.reshape(-1, 3)
+
+    sections = []
+    if len(loose):
+        pairs = edge_verts[loose]
+        points = np.empty((len(loose) * 2, 4), dtype=np.float32)
+        points[:, :3] = verts[pairs.reshape(-1)]
+        points[:, 3] = 1.0
+        name = prefix + "crv"
+        sections += [
+            (name + ".points", "f32", points),
+            (name + ".counts", "u32", np.full(len(loose), 2, dtype=np.uint32)),
+            (name + ".types", "u8", np.zeros(len(loose), dtype=np.uint8)),
+            (name + ".orders", "u8", np.zeros(len(loose), dtype=np.uint8)),
+            (name + ".knots_mode", "u8", np.zeros(len(loose), dtype=np.uint8)),
+            (name + ".cyclic", "u8", np.zeros(len(loose), dtype=np.uint8)),
+        ]
+
+    if len(isolated):
+        sections.append(
+            (prefix + "pts.positions", "f32", np.ascontiguousarray(verts[isolated]))
+        )
+
+    attribute_sections, attributes = wire_attributes(
+        mesh, loose, edge_verts, isolated, index0=index0,
+        prefix=prefix, definition=definition,
+    )
+    return sections + attribute_sections, attributes
+
+
+def wire_attributes(mesh, loose, edge_verts, isolated, index0=0, prefix="", definition=None):
+    """Reindex a mesh's attributes onto its emitted curves and points.
+
+    EDGE attributes become one value per curve (domain ``CURVE``). POINT
+    attributes become two values per curve, in edge order ``(a, b)``, and one
+    value per isolated vertex in the ``pts`` group. FACE and CORNER attributes
+    have no wire/point target and are skipped.
+    """
+    sections = []
+    descriptors = []
+    if not len(loose) and not len(isolated):
+        return sections, descriptors
+
+    for attr in mesh.attributes:
+        name = attr.name
+        if name.startswith(".") or name in attr_mod.SKIP_NAMES or name == CREASE_ATTRIBUTE:
+            continue
+        type_name = attr.data_type
+        if type_name not in attr_mod.WIRE_TYPES:
+            continue
+        values = _attribute_values(attr)
+        comps = attr_mod.components(type_name)
+
+        if attr.domain == "EDGE" and len(loose):
+            mapped = _take_attribute_values(values, loose, comps)
+            index = index0 + len(descriptors)
+            attribute_sections, descriptor = _emit_attribute(
+                "crv", name, "CURVE", type_name, mapped, index,
+                prefix=prefix, definition=definition,
+            )
+            sections += attribute_sections
+            descriptors.append(descriptor)
+            continue
+
+        if attr.domain != "POINT":
+            continue
+
+        if len(loose):
+            point_indices = edge_verts[loose].reshape(-1)
+            mapped = _take_attribute_values(values, point_indices, comps)
+            index = index0 + len(descriptors)
+            attribute_sections, descriptor = _emit_attribute(
+                "crv", name, "POINT", type_name, mapped, index,
+                prefix=prefix, definition=definition,
+            )
+            sections += attribute_sections
+            descriptors.append(descriptor)
+
+        if len(isolated):
+            mapped = _take_attribute_values(values, isolated, comps)
+            index = index0 + len(descriptors)
+            attribute_sections, descriptor = _emit_attribute(
+                "pts", name, "POINT", type_name, mapped, index,
+                prefix=prefix, definition=definition,
+            )
+            sections += attribute_sections
+            descriptors.append(descriptor)
+
+    return sections, descriptors
 
 
 def points_attributes(cloud, index0=0, prefix="", definition=None):
@@ -575,10 +767,10 @@ def geometry_set_to_sections(geometry, as_subd=False):
     rows become ``inst.ref_def`` / ``inst.transforms``. A referenced geometry set
     that itself holds instances recurses into the same flat table.
 
-    Curves carry no attributes yet: Blender's curve helper is a legacy Curve
-    datablock, which cannot store attributes, so a read-only channel would be
-    lost on the way back anyway. Mesh, SubD cage and point attributes are
-    supported end to end.
+    Curves components carry their ``CURVE`` and ``POINT`` attributes (the same
+    per-curve/per-point mapping used for wire-mesh edges). A legacy Curve
+    datablock used as a stage helper still cannot store attributes on the way
+    back; that return path is separate.
     """
     sections = []
     attributes = []
@@ -613,16 +805,37 @@ def _serialize_geometry(geometry, sections, attributes, prefix="", as_subd=False
     ``sections`` / ``attributes``, under an optional definition prefix."""
     mesh = geometry.mesh
     if mesh is not None and len(mesh.vertices):
-        sections += mesh_to_sections(mesh, as_subd=as_subd, prefix=prefix)
-        attribute_sections, mesh_attributes_ = mesh_attributes(
-            mesh, as_subd=as_subd, index0=len(attributes),
-            prefix=prefix, definition=definition,
-        )
-        sections += attribute_sections
-        attributes += mesh_attributes_
+        if not as_subd and len(mesh.polygons) == 0:
+            # A wire mesh has no faces to carry; send its edges as curves and
+            # its isolated vertices as points instead of an empty mesh.
+            wire_sections, wire_attrs = wire_mesh_to_sections(
+                mesh, index0=len(attributes), prefix=prefix, definition=definition,
+            )
+            sections += wire_sections
+            attributes += wire_attrs
+        else:
+            sections += mesh_to_sections(mesh, as_subd=as_subd, prefix=prefix)
+            attribute_sections, mesh_attributes_ = mesh_attributes(
+                mesh, as_subd=as_subd, index0=len(attributes),
+                prefix=prefix, definition=definition,
+            )
+            sections += attribute_sections
+            attributes += mesh_attributes_
+            if not as_subd:
+                # Loose edges and vertices beside a face mesh travel as their
+                # own curves/points so they are not silently dropped.
+                wire_sections, wire_attrs = wire_mesh_to_sections(
+                    mesh, index0=len(attributes), prefix=prefix, definition=definition,
+                )
+                sections += wire_sections
+                attributes += wire_attrs
     curves = geometry.curves
     if curves is not None and len(curves.points):
-        sections += curves_component_to_sections(curves, prefix=prefix)
+        curve_sections, curve_attrs = curves_component_to_sections(
+            curves, index0=len(attributes), prefix=prefix, definition=definition,
+        )
+        sections += curve_sections
+        attributes += curve_attrs
     cloud = geometry.pointcloud
     if cloud is not None and len(cloud.points):
         sections += points_to_sections(cloud, prefix=prefix)
@@ -900,19 +1113,25 @@ def _reference_name(reference):
     return name if isinstance(name, str) else ""
 
 
-def curves_component_to_sections(curves, prefix=""):
-    """Read a GeometrySet's curve component into ``crv.*`` sections.
+def curves_component_to_sections(curves, index0=0, prefix="", definition=None):
+    """Read a GeometrySet's curve component into ``crv.*`` sections and attributes.
 
     The component is the new Curves type: per-curve attributes carry the kind
     (``curve_type``), the NURBS order and knots mode, and the cyclic flag;
     per-point attributes carry the position, the NURBS weight, and the Bezier
-    handles. NURBS and Bezier curves map to the same wire forms the legacy
-    datablock reader produces, so a prefix curve is as exact as a base one.
-    ``prefix`` namespaces a definition's sections (§5.2).
+    handles. Those internal channels stay in ``crv.*``; user attributes are
+    reindexed onto the curves that actually reach the wire, with per-curve
+    values in domain ``CURVE`` and per-point values in domain ``POINT``. This is
+    the same attribute logic the loose-edge exporter uses.
+
+    ``prefix`` namespaces a definition's sections (§5.2). Returns
+    ``(sections, attributes)``.
 
     Catmull-Rom components have no wire representation (our protocol has poly,
-    Bezier, and NURBS); they are skipped with a log line. They can only come
-    from hand-built Geometry Nodes graphs, never from the helpers.
+    Bezier, and NURBS); they are skipped with a log line. A Bezier curve's wire
+    points are its control net, not its original points, so per-point attributes
+    are skipped for the whole component when a Bezier curve is present; a 1:1
+    point mapping does not exist.
     """
     attrs = curves.attributes
     positions = attrs["position"].data
@@ -930,6 +1149,9 @@ def curves_component_to_sections(curves, prefix=""):
     orders = []
     modes = []
     cyclic = []
+    curve_indices = []
+    point_indices = []
+    has_bezier = False
 
     for curve in curves.curves:
         first = curve.first_point_index
@@ -957,6 +1179,8 @@ def curves_component_to_sections(curves, prefix=""):
             orders.append(4)
             modes.append(KNOTS_BEZIER)
             cyclic.append(0)
+            curve_indices.append(index)
+            has_bezier = True
             continue
 
         chunk = []
@@ -982,11 +1206,14 @@ def curves_component_to_sections(curves, prefix=""):
             modes.append(0)
             cyclic.append(1 if is_cyclic else 0)
 
+        curve_indices.append(index)
+        point_indices.extend(range(first, first + length))
+
     if not counts:
-        return []
+        return [], []
     flat = np.asarray(points, dtype=np.float32).reshape(-1, 4)
     name = prefix + "crv"
-    return [
+    sections = [
         (name + ".points", "f32", flat),
         (name + ".counts", "u32", np.asarray(counts, dtype=np.uint32)),
         (name + ".types", "u8", np.asarray(types, dtype=np.uint8)),
@@ -994,6 +1221,67 @@ def curves_component_to_sections(curves, prefix=""):
         (name + ".knots_mode", "u8", np.asarray(modes, dtype=np.uint8)),
         (name + ".cyclic", "u8", np.asarray(cyclic, dtype=np.uint8)),
     ]
+    attribute_sections, attributes = curves_component_attributes(
+        curves, curve_indices, point_indices, has_bezier,
+        index0=index0, prefix=prefix, definition=definition,
+    )
+    return sections + attribute_sections, attributes
+
+
+def curves_component_attributes(curves, curve_indices, point_indices, has_bezier,
+                                index0=0, prefix="", definition=None):
+    """Reindex a Curves component's user attributes onto the emitted curves.
+
+    Per-curve values become domain ``CURVE``; per-point values become domain
+    ``POINT`` and are flattened in curve order. The internal channels already
+    carried by ``crv.*`` are skipped.
+    """
+    sections = []
+    descriptors = []
+    if not curve_indices:
+        return sections, descriptors
+
+    for attr in curves.attributes:
+        name = attr.name
+        if (
+            name.startswith(".")
+            or name in attr_mod.SKIP_NAMES
+            or name in CURVE_INTERNAL_ATTRIBUTES
+        ):
+            continue
+        type_name = attr.data_type
+        if type_name not in attr_mod.WIRE_TYPES:
+            continue
+        values = _attribute_values(attr)
+        comps = attr_mod.components(type_name)
+
+        if attr.domain == "CURVE":
+            mapped = _take_attribute_values(values, curve_indices, comps)
+            index = index0 + len(descriptors)
+            attribute_sections, descriptor = _emit_attribute(
+                "crv", name, "CURVE", type_name, mapped, index,
+                prefix=prefix, definition=definition,
+            )
+            sections += attribute_sections
+            descriptors.append(descriptor)
+        elif attr.domain == "POINT":
+            if has_bezier:
+                prefs.log(
+                    "[gh-stack] curve point attribute %r skipped: a Bezier control "
+                    "net has no 1:1 point mapping" % name,
+                    flush=True,
+                )
+                continue
+            mapped = _take_attribute_values(values, point_indices, comps)
+            index = index0 + len(descriptors)
+            attribute_sections, descriptor = _emit_attribute(
+                "crv", name, "POINT", type_name, mapped, index,
+                prefix=prefix, definition=definition,
+            )
+            sections += attribute_sections
+            descriptors.append(descriptor)
+
+    return sections, descriptors
 
 
 def _component_bezier_net(positions, handle_left, handle_right, first, length, is_cyclic):
@@ -1317,8 +1605,18 @@ def object_to_sections(obj, as_subd=False):
     way).
     """
     if obj.type == "MESH":
-        attribute_sections, attributes = mesh_attributes(obj.data, as_subd=as_subd)
-        return mesh_to_sections(obj.data, as_subd=as_subd) + attribute_sections, attributes
+        mesh = obj.data
+        if not as_subd and len(mesh.polygons) == 0:
+            return wire_mesh_to_sections(mesh)
+        attribute_sections, attributes = mesh_attributes(mesh, as_subd=as_subd)
+        sections = mesh_to_sections(mesh, as_subd=as_subd) + attribute_sections
+        if not as_subd:
+            wire_sections, wire_attrs = wire_mesh_to_sections(
+                mesh, index0=len(attributes),
+            )
+            sections += wire_sections
+            attributes += wire_attrs
+        return sections, attributes
     if obj.type == "CURVE":
         return curve_to_sections(obj.data), []
     if obj.type == "POINTCLOUD":
