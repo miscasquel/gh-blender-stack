@@ -5,6 +5,10 @@ measured evidence behind the bigger items lives in `polish-plan.md`, which is a
 record of one review rather than a plan. If something is not here, it is either
 done or was judged not worth doing — it is not missing.
 
+**Active handoff:** [`docs/handoff-stageloom-0.4.0-2026-10-22.md`](handoff-stageloom-0.4.0-2026-10-22.md)
+— the Stageloom 0.4.0 full rebrand and extensions.blender.org upload. It
+supersedes the extension-upload line below until 0.4.0 is published.
+
 **Next session:** v0.3.1 is published (2026-10-21). The post-0.3.0 review
 batches are in it: the Stage In/GhLink batch (`C-LINK-1`, `C-COMP-2`,
 `C-LINK-3`, `C-LINK-4`, `C-ATT-2`; review §16), the engine batch (`B-ENG-4`,
