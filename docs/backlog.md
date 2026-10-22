@@ -9,7 +9,7 @@ done or was judged not worth doing — it is not missing.
 — the Stageloom 0.4.0 full rebrand and extensions.blender.org upload. It
 supersedes the extension-upload line below until 0.4.0 is published.
 
-**Next session:** v0.3.1 is published (2026-10-21). The post-0.3.0 review
+**Next session:** v0.3.1 is published (2026-10-21); v0.4.0 is in preparation under the active handoff (rebrand plus extensions-platform upload). The post-0.3.0 review
 batches are in it: the Stage In/GhLink batch (`C-LINK-1`, `C-COMP-2`,
 `C-LINK-3`, `C-LINK-4`, `C-ATT-2`; review §16), the engine batch (`B-ENG-4`,
 `B-ENG-2`, `B-ENG-3`, `B-ENG-1`; review §17), the prefix batch (review §18) and
@@ -124,7 +124,7 @@ Settled by evidence; the code that rests on them must not drift from them.
 
 ## Polish
 
-- **The vendored wheel.** `blender/gh_stack/vendor/websockets` is now
+- **The vendored wheel.** `blender/stageloom/vendor/websockets` is now
   development- and test-only (the shipped zip carries the official wheel from
   PyPI, digest-pinned in `scripts/build-extension`). The Linux-only speedups
   build stays out of the repo on purpose; both facts are easy to re-derive from

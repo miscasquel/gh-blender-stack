@@ -1,7 +1,9 @@
-# GH Stack protocol v2
+# Stageloom protocol v2
+
+Stageloom is the new name for GH Stack. The wire protocol is unchanged (v2).
 
 **Status:** draft (M0). Frozen at M2, after spikes S1–S4 have run. Until then, changes are made here and recorded in the changelog at the end.
-**Scope:** the messages between the Blender add-on (`gh_stack`, WebSocket server) and the Grasshopper plugin (`GhStack.gha`, WebSocket client).
+**Scope:** the messages between the Blender add-on (`stageloom`, WebSocket server) and the Grasshopper plugin (`Stageloom.gha`, WebSocket client).
 
 ---
 
@@ -50,7 +52,7 @@ Every message carries `"v": 2`. A message with a different `v` is answered with 
 Sent once per connection, first.
 
 ```json
-{"type":"hello","v":2,"client":"GhStack 0.3.1","doc":"Panels.gh",
+{"type":"hello","v":2,"client":"Stageloom 0.4.0","doc":"Panels.gh",
  "doc_units":"Millimeters",
  "stages":[{"key":"panelize-3f9a","enabled":true}]}
 ```
@@ -329,7 +331,7 @@ SHA-256 over the response sections, in header order: name (UTF-8), 0x00, raw byt
 Both the Python and C# codecs must decode every fixture to the same values, and encode the expected values back to the same bytes (canonical header, §3). Created 2026-10-11:
 
 - Python: `scripts/test-core`, via `blender/tests/core/test_fixtures.py`.
-- C# under wine: `scripts/test-gha`, via `grasshopper/tests/console/GhStackCoreTests.exe`.
+- C# under wine: `scripts/test-gha`, via `grasshopper/tests/console/StageloomCoreTests.exe`.
 - Regenerate with `python3 scripts/make-fixtures`.
 
 Twelve fixtures, covering `ping`, `hello`, `schema`, a `ref` request, a mesh request, a SubD request, a request with a definition table, nested instance rows and a per-definition attribute, a mesh response, a mixed mesh/curve/point response, a response with attributes (`i32`, `f32`, `u8` and a STRING offsets section), an error response, and the `error` message. Floats in fixtures are exactly representable in f32, so both codecs agree byte for byte without a tolerance.

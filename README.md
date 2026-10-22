@@ -1,11 +1,13 @@
-# GH Stack (placeholder name)
+# Stageloom
+
+**Stageloom** is the new name for GH Stack.
 
 Drive Grasshopper definitions from Blender as stackable modifiers, next to
 native Geometry Nodes modifiers, in one visible object per stack. Geometry and
 parameters can flow through the stack, so parameters can be keyframed, driven,
 and played back.
 
-That is the v1 goal. **v0.3.1 is a working demo**: geometry (meshes, curves,
+That is the v1 goal. **v0.4.0 is a working demo**: geometry (meshes, curves,
 points, SubD cages) driven by a real Grasshopper definition, with named
 attributes and Grasshopper blocks (instances) travelling both ways, parameters
 you can edit and keyframe in Blender, packaged as a Blender extension.
@@ -15,7 +17,7 @@ you can edit and keyframe in Blender, packaged as a Blender extension.
 Blender                                          Rhino / Grasshopper (wine)
 ┌───────────────────────────┐      WebSocket     ┌─────────────────────────────────┐
 │ Cube                      │◄──────────────────►│ Stage In ──► Scale ──► Stage Out│
-│   GH · Demo (stage)       │       59130        │                 ▲               │
+│ Stageloom · Demo (stage)  │       59130        │                 ▲               │
 │   Bevel (native, optional)│                    │               Param             │
 └───────────────────────────┘                    └─────────────────────────────────┘
 ```
@@ -50,7 +52,7 @@ Blender                                          Rhino / Grasshopper (wine)
   block definitions and instances, built graph-side with no document write;
   nested blocks work both ways. On the Blender side each definition is drawn
   through `Instance on Points` — nested placements are true instances, one per
-  placement — and all of the helper data lives in a dedicated `GH Stage`
+  placement — and all of the helper data lives in a dedicated `Stageloom Stage`
   scene, so your own scene and outliner stay clean.
 - **Parameters.** `Param` components declare float, int, bool, vector3, colour,
   value list, and text parameters. Blender draws them in the N-panel with
@@ -79,7 +81,7 @@ Blender                                          Rhino / Grasshopper (wine)
 - The frame cache's disk format is per machine and has no persistent promise.
 - There is no separate Preview operator: a stage's output is its modifier, so
   the viewport and render toggles are the preview switch. Freeze, Pull, Key all
-  and Purge orphans are in the GH Stack panel.
+  and Purge orphans are in the Stageloom panel.
 
 The authoritative roadmap and scope are in [docs/plan.md](docs/plan.md).
 
@@ -107,16 +109,34 @@ It connects like the plugin, echoes the geometry back, and (with `--report`)
 writes what it received and sent to a JSON file. `scripts/test-blender` drives
 the same tool across the whole engine surface.
 
+### Reviewer quick start (no Rhino)
+
+1. Install the extension zip and enable **Stageloom**.
+2. Enable **Online Access** in Preferences > System.
+3. Select an object, open the **Stageloom** sidebar tab and press **Add Stage**.
+   The stage reports `disconnected` until something connects.
+4. Run the stand-in with the stage key from the panel:
+
+   ```
+   python3 tools/fake_gh/fake_gh.py --stage <stage key>
+   ```
+
+   It connects like the plugin, echoes the geometry back, and the stage reports
+   `ok`. `--report <path>` writes what it received and sent to JSON.
+
+The frame cache and logs live in the add-on's per-user extension data directory
+by default; the **Data root** preference in the add-on settings overrides it.
+
 ## Install
 
 Release path: the add-on ships as a Blender extension with the official
 pure-Python `websockets` wheel.
 
 ```
-scripts/build-extension          # builds dist/gh_stack-<version>.zip
+scripts/build-extension          # builds dist/stageloom-<version>.zip
 scripts/install-extension        # installs and enables it in Blender
 
-grasshopper/build/build-gha.sh   # build GhStack.gha (Rhino 8)
+grasshopper/build/build-gha.sh   # build Stageloom.gha (Rhino 8)
 grasshopper/deploy/deploy.sh     # copy it into the Grasshopper Libraries
 ```
 
@@ -127,7 +147,7 @@ prints the same warning when the deployed plugin is stale.
 
 Development path: `scripts/install-addon` symlinks the working tree into
 Blender's user scripts (no wheel; the vendored copy under `vendor/` is used).
-Both installs appear as **GH Stack** in Preferences > Add-ons.
+Both installs appear as **Stageloom** in Preferences > Add-ons.
 
 Then follow [DEMO.md](DEMO.md). The server listens on port 59130 (configurable in
 the add-on preferences).
@@ -147,12 +167,16 @@ CI runs the pure-core layer only. Layers B and C run on the development
 machine, which is Linux: Blender 5.2 headless for layer B, and a wine prefix
 with Rhino 8 installed for layer C (`scripts/test-gha`).
 
+## Support
+
+Issues and support: <https://github.com/miscasquel/gh-blender-stack/issues>.
+
 ## Layout
 
 ```
 blender/            Blender add-on (extension support) and its tests
-  gh_stack/core/    pure Python: codec, hashing, rules, cache, params (no bpy)
-  gh_stack/blender/ the bpy layer: server, engine, stack, geometry, UI
+  stageloom/core/    pure Python: codec, hashing, rules, cache, params (no bpy)
+  stageloom/blender/ the bpy layer: server, engine, stack, geometry, UI
   tests/core/       layer A tests
   tests/headless/   layer B tests
 grasshopper/        Grasshopper plugin (C#, built with wine csc.exe)

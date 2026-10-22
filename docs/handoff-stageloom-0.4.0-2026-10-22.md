@@ -1,13 +1,30 @@
 # Handoff: Stageloom 0.4.0 — rebrand and extensions.blender.org upload
 
 **Date:** 2026-10-22
-**Status:** ready to execute. No rebrand or compliance work has been started.
-**Current tree:** `5837fd9` (`Add-on/Plugin: carry wire-edge and curve attributes`),
-one commit after `v0.3.1`. Working tree clean. Manifest version is `0.3.1`.
-`CHANGELOG.md` has an `## [Unreleased]` section for the wire-edge/curve work.
+**Status:** in progress (2026-10-22). The rebrand and compliance code are
+implemented and the test layers pass; the release and platform upload remain.
+**Starting tree:** `5837fd9` (`Add-on/Plugin: carry wire-edge and curve
+attributes`), one commit after `v0.3.1`. The 0.4.0 changes are on top.
 **Target:** **Stageloom 0.4.0**, full rebrand, first upload to
 `extensions.blender.org`.
 **Companion plugin:** the Grasshopper `.gha` — same repository, same release.
+
+**Progress:**
+
+- [x] Python package, manifest id/name, UI, C# namespace/assembly, scripts,
+      current docs.
+- [x] Component GUIDs and persisted keys carved out; old `.blend` migration test.
+- [x] Ruff clean; CI lint step.
+- [x] Truthful build/install/test scripts.
+- [x] Offline-access gate test.
+- [x] Extension user data root; dev fallback; tests.
+- [x] Manifest tags and 5.2 floor.
+- [x] README reviewer path, support line, `docs/submission.md`, icon.
+- [ ] Screenshots.
+- [ ] G7 pre-ask and answer.
+- [ ] 0.4.0 GitHub release and platform upload.
+- [ ] Platform acceptance and clean-config install.
+- [ ] CI build/validate on tags.
 
 ---
 
@@ -131,6 +148,10 @@ These are persisted keys or external identities. Renaming them breaks existing
   point at these paths.
 - `gh_stage_key` — modifier/node-group stage link.
 - `gh_stack_format`, `gh_stack_nested` — node-group format markers.
+- `GHStack.Attributes` — the Grasshopper `ArchivableDictionary` root key that
+  stores the attribute records on geometry.
+- `RID_DOMAIN = b"gh-stack/rid/v2"` — saved stage records carry request IDs
+  derived from it.
 - Stage keys, cache namespaces, wire protocol (`v: 2`) and all section names.
 - **C# component GUIDs.** Keep these six values byte-identical:
   - `a1f0c2d4-1b2e-4c3a-9d4f-5e6a7b8c9d01`
@@ -444,18 +465,18 @@ Also check:
 
 ## 8. Definition of done
 
-- [ ] Stageloom package, manifest id/name, UI, C# namespace/assembly and docs
+- [x] Stageloom package, manifest id/name, UI, C# namespace/assembly and docs
       renamed; historical records untouched.
-- [ ] Component GUIDs unchanged; persisted keys carved out and documented.
-- [ ] Old `.blend` migration test passes (stages/params/keyframes preserved,
+- [x] Component GUIDs unchanged; persisted keys carved out and documented.
+- [x] Old `.blend` migration test passes (stages/params/keyframes preserved,
       display names migrated).
-- [ ] Ruff clean under the reviewer command; CI lint step added.
-- [ ] Build/install/test scripts fail honestly; no stale-zip fallback.
-- [ ] Offline-access test passes in a process without `--online-mode`.
-- [ ] Data root uses the extension user directory; override works.
-- [ ] Manifest tags/floor/permissions validated.
-- [ ] README reviewer quick start + support; `docs/submission.md` ready.
-- [ ] Icon and three screenshots ready.
+- [x] Ruff clean under the reviewer command; CI lint step added.
+- [x] Build/install/test scripts fail honestly; no stale-zip fallback.
+- [x] Offline-access test passes in a process without `--online-mode`.
+- [x] Data root uses the extension user directory; override works.
+- [x] Manifest tags/floor/permissions validated.
+- [x] README reviewer quick start + support; `docs/submission.md` ready.
+- [ ] Icon ready; three screenshots still pending.
 - [ ] G7 answer recorded and linked.
 - [ ] `v0.4.0` GitHub release with `stageloom-0.4.0.zip` and
       `Stageloom.gha`.

@@ -1,6 +1,8 @@
-# GH Stack — Project Plan (rev 2)
+# Stageloom — Project Plan (rev 2)
 
-**Status:** rev 2 approved. M0 done (2026-10-10): repository skeleton, this plan, protocol draft (`docs/protocol.md`), decision records (`docs/decisions/`), spike scripts (`spikes/`). **S2 passed 2026-10-11** (transport on a background thread, `spikes/results/s2-gui.txt`, `s2-background.txt`): `websockets` 17.2 runs on a plain thread in Blender 5.2, queue handoff works, and a 4 ms `bpy.app.timers` drain holds ~5 ms median under a 2 MB load. **S1 passed 2026-10-11** (the transport gate, `spikes/results/s1.txt`): a C# `.gha` under wine connects, a background message triggers `SolveInstance` on the UI thread through `ScheduleSolution`, replies come back in 20–65 ms, and save/reopen reconnects with no dialog. The plan's `ClientWebSocket` choice was replaced by a TcpClient client (see §19). **M2 done 2026-10-11**: protocol core, ten golden fixtures verified by both codecs. **S3 passed 2026-10-11** (`spikes/results/s3.txt`): mesh round trips match exactly at 1k/10k/100k; 100k costs 30.3 ms end to end, inside the §13 budget. **S4 passed 2026-10-11** (`spikes/results/s4.txt`): the SubD tag setter works, cage SubDs are valid, curve conversion is lossless except when weights are dropped. **Demo v0 works** (`DEMO.md`): a mesh in Blender driven through Stage In/Out and a Param in Grasshopper. **S5 passed 2026-10-12**: the parameter UI (keyframes, decorators, arrays, value-list dropdown) is confirmed in the GUI. **v0.1.0 published on GitHub 2026-10-12** (ADR 0007). **S6 conversions passed 2026-10-12** (`spikes/results/s6.txt`): curves, points, SubD cages with tags, and Breps round-trip through the product conversions inside Rhino. Curves became exact by construction — each piecewise-Bezier span is a single rational Bezier Blender holds exactly — after the live run exposed a homogeneous-vs-Euclidean coordinate mix-up that distorted every rational curve. **S8 passed 2026-10-12**: the add-on ships as a Blender extension with the official pure-Python `websockets` wheel. **Prefix evaluation done 2026-10-12**: a stage sees everything before its own modifier (`GH → GN → GH` chains), a waiting stage pauses the ones after it, and layer B covers the chain (54 headless tests); reconnect resends (§8.8) and `unknown_ref` full resends (§4.3) are implemented. **W2 done 2026-10-12** (ADR 0008): the simulation-style frame cache replaced the bake operator — frames fill as the user plays/scrubs, live on disk under the data root, reset per stage on a Grasshopper-side change, schema change, document change or Push, replay with Grasshopper closed, and idle passes write nothing so Cycles accumulates (60 core + 69 headless tests). **v0.3.1 published (2026-10-21):** the post-0.3.0 review batches (review §§16–18) and the Phase 0 registration diagnostics are in; on FiraTower a dirty multi-stage pass is ~46 ms (was ~115 ms) and an idle pass ~1.5 ms. Phase 7 live acceptance, the S6 display half, S7 and acceptance A1–A10 all passed. Next: the extensions-platform upload (compliance Phase 1), the instance-latency re-measure and the old-component migration.
+Stageloom is the new name for GH Stack. The wire protocol is unchanged.
+
+**Status:** rev 2 approved. M0 done (2026-10-10): repository skeleton, this plan, protocol draft (`docs/protocol.md`), decision records (`docs/decisions/`), spike scripts (`spikes/`). **S2 passed 2026-10-11** (transport on a background thread, `spikes/results/s2-gui.txt`, `s2-background.txt`): `websockets` 17.2 runs on a plain thread in Blender 5.2, queue handoff works, and a 4 ms `bpy.app.timers` drain holds ~5 ms median under a 2 MB load. **S1 passed 2026-10-11** (the transport gate, `spikes/results/s1.txt`): a C# `.gha` under wine connects, a background message triggers `SolveInstance` on the UI thread through `ScheduleSolution`, replies come back in 20–65 ms, and save/reopen reconnects with no dialog. The plan's `ClientWebSocket` choice was replaced by a TcpClient client (see §19). **M2 done 2026-10-11**: protocol core, ten golden fixtures verified by both codecs. **S3 passed 2026-10-11** (`spikes/results/s3.txt`): mesh round trips match exactly at 1k/10k/100k; 100k costs 30.3 ms end to end, inside the §13 budget. **S4 passed 2026-10-11** (`spikes/results/s4.txt`): the SubD tag setter works, cage SubDs are valid, curve conversion is lossless except when weights are dropped. **Demo v0 works** (`DEMO.md`): a mesh in Blender driven through Stage In/Out and a Param in Grasshopper. **S5 passed 2026-10-12**: the parameter UI (keyframes, decorators, arrays, value-list dropdown) is confirmed in the GUI. **v0.1.0 published on GitHub 2026-10-12** (ADR 0007). **S6 conversions passed 2026-10-12** (`spikes/results/s6.txt`): curves, points, SubD cages with tags, and Breps round-trip through the product conversions inside Rhino. Curves became exact by construction — each piecewise-Bezier span is a single rational Bezier Blender holds exactly — after the live run exposed a homogeneous-vs-Euclidean coordinate mix-up that distorted every rational curve. **S8 passed 2026-10-12**: the add-on ships as a Blender extension with the official pure-Python `websockets` wheel. **Prefix evaluation done 2026-10-12**: a stage sees everything before its own modifier (`GH → GN → GH` chains), a waiting stage pauses the ones after it, and layer B covers the chain (54 headless tests); reconnect resends (§8.8) and `unknown_ref` full resends (§4.3) are implemented. **W2 done 2026-10-12** (ADR 0008): the simulation-style frame cache replaced the bake operator — frames fill as the user plays/scrubs, live on disk under the data root, reset per stage on a Grasshopper-side change, schema change, document change or Push, replay with Grasshopper closed, and idle passes write nothing so Cycles accumulates (60 core + 69 headless tests). **v0.3.1 published (2026-10-21):** the post-0.3.0 review batches (review §§16–18) and the Phase 0 registration diagnostics are in; on FiraTower a dirty multi-stage pass is ~46 ms (was ~115 ms) and an idle pass ~1.5 ms. Phase 7 live acceptance, the S6 display half, S7 and acceptance A1–A10 all passed. Next: the extensions-platform upload (compliance Phase 1), the instance-latency re-measure and the old-component migration. **v0.4.0 in preparation (2026-10-22):** the full Stageloom rebrand, the compliance polish and the first extensions.blender.org upload.
 **Authoritative copy:** `docs/plan.md` in the repository.
 **Date:** 2026-10-10.
 **Replaces:** `handoff-1-grasshopper-3dm-plugin.md` and `handoff-2-blender-3dm-addon.md` (deleted; their useful facts are in §19).
@@ -92,8 +94,8 @@ Blender 5.2 (this machine)                     Grasshopper / Rhino 8 (wine, this
 
 | Component | Where | Responsibility |
 |---|---|---|
-| `gh_stack` add-on | Blender | UI, stack model, engine, WebSocket server, geometry conversion, parameter properties, frame cache |
-| `GhStack.gha` | Grasshopper | Stage In, Stage Out, Param components; WebSocket client; schema publication |
+| `stageloom` add-on | Blender | UI, stack model, engine, WebSocket server, geometry conversion, parameter properties, frame cache |
+| `Stageloom.gha` | Grasshopper | Stage In, Stage Out, Param components; WebSocket client; schema publication |
 | Protocol | both | Versioned binary-plus-JSON messages (§8) |
 | Data root | this machine | `~/.local/share/gh-stack/`: frame cache and logs |
 
@@ -106,9 +108,9 @@ Portal (`Portal.Gh` 0.5.2 and the patched Portal.blender 0.3.0) stays installed 
 | Thing | Visible | Contents |
 |---|---|---|
 | Stack object | Yes | Base geometry, native modifiers, `gh_stack_id` (uuid), stage records (key, label, state, current request ID, applied output hash, last error, timings, frozen flag), and the parameter custom props. |
-| GH stage modifier | Yes, in the modifier panel | Geometry Nodes modifier built from the "GH Stage" template. Named by its label, e.g. `GH · Panelize`. |
-| Stage node group | No | One per stage, owned by that modifier. Named `GHS <key>`. Custom props: `gh_stage_key`, `gh_stack_id`. Nodes: one Object Info per geometry type → Join Geometry → Group Output. The group input is ignored. |
-| Helpers | No | Hidden objects in `GH Stage Data`, owned by the dedicated **GH Stage** scene (never linked into the user's scene, so the outliner stays theirs). Created on first use, one per geometry type per stage (mesh, curves, points). Identity transform, data in stack-local space. Named `GHS <stack>.<key>.<kind>`. |
+| GH stage modifier | Yes, in the modifier panel | Geometry Nodes modifier built from the "Stageloom Stage" template. Named by its label, e.g. `Stageloom · Panelize`. |
+| Stage node group | No | One per stage, owned by that modifier. Named `SL <key>`. Custom props: `gh_stage_key`, `gh_stack_id`. Nodes: one Object Info per geometry type → Join Geometry → Group Output. The group input is ignored. |
+| Helpers | No | Hidden objects in `Stageloom Stage Data`, owned by the dedicated **Stageloom Stage** scene (never linked into the user's scene, so the outliner stays theirs). Created on first use, one per geometry type per stage (mesh, curves, points). Identity transform, data in stack-local space. Named `SL <stack>.<key>.<kind>`. |
 | Parameters | Yes, on the stack object | Custom props `gh/<stage_key>/<param_id>` with UI ranges and defaults. |
 | Cache | Disk and memory | Content-addressed responses, keyed by request ID. |
 
@@ -346,7 +348,7 @@ Enable, disable and reorder are the modifier's own controls: the viewport, rende
 
 ## 10. Grasshopper plugin
 
-**Name:** `GhStack.gha`. Tab: "GH Stack". Install path: `…/rhino8/drive_c/users/miquel/AppData/Roaming/Grasshopper/Libraries/GhStack/`.
+**Name:** `Stageloom.gha`. Tab: "Stageloom". Install path: `…/rhino8/drive_c/users/miquel/AppData/Roaming/Grasshopper/Libraries/Stageloom/`.
 
 **Components**
 
@@ -387,7 +389,7 @@ Component GUIDs are generated once and never change. Save and reload depend on t
 
 **Layout**
 ```
-blender/gh_stack/
+blender/stageloom/
   __init__.py
   blender_manifest.toml          extension manifest
   core/                          pure Python, no bpy
@@ -401,7 +403,7 @@ blender/gh_stack/
     stack.py                     prefix evaluation on clones
     geometry_io.py               numpy in and out, in-place writes
     nodes.py                     templates, ownership, Join and Object Info wiring
-    helpers.py                   helper objects, definitions, row clouds (GH Stage scene)
+    helpers.py                   helper objects, definitions, row clouds (Stageloom Stage scene)
     props.py                     parameter custom props and UI ranges
     engine/                      tick loop, states, triggers, guard, frame cache
       __init__.py                facade: state, registration, re-exports
@@ -417,7 +419,7 @@ blender/gh_stack/
 blender/tests/
 ```
 
-**Packaging.** A Blender extension (`blender/gh_stack/blender_manifest.toml`). `websockets` ships as the official pure-Python wheel (`wheels/websockets-17.2-py3-none-any.whl`), so one zip covers Linux and Windows; Blender installs it into the extension's `_libs`. `scripts/build-extension` stages the source without `vendor/` and builds `dist/gh_stack-<version>.zip`; `scripts/install-extension` installs and enables it; `scripts/test-extension` proves the installed extension round-trips. Development installs (`scripts/install-addon`) have no wheel and fall back to the vendored copy under `vendor/` on `sys.path`, as Portal does.
+**Packaging.** A Blender extension (`blender/stageloom/blender_manifest.toml`). `websockets` ships as the official pure-Python wheel (`wheels/websockets-17.2-py3-none-any.whl`), so one zip covers Linux and Windows; Blender installs it into the extension's `_libs`. `scripts/build-extension` stages the source without `vendor/` and builds `dist/stageloom-<version>.zip`; `scripts/install-extension` installs and enables it; `scripts/test-extension` proves the installed extension round-trips. Development installs (`scripts/install-addon`) have no wheel and fall back to the vendored copy under `vendor/` on `sys.path`, as Portal does.
 
 **Preferences**
 - Server port (default 59130; 9130 through 0.2.2, where BlenderKit sits).
@@ -429,7 +431,7 @@ blender/tests/
 
 **UI**
 - Modifier panel: native and authoritative for lifecycle. GH stages appear as normal modifiers: the viewport, render and edit-mode toggles enable and disable the stage, drag reorders it, and X removes the stage with its helpers and parameters.
-- N-panel "GH Stack": per-stage rows showing label, copyable key, state, warnings, and errors, with Pull and Freeze buttons; Add Stage and Push at the stack. The Diagnostics child panel lists orphaned parameters and purges them.
+- N-panel "Stageloom": per-stage rows showing label, copyable key, state, warnings, and errors, with Pull and Freeze buttons; Add Stage and Push at the stack. The Diagnostics child panel lists orphaned parameters and purges them.
 - N-panel "GH Parameters": one section per stage, with widgets, keyframe decorators, and Key all.
 - Status bar or header indicator for connection: listening, connected (with GH document name), or error.
 
@@ -522,7 +524,7 @@ GH solve time will dominate real definitions. The transport is not the bottlenec
 
 | Spike | Question | Gate |
 |---|---|---|
-| **S1** | Does a C# `GhStack.gha` under wine connect with `ClientWebSocket`, trigger a solve from a background message via `ScheduleSolution`, send a response to Blender, and save and reopen the document with no dialog? | Yes: continue. No: fall back to Portal's transport (its WebSocket components exist upstream), and the engine stays the same. **Passed 2026-10-11 with a TcpClient client instead of `ClientWebSocket`** (Mono cannot reference it; see §19). Connect, background-message solve, reply in 20–65 ms, and save/reopen reconnected with no dialog: `spikes/results/s1.txt` |
+| **S1** | Does a C# `Stageloom.gha` under wine connect with `ClientWebSocket`, trigger a solve from a background message via `ScheduleSolution`, send a response to Blender, and save and reopen the document with no dialog? | Yes: continue. No: fall back to Portal's transport (its WebSocket components exist upstream), and the engine stays the same. **Passed 2026-10-11 with a TcpClient client instead of `ClientWebSocket`** (Mono cannot reference it; see §19). Connect, background-message solve, reply in 20–65 ms, and save/reopen reconnected with no dialog: `spikes/results/s1.txt` |
 | **S2** | Does `websockets` run in a Blender 5.2 background thread, with queue handoff and no UI stalls? | Yes: continue. |
 | **S3** | Geometry round trip with the C# side at 10k and 100k triangles. | Budgets in §13 met or revised with data. **Passed 2026-10-11**: geometry matches at 1k/10k/100k; the 100k round trip is 30.3 ms (C# 10.0 + 5.1 ms, 1.61 MB each way). `spikes/results/s3.txt` |
 | **S4** | SubD: can `SubDEdge.Tag` be set? Does `SubD.CreateFromMesh` produce a usable SubD from a cage? Are the curve approximation paths behaving? | Setter exists: tags round-trip. No setter: tags are dropped on Blender → GH with a warning (D2). **Passed 2026-10-11**: setter works, cage SubD is valid, `MakePiecewiseBezier` is lossless; the loss is dropping weights (0.73 units at radius 5). `spikes/results/s4.txt` |
@@ -615,7 +617,7 @@ Facts this plan relies on, and how each was checked. Scratch scripts live in `/t
 - Modifier `persistent_uid` is stable across reorder and new on duplicate. A duplicate shares its node group.
 - `stack.copy()` copies modifiers with the same UIDs and evaluates a prefix.
 - Hidden helpers and helpers in an excluded collection still resolve through Object Info (checked by vertex count).
-- Helpers, definitions and row clouds owned by a separate `GH Stage` scene still resolve through Object Info from the user's scene: evaluation, instance references, a Cycles render (lit pixels counted) and save/reload all checked (2026-10-17).
+- Helpers, definitions and row clouds owned by a separate `Stageloom Stage` scene still resolve through Object Info from the user's scene: evaluation, instance references, a Cycles render (lit pixels counted) and save/reload all checked (2026-10-17).
 - `sharp_face` and `UVMap` stay in the generic attribute path (measured 2026-10-17, 100k triangles): UVMap adds 1.61 MB per frame (1.61 → 3.22 MB) and ~0.9 ms (hash + encode + read: 8.2 → 9.1 ms against the 16 ms tick budget); `sharp_face` adds ~50 KB and ~0.02 ms. A triangulated 100k (301k loops) leaves ~2 ms tick headroom; the round-trip figure is extrapolated, not measured. Decision: keep both.
 - GN PLY import caches by path. Rewriting the same path leaves stale geometry.
 - Setting an object-typed modifier input from Python hung headless evaluation.
@@ -671,7 +673,7 @@ operations, and instances cross as named graph-side block definitions — valid,
 previewing and baking without a document write at solve time, the route
 Grasshopper's own Model Block Definition components use.
 Instances as blocks landed 2026-10-17 (nested blocks both ways, helper data in
-the dedicated `GH Stage` scene), and W3/W4 landed 2026-10-18: the operators are
+the dedicated `Stageloom Stage` scene), and W3/W4 landed 2026-10-18: the operators are
 Add Stage, Push, Pull, Freeze, Key all and Purge orphans; the modifier panel is
 the lifecycle (its toggles enable, drag reorders, X removes); the `frozen` and
 `unbound` states, load-time plumbing repair and the parameter-orphan list are in
@@ -683,5 +685,6 @@ live-sync Phase 7 acceptance passed 2026-10-19
 acceptance A1–A10 passed 2026-10-20. The post-0.3.0 review batches landed and
 v0.3.1 is published (2026-10-21): the extension zip and `.gha` are built and
 verified, and on FiraTower a dirty multi-stage pass is ~46 ms (was ~115 ms).
-After the release the backlog holds the extensions-platform upload (compliance
-Phase 1), the instance-latency re-measure and the old-component migration.
+v0.4.0 is in preparation (2026-10-22): the full Stageloom rebrand, the
+compliance polish and the first extensions.blender.org upload, followed by the
+instance-latency re-measure and the old-component migration.

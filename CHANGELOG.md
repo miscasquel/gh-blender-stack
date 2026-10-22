@@ -10,7 +10,17 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] — 2026-10-22
+
+Stageloom is the new name for GH Stack. This release also carries curve and
+wire-edge attributes, moves the frame cache to the extension's user data
+directory, and prepares the add-on for the extensions platform.
+
+**Upgrade:** remove the old GH Stack add-on and `GhStack.gha` before installing
+0.4.0. The extension id, Python package and C# assembly changed, and the old
+`.gha` shares component GUIDs. Protocol v2 is unchanged; existing `.blend`
+stages, parameters and animation are preserved; helper, scene and modifier names
+migrate on load. The old frame cache is not read.
 
 ### Added
 
@@ -23,6 +33,12 @@ Notable changes to this project, following
   one-per-curve, and vertices with no edge become a point cloud. Loose edges and
   vertices beside a face mesh take the same path. A `Mesh to Curve` node is no
   longer needed and is now lossy for edge attributes.
+
+### Changed
+
+- **The frame cache and logs live in the extension's user data directory** by
+  default, not `~/.local/share/gh-stack`. The Data root preference still
+  overrides it. The old cache is disposable and is not migrated.
 
 ### Fixed
 
@@ -744,3 +760,4 @@ First public release: a working demo of the Blender ↔ Grasshopper loop.
 [0.2.2]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.2.2
 [0.3.0]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.3.0
 [0.3.1]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.3.1
+[0.4.0]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.4.0

@@ -7,9 +7,9 @@ as a stage in its modifier stack, with a parameter you can edit in Blender.
 Blender                                     Rhino / Grasshopper (wine)
 ┌───────────────────────────┐   WebSocket   ┌───────────────────────────────┐
 │ Cube                      │◄─────────────►│ Stage In ──► Scale ──► Stage Out│
-│   GH · Demo (stage)       │   59130       │                 ▲              │
+│ Stageloom · Demo (stage)  │   59130       │                 ▲              │
 │   Bevel (native, optional)│               │               Param            │
-│ (GH Stage scene: helpers) │               │                                │
+│ (Stageloom scene: helpers)│               │                                │
 └───────────────────────────┘               └───────────────────────────────┘
 ```
 
@@ -20,7 +20,7 @@ Blender                                     Rhino / Grasshopper (wine)
   other direction.
 - There is no separate Preview operator: a stage's output is its modifier, so
   the viewport and render toggles are the preview switch. Freeze, Pull, Key all
-  and Purge orphans live in the GH Stack panel and the Diagnostics section.
+  and Purge orphans live in the Stageloom panel and the Diagnostics section.
 - The frame cache writes to disk (`~/.local/share/gh-stack/`) and fills as you
   play and scrub; there is no bake operator.
 - The `Param` component takes a **Key** input (a demo deviation from the plan's
@@ -46,7 +46,7 @@ Blender                                     Rhino / Grasshopper (wine)
   the split cannot carry (degree above 5, periodic) are fitted with cubic
   Beziers and warned with the measured deviation (D3).
 - **Points** arrive as one point cloud per stage, which is the geometry that can
-  carry point colours and attributes. Use **Point Cloud Points** (GH Stack tab)
+  carry point colours and attributes. Use **Point Cloud Points** (Stageloom tab)
   to explode it into a point list.
 - **Attributes** are Blender's named attributes (any type, any mesh domain:
   floats, ints, booleans, strings, vectors, colours, quaternions, matrices).
@@ -61,28 +61,28 @@ Blender                                     Rhino / Grasshopper (wine)
 ## Setup
 
 ```
-scripts/build-extension        # builds dist/gh_stack-<version>.zip
+scripts/build-extension        # builds dist/stageloom-<version>.zip
 scripts/install-extension      # installs and enables the extension in Blender
 
-grasshopper/build/build-gha.sh # builds GhStack.gha
+grasshopper/build/build-gha.sh # builds Stageloom.gha
 grasshopper/deploy/deploy.sh   # installs it into the Grasshopper Libraries
 ```
 
 For development, `scripts/install-addon` symlinks the working tree instead (no
-wheel; the vendored websockets copy is used). The add-on appears as **GH Stack**
+wheel; the vendored websockets copy is used). The add-on appears as **Stageloom**
 in Blender's Preferences > Add-ons. The panel is in the 3D viewport sidebar
-(**N**) under the **GH Stack** tab. The server starts with the add-on on port
+(**N**) under the **Stageloom** tab. The server starts with the add-on on port
 59130 (add-on preferences; 9130 through 0.2.2, where BlenderKit sits).
 
 ## The loop
 
-1. **Blender.** Select the default cube. In the GH Stack panel press **Add Stage**.
+1. **Blender.** Select the default cube. In the Stageloom panel press **Add Stage**.
    A stage appears with a key like `stage-3f9a2c`, hidden helper objects (one per
-   geometry kind, in the dedicated **GH Stage** scene's `GH Stage Data`
+   geometry kind, in the dedicated **Stageloom Stage** scene's `Stageloom Stage Data`
    collection, so your own scene stays clean) and a Geometry Nodes modifier named
-   `GH · Stage`.
+   `Stageloom · Stage`.
 
-2. **Grasshopper.** In Rhino, open Grasshopper. From the **GH Stack** tab place:
+2. **Grasshopper.** In Rhino, open Grasshopper. From the **Stageloom** tab place:
    - one **Stage In**
    - one **Stage Out**
    - one **Param**
@@ -101,7 +101,7 @@ in Blender's Preferences > Add-ons. The panel is in the 3D viewport sidebar
    scaled mesh, and the panel gains a **Scale** slider. Drag it: the mesh follows.
    Edit the base mesh (in Edit Mode): the new geometry goes over on the next tick.
 
-4. **Native modifiers still compose.** Add a Bevel modifier after `GH · Stage`:
+4. **Native modifiers still compose.** Add a Bevel modifier after `Stageloom · Stage`:
    it acts on the GH output.
 
 ## What to watch for (the point of the demo)

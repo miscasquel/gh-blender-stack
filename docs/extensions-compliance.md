@@ -1,4 +1,53 @@
-# Extensions Platform compliance
+# Stageloom compliance record
+
+**Status:** 0.4.0 in preparation (2026-10-22), based on `5837fd9` plus the
+full Stageloom rebrand. This is the current record; the 2026-10-14 study below
+is retained as historical evidence.
+
+## Current audit
+
+| Item | State | Evidence |
+|---|---|---|
+| G1 `network` / `online_access` | **Closed** | `server.py` gates `start()`; the operator re-checks; `blender/tests/offline/run.py` proves the off state and the Start recovery |
+| G2 `sys.path` | **Closed** | no code path; only comments/vendor; the zip excludes `vendor/` |
+| G3 `files` | **Closed** | manifest |
+| G4 `clipboard` | **Closed** | manifest |
+| G5 licence | **Closed** | `LICENSE` grant + copyright, manifest `SPDX:GPL-3.0-or-later`, README |
+| G6 `bl_info` | **Closed** | shipped `__init__.py` has none; `scripts/install-addon` generates it from the manifest |
+| G7 self-containment | **Open** | owner pre-ask on `#extension-moderators`; listing copy in `docs/submission.md` |
+| S1 Blender floor | **Settled** | `blender_version_min = "5.2.0"`; the layered-action API is the reason; 4.2 is a separate compatibility project |
+| S2 tags | **Closed** | `tags = ["Geometry Nodes", "Pipeline", "Modeling"]` |
+| S3 `log_level` | **Closed** | `prefs.log()` gates `[stageloom]` output |
+| S5 ruff | **Closed** | `uvx ruff check --output-format=concise --ignore=E402,E741,E731 .` passes |
+| S7 dead stubs | **Closed** | none left |
+| S8 wheel integrity | **Closed** | digest pinned and verified in `scripts/build-extension` |
+| S9 data root | **Closed** | `bpy.utils.extension_path_user(...)`; dev fallback; override retained |
+| Packaging truthfulness | **Closed** | build/install/test fail on validator/build/install error; version-specific zip |
+| Listing assets/support | **In progress** | icon in `docs/listing/`; screenshots pending; support URL is listing metadata |
+
+**Corrections to the historical study.** Manifest schema 1.0.0 has no
+`support` field; the support URL belongs in the listing and README. G1 now
+lives in `blender/stageloom/blender/server.py` and the engine package. S5 was the
+engine facade's F401 set (fixed with an explicit `__all__`). S9 is the
+extension-user data directory, not the old Linux path.
+
+**Current verification (2026-10-22).**
+
+```text
+scripts/test-core        57 tests pass
+scripts/test-blender     204 tests pass (including the rebrand migration and the offline gate)
+scripts/test-gha         12 fixtures + attribute store + link round trip + build guard pass
+scripts/test-extension   installed extension round trip: pass
+uvx ruff check ...       All checks passed
+blender --command extension validate blender/stageloom
+blender --command extension validate dist/stageloom-0.4.0.zip
+```
+
+The plan and task breakdown are in
+[`handoff-stageloom-0.4.0-2026-10-22.md`](handoff-stageloom-0.4.0-2026-10-22.md).
+The listing packet is in [`submission.md`](submission.md).
+
+## Historical study (2026-10-14, GH Stack)
 
 **Status:** study, 2026-10-14. Written from a full read of the tree at `cfcab50`
 (branch state: `blender_manifest.toml` v0.1.2, the `websockets` wheel, the
