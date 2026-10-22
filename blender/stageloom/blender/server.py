@@ -72,7 +72,7 @@ class GhServer(object):
         self.stop()
         self._port = port
         self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name="gh-stack-server", daemon=True)
+        self._thread = threading.Thread(target=self._run, name="stageloom-server", daemon=True)
         self._thread.start()
         return True
 
@@ -203,12 +203,12 @@ class GhServer(object):
             except Exception:
                 pass
             if closed:
-                prefs.log("[gh-stack] client disconnected: %r" % (exc,), flush=True)
+                prefs.log("[stageloom] client disconnected: %r" % (exc,), flush=True)
             else:
                 import traceback
 
                 bridge.state["error"] = "handler error: %r" % (exc,)
-                prefs.log("[gh-stack] handler error: %r\n%s" % (exc, traceback.format_exc()), flush=True)
+                prefs.log("[stageloom] handler error: %r\n%s" % (exc, traceback.format_exc()), flush=True)
         finally:
             try:
                 self._clients.remove(ws)

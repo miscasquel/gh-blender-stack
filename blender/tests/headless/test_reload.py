@@ -37,7 +37,7 @@ PORT = 9147
 
 def pump(seconds=8.0, until=None):
     """Drive the engine timer directly: bpy.app.timers is inert under -b (S2)."""
-    import gh_stack.blender.engine as engine
+    import stageloom.blender.engine as engine
 
     deadline = time.time() + seconds
     while time.time() < deadline:
@@ -60,7 +60,7 @@ def start_fake(stage_key, report, port=PORT):
         env=dict(
             os.environ,
             PYTHONPATH=os.pathsep.join(
-                [os.path.join(REPO, "blender", "gh_stack", "vendor"), REPO]
+                [os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]
             ),
         ),
         stdout=subprocess.PIPE,
@@ -92,27 +92,27 @@ class ReopenTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
-        import gh_stack.blender.bridge as bridge
-        import gh_stack.blender.engine as engine
+        bpy.ops.preferences.addon_enable(module="stageloom")
+        import stageloom.blender.bridge as bridge
+        import stageloom.blender.engine as engine
 
         cls.engine = engine
         cls.bridge = bridge
 
-        prefs = bpy.context.preferences.addons["gh_stack"].preferences
-        prefs.data_root = tempfile.mkdtemp(prefix="gh-stack-reload-test-")
+        prefs = bpy.context.preferences.addons["stageloom"].preferences
+        prefs.data_root = tempfile.mkdtemp(prefix="stageloom-reload-test-")
         engine.start_server(PORT)
         time.sleep(0.5)
 
         bpy.ops.mesh.primitive_cube_add(size=2.0)
         obj = bpy.context.object
         obj.name = "Reload"
-        bpy.ops.gh_stack.add_stage(label="Reload")
+        bpy.ops.stageloom.add_stage(label="Reload")
         stage = obj.gh_stack.stages[0]
         cls.stage_key = stage.key
         # Save the file exactly as a save taken mid-request looks.
         stage.state = "waiting"
-        cls.blend = os.path.join(tempfile.gettempdir(), "gh_stack_reload_test.blend")
+        cls.blend = os.path.join(tempfile.gettempdir(), "stageloom_reload_test.blend")
         bpy.ops.wm.save_as_mainfile(filepath=cls.blend)
 
         # Grasshopper is already connected before the file opens, so no new
@@ -131,7 +131,7 @@ class ReopenTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         stop_fake(getattr(cls, "fake", None))
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_01_engine_hooks_survive_the_load(self):
         self.assertTrue(
@@ -170,26 +170,26 @@ class RepairTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
-        import gh_stack.blender.bridge as bridge
-        import gh_stack.blender.engine as engine
-        import gh_stack.blender.helpers as helpers
-        import gh_stack.blender.nodes as nodes
+        bpy.ops.preferences.addon_enable(module="stageloom")
+        import stageloom.blender.bridge as bridge
+        import stageloom.blender.engine as engine
+        import stageloom.blender.helpers as helpers
+        import stageloom.blender.nodes as nodes
 
         cls.engine = engine
         cls.bridge = bridge
         cls.helpers = helpers
         cls.nodes = nodes
 
-        prefs = bpy.context.preferences.addons["gh_stack"].preferences
-        prefs.data_root = tempfile.mkdtemp(prefix="gh-stack-repair-test-")
+        prefs = bpy.context.preferences.addons["stageloom"].preferences
+        prefs.data_root = tempfile.mkdtemp(prefix="stageloom-repair-test-")
         engine.start_server(9148)
         time.sleep(0.5)
 
         bpy.ops.mesh.primitive_cube_add(size=2.0)
         obj = bpy.context.object
         obj.name = "Repair"
-        bpy.ops.gh_stack.add_stage(label="Repair")
+        bpy.ops.stageloom.add_stage(label="Repair")
         cls.stage_key = obj.gh_stack.stages[0].key
 
         # The file this test opens: helpers and the node group already gone.
@@ -201,7 +201,7 @@ class RepairTests(unittest.TestCase):
         if group is not None:
             bpy.data.node_groups.remove(group)
 
-        cls.blend = os.path.join(tempfile.gettempdir(), "gh_stack_repair_test.blend")
+        cls.blend = os.path.join(tempfile.gettempdir(), "stageloom_repair_test.blend")
         bpy.ops.wm.save_as_mainfile(filepath=cls.blend)
 
         # Grasshopper stays connected across the load, like the reopen test.
@@ -219,7 +219,7 @@ class RepairTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         stop_fake(getattr(cls, "fake", None))
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_01_lost_plumbing_rebuilt_and_unbound(self):
         obj = bpy.data.objects.get("Repair")

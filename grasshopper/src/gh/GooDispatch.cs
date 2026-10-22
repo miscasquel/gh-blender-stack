@@ -14,7 +14,7 @@ using Grasshopper.Kernel;
 using Grasshopper.Kernel.Types;
 using Rhino.Geometry;
 
-namespace GhStack
+namespace Stageloom
 {
     public static class GooDispatch
     {

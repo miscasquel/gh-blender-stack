@@ -18,14 +18,14 @@ import bpy
 class StageIndexTests(unittest.TestCase):
     def setUp(self):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
-        import gh_stack.blender.engine as engine
+        bpy.ops.preferences.addon_enable(module="stageloom")
+        import stageloom.blender.engine as engine
 
         self.engine = engine
         bpy.ops.mesh.primitive_cube_add(size=1.0)
         self.obj = bpy.context.object
         self.obj.name = "Indexed"
-        bpy.ops.gh_stack.add_stage(label="Indexed")
+        bpy.ops.stageloom.add_stage(label="Indexed")
         self.stage = self.obj.gh_stack.stages[0]
 
         # Unrelated objects make a full scan expensive, so a hidden rebuild is
@@ -36,7 +36,7 @@ class StageIndexTests(unittest.TestCase):
             bpy.context.scene.collection.objects.link(dummy)
 
     def tearDown(self):
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_a_warm_index_is_not_rebuilt_by_messages(self):
         engine = self.engine

@@ -69,17 +69,17 @@ class DuplicateStageTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
-        from gh_stack.blender import bridge, engine, helpers, nodes, props
-        from gh_stack.blender import stack as stack_mod
+        bpy.ops.preferences.addon_enable(module="stageloom")
+        from stageloom.blender import bridge, engine, helpers, nodes, props
+        from stageloom.blender import stack as stack_mod
 
         cls.engine = engine
         cls.helpers = helpers
         cls.nodes = nodes
         cls.props = props
         cls.stack_mod = stack_mod
-        bpy.context.preferences.addons["gh_stack"].preferences.data_root = tempfile.mkdtemp(
-            prefix="gh-stack-duplicates-"
+        bpy.context.preferences.addons["stageloom"].preferences.data_root = tempfile.mkdtemp(
+            prefix="stageloom-duplicates-"
         )
         # Direct passes only; no socket, no timer.
         bridge.state.update(connected=False, clients=0, listening=False)
@@ -88,7 +88,7 @@ class DuplicateStageTests(unittest.TestCase):
         bpy.ops.mesh.primitive_cube_add(size=2.0)
         cls.obj = bpy.context.object
         cls.obj.name = "Original"
-        bpy.ops.gh_stack.add_stage(label="Original")
+        bpy.ops.stageloom.add_stage(label="Original")
         cls.stage = cls.obj.gh_stack.stages[0]
         cls.original_key = cls.stage.key
         props.apply_schema(cls.obj, cls.stage, PARAMS)
@@ -112,7 +112,7 @@ class DuplicateStageTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     def _paths(self, obj):
         return [fcurve.data_path for _bag, fcurve in self.props._fcurve_slots(obj)]

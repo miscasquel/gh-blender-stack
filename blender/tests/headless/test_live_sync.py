@@ -74,7 +74,7 @@ SCALE = "00000000-0000-4000-8000-0000000000aa"
 
 def pump(seconds=10.0, until=None):
     """Drive the engine timer directly: bpy.app.timers is inert under -b (S2)."""
-    import gh_stack.blender.engine as engine
+    import stageloom.blender.engine as engine
 
     deadline = time.time() + seconds
     while time.time() < deadline:
@@ -101,7 +101,7 @@ def start_fake(stage_key, report, port=PORT, *extra):
         env=dict(
             os.environ,
             PYTHONPATH=os.pathsep.join(
-                [os.path.join(REPO, "blender", "gh_stack", "vendor"), REPO]
+                [os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]
             ),
         ),
         stdout=subprocess.PIPE,
@@ -129,8 +129,8 @@ def report_of(path):
 
 
 def isolate_data_root():
-    prefs = bpy.context.preferences.addons["gh_stack"].preferences
-    prefs.data_root = tempfile.mkdtemp(prefix="gh-stack-live-")
+    prefs = bpy.context.preferences.addons["stageloom"].preferences
+    prefs.data_root = tempfile.mkdtemp(prefix="stageloom-live-")
 
 
 def first_x(report):
@@ -141,7 +141,7 @@ def first_x(report):
 def helper_max(obj, stage_key):
     """The largest absolute coordinate in a stage's mesh helper: what actually
     landed on screen (the fake scales the stored geometry by the parameter)."""
-    import gh_stack.blender.helpers as helpers
+    import stageloom.blender.helpers as helpers
 
     helper = helpers.helper_for(obj, stage_key, "mesh")
     if helper is None or not len(helper.data.vertices):
@@ -194,10 +194,10 @@ class LiveSyncTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
+        bpy.ops.preferences.addon_enable(module="stageloom")
         isolate_data_root()
-        import gh_stack.blender.engine as engine
-        import gh_stack.blender.stack as stack_mod
+        import stageloom.blender.engine as engine
+        import stageloom.blender.stack as stack_mod
 
         cls.engine = engine
         cls.stack_mod = stack_mod
@@ -207,7 +207,7 @@ class LiveSyncTestCase(unittest.TestCase):
         bpy.ops.mesh.primitive_cube_add(size=2.0)
         cls.obj = bpy.context.object
         cls.obj.name = "Live"
-        bpy.ops.gh_stack.add_stage(label="Live")
+        bpy.ops.stageloom.add_stage(label="Live")
         cls.stage = cls.obj.gh_stack.stages[0]
         cls.obj[stack_mod.param_prop_name(cls.stage.key, SCALE)] = 1.0
 
@@ -227,7 +227,7 @@ class LiveSyncTestCase(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         stop_fake(cls.fake)
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     def edit_mode(self):
         bpy.context.view_layer.objects.active = self.obj
@@ -454,10 +454,10 @@ class MultiObjectEditTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
+        bpy.ops.preferences.addon_enable(module="stageloom")
         isolate_data_root()
-        import gh_stack.blender.engine as engine
-        import gh_stack.blender.stack as stack_mod
+        import stageloom.blender.engine as engine
+        import stageloom.blender.stack as stack_mod
 
         cls.engine = engine
         cls.stack_mod = stack_mod
@@ -499,14 +499,14 @@ class MultiObjectEditTests(unittest.TestCase):
         bpy.ops.mesh.primitive_cube_add(size=2.0)
         obj = bpy.context.object
         obj.name = name
-        bpy.ops.gh_stack.add_stage(label=label)
+        bpy.ops.stageloom.add_stage(label=label)
         return obj
 
     @classmethod
     def tearDownClass(cls):
         stop_fake(cls.fake_a)
         stop_fake(cls.fake_b)
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     def tearDown(self):
         self.leave_edit_mode()
@@ -697,7 +697,7 @@ class EvaluatedHeadTests(LiveSyncTestCase):
     """No fake, no timer: the prefix read itself must be the evaluated object."""
 
     def test_01_shape_keys_are_part_of_a_head_of_stack_prefix(self):
-        import gh_stack.blender.engine as engine
+        import stageloom.blender.engine as engine
 
         key = self.obj.shape_key_add(name="Basis")
         self.assertIsNotNone(key)
@@ -774,7 +774,7 @@ class GuardWatchdogTests(LiveSyncTestCase):
         )
 
     def test_02_a_cleanup_raise_clears_the_guard_without_the_watchdog(self):
-        import gh_stack.blender.bridge as bridge
+        import stageloom.blender.bridge as bridge
 
         engine = self.engine
         self.assertEqual(self.stage.state, "ok", self.stage.error)
@@ -856,8 +856,8 @@ class BatchIsolationTests(LiveSyncTestCase):
     """
 
     def test_01_one_bad_response_does_not_eat_the_batch(self):
-        import gh_stack.blender.bridge as bridge
-        import gh_stack.blender.server as server
+        import stageloom.blender.bridge as bridge
+        import stageloom.blender.server as server
 
         engine = self.engine
         self.assertEqual(self.stage.state, "ok", self.stage.error)
@@ -959,10 +959,10 @@ class StallRenameTests(LiveSyncTestCase):
     """
 
     def test_01_a_renamed_object_still_gets_its_stall_nudge(self):
-        import gh_stack.blender.server as server
+        import stageloom.blender.server as server
 
         engine = self.engine
-        prefs = bpy.context.preferences.addons["gh_stack"].preferences
+        prefs = bpy.context.preferences.addons["stageloom"].preferences
         original_name = self.obj.name
         original_timeout = prefs.timeout
         real_send = server.SERVER.send
@@ -1116,7 +1116,7 @@ class WhyNoSendTests(LiveSyncTestCase):
             self.stage.frozen = False
 
     def test_02_a_pending_request_is_coalesced_then_superseded(self):
-        import gh_stack.blender.server as server
+        import stageloom.blender.server as server
 
         engine = self.engine
         self.settle()
@@ -1307,10 +1307,10 @@ class SupersedeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
+        bpy.ops.preferences.addon_enable(module="stageloom")
         isolate_data_root()
-        import gh_stack.blender.engine as engine
-        import gh_stack.blender.stack as stack_mod
+        import stageloom.blender.engine as engine
+        import stageloom.blender.stack as stack_mod
 
         cls.engine = engine
         cls.stack_mod = stack_mod
@@ -1320,7 +1320,7 @@ class SupersedeTests(unittest.TestCase):
         bpy.ops.mesh.primitive_cube_add(size=2.0)
         cls.obj = bpy.context.object
         cls.obj.name = "Slow"
-        bpy.ops.gh_stack.add_stage(label="Slow")
+        bpy.ops.stageloom.add_stage(label="Slow")
         cls.stage = cls.obj.gh_stack.stages[0]
         cls.obj[stack_mod.param_prop_name(cls.stage.key, SCALE)] = 1.0
 
@@ -1337,7 +1337,7 @@ class SupersedeTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         stop_fake(cls.fake)
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_01_a_new_value_supersedes_a_slow_request(self):
         engine = self.engine
@@ -1452,7 +1452,7 @@ class HashTrustTests(LiveSyncTestCase):
     """
 
     def test_01_a_cleared_helper_is_reapplied_from_the_frame(self):
-        import gh_stack.blender.helpers as helpers
+        import stageloom.blender.helpers as helpers
 
         engine = self.engine
         helper = helpers.helper_for(self.obj, self.stage.key, "mesh")

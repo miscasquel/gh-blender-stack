@@ -1,4 +1,4 @@
-// The Grasshopper ribbon icon for the "GH Stack" category.
+// The Grasshopper ribbon icon for the "Stageloom" category.
 //
 // A category icon is registered through GH_AssemblyPriority, not through
 // GH_AssemblyInfo: the latter only covers the About dialog. The icon is the
@@ -8,9 +8,9 @@
 using System.Drawing;
 using Grasshopper.Kernel;
 
-namespace GhStack
+namespace Stageloom
 {
-    public class GhStackRibbonIcon : GH_AssemblyPriority
+    public class StageloomRibbonIcon : GH_AssemblyPriority
     {
         // Held for the component server's lifetime: AddCategoryIcon stores the
         // bitmap, so disposing it here would leave the ribbon tab with a dead
@@ -25,7 +25,7 @@ namespace GhStack
                 // AddCategoryIcon wants a 16x16 tab icon; the component icons
                 // are stored at 24x24 for the canvas.
                 _tabIcon = new Bitmap(icon, 16, 16);
-                Grasshopper.Instances.ComponentServer.AddCategoryIcon("GH Stack", _tabIcon);
+                Grasshopper.Instances.ComponentServer.AddCategoryIcon("Stageloom", _tabIcon);
             }
             return GH_LoadingInstruction.Proceed;
         }

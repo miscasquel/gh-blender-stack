@@ -14,10 +14,10 @@ using System.Drawing;
 using System.Globalization;
 using Grasshopper.Kernel;
 using Grasshopper.Kernel.Types;
-using GhStack.Core;
+using Stageloom.Core;
 using Rhino.Geometry;
 
-namespace GhStack
+namespace Stageloom
 {
     /// <summary>Shared conversions between GH values and the attribute
     /// vocabulary, so Get and Set cannot drift apart.</summary>
@@ -251,7 +251,7 @@ namespace GhStack
         public AttributeGetComponent()
             : base("Attribute Get", "Attr Get",
                    "Reads one attribute carried by a geometry.",
-                   "GH Stack", "Attributes")
+                   "Stageloom", "Attributes")
         {
         }
 
@@ -333,7 +333,7 @@ namespace GhStack
         public AttributeSetComponent()
             : base("Attribute Set", "Attr Set",
                    "Attaches an attribute to a geometry; Stage Out sends it to Blender.",
-                   "GH Stack", "Attributes")
+                   "Stageloom", "Attributes")
         {
         }
 

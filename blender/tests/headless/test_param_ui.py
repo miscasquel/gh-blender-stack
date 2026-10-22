@@ -34,9 +34,9 @@ class ParamUiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
-        import gh_stack.blender.props as props
-        import gh_stack.blender.stack as stack_mod
+        bpy.ops.preferences.addon_enable(module="stageloom")
+        import stageloom.blender.props as props
+        import stageloom.blender.stack as stack_mod
 
         cls.stack_mod = stack_mod
         cls.props = props
@@ -266,7 +266,7 @@ class ParamUiTests(unittest.TestCase):
 
         # The old keys and drivers cannot drive the new type: they are removed,
         # and the panel is told.
-        import gh_stack.blender.bridge as bridge
+        import stageloom.blender.bridge as bridge
 
         self.assertIn("changed type to vector3", bridge.state.get("notice", ""))
 

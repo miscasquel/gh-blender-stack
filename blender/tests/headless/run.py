@@ -17,7 +17,7 @@ if REPO not in sys.path:
 # installed extension gets `websockets` from its declared wheel, the development
 # install from the addons directory. Tests import the package straight from the
 # tree, so the harness provides the vendored copy — test code, not shipped code.
-VENDOR = os.path.join(REPO, "blender", "gh_stack", "vendor")
+VENDOR = os.path.join(REPO, "blender", "stageloom", "vendor")
 if VENDOR not in sys.path:
     sys.path.insert(0, VENDOR)
 

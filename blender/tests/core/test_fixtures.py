@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from blender.gh_stack.core import codec, hashing  # noqa: E402
+from blender.stageloom.core import codec, hashing  # noqa: E402
 
 FIXTURE_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "protocol", "fixtures")

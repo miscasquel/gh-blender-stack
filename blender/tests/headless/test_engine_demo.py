@@ -36,7 +36,7 @@ PORT = 9141
 
 def pump(seconds=8.0, until=None):
     """Drive the engine timer directly: bpy.app.timers is inert under -b (S2)."""
-    import gh_stack.blender.engine as engine
+    import stageloom.blender.engine as engine
 
     deadline = time.time() + seconds
     while time.time() < deadline:
@@ -53,12 +53,12 @@ class EngineDemoTests(unittest.TestCase):
         # Clear the file first: read_factory_settings also resets preferences,
         # which would disable the add-on if it ran after addon_enable.
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
-        bpy.context.preferences.addons["gh_stack"].preferences.data_root = tempfile.mkdtemp(
-            prefix="gh-stack-test-"
+        bpy.ops.preferences.addon_enable(module="stageloom")
+        bpy.context.preferences.addons["stageloom"].preferences.data_root = tempfile.mkdtemp(
+            prefix="stageloom-test-"
         )
-        import gh_stack.blender.engine as engine
-        import gh_stack.blender.stack as stack_mod
+        import stageloom.blender.engine as engine
+        import stageloom.blender.stack as stack_mod
 
         cls.engine = engine
         cls.stack_mod = stack_mod
@@ -73,7 +73,7 @@ class EngineDemoTests(unittest.TestCase):
         engine.start_server(PORT)
         time.sleep(0.5)
 
-        bpy.ops.gh_stack.add_stage(label="Demo")
+        bpy.ops.stageloom.add_stage(label="Demo")
         cls.stage = cls.obj.gh_stack.stages[0]
         cls.param_name = "gh/%s/%s" % (cls.stage.key, "00000000-0000-4000-8000-0000000000aa")
 
@@ -91,7 +91,7 @@ class EngineDemoTests(unittest.TestCase):
             env=dict(
                 os.environ,
                 PYTHONPATH=os.pathsep.join(
-                    [os.path.join(REPO, "blender", "gh_stack", "vendor"), REPO]
+                    [os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]
                 ),
             ),
             stdout=subprocess.PIPE,
@@ -113,10 +113,10 @@ class EngineDemoTests(unittest.TestCase):
             cls.fake.wait(timeout=5)
         except subprocess.TimeoutExpired:
             cls.fake.kill()
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     def helper(self):
-        import gh_stack.blender.helpers as helpers
+        import stageloom.blender.helpers as helpers
 
         return helpers.ensure_helper(self.obj, self.stage.key)
 
@@ -216,7 +216,7 @@ class EngineDemoTests(unittest.TestCase):
         """The three context toggles in the modifiers panel are the control, and
         the engine never writes them back (the old bug: every pass re-enabled
         realtime and render)."""
-        import gh_stack.blender.nodes as nodes
+        import stageloom.blender.nodes as nodes
 
         modifier = nodes.modifier_of(self.obj, self.stage)
         self.assertIsNotNone(modifier)

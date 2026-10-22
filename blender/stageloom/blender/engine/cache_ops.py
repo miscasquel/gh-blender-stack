@@ -33,10 +33,10 @@ def _bump_generation(obj, record, stage, reason=""):
         removed = engine._store_for(record, stage).prune(generation=stage.generation)
     except OSError as exc:
         removed = []
-        engine.prefs.log("[gh-stack] cache reset failed for %s: %r" % (stage.key, exc), flush=True)
+        engine.prefs.log("[stageloom] cache reset failed for %s: %r" % (stage.key, exc), flush=True)
     if removed:
         engine.prefs.log(
-            "[gh-stack] %s: cache reset (%s), %d frame(s) dropped"
+            "[stageloom] %s: cache reset (%s), %d frame(s) dropped"
             % (stage.key, reason or "definition changed", len(removed)),
             flush=True,
         )
@@ -82,7 +82,7 @@ def _store_frame(record, stage, rid, header, sections, raw=None):
             raw = engine._frame_bytes(header, sections)
         except (engine.codec.CodecError, KeyError, TypeError) as exc:
             engine.prefs.log(
-                "[gh-stack] could not store a frame for %s: %r" % (stage.key, exc),
+                "[stageloom] could not store a frame for %s: %r" % (stage.key, exc),
                 flush=True,
             )
             return
@@ -95,7 +95,7 @@ def _store_frame(record, stage, rid, header, sections, raw=None):
             out_hash=header.get("out_hash") or "",
         )
     except OSError as exc:
-        engine.prefs.log("[gh-stack] cache write failed for %s: %r" % (stage.key, exc), flush=True)
+        engine.prefs.log("[stageloom] cache write failed for %s: %r" % (stage.key, exc), flush=True)
 
 
 def _remember(record, stage, rid, header, sections, raw=None):
@@ -113,7 +113,7 @@ def _remember(record, stage, rid, header, sections, raw=None):
             raw = engine._frame_bytes(header, sections)
         except (engine.codec.CodecError, KeyError, TypeError) as exc:
             engine.prefs.log(
-                "[gh-stack] could not cache a frame for %s: %r" % (stage.key, exc),
+                "[stageloom] could not cache a frame for %s: %r" % (stage.key, exc),
                 flush=True,
             )
             return
@@ -152,7 +152,7 @@ def _cached_response(record, stage, rid):
                 header, sections = engine.codec.decode_frame(hit[0])
             except engine.codec.CodecError as exc:
                 engine.prefs.log(
-                    "[gh-stack] dropping a corrupt hot frame for %s: %r"
+                    "[stageloom] dropping a corrupt hot frame for %s: %r"
                     % (stage.key, exc),
                     flush=True,
                 )
@@ -169,14 +169,14 @@ def _cached_response(record, stage, rid):
             return None
         raw = store.load(rid)
     except OSError as exc:
-        engine.prefs.log("[gh-stack] cache read failed for %s: %r" % (stage.key, exc), flush=True)
+        engine.prefs.log("[stageloom] cache read failed for %s: %r" % (stage.key, exc), flush=True)
         return None
     if raw is None:
         return None
     try:
         header, sections = engine.codec.decode_frame(raw)
     except engine.codec.CodecError as exc:
-        engine.prefs.log("[gh-stack] dropping a corrupt cached frame for %s: %r" % (stage.key, exc), flush=True)
+        engine.prefs.log("[stageloom] dropping a corrupt cached frame for %s: %r" % (stage.key, exc), flush=True)
         store.remove(rid)
         return None
     if header.get("status") != "ok" or header.get("stage") != stage.key:
@@ -200,7 +200,7 @@ def _forget_frame(record, stage, rid):
         engine._store_for(record, stage).remove(rid)
     except OSError as exc:
         engine.prefs.log(
-            "[gh-stack] could not drop a failed frame for %s: %r" % (stage.key, exc),
+            "[stageloom] could not drop a failed frame for %s: %r" % (stage.key, exc),
             flush=True,
         )
 

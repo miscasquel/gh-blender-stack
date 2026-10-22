@@ -19,8 +19,10 @@ import bpy
 
 from . import helpers, prefs
 
-GROUP_PREFIX = "GHS "
-MODIFIER_PREFIX = "GH · "
+GROUP_PREFIX = "SL "
+MODIFIER_PREFIX = "Stageloom · "
+OLD_GROUP_PREFIX = "GHS "
+OLD_MODIFIER_PREFIX = "GH · "
 # The node group's format. Stamped on every group the builder writes, and
 # required by _group_matches: a group from an older build (no stamp, no nested
 # chain) is stale even when the object set matches, which is what lets a
@@ -32,6 +34,22 @@ GROUP_FORMAT = 3
 
 def group_name(stage_key):
     return "%s%s" % (GROUP_PREFIX, stage_key)
+
+
+def migrate_names():
+    """Rename the 0.3.x node groups and modifiers to the Stageloom brand.
+
+    Called from ``helpers.adopt_existing()`` on register and on file load, so a
+    pre-0.4.0 file is renamed in place before the first pass. The stage records,
+    parameter properties and keyframes are untouched.
+    """
+    for group in bpy.data.node_groups:
+        if group.name.startswith(OLD_GROUP_PREFIX):
+            group.name = GROUP_PREFIX + group.name[len(OLD_GROUP_PREFIX):]
+    for obj in bpy.data.objects:
+        for modifier in obj.modifiers:
+            if modifier.name.startswith(OLD_MODIFIER_PREFIX):
+                modifier.name = MODIFIER_PREFIX + modifier.name[len(OLD_MODIFIER_PREFIX):]
 
 
 def ensure_group(stack_obj, stage_key, nested_rows=None):
@@ -242,13 +260,13 @@ def _note_skipped(stage_key, definitions, nested_rows, wired):
                 continue
             if target == index:
                 prefs.log(
-                    "[gh-stack] %s: nested block %d is inside itself; the placement is skipped"
+                    "[stageloom] %s: nested block %d is inside itself; the placement is skipped"
                     % (stage_key, index),
                     flush=True,
                 )
             else:
                 prefs.log(
-                    "[gh-stack] %s: the placement of block %d inside block %d would close "
+                    "[stageloom] %s: the placement of block %d inside block %d would close "
                     "a cycle; the placement is skipped" % (stage_key, target, index),
                     flush=True,
                 )
@@ -381,7 +399,7 @@ def modifier_of(stack_obj, stage):
 def modifier_by_name(stack_obj, stage):
     """Last-resort finder for a record saved before the uid existed whose node
     group is gone too, when the group-name link has nothing to match: the
-    modifier's creation name (``GH · <label>``). Only an *unattached* modifier
+    modifier's creation name (``Stageloom · <label>``). Only an *unattached* modifier
     (``node_group`` None) qualifies — one that still holds a group belongs to
     whoever owns that group's name — and binding it attaches a group, so a
     second same-label stage cannot claim the same modifier afterwards."""

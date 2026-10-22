@@ -11,7 +11,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 
-namespace GhStack.Core
+namespace Stageloom.Core
 {
     public static class ParamValues
     {

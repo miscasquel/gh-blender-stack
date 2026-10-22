@@ -1,6 +1,6 @@
 // Layer C, link half: one round trip against the real GhLink.
 //
-//     GhStackLinkTests.exe
+//     StageloomLinkTests.exe
 //
 // Drives the product GhLink over a scripted fake WebSocket server: hello and
 // schema content, slot bookkeeping, the unknown_ref refusal, the error path,
@@ -21,9 +21,9 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using Grasshopper.Kernel;
-using GhStack.Core;
+using Stageloom.Core;
 
-namespace GhStack.Tests.Console
+namespace Stageloom.Tests.Console
 {
     public static class LinkTests
     {
@@ -44,7 +44,7 @@ namespace GhStack.Tests.Console
                 // 1. hello on connect: no components, so no stages; the client
                 //    string is the one release version bump to keep in sync.
                 Dictionary<string, object> hello = ReadUntil(server, "hello");
-                Check("hello client", (string)Json.Get(hello, "client") == "GhStack 0.3.1",
+                Check("hello client", (string)Json.Get(hello, "client") == "Stageloom 0.4.0",
                     "client=" + Json.Get(hello, "client"));
                 Check("hello doc", (string)Json.Get(hello, "doc") == "(unsaved)",
                     "doc=" + Json.Get(hello, "doc"));
@@ -55,7 +55,7 @@ namespace GhStack.Tests.Console
                 // 2. a request before any component: no slot, a note, no growth.
                 server.Send(Frame(Header("request", "k0", "r0"), null));
                 DateTime noteDeadline = DateTime.UtcNow.AddSeconds(2);
-                while (DateTime.UtcNow < noteDeadline && !HasNote("no GH Stack component"))
+                while (DateTime.UtcNow < noteDeadline && !HasNote("no Stageloom component"))
                 {
                     CollectNotes();
                     Thread.Sleep(20);
@@ -287,7 +287,7 @@ namespace GhStack.Tests.Console
 
                 CollectNotes();
                 Check("note about the pre-component request",
-                    HasNote("no GH Stack component"), string.Join(" | ", Notes));
+                    HasNote("no Stageloom component"), string.Join(" | ", Notes));
                 Check("note about the held request",
                     HasNote("no active document; held in the slot"), string.Join(" | ", Notes));
                 Check("note about the bad frame", HasNote("bad frame (bad_frame)"), "");
@@ -537,7 +537,7 @@ namespace GhStack.Tests.Console
         private sealed class TestComponent : GH_Component
         {
             public TestComponent()
-                : base("Link Test", "Link Test", "test double", "GH Stack", "Tests")
+                : base("Link Test", "Link Test", "test double", "Stageloom", "Tests")
             {
             }
 

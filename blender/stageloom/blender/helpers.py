@@ -1,4 +1,4 @@
-"""Helper objects, block definitions and row clouds in the GH Stage scene (plan §5).
+"""Helper objects, block definitions and row clouds in the Stageloom Stage scene (plan §5).
 
 Helpers are hidden objects that carry a stage's output geometry, one per
 geometry kind: a mesh, a curve, and a point cloud. A node group reads them with
@@ -13,7 +13,7 @@ node group through Object Info, and each definition's rows are hidden point
 clouds (position/rotation/scale) fed into Instance on Points: one cloud for the
 definition's top-level rows, and one for the placements nested inside it.
 
-All of it is owned by the dedicated `GH Stage` scene, not the user's: the
+All of it is owned by the dedicated `Stageloom Stage` scene, not the user's: the
 outliner stays theirs, while the node graph still resolves the datablocks
 through Object Info (verified across scenes, render included).
 """
@@ -21,9 +21,12 @@ through Object Info (verified across scenes, render included).
 import bpy
 import numpy as np
 
-COLLECTION_NAME = "GH Stage Data"
-SCENE_NAME = "GH Stage"
-HELPER_PREFIX = "GHS "
+COLLECTION_NAME = "Stageloom Stage Data"
+SCENE_NAME = "Stageloom Stage"
+HELPER_PREFIX = "SL "
+OLD_COLLECTION_NAME = "GH Stage Data"
+OLD_SCENE_NAME = "GH Stage"
+OLD_HELPER_PREFIX = "GHS "
 KINDS = ("mesh", "curves", "points")
 
 
@@ -72,9 +75,37 @@ def adopt_existing():
         # register() also runs while a file is being read, and data access is
         # restricted there; the load_post hook adopts once the file is in.
         return
+    _migrate_old_names()
     for coll in list(bpy.data.collections):
         if coll.name == COLLECTION_NAME or coll.name.startswith(HELPER_PREFIX):
             _adopt(coll)
+
+
+def _migrate_old_names():
+    """Rename the 0.3.x scene, collection, helpers and node objects in place.
+
+    The stage records, parameter properties and keyframes are not touched; the
+    persisted keys deliberately keep their old names (see stack.py/props.py).
+    """
+    old_scene = bpy.data.scenes.get(OLD_SCENE_NAME)
+    if old_scene is not None and bpy.data.scenes.get(SCENE_NAME) is None:
+        old_scene.name = SCENE_NAME
+    old_coll = bpy.data.collections.get(OLD_COLLECTION_NAME)
+    if old_coll is not None and bpy.data.collections.get(COLLECTION_NAME) is None:
+        old_coll.name = COLLECTION_NAME
+    for coll in list(bpy.data.collections):
+        if coll.name.startswith(OLD_HELPER_PREFIX):
+            coll.name = HELPER_PREFIX + coll.name[len(OLD_HELPER_PREFIX):]
+    for obj in list(bpy.data.objects):
+        if obj.name.startswith(OLD_HELPER_PREFIX):
+            obj.name = HELPER_PREFIX + obj.name[len(OLD_HELPER_PREFIX):]
+        data = obj.data
+        if data is not None and data.name.startswith(OLD_HELPER_PREFIX):
+            data.name = HELPER_PREFIX + data.name[len(OLD_HELPER_PREFIX):]
+    # Node groups and modifiers live in nodes.py; import lazily to avoid the
+    # helpers <-> nodes cycle.
+    from . import nodes
+    nodes.migrate_names()
 
 
 def helper_name(stack_obj, stage_key, kind="mesh"):

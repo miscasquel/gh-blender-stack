@@ -18,7 +18,7 @@ REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
-from blender.gh_stack.blender import geometry_io  # noqa: E402
+from blender.stageloom.blender import geometry_io  # noqa: E402
 
 
 def by_name(sections):

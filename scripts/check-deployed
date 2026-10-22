@@ -3,7 +3,7 @@
 #
 #     scripts/check-deployed
 #
-# Compares grasshopper/build/out/GhStack.gha with every copy under the wine
+# Compares grasshopper/build/out/Stageloom.gha with every copy under the wine
 # prefix's Grasshopper Libraries folder (the place Grasshopper scans on load).
 # A C# fix is invisible until the .gha is copied *and* Rhino restarts;
 # grasshopper/deploy/deploy.sh reminds you but nothing enforces it.
@@ -15,7 +15,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 PREFIX="${WINEPREFIX:-$HOME/.local/share/wineprefixes/rhino8}"
 
-BUILT="grasshopper/build/out/GhStack.gha"
+BUILT="grasshopper/build/out/Stageloom.gha"
 if [ ! -f "$BUILT" ]; then
   echo "check-deployed: no $BUILT yet; build it with grasshopper/build/build-gha.sh"
   exit 0
@@ -24,12 +24,12 @@ BUILT_SHA="$(sha256sum "$BUILT" | cut -d' ' -f1)"
 
 DEPLOYED=()
 while IFS= read -r -d '' f; do DEPLOYED+=("$f"); done < <(
-  find "$PREFIX/drive_c/users" -type f -name 'GhStack.gha' \
+  find "$PREFIX/drive_c/users" -type f -name 'Stageloom.gha' \
     -path '*/AppData/Roaming/Grasshopper/Libraries/*' -print0 2>/dev/null || true
 )
 
 if [ "${#DEPLOYED[@]}" -eq 0 ]; then
-  echo "check-deployed: no deployed GhStack.gha under $PREFIX; nothing to compare"
+  echo "check-deployed: no deployed Stageloom.gha under $PREFIX; nothing to compare"
   exit 0
 fi
 

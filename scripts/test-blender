@@ -12,6 +12,11 @@ set +e
 blender -b --factory-startup --online-mode --python-exit-code 1 \
   --python blender/tests/headless/run.py >"$LOG" 2>&1
 CODE=$?
+# The offline gate needs a process that starts with online access off, so it
+# cannot live in the suite above (which runs with --online-mode).
+blender -b --factory-startup --python-exit-code 1 \
+  --python blender/tests/offline/run.py >>"$LOG" 2>&1
+CODE=$(( CODE | $? ))
 set -e
 
 grep -vE '^Blender [0-9]|^Read prefs|^$' "$LOG" || true

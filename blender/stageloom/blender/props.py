@@ -143,7 +143,7 @@ def apply_schema(obj, stage, params):
             if keys:
                 notice += " and %d keyframe(s)/driver(s) were removed" % keys
             bridge.state["notice"] = notice
-            prefs.log("[gh-stack] " + notice, flush=True)
+            prefs.log("[stageloom] " + notice, flush=True)
         if name not in obj:
             obj[name] = _initial_value(entry)
         elif entry.type == "value_list":
@@ -416,7 +416,7 @@ def _safe_values(obj, stage):
             safe[pid] = values[pid]
         except (core_params.SchemaError, TypeError, ValueError):
             prefs.log(
-                "[gh-stack] value for %s/%s does not fit type %s; using the default"
+                "[stageloom] value for %s/%s does not fit type %s; using the default"
                 % (stage.key, pid, param["type"]),
                 flush=True,
             )

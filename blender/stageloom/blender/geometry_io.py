@@ -15,7 +15,7 @@ and comes back as Bezier splines. NURBS splines keep order, weights, and the
 endpoint/uniform flag. Gaps in what Blender can express (arbitrary interior
 knots) are the GH side's job to approximate and warn about (D3).
 
-This module is the bpy layer: core stays pure (see blender/gh_stack/core).
+This module is the bpy layer: core stays pure (see blender/stageloom/core).
 """
 
 import numpy as np
@@ -880,7 +880,7 @@ def _instance_rows(geometry):
     index_attr = cloud.attributes.get(".reference_index")
     transform_attr = cloud.attributes.get("instance_transform")
     if index_attr is None or transform_attr is None:
-        prefs.log("[gh-stack] instances skipped: no reference_index/instance_transform", flush=True)
+        prefs.log("[stageloom] instances skipped: no reference_index/instance_transform", flush=True)
         return None
 
     n = len(cloud.points)
@@ -899,7 +899,7 @@ def _instance_rows(geometry):
             rows.append((refs[slot], matrices[row * 16:(row + 1) * 16]))
         else:
             prefs.log(
-                "[gh-stack] instance row %d skipped: reference index %d out of range" % (row, slot),
+                "[stageloom] instance row %d skipped: reference index %d out of range" % (row, slot),
                 flush=True,
             )
     return rows or None
@@ -925,13 +925,13 @@ def _reference_parts(reference, depth):
     if reference is None:
         return [], []
     if depth >= MAX_INSTANCE_DEPTH:
-        prefs.log("[gh-stack] instance nesting deeper than %d skipped" % MAX_INSTANCE_DEPTH, flush=True)
+        prefs.log("[stageloom] instance nesting deeper than %d skipped" % MAX_INSTANCE_DEPTH, flush=True)
         return [], []
     try:
         depsgraph = bpy.context.evaluated_depsgraph_get()
         evaluated = reference.evaluated_get(depsgraph)
     except Exception as ex:
-        prefs.log("[gh-stack] instance reference not evaluable: %r" % (ex,), flush=True)
+        prefs.log("[stageloom] instance reference not evaluable: %r" % (ex,), flush=True)
         return [], []
 
     if isinstance(reference, bpy.types.Collection):
@@ -976,7 +976,7 @@ def _object_parts(obj, depth):
         return [bpy.types.GeometrySet.from_evaluated_object(obj)], []
     except Exception as ex:
         prefs.log(
-            "[gh-stack] instance reference %r not readable: %r" % (obj.name, ex),
+            "[stageloom] instance reference %r not readable: %r" % (obj.name, ex),
             flush=True,
         )
         return [], []
@@ -1042,7 +1042,7 @@ def _serialize_definition(reference, sections, attributes, definitions, depth):
     definitions.append({"name": _reference_name(reference)})
     prefix = "idef.%d." % index
     if depth >= MAX_INSTANCE_DEPTH:
-        prefs.log("[gh-stack] instance nesting deeper than %d skipped" % MAX_INSTANCE_DEPTH, flush=True)
+        prefs.log("[stageloom] instance nesting deeper than %d skipped" % MAX_INSTANCE_DEPTH, flush=True)
         return index
 
     units, nested = _definition_parts(reference, depth)
@@ -1088,7 +1088,7 @@ def _serialize_instances(geometry, sections, attributes, definitions, depth):
     if not rows:
         return None
     if depth >= MAX_INSTANCE_DEPTH:
-        prefs.log("[gh-stack] instance nesting deeper than %d skipped" % MAX_INSTANCE_DEPTH, flush=True)
+        prefs.log("[stageloom] instance nesting deeper than %d skipped" % MAX_INSTANCE_DEPTH, flush=True)
         return None
 
     local = {}
@@ -1164,7 +1164,7 @@ def curves_component_to_sections(curves, index0=0, prefix="", definition=None):
 
         if ctype == CURVE_TYPE_CATMULL_ROM:
             prefs.log(
-                "[gh-stack] Catmull-Rom curve component skipped: no wire representation",
+                "[stageloom] Catmull-Rom curve component skipped: no wire representation",
                 flush=True,
             )
             continue
@@ -1267,7 +1267,7 @@ def curves_component_attributes(curves, curve_indices, point_indices, has_bezier
         elif attr.domain == "POINT":
             if has_bezier:
                 prefs.log(
-                    "[gh-stack] curve point attribute %r skipped: a Bezier control "
+                    "[stageloom] curve point attribute %r skipped: a Bezier control "
                     "net has no 1:1 point mapping" % name,
                     flush=True,
                 )

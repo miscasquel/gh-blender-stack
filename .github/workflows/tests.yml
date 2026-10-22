@@ -18,5 +18,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
+      - name: Lint
+        run: |
+          python -m pip install --quiet ruff==0.17.2
+          ruff check --output-format=concise --ignore=E402,E741,E731 .
       - name: Run the core tests
         run: scripts/test-core

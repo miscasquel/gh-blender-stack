@@ -23,7 +23,7 @@ using System.Drawing;
 using Rhino;
 using Rhino.Geometry;
 
-namespace GhStack.Core
+namespace Stageloom.Core
 {
     /// <summary>One conversion loss or approximation (protocol §4.4): the
     /// documented code plus the human-readable message. The channel keeps this

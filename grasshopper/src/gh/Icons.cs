@@ -9,7 +9,7 @@ using System.Drawing;
 using System.IO;
 using System.Reflection;
 
-namespace GhStack
+namespace Stageloom
 {
     public static class Icons
     {

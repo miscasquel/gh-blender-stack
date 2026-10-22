@@ -1,6 +1,6 @@
 // Layer C, codec half: the C# codec against the golden fixtures.
 //
-//     GhStackCoreTests.exe <fixtures root>
+//     StageloomCoreTests.exe <fixtures root>
 //
 // No Rhino and no Grasshopper: the codec is pure managed code, so this runs under
 // the wine runtime directly (see build.sh). For every fixture it checks:
@@ -17,9 +17,9 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
-using GhStack.Core;
+using Stageloom.Core;
 
-namespace GhStack.Tests.Console
+namespace Stageloom.Tests.Console
 {
     public static class Program
     {
@@ -29,7 +29,7 @@ namespace GhStack.Tests.Console
         {
             if (args.Length < 1)
             {
-                System.Console.WriteLine("usage: GhStackCoreTests.exe <fixtures root>");
+                System.Console.WriteLine("usage: StageloomCoreTests.exe <fixtures root>");
                 return 2;
             }
             string root = args[0];

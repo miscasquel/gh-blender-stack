@@ -21,12 +21,12 @@ _ICON_NAMES = {
 _STAGE_ICON = "IMPORT_EXPORT" if "IMPORT_EXPORT" in _ICON_NAMES else "ARROW_LEFTRIGHT"
 
 
-class GHSTACK_PT_panel(bpy.types.Panel):
-    bl_label = "GH Stack"
-    bl_idname = "GHSTACK_PT_panel"
+class STAGELOOM_PT_panel(bpy.types.Panel):
+    bl_label = "Stageloom"
+    bl_idname = "STAGELOOM_PT_panel"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
-    bl_category = "GH Stack"
+    bl_category = "Stageloom"
 
     def draw(self, context):
         layout = self.layout
@@ -49,13 +49,13 @@ class GHSTACK_PT_panel(bpy.types.Panel):
         obj = context.object
         record = stack_mod.stack_of(obj) if obj is not None else None
         if obj is None or record is None or not record.stages:
-            layout.operator("gh_stack.add_stage", icon="ADD")
+            layout.operator("stageloom.add_stage", icon="ADD")
             layout.label(text="Select a mesh and add a stage", icon="INFO")
             return
 
         row = layout.row()
-        row.operator("gh_stack.add_stage", icon="ADD")
-        row.operator("gh_stack.push", icon="FILE_REFRESH")
+        row.operator("stageloom.add_stage", icon="ADD")
+        row.operator("stageloom.push", icon="FILE_REFRESH")
 
         if obj.type == "MESH":
             row = layout.row()
@@ -73,9 +73,9 @@ class GHSTACK_PT_panel(bpy.types.Panel):
         # Pull, Freeze, and the key to paste into Grasshopper.
         row.label(text=stage.label or stage.key, icon=_STAGE_ICON)
         row.label(text=stage.state, icon=_state_icon(stage))
-        row.operator("gh_stack.pull", text="", icon="IMPORT").index = index
-        row.operator("gh_stack.freeze", text="", icon="FREEZE", depress=stage.frozen).index = index
-        row.operator("gh_stack.copy_key", text="", icon="COPYDOWN").index = index
+        row.operator("stageloom.pull", text="", icon="IMPORT").index = index
+        row.operator("stageloom.freeze", text="", icon="FREEZE", depress=stage.frozen).index = index
+        row.operator("stageloom.copy_key", text="", icon="COPYDOWN").index = index
 
         row = box.row()
         row.label(text="Key")
@@ -90,7 +90,7 @@ class GHSTACK_PT_panel(bpy.types.Panel):
             params_box = box.box()
             row = params_box.row()
             row.label(text="Parameters", icon="PRESET")
-            row.operator("gh_stack.key_all", text="Key all").index = index
+            row.operator("stageloom.key_all", text="Key all").index = index
             # Group labels come from the Param component's Group input; parameters
             # with no group sit directly under the header, in schema order.
             groups = []
@@ -141,16 +141,16 @@ class GHSTACK_PT_panel(bpy.types.Panel):
             col.prop(obj, '["%s"]' % name, text=entry.label or entry.param_id)
 
 
-class GHSTACK_PT_diagnostics(bpy.types.Panel):
+class STAGELOOM_PT_diagnostics(bpy.types.Panel):
     """What the add-on actually received, for when the panel and GH disagree.
     Collapsed by default; Blender-style child panel."""
 
     bl_label = "Diagnostics"
-    bl_idname = "GHSTACK_PT_diagnostics"
+    bl_idname = "STAGELOOM_PT_diagnostics"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
-    bl_category = "GH Stack"
-    bl_parent_id = "GHSTACK_PT_panel"
+    bl_category = "Stageloom"
+    bl_parent_id = "STAGELOOM_PT_panel"
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
@@ -217,7 +217,7 @@ class GHSTACK_PT_diagnostics(bpy.types.Panel):
                 box.label(text="Orphans: %d" % len(orphaned), icon="ORPHAN_DATA")
                 for name in orphaned:
                     box.label(text=name.rsplit("/", 1)[-1])
-                box.operator("gh_stack.purge_orphans", icon="TRASH")
+                box.operator("stageloom.purge_orphans", icon="TRASH")
 
         activity = engine.recent_activity(8)
         if activity:
@@ -283,10 +283,10 @@ def _safe_unregister(cls):
 
 
 def register():
-    bpy.utils.register_class(GHSTACK_PT_panel)
-    bpy.utils.register_class(GHSTACK_PT_diagnostics)
+    bpy.utils.register_class(STAGELOOM_PT_panel)
+    bpy.utils.register_class(STAGELOOM_PT_diagnostics)
 
 
 def unregister():
-    _safe_unregister(GHSTACK_PT_diagnostics)
-    _safe_unregister(GHSTACK_PT_panel)
+    _safe_unregister(STAGELOOM_PT_diagnostics)
+    _safe_unregister(STAGELOOM_PT_panel)

@@ -241,7 +241,7 @@ def _process_stage(obj, record, stage):
         "%s: sent %s %s" % (stage.key, mode, rid[-8:] if rid else "")
     )
     if retry_note:
-        engine.prefs.log("[gh-stack] %s: %s" % (stage.key, retry_note), flush=True)
+        engine.prefs.log("[stageloom] %s: %s" % (stage.key, retry_note), flush=True)
     engine.stats["sends"] += 1
     # A send re-arms the "why no send" reason: the next silence is a new
     # decision, not a repeat of the pass before this one.
@@ -463,7 +463,7 @@ def _clone_prefixes(obj, stages, subd):
                 import traceback
 
                 engine.prefs.log(
-                    "[gh-stack] %s\n%s" % (message, traceback.format_exc()),
+                    "[stageloom] %s\n%s" % (message, traceback.format_exc()),
                     flush=True,
                 )
         finally:
@@ -559,7 +559,7 @@ def _cleanup_prefix_clone(clone, owned_data, stage_key, update_view_layer=True):
                 engine._trace.append(message)
             import traceback
 
-            engine.prefs.log("[gh-stack] %s\n%s" % (message, traceback.format_exc()), flush=True)
+            engine.prefs.log("[stageloom] %s\n%s" % (message, traceback.format_exc()), flush=True)
     return failure
 
 

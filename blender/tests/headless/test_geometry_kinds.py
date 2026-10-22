@@ -27,7 +27,7 @@ BLENDER_PKG = os.path.join(REPO, "blender")
 if BLENDER_PKG not in sys.path:
     sys.path.insert(0, BLENDER_PKG)
 
-from blender.gh_stack.blender import geometry_io  # noqa: E402
+from blender.stageloom.blender import geometry_io  # noqa: E402
 
 PORT = 9143
 
@@ -456,12 +456,12 @@ class MixedEngineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
-        bpy.context.preferences.addons["gh_stack"].preferences.data_root = tempfile.mkdtemp(
-            prefix="gh-stack-test-"
+        bpy.ops.preferences.addon_enable(module="stageloom")
+        bpy.context.preferences.addons["stageloom"].preferences.data_root = tempfile.mkdtemp(
+            prefix="stageloom-test-"
         )
-        import gh_stack.blender.engine as engine
-        import gh_stack.blender.stack as stack_mod
+        import stageloom.blender.engine as engine
+        import stageloom.blender.stack as stack_mod
 
         cls.engine = engine
         cls.stack_mod = stack_mod
@@ -476,7 +476,7 @@ class MixedEngineTests(unittest.TestCase):
         engine.start_server(PORT)
         time.sleep(0.5)
 
-        bpy.ops.gh_stack.add_stage(label="Mixed")
+        bpy.ops.stageloom.add_stage(label="Mixed")
         cls.stage = cls.obj.gh_stack.stages[0]
 
         cls.fake = subprocess.Popen(
@@ -491,7 +491,7 @@ class MixedEngineTests(unittest.TestCase):
             env=dict(
                 os.environ,
                 PYTHONPATH=os.pathsep.join(
-                    [os.path.join(REPO, "blender", "gh_stack", "vendor"), REPO]
+                    [os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]
                 ),
             ),
             stdout=subprocess.PIPE,
@@ -523,10 +523,10 @@ class MixedEngineTests(unittest.TestCase):
                 cls.fake.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 cls.fake.kill()
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_01_response_reaches_all_three_helpers(self):
-        import gh_stack.blender.helpers as helpers
+        import stageloom.blender.helpers as helpers
 
         self.assertEqual(self.stage.state, "ok", self.stage.error)
         mesh_helper = helpers.ensure_helper(self.obj, self.stage.key, "mesh")
@@ -538,7 +538,7 @@ class MixedEngineTests(unittest.TestCase):
         self.assertEqual(len(point_helper.data.points), 8)
 
     def test_02_group_reads_every_helper(self):
-        import gh_stack.blender.nodes as nodes
+        import stageloom.blender.nodes as nodes
 
         group = bpy.data.node_groups.get(nodes.group_name(self.stage.key))
         self.assertIsNotNone(group)
@@ -547,8 +547,8 @@ class MixedEngineTests(unittest.TestCase):
         self.assertTrue(all(n.transform_space == "ORIGINAL" for n in infos))
 
     def test_03_a_response_without_curves_or_points_clears_them(self):
-        import gh_stack.blender.helpers as helpers
-        from blender.gh_stack.blender import engine as engine_mod
+        import stageloom.blender.helpers as helpers
+        from blender.stageloom.blender import engine as engine_mod
 
         mesh_sections = {"mesh.verts": [(0, 0, 0), (1, 0, 0), (0, 1, 0)],
                          "mesh.face_counts": [3],

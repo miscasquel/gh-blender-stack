@@ -48,7 +48,7 @@ SCALE = "00000000-0000-4000-8000-0000000000aa"
 
 def pump(seconds=8.0, until=None):
     """Drive the engine timer directly: bpy.app.timers is inert under -b (S2)."""
-    import gh_stack.blender.engine as engine
+    import stageloom.blender.engine as engine
 
     deadline = time.time() + seconds
     while time.time() < deadline:
@@ -62,7 +62,7 @@ def pump(seconds=8.0, until=None):
 def scrub(obj, frame):
     """Move the timeline and make sure the engine sees it (frame_change_post is
     not guaranteed to run under -b)."""
-    import gh_stack.blender.engine as engine
+    import stageloom.blender.engine as engine
 
     bpy.context.scene.frame_set(frame)
     engine._mark_object_dirty(obj)
@@ -72,7 +72,7 @@ def pump_dirty(obj, seconds=8.0, until=None):
     """Like pump, but keeps the object dirty. The request timeout is only
     noticed on a pass, so a test waiting for a retry has to ask for passes (a
     scene change would do the same in a session)."""
-    import gh_stack.blender.engine as engine
+    import stageloom.blender.engine as engine
 
     deadline = time.time() + seconds
     while time.time() < deadline:
@@ -97,7 +97,7 @@ def start_fake(stage_key, report, *extra):
         env=dict(
             os.environ,
             PYTHONPATH=os.pathsep.join(
-                [os.path.join(REPO, "blender", "gh_stack", "vendor"), REPO]
+                [os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]
             ),
         ),
         stdout=subprocess.PIPE,
@@ -133,7 +133,7 @@ def requests_of(path):
 def helper_max(obj, stage_key):
     """The largest absolute coordinate in a stage's mesh helper: the fake scales
     the whole mesh by the parameter, so this is the parameter value."""
-    import gh_stack.blender.helpers as helpers
+    import stageloom.blender.helpers as helpers
 
     helper = helpers.helper_for(obj, stage_key, "mesh")
     if helper is None:
@@ -149,7 +149,7 @@ def helper_max(obj, stage_key):
 
 def helper_bounds(obj, stage_key):
     """(min, max) of the helper mesh's X, so a test can see a prefix offset."""
-    import gh_stack.blender.helpers as helpers
+    import stageloom.blender.helpers as helpers
 
     helper = helpers.helper_for(obj, stage_key, "mesh")
     if helper is None or not len(helper.data.vertices):
@@ -194,15 +194,15 @@ def expected_offset(frame):
 
 
 def store_of(obj, stage):
-    import gh_stack.blender.engine as engine
-    import gh_stack.blender.stack as stack_mod
+    import stageloom.blender.engine as engine
+    import stageloom.blender.stack as stack_mod
 
     return engine._store_for(stack_mod.stack_of(obj), stage)
 
 
 def memory_count(obj, stage):
-    import gh_stack.blender.engine as engine
-    import gh_stack.blender.stack as stack_mod
+    import stageloom.blender.engine as engine
+    import stageloom.blender.stack as stack_mod
 
     record = stack_mod.stack_of(obj)
     return len(engine._cache.get((record.stack_id, stage.key), {}))
@@ -210,7 +210,7 @@ def memory_count(obj, stage):
 
 def keyframe_scale(obj, stage, values):
     """Keyframe the stage's float parameter at frames 1..len(values)."""
-    import gh_stack.blender.stack as stack_mod
+    import stageloom.blender.stack as stack_mod
 
     name = stack_mod.param_prop_name(stage.key, SCALE)
     if name not in obj:
@@ -228,14 +228,14 @@ class FrameCacheTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
-        import gh_stack.blender.engine as engine
-        import gh_stack.blender.stack as stack_mod
+        bpy.ops.preferences.addon_enable(module="stageloom")
+        import stageloom.blender.engine as engine
+        import stageloom.blender.stack as stack_mod
 
         cls.engine = engine
         cls.stack_mod = stack_mod
-        prefs = bpy.context.preferences.addons["gh_stack"].preferences
-        cls.data_root = tempfile.mkdtemp(prefix="gh-stack-cache-test-")
+        prefs = bpy.context.preferences.addons["stageloom"].preferences
+        cls.data_root = tempfile.mkdtemp(prefix="stageloom-cache-test-")
         prefs.data_root = cls.data_root
         if cls.cache_mb is not None:
             prefs.cache_size_mb = cls.cache_mb
@@ -245,7 +245,7 @@ class FrameCacheTestCase(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     @classmethod
     def await_client(cls, seconds=15.0):
@@ -259,7 +259,7 @@ class FrameCacheTestCase(unittest.TestCase):
         would send a request early — which shifts the response counts that
         `--echo-after`, `--gh-edit-after`, `--schema-after` and `--forget-after`
         are scripted against."""
-        import gh_stack.blender.bridge as bridge
+        import stageloom.blender.bridge as bridge
 
         deadline = time.time() + seconds
         while time.time() < deadline:
@@ -273,7 +273,7 @@ class FrameCacheTestCase(unittest.TestCase):
         bpy.ops.mesh.primitive_cube_add(size=2.0)
         obj = bpy.context.object
         obj.name = label
-        bpy.ops.gh_stack.add_stage(label=label)
+        bpy.ops.stageloom.add_stage(label=label)
         return obj, obj.gh_stack.stages[0]
 
     @classmethod
@@ -313,7 +313,7 @@ class ProgressiveFillTests(FrameCacheTestCase):
         self.assertGreaterEqual(requests_of(self.report), 5)
 
     def test_02_replay_with_grasshopper_closed(self):
-        import gh_stack.blender.bridge as bridge
+        import stageloom.blender.bridge as bridge
 
         stop_fake(type(self).fake)
         type(self).fake = None
@@ -581,7 +581,7 @@ class EvictionTests(FrameCacheTestCase):
         bpy.ops.mesh.primitive_grid_add(x_subdivisions=225, y_subdivisions=225, size=2.0)
         obj = bpy.context.object
         obj.name = "Evict"
-        bpy.ops.gh_stack.add_stage(label="Evict")
+        bpy.ops.stageloom.add_stage(label="Evict")
         cls.obj = obj
         cls.stage = obj.gh_stack.stages[0]
         keyframe_scale(cls.obj, cls.stage, [1.0, 2.0, 3.0, 4.0])
@@ -770,7 +770,7 @@ class OneRequestOutstandingTests(FrameCacheTestCase):
         super().tearDownClass()
 
     def test_01_only_one_request_is_ever_outstanding(self):
-        import gh_stack.blender.server as server
+        import stageloom.blender.server as server
 
         engine = self.engine
         seen = {"outstanding": 0, "peak": 0}
@@ -969,7 +969,7 @@ class CoalescedAnswerTests(FrameCacheTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        prefs = bpy.context.preferences.addons["gh_stack"].preferences
+        prefs = bpy.context.preferences.addons["stageloom"].preferences
         cls.timeout_before = prefs.timeout
         prefs.timeout = 1.0
         cls.obj, cls.stage = cls.add_cube("Coalesce")
@@ -979,7 +979,7 @@ class CoalescedAnswerTests(FrameCacheTestCase):
 
     @classmethod
     def tearDownClass(cls):
-        bpy.context.preferences.addons["gh_stack"].preferences.timeout = cls.timeout_before
+        bpy.context.preferences.addons["stageloom"].preferences.timeout = cls.timeout_before
         stop_fake(getattr(cls, "fake", None))
         super().tearDownClass()
 
@@ -1032,12 +1032,12 @@ class TimeDrivenPrefixTests(FrameCacheTestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        import gh_stack.blender.stack as stack_mod
+        import stageloom.blender.stack as stack_mod
 
         bpy.ops.mesh.primitive_cube_add(size=2.0)
         cls.obj = bpy.context.object
         cls.obj.name = "Clock"
-        bpy.ops.gh_stack.add_stage(label="Clock")
+        bpy.ops.stageloom.add_stage(label="Clock")
         cls.stage = cls.obj.gh_stack.stages[0]
         # A constant parameter: the prefix is the only thing that can differ
         # between frames, so no keyframes are involved anywhere.

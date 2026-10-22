@@ -37,6 +37,8 @@ HASH_SECTION_ORDER = (
     "inst.transforms",
 )
 
+# Historical hash domain: saved stage records carry request IDs derived from
+# this string. Keep it across the rebrand so existing .blend records stay coherent.
 RID_DOMAIN = b"gh-stack/rid/v2"
 
 

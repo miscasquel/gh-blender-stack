@@ -53,7 +53,7 @@ def _report_message_failure(header, exc):
         engine._trace.append(message)
     import traceback
 
-    engine.prefs.log("[gh-stack] incoming %s failed:\n%s" % (where, traceback.format_exc()), flush=True)
+    engine.prefs.log("[stageloom] incoming %s failed:\n%s" % (where, traceback.format_exc()), flush=True)
     if mtype == "response" and stage_key:
         try:
             engine._clear_failed_response(stage_key, header.get("rid"))
@@ -61,7 +61,7 @@ def _report_message_failure(header, exc):
             # Best-effort, like the cleanup: a stage that cannot be recovered
             # must not cost the *other* messages their chance to be handled.
             engine.prefs.log(
-                "[gh-stack] could not recover the failed response for %s: %r"
+                "[stageloom] could not recover the failed response for %s: %r"
                 % (stage_key, recovery),
                 flush=True,
             )
@@ -151,7 +151,7 @@ def _handle_schema(header):
             engine.bridge.state["error"] = "schema for %s failed: %r" % (key, exc)
             import traceback
 
-            engine.prefs.log("[gh-stack] schema error:\n%s" % traceback.format_exc(), flush=True)
+            engine.prefs.log("[stageloom] schema error:\n%s" % traceback.format_exc(), flush=True)
             continue
         # A changed schema is a changed definition: frames cached against
         # the old one must not replay.
@@ -161,7 +161,7 @@ def _handle_schema(header):
     if not matched:
         # A schema for a stage no object has: usually a key pasted into GH that
         # does not belong to any stack, or a stage removed in Blender.
-        engine.prefs.log("[gh-stack] schema for unknown stage %r ignored" % (key,), flush=True)
+        engine.prefs.log("[stageloom] schema for unknown stage %r ignored" % (key,), flush=True)
 
 
 def _handle_response(header, sections, raw=None):
@@ -284,10 +284,10 @@ def _handle_error(header):
             matched = True
             engine._resend_in_full(obj, record, stage, "unknown_ref")
         if not matched:
-            engine.prefs.log("[gh-stack] unknown_ref for unknown stage %r" % (header.get("stage"),), flush=True)
+            engine.prefs.log("[stageloom] unknown_ref for unknown stage %r" % (header.get("stage"),), flush=True)
         return
 
-    engine.prefs.log("[gh-stack] protocol error %s: %s" % (code, message), flush=True)
+    engine.prefs.log("[stageloom] protocol error %s: %s" % (code, message), flush=True)
     for obj, record, stage in engine._stage_views(header.get("stage")):
         # The request this error answers is over: without this the stage would
         # sit `waiting` for the full timeout for an answer that is already here.
@@ -315,5 +315,5 @@ def _resend_in_full(obj, record, stage, reason):
     engine._set(stage, "state", engine.stack_mod.STATE_IDLE)
     engine._set(stage, "error", "")
     engine._dirty.add(obj.name)
-    engine.prefs.log("[gh-stack] %s: resending geometry (%s)" % (stage.key, reason), flush=True)
+    engine.prefs.log("[stageloom] %s: resending geometry (%s)" % (stage.key, reason), flush=True)
 

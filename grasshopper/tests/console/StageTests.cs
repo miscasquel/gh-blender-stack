@@ -1,7 +1,7 @@
 // Layer C, Stage In build guard: a malformed frame becomes a reported stage
 // error instead of an exception escaping SolveInstance.
 //
-//     GhStackStageTests.exe
+//     StageloomStageTests.exe
 //
 // The guard is deliberately free of Rhino types, so this runs under wine
 // without a Rhino process. The real conversion is exercised by the Blender/GH
@@ -9,7 +9,7 @@
 
 using System;
 
-namespace GhStack.Tests.Console
+namespace Stageloom.Tests.Console
 {
     public static class StageTests
     {

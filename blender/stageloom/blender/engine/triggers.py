@@ -238,7 +238,7 @@ def _recover_stuck_guard():
         % (where, age)
     )
     engine._trace.append(line)
-    engine.prefs.log("[gh-stack] " + line, flush=True)
+    engine.prefs.log("[stageloom] " + line, flush=True)
 
 
 def _timer():
@@ -292,7 +292,7 @@ def _timer():
                 engine.bridge.state["error"] = "engine error on %s: %r" % (name, exc)
                 import traceback
 
-                engine.prefs.log("[gh-stack] engine error:\n%s" % traceback.format_exc(), flush=True)
+                engine.prefs.log("[stageloom] engine error:\n%s" % traceback.format_exc(), flush=True)
                 # The pass died before it could decide anything for this
                 # object: say so in the panel, where the silence is what a user
                 # is staring at. One line per consecutive identical failure.
@@ -314,7 +314,7 @@ def _timer():
             engine.bridge.state["error"] = "engine error: %r" % (exc,)
             import traceback
 
-            engine.prefs.log("[gh-stack] engine error:\n%s" % traceback.format_exc(), flush=True)
+            engine.prefs.log("[stageloom] engine error:\n%s" % traceback.format_exc(), flush=True)
         except Exception:
             pass
         return engine.IDLE_INTERVAL

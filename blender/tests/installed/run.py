@@ -16,7 +16,7 @@ import time
 import addon_utils
 import bpy
 
-MODULE = "bl_ext.user_default.gh_stack"
+MODULE = "bl_ext.user_default.stageloom"
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 PORT = 9144
 failures = []
@@ -52,7 +52,7 @@ def saved_port_check(server, prefs):
     # the add-on gates its server on it (the `network` permission contract).
     result = subprocess.run(
         [bpy.app.binary_path, "-b", "--online-mode", "--python", phase2],
-        env=dict(os.environ, GHSTACK_PORT_EXPECT=str(SAVED_PORT)),
+        env=dict(os.environ, STAGELOOM_PORT_EXPECT=str(SAVED_PORT)),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -83,10 +83,21 @@ def main():
     server = importlib.import_module(MODULE + ".blender.server")
     engine = importlib.import_module(MODULE + ".blender.engine")
 
-    # Keep the frame cache out of the real ~/.local/share/gh-stack.
+    # The default must be the extension's own user directory, not a hard-coded
+    # path or the extension install directory.
+    prefs = importlib.import_module(MODULE + ".blender.prefs")
+    default_root = prefs.data_root()
+    extensions_root = os.environ.get("BLENDER_USER_EXTENSIONS", "")
+    check(
+        "default data root under the extension user directory",
+        bool(extensions_root) and default_root.startswith(extensions_root),
+        default_root,
+    )
+
+    # Keep the frame cache out of the real user data root for the round trip.
     try:
         bpy.context.preferences.addons[MODULE].preferences.data_root = tempfile.mkdtemp(
-            prefix="gh-stack-installed-test-"
+            prefix="stageloom-installed-test-"
         )
     except KeyError:
         pass
@@ -97,7 +108,7 @@ def main():
     )
 
     check("extension module imported", server is not None)
-    check("panel class registered", hasattr(bpy.types, "GHSTACK_PT_panel"))
+    check("panel class registered", hasattr(bpy.types, "STAGELOOM_PT_panel"))
 
     import websockets
 
@@ -110,7 +121,7 @@ def main():
 
     bpy.ops.mesh.primitive_cube_add(size=2.0)
     obj = bpy.context.object
-    bpy.ops.gh_stack.add_stage(label="Installed")
+    bpy.ops.stageloom.add_stage(label="Installed")
     stage = obj.gh_stack.stages[0]
 
     report = os.path.join(tempfile.gettempdir(), "fake_gh_installed_report.json")
@@ -126,7 +137,7 @@ def main():
         ],
         env=dict(
             os.environ,
-            PYTHONPATH=os.pathsep.join([os.path.join(REPO, "blender", "gh_stack", "vendor"), REPO]),
+            PYTHONPATH=os.pathsep.join([os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]),
         ),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

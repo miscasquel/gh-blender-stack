@@ -25,8 +25,8 @@ BLENDER_PKG = os.path.join(REPO, "blender")
 if BLENDER_PKG not in sys.path:
     sys.path.insert(0, BLENDER_PKG)
 
-from blender.gh_stack.blender import geometry_io  # noqa: E402
-from blender.gh_stack.core import codec  # noqa: E402
+from blender.stageloom.blender import geometry_io  # noqa: E402
+from blender.stageloom.core import codec  # noqa: E402
 
 
 def _quad(name):
@@ -396,7 +396,7 @@ class InstanceReadTests(unittest.TestCase):
         self.assertEqual([cube_row[0][3], cube_row[1][3], cube_row[2][3]], [0.0, 0.0, 0.0])
 
     def test_definition_names_take_part_in_the_request_hash(self):
-        from blender.gh_stack.blender import engine
+        from blender.stageloom.blender import engine
 
         quad = _quad("hash-quad")
         coll = _collection("HashColl", quad)
@@ -446,13 +446,13 @@ class InstanceApplyTests(unittest.TestCase):
 
     def setUp(self):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
+        bpy.ops.preferences.addon_enable(module="stageloom")
 
     def _stage(self):
         bpy.ops.mesh.primitive_cube_add(size=2.0)
         obj = bpy.context.object
         obj.name = "Blocks"
-        bpy.ops.gh_stack.add_stage(label="Blocks")
+        bpy.ops.stageloom.add_stage(label="Blocks")
         return obj, obj.gh_stack.stages[0]
 
     @staticmethod
@@ -494,7 +494,7 @@ class InstanceApplyTests(unittest.TestCase):
         return evaluated, evaluated.to_mesh()
 
     def test_apply_realizes_block_instances(self):
-        from blender.gh_stack.blender import engine
+        from blender.stageloom.blender import engine
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -516,7 +516,7 @@ class InstanceApplyTests(unittest.TestCase):
             evaluated.to_mesh_clear()
 
     def test_apply_rotates_and_scales_rows(self):
-        from blender.gh_stack.blender import engine
+        from blender.stageloom.blender import engine
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -544,7 +544,7 @@ class InstanceApplyTests(unittest.TestCase):
         # A nested placement is an instance of the child's prototype chain at
         # the parent's placement points — never a baked transformed copy — so
         # the parent's rows draw the nested content with it.
-        from blender.gh_stack.blender import engine, helpers, nodes
+        from blender.stageloom.blender import engine, helpers, nodes
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -589,7 +589,7 @@ class InstanceApplyTests(unittest.TestCase):
     def test_apply_draws_two_levels_of_nesting(self):
         # def0: a quad; def1 nests it 3 up; def2 nests def1 1 up; one top row
         # of def2 — the quad lands at z = 4. Each level stays its own instance.
-        from blender.gh_stack.blender import engine
+        from blender.stageloom.blender import engine
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -629,7 +629,7 @@ class InstanceApplyTests(unittest.TestCase):
         # One placement cloud, two children: each Instance-on-Points selects
         # only the points whose ``child`` names it, so both children land where
         # they belong inside a single cloud (rows interleaved on purpose).
-        from blender.gh_stack.blender import engine, nodes
+        from blender.stageloom.blender import engine, nodes
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -672,7 +672,7 @@ class InstanceApplyTests(unittest.TestCase):
         # A definition placed inside itself is a wire error: the placement is
         # skipped (with a note), the rest of the chain still wires, and the
         # group stays a real graph.
-        from blender.gh_stack.blender import engine
+        from blender.stageloom.blender import engine
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -700,7 +700,7 @@ class InstanceApplyTests(unittest.TestCase):
         # like the top-level rows, so moving a nested placement updates the
         # drawing without churning the node group. The old chain baked each
         # matrix into a Transform node, so every move rebuilt the chain.
-        from blender.gh_stack.blender import engine, helpers, nodes
+        from blender.stageloom.blender import engine, helpers, nodes
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -733,7 +733,7 @@ class InstanceApplyTests(unittest.TestCase):
             evaluated.to_mesh_clear()
 
     def test_the_group_rebuilds_when_the_nested_structure_changes(self):
-        from blender.gh_stack.blender import engine, helpers, nodes
+        from blender.stageloom.blender import engine, helpers, nodes
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -776,7 +776,7 @@ class InstanceApplyTests(unittest.TestCase):
         # per row — so a child placed at many nested rows scaled with copies.
         # The output must hold one instance per placement instead, reachable
         # through the instance references, with no baked mesh at the top.
-        from blender.gh_stack.blender import engine, nodes
+        from blender.stageloom.blender import engine, nodes
 
         obj, stage = self._stage()
         placements = 1000
@@ -815,7 +815,7 @@ class InstanceApplyTests(unittest.TestCase):
         # counted is what proves the renderer sees the nested instances (the
         # method that showed geometry copies drawing where references did not,
         # 2026-10-17).
-        from blender.gh_stack.blender import engine
+        from blender.stageloom.blender import engine
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -848,7 +848,7 @@ class InstanceApplyTests(unittest.TestCase):
         sun_data.energy = 5.0
         scene.collection.objects.link(bpy.data.objects.new("draw-sun", sun_data))
 
-        path = os.path.join(bpy.app.tempdir, "gh-stack-nested-draw.png")
+        path = os.path.join(bpy.app.tempdir, "stageloom-nested-draw.png")
         scene.render.filepath = path
         bpy.ops.render.render(write_still=True)
         image = bpy.data.images.load(path)
@@ -866,7 +866,7 @@ class InstanceApplyTests(unittest.TestCase):
         # A group written by an older build has no format stamp (and no nested
         # chain): a same-hash frame must still be able to repair it, so the
         # stamp is part of the match.
-        from blender.gh_stack.blender import engine, helpers, nodes
+        from blender.stageloom.blender import engine, helpers, nodes
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -892,7 +892,7 @@ class InstanceApplyTests(unittest.TestCase):
     def test_an_orphan_definition_is_not_expected_in_the_group(self):
         # A definition no row reaches gets no chain; expecting its objects would
         # make every apply see a mismatch and rebuild forever.
-        from blender.gh_stack.blender import engine, helpers, nodes
+        from blender.stageloom.blender import engine, helpers, nodes
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -912,7 +912,7 @@ class InstanceApplyTests(unittest.TestCase):
         # attribute + four rows, all in one response. The base mesh draws as
         # real geometry, the four quads as instances, and each attribute lands
         # on its own helper.
-        from blender.gh_stack.blender import engine
+        from blender.stageloom.blender import engine
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections())
@@ -948,7 +948,7 @@ class InstanceApplyTests(unittest.TestCase):
         finally:
             evaluated.to_mesh_clear()
 
-        from blender.gh_stack.blender import helpers
+        from blender.stageloom.blender import helpers
 
         base = helpers.helper_for(obj, stage.key, "mesh")
         definition = helpers.definition_name(obj, stage.key, 0)
@@ -962,7 +962,7 @@ class InstanceApplyTests(unittest.TestCase):
         # The rebuild check must agree with the wiring it just produced (it
         # used to count the base points helper as a row cloud and rebuild on
         # every apply — churn, caught by the 2026-10-16 audit).
-        from blender.gh_stack.blender import engine, helpers, nodes
+        from blender.stageloom.blender import engine, helpers, nodes
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -990,7 +990,7 @@ class InstanceApplyTests(unittest.TestCase):
         # definitions + rows has empty top-level helpers. The old emptiness
         # check looked only there, so every pass looked "missing" and applied
         # the same frame again. Check the helper each section actually writes.
-        from blender.gh_stack.blender import engine, helpers
+        from blender.stageloom.blender import engine, helpers
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -1009,7 +1009,7 @@ class InstanceApplyTests(unittest.TestCase):
     def test_a_mixed_frame_still_reapplies_a_cleared_base_helper(self):
         # Definition helpers must not mask a missing base helper: both are
         # checked against the sections that name them.
-        from blender.gh_stack.blender import engine, helpers
+        from blender.stageloom.blender import engine, helpers
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections())
@@ -1023,7 +1023,7 @@ class InstanceApplyTests(unittest.TestCase):
         self.assertTrue(engine._payload_missing(obj, stage, sections))
 
     def test_apply_clears_definitions_that_go_away(self):
-        from blender.gh_stack.blender import engine
+        from blender.stageloom.blender import engine
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -1032,7 +1032,7 @@ class InstanceApplyTests(unittest.TestCase):
         engine._apply(obj, stage, sections, None)
 
         # A later response without blocks removes the prototype and its cloud.
-        from blender.gh_stack.blender import helpers
+        from blender.stageloom.blender import helpers
 
         engine._apply(obj, stage, {}, None)
         self.assertEqual(helpers.definition_collections(obj, stage.key), {})
@@ -1047,9 +1047,9 @@ class InstanceApplyTests(unittest.TestCase):
 
     def test_plumbing_lives_in_the_stage_scene(self):
         # Helpers, definitions and row clouds are owned by the dedicated
-        # "GH Stage" scene, so the user's outliner holds only their own
+        # "Stageloom Stage" scene, so the user's outliner holds only their own
         # collections; the node graph still resolves them across scenes.
-        from blender.gh_stack.blender import engine, helpers
+        from blender.stageloom.blender import engine, helpers
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -1083,7 +1083,7 @@ class InstanceApplyTests(unittest.TestCase):
         # Sessions from before the stage scene have their plumbing linked into
         # the user's scene; the next use moves it, so no manual cleanup is
         # needed. A deleted stage scene is recreated the same way.
-        from blender.gh_stack.blender import engine, helpers
+        from blender.stageloom.blender import engine, helpers
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -1129,7 +1129,7 @@ class EnginePrefixTests(unittest.TestCase):
 
     def setUp(self):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
+        bpy.ops.preferences.addon_enable(module="stageloom")
 
     def _instance_group(self, name, points_obj, source_obj):
         group = bpy.data.node_groups.new(name, "GeometryNodeTree")
@@ -1148,7 +1148,7 @@ class EnginePrefixTests(unittest.TestCase):
         return group
 
     def _scene(self):
-        from gh_stack.blender import stack as stack_mod
+        from stageloom.blender import stack as stack_mod
 
         source = _quad("prefix-source")
         points = _points("prefix-points", [(0, 0, 0), (3, 0, 0)])
@@ -1158,16 +1158,16 @@ class EnginePrefixTests(unittest.TestCase):
         modifier.node_group = group
         bpy.context.view_layer.objects.active = holder
         holder.modifiers.active = modifier
-        bpy.ops.gh_stack.add_stage(label="Prefix")
+        bpy.ops.stageloom.add_stage(label="Prefix")
         stage = holder.gh_stack.stages[-1]
         return holder, stage, group, modifier, stack_mod
 
     @staticmethod
     def _prefix(holder, stage, stack_mod):
-        # The add-on's module copy, not `blender.gh_stack`: the registered
+        # The add-on's module copy, not `blender.stageloom`: the registered
         # depsgraph handler and the engine state (`_prefix_epoch`, `_dirty`,
         # the memos) live in the module Blender enabled.
-        from gh_stack.blender import engine
+        from stageloom.blender import engine
 
         return engine._prefix_sections(holder, stack_mod.stack_of(holder), stage)
 
@@ -1183,7 +1183,7 @@ class EnginePrefixTests(unittest.TestCase):
     def test_stage_before_the_instance_modifier_ships_none(self):
         holder, stage, _group, _modifier, stack_mod = self._scene()
         order = [m.name for m in holder.modifiers]
-        holder.modifiers.move(order.index("GH · Prefix"), 0)
+        holder.modifiers.move(order.index("Stageloom · Prefix"), 0)
         sections, _hash, _attributes, definitions = self._prefix(holder, stage, stack_mod)
         self.assertEqual(definitions, [])
         self.assertFalse(any(name == "inst.ref_def" for name, _d, _v in sections))
@@ -1224,8 +1224,8 @@ class EngineUpdateTests(unittest.TestCase):
 
     def setUp(self):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
-        from blender.gh_stack.blender import bridge, server
+        bpy.ops.preferences.addon_enable(module="stageloom")
+        from blender.stageloom.blender import bridge, server
 
         self.server = server
         self.bridge = bridge
@@ -1240,8 +1240,8 @@ class EngineUpdateTests(unittest.TestCase):
         self.bridge.state["connected"] = self._original_connected
 
     def _capture(self, obj, record, stage):
-        from blender.gh_stack.blender import engine
-        from blender.gh_stack.core import codec
+        from blender.stageloom.blender import engine
+        from blender.stageloom.core import codec
 
         engine._process_stage(obj, record, stage)
         header, sections = codec.decode_frame(self.frames[-1])
@@ -1249,7 +1249,7 @@ class EngineUpdateTests(unittest.TestCase):
 
     @staticmethod
     def _edit(owner, object_name):
-        from blender.gh_stack.blender import engine
+        from blender.stageloom.blender import engine
 
         owner.data.vertices[0].co.x += 0.5
         owner.data.update()
@@ -1259,7 +1259,7 @@ class EngineUpdateTests(unittest.TestCase):
         engine._bump_epochs(None)
 
     def _collection_scene(self):
-        from blender.gh_stack.blender import stack as stack_mod
+        from blender.stageloom.blender import stack as stack_mod
 
         member = _quad("update-member")
         collection = bpy.data.collections.new("update-coll")
@@ -1287,12 +1287,12 @@ class EngineUpdateTests(unittest.TestCase):
         modifier.node_group = group
         bpy.context.view_layer.objects.active = holder
         holder.modifiers.active = modifier
-        bpy.ops.gh_stack.add_stage(label="Update")
+        bpy.ops.stageloom.add_stage(label="Update")
         stage = holder.gh_stack.stages[-1]
         return holder, member, stage, stack_mod.stack_of(holder)
 
     def test_a_collection_members_edit_ships_a_new_definition(self):
-        from blender.gh_stack.blender import engine
+        from blender.stageloom.blender import engine
 
         holder, member, stage, record = self._collection_scene()
         header, sections = self._capture(holder, record, stage)
@@ -1317,7 +1317,7 @@ class EngineUpdateTests(unittest.TestCase):
         # nudges a stage that has waited past the timeout.
         import time
 
-        from blender.gh_stack.blender import engine
+        from blender.stageloom.blender import engine
 
         holder, member, stage, record = self._collection_scene()
         self._capture(holder, record, stage)
@@ -1333,7 +1333,7 @@ class EngineUpdateTests(unittest.TestCase):
         self.assertIn(holder.name, engine._dirty)
 
     def test_an_object_sources_edit_ships_a_new_definition(self):
-        from blender.gh_stack.blender import engine
+        from blender.stageloom.blender import engine
 
         source = _quad("update-source")
         points = _points("update-opoints", [(0, 0, 0), (1, 0, 0)])
@@ -1355,9 +1355,9 @@ class EngineUpdateTests(unittest.TestCase):
         modifier.node_group = group
         bpy.context.view_layer.objects.active = holder
         holder.modifiers.active = modifier
-        bpy.ops.gh_stack.add_stage(label="UpdateO")
+        bpy.ops.stageloom.add_stage(label="UpdateO")
         stage = holder.gh_stack.stages[-1]
-        from blender.gh_stack.blender import stack as stack_mod
+        from blender.stageloom.blender import stack as stack_mod
 
         record = stack_mod.stack_of(holder)
 

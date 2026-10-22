@@ -29,8 +29,8 @@ BLENDER_PKG = os.path.join(REPO, "blender")
 if BLENDER_PKG not in sys.path:
     sys.path.insert(0, BLENDER_PKG)
 
-from blender.gh_stack.blender import geometry_io  # noqa: E402
-from blender.gh_stack.core import attributes as attr_mod  # noqa: E402
+from blender.stageloom.blender import geometry_io  # noqa: E402
+from blender.stageloom.core import attributes as attr_mod  # noqa: E402
 
 PORT = 9150
 
@@ -224,12 +224,12 @@ class AttributeEngineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
-        bpy.context.preferences.addons["gh_stack"].preferences.data_root = tempfile.mkdtemp(
-            prefix="gh-stack-attr-test-"
+        bpy.ops.preferences.addon_enable(module="stageloom")
+        bpy.context.preferences.addons["stageloom"].preferences.data_root = tempfile.mkdtemp(
+            prefix="stageloom-attr-test-"
         )
-        import gh_stack.blender.engine as engine
-        import gh_stack.blender.helpers as helpers
+        import stageloom.blender.engine as engine
+        import stageloom.blender.helpers as helpers
 
         cls.engine = engine
         cls.helpers = helpers
@@ -256,7 +256,7 @@ class AttributeEngineTests(unittest.TestCase):
         engine.start_server(PORT)
         time.sleep(0.5)
 
-        bpy.ops.gh_stack.add_stage(label="Attributes")
+        bpy.ops.stageloom.add_stage(label="Attributes")
         cls.stage = cls.obj.gh_stack.stages[0]
 
         cls.fake = subprocess.Popen(
@@ -270,7 +270,7 @@ class AttributeEngineTests(unittest.TestCase):
             env=dict(
                 os.environ,
                 PYTHONPATH=os.pathsep.join(
-                    [os.path.join(REPO, "blender", "gh_stack", "vendor"), REPO]
+                    [os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]
                 ),
             ),
             stdout=subprocess.PIPE,
@@ -303,7 +303,7 @@ class AttributeEngineTests(unittest.TestCase):
                 cls.fake.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 cls.fake.kill()
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_01_the_request_carried_the_attributes(self):
         report = json.load(open(self.report_path))
@@ -336,7 +336,7 @@ class AttributeEngineTests(unittest.TestCase):
     def test_02b_a_response_without_attributes_clears_them(self):
         # Absent means none: the helper must not keep the previous response's
         # generic attributes or native colour channel.
-        from blender.gh_stack.blender import engine, helpers
+        from blender.stageloom.blender import engine, helpers
 
         helper = helpers.helper_for(self.obj, self.stage.key, "mesh")
         mesh = helper.data
@@ -361,7 +361,7 @@ class AttributeEngineTests(unittest.TestCase):
     def test_03_an_attribute_value_change_is_new_geometry(self):
         """Attribute values are part of the geometry hash: editing one makes the
         stage request again instead of hitting the cache."""
-        import gh_stack.blender.engine as engine
+        import stageloom.blender.engine as engine
 
         mesh = quad_mesh("hash-quad")
         attr = mesh.attributes.new("v", "FLOAT", "POINT")
@@ -375,8 +375,8 @@ class AttributeEngineTests(unittest.TestCase):
         """Blender evaluates modifier-generated attribute data with last-bit
         float variation. Two reads that differ only that much are the same
         prefix; anything more is a real edit."""
-        import gh_stack.blender.engine as engine
-        from blender.gh_stack.core import attributes as attr_mod
+        import stageloom.blender.engine as engine
+        from blender.stageloom.core import attributes as attr_mod
 
         vertices = np.array((0.0, 0.0, 0.0), dtype=np.float32).reshape(-1, 3)
         descriptors = [attr_mod.descriptor("mesh", "load", "POINT", "FLOAT", 2, 0)]

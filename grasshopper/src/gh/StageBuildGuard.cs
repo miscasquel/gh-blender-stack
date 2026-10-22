@@ -8,7 +8,7 @@
 
 using System;
 
-namespace GhStack
+namespace Stageloom
 {
     public static class StageBuildGuard
     {

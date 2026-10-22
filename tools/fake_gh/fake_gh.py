@@ -1,6 +1,6 @@
 """A Python stand-in for the Grasshopper side, for layer B tests (plan §14).
 
-    PYTHONPATH=blender/gh_stack/vendor python3 tools/fake_gh/fake_gh.py \
+    PYTHONPATH=blender/stageloom/vendor python3 tools/fake_gh/fake_gh.py \
         --port 59130 --stage <key> [--scale 2.0] [--report /tmp/report.json]
 
 It speaks protocol v2: sends `hello` and one `schema` (a float parameter), then
@@ -20,14 +20,14 @@ import os
 import sys
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-for path in (os.path.join(REPO_ROOT, "blender", "gh_stack", "vendor"), REPO_ROOT):
+for path in (os.path.join(REPO_ROOT, "blender", "stageloom", "vendor"), REPO_ROOT):
     if path not in sys.path:
         sys.path.insert(0, path)
 
 import numpy as np  # noqa: E402
 import websockets  # noqa: E402
-from blender.gh_stack.core import attributes as attr_mod  # noqa: E402
-from blender.gh_stack.core import codec, hashing  # noqa: E402
+from blender.stageloom.core import attributes as attr_mod  # noqa: E402
+from blender.stageloom.core import codec, hashing  # noqa: E402
 
 PARAM_ID = "00000000-0000-4000-8000-0000000000aa"
 

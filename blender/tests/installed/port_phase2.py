@@ -7,7 +7,7 @@ a user takes and the one a single-process test cannot reach. Phase 1 set the por
 and saved the preferences; this process asserts the server bound it.
 
     blender -b --python port_phase2.py     (BLENDER_USER_CONFIG must be the config
-                                            phase 1 saved into; GHSTACK_PORT_EXPECT
+                                            phase 1 saved into; STAGELOOM_PORT_EXPECT
                                             is the port to expect)
 
 Exits non-zero when the server is on anything else.
@@ -20,8 +20,8 @@ import time
 import addon_utils
 import bpy
 
-MODULE = "bl_ext.user_default.gh_stack"
-EXPECTED = int(os.environ["GHSTACK_PORT_EXPECT"])
+MODULE = "bl_ext.user_default.stageloom"
+EXPECTED = int(os.environ["STAGELOOM_PORT_EXPECT"])
 
 
 def main():

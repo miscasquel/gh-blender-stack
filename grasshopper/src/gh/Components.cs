@@ -1,4 +1,4 @@
-// The GH Stack components: Stage In, Stage Out, Param (plan §10).
+// The Stageloom components: Stage In, Stage Out, Param (plan §10).
 //
 // Stage In  reads the stage's latest slot and outputs the geometry Blender sent.
 // Stage Out converts the graph's result back to sections and replies.
@@ -13,9 +13,9 @@ using GH_IO.Serialization;
 using Grasshopper.Kernel;
 using Grasshopper.Kernel.Types;
 using Rhino.Geometry;
-using GhStack.Core;
+using Stageloom.Core;
 
-namespace GhStack
+namespace Stageloom
 {
     // ------------------------------------------------------------------ Stage In
 
@@ -24,7 +24,7 @@ namespace GhStack
         public StageInComponent()
             : base("Stage In", "Stage In",
                    "Receives geometry from Blender for one stage key.",
-                   "GH Stack", "Stack")
+                   "Stageloom", "Stack")
         {
         }
 
@@ -52,7 +52,7 @@ namespace GhStack
 
         protected override void RegisterInputParams(GH_InputParamManager p)
         {
-            p.AddTextParameter("Key", "K", "Stage key, copied from the GH Stack panel in Blender", GH_ParamAccess.item);
+            p.AddTextParameter("Key", "K", "Stage key, copied from the Stageloom panel in Blender", GH_ParamAccess.item);
             p.AddBooleanParameter("Enabled", "On", "Report this stage to Blender", GH_ParamAccess.item);
             p[0].Optional = true;
             ((Grasshopper.Kernel.Parameters.Param_Boolean)p[1]).PersistentData.Append(new GH_Boolean(true));
@@ -98,7 +98,7 @@ namespace GhStack
                 da.SetDataList("Geometry", new List<IGH_Goo>());
                 da.SetData("Request ID", "");
                 da.SetData("Status", "No key");
-                da.SetData("Message", "Connect the stage key from the GH Stack panel in Blender");
+                da.SetData("Message", "Connect the stage key from the Stageloom panel in Blender");
                 if (HasOutput("Attributes"))
                     da.SetDataList("Attributes", new List<string>());
                 return;
@@ -187,7 +187,7 @@ namespace GhStack
         public StageOutComponent()
             : base("Stage Out", "Stage Out",
                    "Sends the graph's result back to Blender for one stage key.",
-                   "GH Stack", "Stack")
+                   "Stageloom", "Stack")
         {
         }
 
@@ -203,7 +203,7 @@ namespace GhStack
 
         protected override void RegisterInputParams(GH_InputParamManager p)
         {
-            p.AddTextParameter("Key", "K", "Stage key, copied from the GH Stack panel in Blender", GH_ParamAccess.item);
+            p.AddTextParameter("Key", "K", "Stage key, copied from the Stageloom panel in Blender", GH_ParamAccess.item);
             // One generic input: mesh, curves, points, SubD, or Brep. A Brep (or
             // surface) is meshed on the way out, with a warning.
             p.AddGenericParameter("Geometry", "G", "The graph's result: mesh, point cloud, curve, SubD, or Brep", GH_ParamAccess.list);
@@ -388,7 +388,7 @@ namespace GhStack
         public ParamComponent()
             : base("Param", "Param",
                    "Declares a parameter Blender can drive. Connect it into the graph.",
-                   "GH Stack", "Stack")
+                   "Stageloom", "Stack")
         {
         }
 
@@ -578,7 +578,7 @@ namespace GhStack
         public PointCloudPointsComponent()
             : base("Point Cloud Points", "Cloud Pts",
                    "Explodes a point cloud into its points.",
-                   "GH Stack", "Util")
+                   "Stageloom", "Util")
         {
         }
 

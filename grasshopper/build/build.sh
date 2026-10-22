@@ -3,10 +3,10 @@
 #
 #     grasshopper/build/build.sh
 #
-# Produces grasshopper/build/out/GhStackCoreTests.exe, which runs under the wine
+# Produces grasshopper/build/out/StageloomCoreTests.exe, which runs under the wine
 # runtime without Rhino (the codec has no RhinoCommon or Grasshopper references):
 #
-#     WINEPREFIX=... wine grasshopper/build/out/GhStackCoreTests.exe protocol/fixtures
+#     WINEPREFIX=... wine grasshopper/build/out/StageloomCoreTests.exe protocol/fixtures
 #
 # Mono's real csc.exe is used, not wine's Framework wrapper: the wrapper
 # compiles against a 4.0 profile that cannot resolve RhinoCommon types (see
@@ -16,7 +16,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/wine-env.sh"
 OUT_DIR="$HERE/out"
-OUT="$OUT_DIR/GhStackCoreTests.exe"
+OUT="$OUT_DIR/StageloomCoreTests.exe"
 
 mkdir -p "$OUT_DIR"
 rm -f "$OUT"
@@ -36,7 +36,7 @@ echo "built $OUT ($(stat -c%s "$OUT") bytes)"
 # ArchivableDictionary runs without a Rhino process, but the types must be
 # present). They build only where the Rhino install is; the codec tests above
 # need nothing from Rhino.
-ATTR_OUT="$OUT_DIR/GhStackAttrTests.exe"
+ATTR_OUT="$OUT_DIR/StageloomAttrTests.exe"
 if [ -f "$RC_DLL" ]; then
   cp -f "$RC_DLL" "$OUT_DIR/"
   rm -f "$ATTR_OUT"
@@ -59,7 +59,7 @@ fi
 # needs Grasshopper.dll (GH_Component is a Grasshopper type) and RhinoCommon,
 # but no Rhino process: an unattached component's OnPingDocument() returns
 # null, so the solve trigger is exercised as a note.
-LINK_OUT="$OUT_DIR/GhStackLinkTests.exe"
+LINK_OUT="$OUT_DIR/StageloomLinkTests.exe"
 if [ -f "$GH_DLL" ] && [ -f "$GHIO_DLL" ] && [ -f "$RC_DLL" ]; then
   cp -f "$RC_DLL" "$GH_DLL" "$GHIO_DLL" "$OUT_DIR/"
   rm -f "$LINK_OUT"
@@ -81,7 +81,7 @@ fi
 
 # Stage In's build guard. It has no Rhino types, so it builds and runs without
 # a Rhino process; the same guard wraps the real conversion in the component.
-STAGE_OUT="$OUT_DIR/GhStackStageTests.exe"
+STAGE_OUT="$OUT_DIR/StageloomStageTests.exe"
 rm -f "$STAGE_OUT"
 run_csc \
   /nologo /target:exe \

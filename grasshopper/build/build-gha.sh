@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build GhStack.gha: the core codec/conversion plus the GH components.
+# Build Stageloom.gha: the core codec/conversion plus the GH components.
 #
 #     grasshopper/build/build-gha.sh
 #
@@ -9,7 +9,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/wine-env.sh"
-OUT="$HERE/out/GhStack.gha"
+OUT="$HERE/out/Stageloom.gha"
 
 for f in "$GH_DLL" "$GHIO_DLL" "$RC_DLL"; do
   [ -f "$f" ] || { echo "missing $f" >&2; exit 1; }
@@ -27,7 +27,7 @@ done
 RESOURCES=()
 for png in "$REPO"/grasshopper/src/gh/icons/*.png; do
   name="$(basename "$png" .png)"
-  RESOURCES+=("/resource:$(win_path "$png"),GhStack.icons.$name.png")
+  RESOURCES+=("/resource:$(win_path "$png"),Stageloom.icons.$name.png")
 done
 
 run_csc \

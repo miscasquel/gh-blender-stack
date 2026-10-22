@@ -25,10 +25,12 @@ using System.Text;
 using Rhino.Collections;
 using Rhino.Geometry;
 
-namespace GhStack.Core
+namespace Stageloom.Core
 {
     public static class AttributeStore
     {
+        // Persisted ArchivableDictionary key: keep it across the rebrand so
+        // attributes stored by pre-0.4.0 components still read back.
         public const string RootKey = "GHStack.Attributes";
 
         // Blender data type -> storage kind, components per element and the

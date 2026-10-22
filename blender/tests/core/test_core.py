@@ -5,7 +5,7 @@ import unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from blender.gh_stack.core import codec, hashing, params  # noqa: E402
+from blender.stageloom.core import codec, hashing, params  # noqa: E402
 
 
 class CanonicalJsonTests(unittest.TestCase):
@@ -72,7 +72,7 @@ class FrameRoundTripTests(unittest.TestCase):
         self.assertEqual(sections["attr.0.values"], (-3, 0, 7, 2147483647, -2147483648))
 
     def test_attribute_descriptors_name_their_sections(self):
-        from blender.gh_stack.core import attributes as attr_mod
+        from blender.stageloom.core import attributes as attr_mod
 
         entry = attr_mod.descriptor("mesh", "panel_id", "FACE", "INT", 2, 3)
         self.assertEqual(entry["section"], "attr.3.values")
@@ -273,7 +273,7 @@ class ParamsTests(unittest.TestCase):
 
 class CacheTests(unittest.TestCase):
     def test_add_and_contains(self):
-        from blender.gh_stack.core.cache import CacheIndex
+        from blender.stageloom.core.cache import CacheIndex
 
         idx = CacheIndex("/tmp/base", "stack1", "panelize-3f9a")
         idx.add("sha256:a", 10)
@@ -282,7 +282,7 @@ class CacheTests(unittest.TestCase):
         self.assertNotIn("sha256:b", idx)
 
     def test_path_layout(self):
-        from blender.gh_stack.core.cache import CacheIndex
+        from blender.stageloom.core.cache import CacheIndex
 
         idx = CacheIndex("/tmp/base", "stack1", "panelize-3f9a")
         path = idx.path_for("sha256:abc")
@@ -291,7 +291,7 @@ class CacheTests(unittest.TestCase):
         )
 
     def test_fifo_eviction_by_size(self):
-        from blender.gh_stack.core.cache import CacheIndex
+        from blender.stageloom.core.cache import CacheIndex
 
         idx = CacheIndex("/tmp/base", "s", "k", size_limit=100)
         idx.add("sha256:a", 60)
@@ -302,7 +302,7 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(idx.total_size(), 60)
 
     def test_touch_promotes(self):
-        from blender.gh_stack.core.cache import CacheIndex
+        from blender.stageloom.core.cache import CacheIndex
 
         idx = CacheIndex("/tmp/base", "s", "k", size_limit=150)
         idx.add("sha256:a", 60)
@@ -315,7 +315,7 @@ class CacheTests(unittest.TestCase):
         self.assertIn("sha256:c", idx)
 
     def test_remove(self):
-        from blender.gh_stack.core.cache import CacheIndex
+        from blender.stageloom.core.cache import CacheIndex
 
         idx = CacheIndex("/tmp/base", "s", "k")
         idx.add("sha256:a", 1)
@@ -333,7 +333,7 @@ class ResponseStoreTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
 
     def _store(self, base=None, **kwargs):
-        from blender.gh_stack.core.cache import ResponseStore
+        from blender.stageloom.core.cache import ResponseStore
 
         return ResponseStore(base or self.tmp.name, "stack1", "panelize-3f9a", **kwargs)
 

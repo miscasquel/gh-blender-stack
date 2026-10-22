@@ -44,7 +44,7 @@ SCALE_PARAM = "00000000-0000-4000-8000-0000000000aa"
 
 def pump(seconds=10.0, until=None):
     """Drive the engine timer directly: bpy.app.timers is inert under -b (S2)."""
-    import gh_stack.blender.engine as engine
+    import stageloom.blender.engine as engine
 
     deadline = time.time() + seconds
     while time.time() < deadline:
@@ -69,7 +69,7 @@ def start_fake(stage_key, report):
         ],
         env=dict(
             os.environ,
-            PYTHONPATH=os.pathsep.join([os.path.join(REPO, "blender", "gh_stack", "vendor"), REPO]),
+            PYTHONPATH=os.pathsep.join([os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]),
         ),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -97,8 +97,8 @@ def report_of(path):
 
 
 def isolate_data_root():
-    prefs = bpy.context.preferences.addons["gh_stack"].preferences
-    prefs.data_root = tempfile.mkdtemp(prefix="gh-stack-memo-")
+    prefs = bpy.context.preferences.addons["stageloom"].preferences
+    prefs.data_root = tempfile.mkdtemp(prefix="stageloom-memo-")
 
 
 def gn_shift_group(name="MemoShift", shift=0.0, min_value=-20.0, max_value=20.0):
@@ -170,9 +170,9 @@ class ModifierInputMemoTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
+        bpy.ops.preferences.addon_enable(module="stageloom")
         isolate_data_root()
-        import gh_stack.blender.engine as engine
+        import stageloom.blender.engine as engine
 
         cls.engine = engine
         engine.start_server(PORT)
@@ -186,7 +186,7 @@ class ModifierInputMemoTests(unittest.TestCase):
         cls.gn.node_group = gn_shift_group()
         bpy.context.view_layer.update()
 
-        bpy.ops.gh_stack.add_stage(label="AfterShift")
+        bpy.ops.stageloom.add_stage(label="AfterShift")
         cls.stage = cls.obj.gh_stack.stages[0]
 
         cls.report = os.path.join(tempfile.gettempdir(), "fake_gh_memo.json")
@@ -205,7 +205,7 @@ class ModifierInputMemoTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         stop_fake(cls.fake)
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_01_the_modifier_input_is_not_rna(self):
         # The premise of the whole file: a stored input is invisible to a
@@ -244,7 +244,7 @@ class ModifierInputMemoTests(unittest.TestCase):
         self.assertAlmostEqual(report.get("received_first", [None])[0], 9.0, places=2)
 
     def test_03_the_revision_sees_the_input(self):
-        import gh_stack.blender.engine as engine
+        import stageloom.blender.engine as engine
 
         record = bpy.context.object.gh_stack
         first = engine._prefix_revision(self.obj, record)
@@ -275,9 +275,9 @@ class ResetRetiresMemoTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
+        bpy.ops.preferences.addon_enable(module="stageloom")
         isolate_data_root()
-        import gh_stack.blender.engine as engine
+        import stageloom.blender.engine as engine
 
         cls.engine = engine
         engine.start_server(PORT)
@@ -288,7 +288,7 @@ class ResetRetiresMemoTests(unittest.TestCase):
         cls.obj.name = "Reset"
         cls.gn = cls.obj.modifiers.new("GNShift", "NODES")
         cls.gn.node_group = gn_shift_group(name="ResetShift")
-        bpy.ops.gh_stack.add_stage(label="Reset")
+        bpy.ops.stageloom.add_stage(label="Reset")
         cls.stage = cls.obj.gh_stack.stages[0]
 
         cls.report = os.path.join(tempfile.gettempdir(), "fake_gh_reset.json")
@@ -303,7 +303,7 @@ class ResetRetiresMemoTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         stop_fake(cls.fake)
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     def _seen(self, first_x):
         report = report_of(self.report)
@@ -344,9 +344,9 @@ class ReferencedObjectTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
+        bpy.ops.preferences.addon_enable(module="stageloom")
         isolate_data_root()
-        import gh_stack.blender.engine as engine
+        import stageloom.blender.engine as engine
 
         cls.engine = engine
         engine.start_server(PORT)
@@ -371,7 +371,7 @@ class ReferencedObjectTests(unittest.TestCase):
         modifier = cls.obj.modifiers.new("Reads", "NODES")
         modifier.node_group = cls.tree
 
-        bpy.ops.gh_stack.add_stage(label="Reads")
+        bpy.ops.stageloom.add_stage(label="Reads")
         cls.stage = cls.obj.gh_stack.stages[0]
         cls.report = os.path.join(tempfile.gettempdir(), "fake_gh_referenced.json")
         if os.path.exists(cls.report):
@@ -385,7 +385,7 @@ class ReferencedObjectTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         stop_fake(cls.fake)
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     @staticmethod
     def _depsgraph_event():
@@ -405,7 +405,7 @@ class ReferencedObjectTests(unittest.TestCase):
         finally:
             bpy.app.handlers.depsgraph_update_post.remove(capture)
         if seen:
-            import gh_stack.blender.engine as engine
+            import stageloom.blender.engine as engine
 
             engine._bump_epochs(seen[-1])
 
@@ -438,7 +438,7 @@ class ReferencedObjectTests(unittest.TestCase):
         self.assertGreaterEqual(report_of(self.report).get("full", 0), 2)
 
     def test_02_the_generation_is_consulted(self):
-        import gh_stack.blender.engine as engine
+        import stageloom.blender.engine as engine
 
         record = self.obj.gh_stack
         before = engine._prefix_revision(self.obj, record)
@@ -459,9 +459,9 @@ class UpstreamOutputTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
+        bpy.ops.preferences.addon_enable(module="stageloom")
         isolate_data_root()
-        import gh_stack.blender.engine as engine
+        import stageloom.blender.engine as engine
 
         cls.engine = engine
         engine.start_server(PORT)
@@ -469,22 +469,22 @@ class UpstreamOutputTests(unittest.TestCase):
         bpy.ops.mesh.primitive_cube_add(size=2.0)
         cls.obj = bpy.context.object
         cls.obj.name = "Chain"
-        bpy.ops.gh_stack.add_stage(label="First")
+        bpy.ops.stageloom.add_stage(label="First")
         cls.stage_a = cls.obj.gh_stack.stages[0]
         # A native modifier between the two stages, so the second one's prefix is
         # evaluated (the memo path) rather than read from the base.
         bevel = cls.obj.modifiers.new("Mid", "BEVEL")
         bevel.width = 0.1
         cls.obj.modifiers.active = bevel
-        bpy.ops.gh_stack.add_stage(label="Second")
+        bpy.ops.stageloom.add_stage(label="Second")
         cls.stage_b = cls.obj.gh_stack.stages[1]
 
     @classmethod
     def tearDownClass(cls):
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_the_engine_write_moves_the_downstream_revision(self):
-        import gh_stack.blender.engine as engine
+        import stageloom.blender.engine as engine
 
         record = self.obj.gh_stack
         before = engine._prefix_revision(self.obj, record)
@@ -514,18 +514,18 @@ class WaitingAgeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
+        bpy.ops.preferences.addon_enable(module="stageloom")
         isolate_data_root()
 
     @classmethod
     def tearDownClass(cls):
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_idle_stages_report_no_wait(self):
-        import gh_stack.blender.engine as engine
+        import stageloom.blender.engine as engine
 
         bpy.ops.mesh.primitive_cube_add(size=2.0)
-        bpy.ops.gh_stack.add_stage(label="Age")
+        bpy.ops.stageloom.add_stage(label="Age")
         stage = bpy.context.object.gh_stack.stages[0]
         record = bpy.context.object.gh_stack
         self.assertEqual(engine.waiting_seconds(record.stack_id, stage.key), 0.0)
@@ -536,10 +536,10 @@ class WaitingAgeTests(unittest.TestCase):
         )
 
     def test_a_stamp_ages(self):
-        import gh_stack.blender.engine as engine
+        import stageloom.blender.engine as engine
 
         bpy.ops.mesh.primitive_cube_add(size=2.0)
-        bpy.ops.gh_stack.add_stage(label="AgeB")
+        bpy.ops.stageloom.add_stage(label="AgeB")
         stage = bpy.context.object.gh_stack.stages[0]
         record = bpy.context.object.gh_stack
         engine._state_since[(record.stack_id, stage.key)] = time.monotonic() - 4.0

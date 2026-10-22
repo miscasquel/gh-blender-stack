@@ -1,18 +1,22 @@
 schema_version = "1.0.0"
 
-id = "gh_stack"
+id = "stageloom"
 # The single source for the add-on version: the development install
 # (scripts/install-addon) generates bl_info from this manifest.
-version = "0.3.1"
-name = "GH Stack"
+version = "0.4.0"
+name = "Stageloom"
 tagline = "Grasshopper definitions as stackable modifiers in Blender"
 maintainer = "Miquel Oller <miqueloc14@gmail.com>"
 type = "add-on"
 
 license = ["SPDX:GPL-3.0-or-later"]
 copyright = ["2026 Miquel Oller"]
+# 5.2 is the tested floor: the parameter UI uses the layered-action API
+# exclusively (Blender 5.2 has no Action.fcurves). Widening to 4.2 needs a
+# legacy fcurve path and a separate compatibility pass.
 blender_version_min = "5.2.0"
 website = "https://github.com/miscasquel/gh-blender-stack"
+tags = ["Geometry Nodes", "Pipeline", "Modeling"]
 
 # The official pure-Python wheel. Blender installs it into the extension's
 # _libs directory; the development install (scripts/install-addon) places the

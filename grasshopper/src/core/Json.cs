@@ -1,4 +1,4 @@
-// Minimal JSON for the GH Stack codec: parse and canonical encode, with no
+// Minimal JSON for the Stageloom codec: parse and canonical encode, with no
 // third-party dependencies. This is the C# half of the protocol's header format
 // (docs/protocol.md §3): UTF-8, keys sorted, no insignificant whitespace.
 //
@@ -21,7 +21,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 
-namespace GhStack.Core
+namespace Stageloom.Core
 {
     public static class Json
     {

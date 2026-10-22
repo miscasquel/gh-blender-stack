@@ -23,9 +23,9 @@ def _stage(context, index):
     return obj, record, record.stages[index]
 
 
-class GHSTACK_OT_add_stage(bpy.types.Operator):
-    bl_idname = "gh_stack.add_stage"
-    bl_label = "Add GH Stage"
+class STAGELOOM_OT_add_stage(bpy.types.Operator):
+    bl_idname = "stageloom.add_stage"
+    bl_label = "Add Stageloom Stage"
     bl_description = "Add a Grasshopper stage to the active object"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -51,8 +51,8 @@ class GHSTACK_OT_add_stage(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class GHSTACK_OT_push(bpy.types.Operator):
-    bl_idname = "gh_stack.push"
+class STAGELOOM_OT_push(bpy.types.Operator):
+    bl_idname = "stageloom.push"
     bl_label = "Push"
     bl_description = "Send the current state to Grasshopper again, and reset this stack's frame cache"
     bl_options = {"REGISTER", "UNDO"}
@@ -62,8 +62,8 @@ class GHSTACK_OT_push(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class GHSTACK_OT_pull(bpy.types.Operator):
-    bl_idname = "gh_stack.pull"
+class STAGELOOM_OT_pull(bpy.types.Operator):
+    bl_idname = "stageloom.pull"
     bl_label = "Pull"
     bl_description = "Ask Grasshopper for this stage's output again; cached frames are kept"
     bl_options = {"REGISTER", "UNDO"}
@@ -81,8 +81,8 @@ class GHSTACK_OT_pull(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class GHSTACK_OT_freeze(bpy.types.Operator):
-    bl_idname = "gh_stack.freeze"
+class STAGELOOM_OT_freeze(bpy.types.Operator):
+    bl_idname = "stageloom.freeze"
     bl_label = "Freeze"
     bl_description = "Freeze this stage: no requests until unfrozen; the output stays"
     bl_options = {"REGISTER", "UNDO"}
@@ -104,8 +104,8 @@ class GHSTACK_OT_freeze(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class GHSTACK_OT_key_all(bpy.types.Operator):
-    bl_idname = "gh_stack.key_all"
+class STAGELOOM_OT_key_all(bpy.types.Operator):
+    bl_idname = "stageloom.key_all"
     bl_label = "Key all"
     bl_description = "Key every parameter of this stage at the current frame"
     bl_options = {"REGISTER", "UNDO"}
@@ -124,8 +124,8 @@ class GHSTACK_OT_key_all(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class GHSTACK_OT_purge_orphans(bpy.types.Operator):
-    bl_idname = "gh_stack.purge_orphans"
+class STAGELOOM_OT_purge_orphans(bpy.types.Operator):
+    bl_idname = "stageloom.purge_orphans"
     bl_label = "Purge orphans"
     bl_description = "Delete parameter properties Grasshopper no longer declares, with their keyframes"
     bl_options = {"REGISTER", "UNDO"}
@@ -144,8 +144,8 @@ class GHSTACK_OT_purge_orphans(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class GHSTACK_OT_copy_key(bpy.types.Operator):
-    bl_idname = "gh_stack.copy_key"
+class STAGELOOM_OT_copy_key(bpy.types.Operator):
+    bl_idname = "stageloom.copy_key"
     bl_label = "Copy stage key"
     bl_description = "Copy this stage's key, to paste into the Grasshopper components"
 
@@ -160,18 +160,18 @@ class GHSTACK_OT_copy_key(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class GHSTACK_OT_start_server(bpy.types.Operator):
-    bl_idname = "gh_stack.start_server"
+class STAGELOOM_OT_start_server(bpy.types.Operator):
+    bl_idname = "stageloom.start_server"
     bl_label = "Start server"
     bl_description = "Start (or restart) the WebSocket server"
 
     def execute(self, context):
         ok = engine.start_server()
         if ok:
-            self.report({"INFO"}, "GH Stack server started")
+            self.report({"INFO"}, "Stageloom server started")
             return {"FINISHED"}
         why = bridge.state.get("notice") or bridge.state.get("error") or "failed"
-        self.report({"WARNING"}, "GH Stack server not started: %s" % why)
+        self.report({"WARNING"}, "Stageloom server not started: %s" % why)
         return {"CANCELLED"}
 
 
@@ -184,27 +184,27 @@ def _safe_unregister(cls):
 
 def register():
     for cls in (
-        GHSTACK_OT_add_stage,
-        GHSTACK_OT_push,
-        GHSTACK_OT_pull,
-        GHSTACK_OT_freeze,
-        GHSTACK_OT_key_all,
-        GHSTACK_OT_purge_orphans,
-        GHSTACK_OT_copy_key,
-        GHSTACK_OT_start_server,
+        STAGELOOM_OT_add_stage,
+        STAGELOOM_OT_push,
+        STAGELOOM_OT_pull,
+        STAGELOOM_OT_freeze,
+        STAGELOOM_OT_key_all,
+        STAGELOOM_OT_purge_orphans,
+        STAGELOOM_OT_copy_key,
+        STAGELOOM_OT_start_server,
     ):
         bpy.utils.register_class(cls)
 
 
 def unregister():
     for cls in (
-        GHSTACK_OT_start_server,
-        GHSTACK_OT_copy_key,
-        GHSTACK_OT_purge_orphans,
-        GHSTACK_OT_key_all,
-        GHSTACK_OT_freeze,
-        GHSTACK_OT_pull,
-        GHSTACK_OT_push,
-        GHSTACK_OT_add_stage,
+        STAGELOOM_OT_start_server,
+        STAGELOOM_OT_copy_key,
+        STAGELOOM_OT_purge_orphans,
+        STAGELOOM_OT_key_all,
+        STAGELOOM_OT_freeze,
+        STAGELOOM_OT_pull,
+        STAGELOOM_OT_push,
+        STAGELOOM_OT_add_stage,
     ):
         _safe_unregister(cls)

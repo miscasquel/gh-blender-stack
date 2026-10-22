@@ -11,7 +11,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 
-namespace GhStack.Core
+namespace Stageloom.Core
 {
     public class FrameException : Exception
     {

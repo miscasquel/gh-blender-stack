@@ -10,11 +10,11 @@
 # is copied next to it because Blender already has the addons directory on
 # `sys.path` — no shipped code ever manipulates the module search path (G2).
 #
-# Then enable "GH Stack" in Blender's Preferences > Add-ons (search for gh_stack).
+# Then enable "Stageloom" in Blender's Preferences > Add-ons (search for stageloom).
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-PKG="$REPO/blender/gh_stack"
+PKG="$REPO/blender/stageloom"
 MANIFEST="$PKG/blender_manifest.toml"
 VERSION_RAW="$(grep -E '^version' "$MANIFEST" | head -1 | cut -d'"' -f2)"
 
@@ -22,7 +22,7 @@ BLENDER_VERSION="$(blender --version | head -1 | grep -oE '[0-9]+\.[0-9]+' | hea
 ADDONS="${BLENDER_USER_SCRIPTS:-$HOME/.config/blender/$BLENDER_VERSION/scripts}/addons"
 mkdir -p "$ADDONS"
 
-DEST="$ADDONS/gh_stack"
+DEST="$ADDONS/stageloom"
 rm -rf "$DEST"
 mkdir -p "$DEST"
 ln -s "$PKG/core" "$DEST/core"
@@ -44,7 +44,7 @@ bl_info = {
     "author": manifest["maintainer"],
     "version": tuple_of(manifest["version"]),
     "blender": tuple_of(manifest.get("blender_version_min", "4.2.0")),
-    "location": "View3D > Sidebar > GH Stack",
+    "location": "View3D > Sidebar > Stageloom",
     "description": manifest.get("tagline", ""),
     "category": "Object",
 }
@@ -54,15 +54,15 @@ with open(dest, "w") as fh:
              ' plus the working tree\'s package body. Do not edit."""\n')
     fh.write("bl_info = %r\n\n" % (bl_info,))
     fh.write('# Live tree: core/ and blender/ are symlinks next to this file, so\n'
-             '# the body runs in this module\'s namespace with __package__ = "gh_stack".\n')
+             '# the body runs in this module\'s namespace with __package__ = "stageloom".\n')
     fh.write('exec(compile(open(%r).read(), %r, "exec"))\n' % (init_path, init_path))
 PY
 
 # websockets for the development install: the addons directory is on sys.path,
 # so a top-level package here is found without any path manipulation.
 rm -rf "$ADDONS/websockets"
-cp -r "$REPO/blender/gh_stack/vendor/websockets" "$ADDONS/websockets"
+cp -r "$REPO/blender/stageloom/vendor/websockets" "$ADDONS/websockets"
 
 echo "installed $VERSION_RAW into $DEST (live tree: core/, blender/)"
-echo "enable it in Blender: Preferences > Add-ons > search 'GH Stack'"
+echo "enable it in Blender: Preferences > Add-ons > search 'Stageloom'"
 echo "port and timeout are in the add-on preferences; the panel is in the 3D viewport sidebar (N)"

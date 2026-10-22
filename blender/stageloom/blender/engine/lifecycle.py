@@ -289,7 +289,7 @@ def _repair_plumbing(obj, record, stage, modifier):
         engine._set(stage, "applied_out_hash", "")
         if stage.state != engine.stack_mod.STATE_UNBOUND:
             engine._set(stage, "state", engine.stack_mod.STATE_UNBOUND)
-        engine.prefs.log("[gh-stack] %s: plumbing rebuilt, marked unbound" % stage.key, flush=True)
+        engine.prefs.log("[stageloom] %s: plumbing rebuilt, marked unbound" % stage.key, flush=True)
     return rebuilt
 
 

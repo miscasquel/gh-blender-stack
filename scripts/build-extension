@@ -9,8 +9,26 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-SOURCE="$REPO/blender/gh_stack"
+SOURCE="$REPO/blender/stageloom"
+MANIFEST="$SOURCE/blender_manifest.toml"
 OUT="$REPO/dist"
+VERSION="$(grep -E '^version' "$MANIFEST" | head -1 | cut -d'"' -f2)"
+ZIP="$OUT/stageloom-$VERSION.zip"
+
+# Run Blender with its output filtered for the noisy DEBUG lines, but keep the
+# exit status authoritative. The previous pipe through `grep ... || true` let a
+# failed validation or build fall through to an older zip.
+run_blender() {
+  local log code
+  log="$(mktemp)"
+  set +e
+  blender "$@" >"$log" 2>&1
+  code=$?
+  set -e
+  grep -v '^DEBUG' "$log" || true
+  rm -f "$log"
+  return "$code"
+}
 
 # The wheel is third-party code that ships inside the zip; its digest is pinned
 # so a modified or substituted wheel fails the build instead of the platform's
@@ -28,7 +46,7 @@ if ! echo "$WHEEL_SHA256  $WHEEL" | sha256sum -c --quiet -; then
 fi
 
 # The manifest, its wheel, and the add-on code must validate before building.
-blender --command extension validate "$SOURCE" 2>&1 | grep -v '^DEBUG' || true
+run_blender --command extension validate "$SOURCE"
 
 # Stage without the vendored websockets copy or caches: the extension declares
 # the official pure-Python wheel instead (manifest `wheels`), so the zip stays
@@ -40,24 +58,32 @@ tar -C "$SOURCE" \
   --exclude './vendor' \
   --exclude '__pycache__' \
   --exclude '*.pyc' \
+  --exclude '*.pyo' \
   -cf - . | tar -C "$STAGE" -xf -
 
 mkdir -p "$OUT"
-blender --command extension build --source-dir "$STAGE" --output-dir "$OUT" 2>&1 | grep -v '^DEBUG' || true
+run_blender --command extension build --source-dir "$STAGE" --output-dir "$OUT"
 
-ZIP="$(ls -t "$OUT"/gh_stack-*.zip 2>/dev/null | head -1 || true)"
-if [ -z "$ZIP" ]; then
-  echo "build failed: no zip in $OUT" >&2
+if [ ! -f "$ZIP" ]; then
+  echo "build failed: expected $ZIP" >&2
+  exit 1
+fi
+
+# A build that silently produced another version must not be uploaded as this
+# one. The manifest is the source of truth.
+BUILT_VERSION="$(unzip -p "$ZIP" blender_manifest.toml | grep -E '^version' | head -1 | cut -d'"' -f2)"
+if [ "$BUILT_VERSION" != "$VERSION" ]; then
+  echo "built version $BUILT_VERSION does not match manifest $VERSION" >&2
   exit 1
 fi
 
 # Validate the artifact, not just the source: this runs the same checks the
 # platform runs, catching "wheel declared but missing", malformed permission
 # strings and path-separator mistakes.
-blender --command extension validate "$ZIP" 2>&1 | grep -v '^DEBUG' || true
+run_blender --command extension validate "$ZIP"
 
 # Nothing platform-specific or dev-only may ride inside the zip.
-BAD="$(unzip -Z1 "$ZIP" | grep -E '(^|/)vendor/|\.so$|\.exe$|\.pyc$|\.zip$' || true)"
+BAD="$(unzip -Z1 "$ZIP" | grep -E '(^|/)vendor/|(^|/)__pycache__/|\.so$|\.exe$|\.pyc$|\.pyo$|\.zip$' || true)"
 if [ -n "$BAD" ]; then
   echo "zip carries files that must not ship:" >&2
   echo "$BAD" >&2

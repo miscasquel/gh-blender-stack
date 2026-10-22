@@ -99,7 +99,7 @@ def _value_changed(self, context):
         notify_param_changed(obj)
 
 
-class GhParam(bpy.types.PropertyGroup):
+class StageloomParam(bpy.types.PropertyGroup):
     """One parameter declaration, from the GH schema message (plan §7)."""
 
     param_id: StringProperty(name="ID", default="")
@@ -117,7 +117,7 @@ class GhParam(bpy.types.PropertyGroup):
     value_index: EnumProperty(name="Value", items=_value_items, update=_value_changed)
 
 
-class GhStage(bpy.types.PropertyGroup):
+class StageloomStage(bpy.types.PropertyGroup):
     """One GH stage on a stack object."""
 
     key: StringProperty(name="Key", default="")
@@ -153,10 +153,10 @@ class GhStage(bpy.types.PropertyGroup):
     applied_out_hash: StringProperty(name="Applied output hash", default="")
     error: StringProperty(name="Last error", default="")
     warnings: StringProperty(name="Warnings", default="")
-    params: CollectionProperty(type=GhParam)
+    params: CollectionProperty(type=StageloomParam)
 
 
-class GhStack(bpy.types.PropertyGroup):
+class StageloomStack(bpy.types.PropertyGroup):
     """Per-object stack record. `gh_stack_id` doubles as the cache namespace."""
 
     stack_id: StringProperty(name="Stack ID", default="")
@@ -164,11 +164,11 @@ class GhStack(bpy.types.PropertyGroup):
     # A mesh stack flagged as a SubD control cage travels as subd.* sections
     # (protocol §5); the GH side builds a SubD from it and tags the creases.
     subd: BoolProperty(name="SubD cage", default=False)
-    stages: CollectionProperty(type=GhStage)
+    stages: CollectionProperty(type=StageloomStage)
 
 
 def stack_of(obj):
-    """The GhStack record for an object, or None when it has no stages."""
+    """The Stageloom stack record for an object, or None when it has no stages."""
     return getattr(obj, "gh_stack", None)
 
 
@@ -208,10 +208,10 @@ def clear_stage_params(obj, stage_key):
 
 
 def register():
-    bpy.utils.register_class(GhParam)
-    bpy.utils.register_class(GhStage)
-    bpy.utils.register_class(GhStack)
-    bpy.types.Object.gh_stack = bpy.props.PointerProperty(type=GhStack)
+    bpy.utils.register_class(StageloomParam)
+    bpy.utils.register_class(StageloomStage)
+    bpy.utils.register_class(StageloomStack)
+    bpy.types.Object.gh_stack = bpy.props.PointerProperty(type=StageloomStack)
 
 
 def unregister():
@@ -219,7 +219,7 @@ def unregister():
         del bpy.types.Object.gh_stack
     except AttributeError:
         pass
-    for cls in (GhStack, GhStage, GhParam):
+    for cls in (StageloomStack, StageloomStage, StageloomParam):
         try:
             bpy.utils.unregister_class(cls)
         except (RuntimeError, ValueError):

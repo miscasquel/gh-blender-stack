@@ -39,7 +39,7 @@ PORT = 9152
 
 def pump(seconds=8.0, until=None):
     """Drive the engine timer directly: bpy.app.timers is inert under -b (S2)."""
-    import gh_stack.blender.engine as engine
+    import stageloom.blender.engine as engine
 
     deadline = time.time() + seconds
     while time.time() < deadline:
@@ -54,12 +54,12 @@ class StageControlTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
-        bpy.context.preferences.addons["gh_stack"].preferences.data_root = tempfile.mkdtemp(
-            prefix="gh-stack-controls-"
+        bpy.ops.preferences.addon_enable(module="stageloom")
+        bpy.context.preferences.addons["stageloom"].preferences.data_root = tempfile.mkdtemp(
+            prefix="stageloom-controls-"
         )
-        import gh_stack.blender.engine as engine
-        import gh_stack.blender.nodes as nodes
+        import stageloom.blender.engine as engine
+        import stageloom.blender.nodes as nodes
 
         cls.engine = engine
         cls.nodes = nodes
@@ -74,7 +74,7 @@ class StageControlTests(unittest.TestCase):
         engine.start_server(PORT)
         time.sleep(0.5)
 
-        bpy.ops.gh_stack.add_stage(label="Controls")
+        bpy.ops.stageloom.add_stage(label="Controls")
         cls.stage = cls.obj.gh_stack.stages[0]
         cls.param_name = "gh/%s/%s" % (cls.stage.key, "00000000-0000-4000-8000-0000000000aa")
         cls.choice_name = "gh/%s/%s" % (cls.stage.key, "00000000-0000-4000-8000-0000000000cc")
@@ -93,7 +93,7 @@ class StageControlTests(unittest.TestCase):
             env=dict(
                 os.environ,
                 PYTHONPATH=os.pathsep.join(
-                    [os.path.join(REPO, "blender", "gh_stack", "vendor"), REPO]
+                    [os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]
                 ),
             ),
             stdout=subprocess.PIPE,
@@ -114,7 +114,7 @@ class StageControlTests(unittest.TestCase):
             cls.fake.wait(timeout=5)
         except subprocess.TimeoutExpired:
             cls.fake.kill()
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     def report_counts(self):
         time.sleep(0.3)
@@ -125,7 +125,7 @@ class StageControlTests(unittest.TestCase):
 
     def helper_coords(self):
         import numpy as np
-        import gh_stack.blender.helpers as helpers
+        import stageloom.blender.helpers as helpers
 
         mesh = helpers.ensure_helper(self.obj, self.stage.key).data
         co = np.empty(len(mesh.vertices) * 3, dtype=np.float32)
@@ -138,7 +138,7 @@ class StageControlTests(unittest.TestCase):
     def test_01_freeze_stops_updates(self):
         before = self.helper_coords().copy()
         counts = self.report_counts()
-        self.assertEqual(bpy.ops.gh_stack.freeze(index=0), {"FINISHED"})
+        self.assertEqual(bpy.ops.stageloom.freeze(index=0), {"FINISHED"})
         self.assertEqual(self.stage.state, "frozen")
 
         self.obj[self.param_name] = 3.0
@@ -152,7 +152,7 @@ class StageControlTests(unittest.TestCase):
         self.assertEqual(self.report_counts(), counts, "a frozen stage sent a request")
 
     def test_02_pull_refreshes_while_frozen(self):
-        self.assertEqual(bpy.ops.gh_stack.pull(index=0), {"FINISHED"})
+        self.assertEqual(bpy.ops.stageloom.pull(index=0), {"FINISHED"})
         self.assertTrue(
             pump(until=lambda: abs(float(abs(self.helper_coords()).max()) - 3.0) < 1e-3),
             "Pull did not refresh the frozen stage",
@@ -162,22 +162,22 @@ class StageControlTests(unittest.TestCase):
     def test_03_push_skips_frozen(self):
         generation = self.stage.generation
         counts = self.report_counts()
-        bpy.ops.gh_stack.push()
+        bpy.ops.stageloom.push()
         self.assertEqual(self.stage.generation, generation, "Push touched a frozen stage")
         pump(seconds=0.8)
         self.assertEqual(self.stage.state, "frozen")
         self.assertEqual(self.report_counts(), counts, "Push sent a request for a frozen stage")
 
     def test_04_unfreeze_resumes(self):
-        self.assertEqual(bpy.ops.gh_stack.freeze(index=0), {"FINISHED"})  # toggles off
+        self.assertEqual(bpy.ops.stageloom.freeze(index=0), {"FINISHED"})  # toggles off
         self.assertTrue(pump(until=lambda: self.stage.state == "ok"), "unfreeze did not resume")
         self.assertAlmostEqual(float(abs(self.helper_coords()).max()), 3.0, places=3)
 
     def test_05_key_all_keys_every_parameter(self):
-        import gh_stack.blender.props as props
+        import stageloom.blender.props as props
 
         bpy.context.scene.frame_set(10)
-        self.assertEqual(bpy.ops.gh_stack.key_all(index=0), {"FINISHED"})
+        self.assertEqual(bpy.ops.stageloom.key_all(index=0), {"FINISHED"})
         scale = '["%s"]' % self.param_name
         choice = '["%s"]' % self.choice_name
         paths = {fcurve.data_path for _bag, fcurve in props._fcurve_slots(self.obj)}
@@ -193,13 +193,13 @@ class StageControlTests(unittest.TestCase):
                     )
 
     def test_06_orphans_are_kept_and_purge_removes_them(self):
-        import gh_stack.blender.props as props
+        import stageloom.blender.props as props
 
         name = "gh/%s/00000000-0000-4000-8000-000000000099" % self.stage.key
         self.obj[name] = 1.5
         self.obj.keyframe_insert(data_path='["%s"]' % name, frame=1)
         self.assertIn(name, props.orphans(self.obj, self.stage))
-        self.assertEqual(bpy.ops.gh_stack.purge_orphans(), {"FINISHED"})
+        self.assertEqual(bpy.ops.stageloom.purge_orphans(), {"FINISHED"})
         self.assertNotIn(name, self.obj)
         paths = {fcurve.data_path for _bag, fcurve in props._fcurve_slots(self.obj)}
         self.assertNotIn('["%s"]' % name, paths, "purge left the orphan's keyframes")
@@ -241,7 +241,7 @@ class StageControlTests(unittest.TestCase):
         self.assertEqual(stage.state, "ok", stage.error)
 
     def test_07_deleting_the_modifier_removes_the_stage(self):
-        import gh_stack.blender.helpers as helpers
+        import stageloom.blender.helpers as helpers
 
         record = self.obj.gh_stack
         key = (record.stack_id, self.stage.key)

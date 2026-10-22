@@ -1,4 +1,4 @@
-// GhStack link: the Grasshopper side of the protocol (plan §10).
+// Stageloom link: the Grasshopper side of the protocol (plan §10).
 //
 // Owns the socket thread, the per-stage latest slots, and the publication of
 // `hello` and `schema`. Adapted from the S1/S3 spike, which passed the transport
@@ -16,9 +16,9 @@ using System.Collections.Generic;
 using System.Threading;
 using Grasshopper.Kernel;
 using Rhino;
-using GhStack.Core;
+using Stageloom.Core;
 
-namespace GhStack
+namespace Stageloom
 {
     /// <summary>One complete request frame, published as a single reference.
     ///
@@ -176,7 +176,7 @@ namespace GhStack
 
         private static string DefaultPort()
         {
-            string port = Environment.GetEnvironmentVariable("GHSTACK_PORT");
+            string port = Environment.GetEnvironmentVariable("STAGELOOM_PORT");
             return string.IsNullOrEmpty(port) ? "59130" : port;
         }
 
@@ -285,7 +285,7 @@ namespace GhStack
         {
             lock (Gate)
             {
-                Notes.Add("[GH Stack] " + text);
+                Notes.Add("[Stageloom] " + text);
                 if (Notes.Count > 50) Notes.RemoveAt(0);
             }
         }
@@ -358,7 +358,7 @@ namespace GhStack
                 _worker = worker;
                 _thread = new Thread(delegate() { Loop(worker); });
                 _thread.IsBackground = true;
-                _thread.Name = "GhStack-socket";
+                _thread.Name = "Stageloom-socket";
                 _thread.Start();
             }
         }
@@ -367,7 +367,7 @@ namespace GhStack
         /// receive loop is blocked in a socket read, so the client is disposed
         /// to unblock it; without that the thread would outlive the call by an
         /// unbounded time. Called when the last component leaves the document,
-        /// so a canvas with no GH Stack components holds no socket.</summary>
+        /// so a canvas with no Stageloom components holds no socket.</summary>
         public static void Stop()
         {
             Worker worker;
@@ -434,7 +434,7 @@ namespace GhStack
                     var stopSend = new ManualResetEvent(false);
                     var sender = new Thread(delegate() { SendLoop(client, stopSend, worker); });
                     sender.IsBackground = true;
-                    sender.Name = "GhStack-sender";
+                    sender.Name = "Stageloom-sender";
                     sender.Start();
                     try
                     {
@@ -587,7 +587,7 @@ namespace GhStack
             if (noComponents)
             {
                 // The request triggers no solve: there is no document to solve.
-                Note("request for stage " + key + ", but no GH Stack component is on the canvas");
+                Note("request for stage " + key + ", but no Stageloom component is on the canvas");
                 return;
             }
 
@@ -690,7 +690,7 @@ namespace GhStack
             lock (Gate) { origin = Components.Count > 0 ? Components[0] : null; }
             if (origin == null)
             {
-                Note("request received, but no GH Stack component is on the canvas");
+                Note("request received, but no Stageloom component is on the canvas");
                 return;
             }
             GH_Document doc = null;
@@ -814,7 +814,7 @@ namespace GhStack
             }
             foreach (KeyValuePair<string, string> entry in refused)
                 Enqueue(ErrorFrame("unknown_stage",
-                    "no GH Stack component claims this stage key", entry.Key, entry.Value));
+                    "no Stageloom component claims this stage key", entry.Key, entry.Value));
         }
 
         private static bool IsOwnedLocked(string key)
@@ -1036,7 +1036,7 @@ namespace GhStack
                 hello["type"] = "hello";
                 // Keep in sync with blender_manifest.toml (the release path
                 // enforces that one) and the example in docs/protocol.md.
-                hello["client"] = "GhStack 0.3.1";
+                hello["client"] = "Stageloom 0.4.0";
                 hello["doc"] = _lastDocName;
                 hello["doc_units"] = UnitsName();
                 hello["stages"] = list;

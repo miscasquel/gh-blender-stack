@@ -3,7 +3,7 @@
 #
 #     grasshopper/build/build-core.sh
 #
-# Produces grasshopper/build/out/GhStack.Core.dll. The codec and hashing halves
+# Produces grasshopper/build/out/Stageloom.Core.dll. The codec and hashing halves
 # are also compiled into the console fixture tests (which run without Rhino);
 # this build additionally compiles the RhinoCommon conversion, so it is the
 # compile check for conversion code.
@@ -12,7 +12,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 source "$HERE/wine-env.sh"
 OUT_DIR="$HERE/out"
-OUT="$OUT_DIR/GhStack.Core.dll"
+OUT="$OUT_DIR/Stageloom.Core.dll"
 
 [ -f "$RC_DLL" ] || { echo "missing $RC_DLL" >&2; exit 1; }
 

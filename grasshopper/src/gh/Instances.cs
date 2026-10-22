@@ -34,14 +34,14 @@ using Grasshopper.Rhinoceros.Model;
 using Rhino;
 using Rhino.DocObjects;
 using Rhino.Geometry;
-using GhStack.Core;
+using Stageloom.Core;
 
-namespace GhStack
+namespace Stageloom
 {
     public static class Instances
     {
         /// <summary>The name given to definitions Blender did not name.</summary>
-        public const string DefinitionPrefix = "GHStack ";
+        public const string DefinitionPrefix = "Stageloom ";
 
         /// <summary>Definition rows and transforms, decoded (protocol §5.2).
         /// Returns false when the pair is absent; both halves are all-or-nothing.</summary>
@@ -261,7 +261,7 @@ namespace GhStack
             /// content), so equal content shares a name and any real change —
             /// a rename, a moved row, a child's geometry — is a new name.
             /// Hashing only the child's resolved name let two different nested
-            /// contents share `GHStack &lt;hash&gt;` (2026-10-17 handoff, item
+            /// contents share `Stageloom &lt;hash&gt;` (2026-10-17 handoff, item
             /// (a)).</summary>
             private string ContentHash(long index)
             {

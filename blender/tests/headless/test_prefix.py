@@ -37,7 +37,7 @@ SCALE_PARAM = "00000000-0000-4000-8000-0000000000aa"
 
 def pump(seconds=8.0, until=None):
     """Drive the engine timer directly: bpy.app.timers is inert under -b (S2)."""
-    import gh_stack.blender.engine as engine
+    import stageloom.blender.engine as engine
 
     deadline = time.time() + seconds
     while time.time() < deadline:
@@ -61,7 +61,7 @@ def start_fake(stage_key, report, delay_ms=0):
         env=dict(
             os.environ,
             PYTHONPATH=os.pathsep.join(
-                [os.path.join(REPO, "blender", "gh_stack", "vendor"), REPO]
+                [os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]
             ),
         ),
         stdout=subprocess.PIPE,
@@ -89,9 +89,9 @@ def report_of(path):
 
 def isolate_data_root():
     """Point the frame cache at a temp dir so tests never write into the real
-    ``~/.local/share/gh-stack``."""
-    prefs = bpy.context.preferences.addons["gh_stack"].preferences
-    prefs.data_root = tempfile.mkdtemp(prefix="gh-stack-test-")
+    extension user data directory (or the dev fallback)."""
+    prefs = bpy.context.preferences.addons["stageloom"].preferences
+    prefs.data_root = tempfile.mkdtemp(prefix="stageloom-test-")
 
 
 class PrefixChainTests(unittest.TestCase):
@@ -100,9 +100,9 @@ class PrefixChainTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
+        bpy.ops.preferences.addon_enable(module="stageloom")
         isolate_data_root()
-        import gh_stack.blender.engine as engine
+        import stageloom.blender.engine as engine
 
         cls.engine = engine
 
@@ -116,13 +116,13 @@ class PrefixChainTests(unittest.TestCase):
         pre = cls.obj.modifiers.new("PreBevel", "BEVEL")
         pre.width = 0.2
         cls.obj.modifiers.active = pre
-        bpy.ops.gh_stack.add_stage(label="A")
+        bpy.ops.stageloom.add_stage(label="A")
         cls.stage_a = cls.obj.gh_stack.stages[0]
 
         mid = cls.obj.modifiers.new("MidBevel", "BEVEL")
         mid.width = 0.1
         cls.obj.modifiers.active = mid
-        bpy.ops.gh_stack.add_stage(label="B")
+        bpy.ops.stageloom.add_stage(label="B")
         cls.stage_b = cls.obj.gh_stack.stages[1]
 
         cls.report_a = os.path.join(tempfile.gettempdir(), "fake_gh_prefix_a.json")
@@ -143,7 +143,7 @@ class PrefixChainTests(unittest.TestCase):
     def tearDownClass(cls):
         stop_fake(cls.fake_a)
         stop_fake(cls.fake_b)
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_01_native_modifier_before_the_first_stage(self):
         self.assertEqual(self.stage_a.state, "ok", self.stage_a.error)
@@ -234,9 +234,9 @@ class WaitingPrefixTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
+        bpy.ops.preferences.addon_enable(module="stageloom")
         isolate_data_root()
-        import gh_stack.blender.engine as engine
+        import stageloom.blender.engine as engine
 
         cls.engine = engine
 
@@ -247,9 +247,9 @@ class WaitingPrefixTests(unittest.TestCase):
         engine.start_server(PORT)
         time.sleep(0.5)
 
-        bpy.ops.gh_stack.add_stage(label="Slow")
+        bpy.ops.stageloom.add_stage(label="Slow")
         cls.stage_a = cls.obj.gh_stack.stages[0]
-        bpy.ops.gh_stack.add_stage(label="Fast")
+        bpy.ops.stageloom.add_stage(label="Fast")
         cls.stage_b = cls.obj.gh_stack.stages[1]
 
         cls.report_a = os.path.join(tempfile.gettempdir(), "fake_gh_wait_a.json")
@@ -271,7 +271,7 @@ class WaitingPrefixTests(unittest.TestCase):
     def tearDownClass(cls):
         stop_fake(cls.fake_a)
         stop_fake(cls.fake_b)
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_01_downstream_does_not_start_while_upstream_waits(self):
         self.assertEqual(self.stage_a.state, "ok", self.stage_a.error)
@@ -308,9 +308,9 @@ class ComponentPrefixTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
+        bpy.ops.preferences.addon_enable(module="stageloom")
         isolate_data_root()
-        import gh_stack.blender.engine as engine
+        import stageloom.blender.engine as engine
 
         cls.engine = engine
         engine.start_server(PORT)
@@ -332,7 +332,7 @@ class ComponentPrefixTests(unittest.TestCase):
         for chain in (cls.curve, cls.points):
             stop_fake(chain["fake_a"])
             stop_fake(chain["fake_b"])
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     @classmethod
     def _offset_group(cls, name):
@@ -353,13 +353,13 @@ class ComponentPrefixTests(unittest.TestCase):
     def _chain(cls, obj, name):
         bpy.context.view_layer.objects.active = obj
         obj.select_set(True)
-        bpy.ops.gh_stack.add_stage(label=name + "A")
+        bpy.ops.stageloom.add_stage(label=name + "A")
         stage_a = obj.gh_stack.stages[0]
 
         offset = obj.modifiers.new("Offset", "NODES")
         offset.node_group = cls._offset_group(name + "Offset")
         obj.modifiers.active = offset
-        bpy.ops.gh_stack.add_stage(label=name + "B")
+        bpy.ops.stageloom.add_stage(label=name + "B")
         stage_b = obj.gh_stack.stages[1]
 
         report_a = os.path.join(tempfile.gettempdir(), "fake_gh_%s_a.json" % name)
@@ -455,9 +455,9 @@ class NestedGroupPrefixTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
+        bpy.ops.preferences.addon_enable(module="stageloom")
         isolate_data_root()
-        import gh_stack.blender.engine as engine
+        import stageloom.blender.engine as engine
 
         cls.engine = engine
 
@@ -474,7 +474,7 @@ class NestedGroupPrefixTests(unittest.TestCase):
         modifier = cls.obj.modifiers.new("NestedOffset", "NODES")
         modifier.node_group = cls.outer
         cls.obj.modifiers.active = modifier
-        bpy.ops.gh_stack.add_stage(label="AfterNested")
+        bpy.ops.stageloom.add_stage(label="AfterNested")
         cls.stage = cls.obj.gh_stack.stages[0]
 
         cls.report = os.path.join(tempfile.gettempdir(), "fake_gh_nested.json")
@@ -490,7 +490,7 @@ class NestedGroupPrefixTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         stop_fake(cls.fake)
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     @staticmethod
     def _transform_group(name, offset):
@@ -579,9 +579,9 @@ class LateClientTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
+        bpy.ops.preferences.addon_enable(module="stageloom")
         isolate_data_root()
-        import gh_stack.blender.engine as engine
+        import stageloom.blender.engine as engine
 
         cls.engine = engine
 
@@ -592,9 +592,9 @@ class LateClientTests(unittest.TestCase):
         engine.start_server(PORT)
         time.sleep(0.5)
 
-        bpy.ops.gh_stack.add_stage(label="Late")
+        bpy.ops.stageloom.add_stage(label="Late")
         cls.stage_a = cls.obj.gh_stack.stages[0]
-        bpy.ops.gh_stack.add_stage(label="Early")
+        bpy.ops.stageloom.add_stage(label="Early")
         cls.stage_b = cls.obj.gh_stack.stages[1]
 
         cls.report_a = os.path.join(tempfile.gettempdir(), "fake_gh_late_a.json")
@@ -614,7 +614,7 @@ class LateClientTests(unittest.TestCase):
         if cls.fake_a is not None:
             stop_fake(cls.fake_a)
         stop_fake(cls.fake_b)
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_01_request_waits_without_its_client(self):
         self.assertEqual(self.stage_a.state, "waiting")
@@ -636,7 +636,7 @@ class PrefixCostTests(unittest.TestCase):
 
     def setUp(self):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
+        bpy.ops.preferences.addon_enable(module="stageloom")
         isolate_data_root()
 
     def _grid(self, nx, ny):
@@ -660,8 +660,8 @@ class PrefixCostTests(unittest.TestCase):
         return mesh
 
     def _measure(self, nx, ny, budget_ms):
-        import gh_stack.blender.engine as engine
-        import gh_stack.blender.stack as stack_mod
+        import stageloom.blender.engine as engine
+        import stageloom.blender.stack as stack_mod
 
         bpy.ops.object.select_all(action="SELECT")
         bpy.ops.object.delete()
@@ -673,7 +673,7 @@ class PrefixCostTests(unittest.TestCase):
         # A cheap native modifier before the stage forces the clone path.
         mod = obj.modifiers.new("Triangulate", "TRIANGULATE")
         obj.modifiers.active = mod
-        bpy.ops.gh_stack.add_stage(label="Perf")
+        bpy.ops.stageloom.add_stage(label="Perf")
         stage = obj.gh_stack.stages[0]
         record = stack_mod.stack_of(obj)
 

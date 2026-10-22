@@ -5,7 +5,10 @@ import os
 import bpy
 from bpy.props import EnumProperty, FloatProperty, IntProperty, StringProperty
 
-DEFAULT_DATA_ROOT = "~/.local/share/gh-stack"
+FALLBACK_DATA_ROOT = "~/.local/share/stageloom"
+# The default through 0.3.1. A saved preference still on it is moved once on
+# register; the old cache is disposable.
+OLD_DATA_ROOT = "~/.local/share/gh-stack"
 DEFAULT_CACHE_MB = 256
 # A dynamic-range port: 9130, the default through 0.2.2, is where BlenderKit
 # sits, so the two fought over the loopback. The plugin's default endpoint in
@@ -15,6 +18,26 @@ DEFAULT_PORT = 59130
 # register, with a notice, because the old value would otherwise override the
 # new default and collide exactly as before.
 OLD_DEFAULT_PORT = 9130
+
+
+def _default_data_root():
+    """The extension's per-user data directory, or the dev fallback.
+
+    ``bpy.utils.extension_path_user`` expects the add-on package
+    (``bl_ext.<repo>.<id>``); the development install's package is just
+    ``stageloom`` and has no extension repository, so it uses the conventional
+    per-user path instead.
+    """
+    package = __package__.rsplit(".", 1)[0] if "." in __package__ else __package__
+    try:
+        root = bpy.utils.extension_path_user(package, path="data", create=True)
+    except (AttributeError, RuntimeError, ValueError):
+        root = ""
+    return root or os.path.expanduser(FALLBACK_DATA_ROOT)
+
+
+DEFAULT_DATA_ROOT = _default_data_root()
+
 
 # A plain snapshot of `log_level`, refreshed on the main thread (register and
 # every change), so any thread can call `log()` without touching bpy — the
@@ -32,7 +55,7 @@ def refresh_log_level():
 
 
 def log(*args, **kwargs):
-    """A gated `print` for the `[gh-stack]` diagnostics: `quiet` silences them,
+    """A gated `print` for the `[stageloom]` diagnostics: `quiet` silences them,
     `info` (the default) prints. Errors still surface in the panel state either
     way; this only controls the system console.
 
@@ -49,7 +72,7 @@ def log(*args, **kwargs):
             pass
 
 
-class GhStackPreferences(bpy.types.AddonPreferences):
+class StageloomPreferences(bpy.types.AddonPreferences):
     bl_idname = __package__.rsplit(".", 1)[0] if "." in __package__ else __package__
 
     port: IntProperty(
@@ -82,7 +105,7 @@ class GhStackPreferences(bpy.types.AddonPreferences):
         description="How much the add-on prints to the system console",
         items=[
             ("quiet", "Quiet", "Print nothing; stage states stay visible in the panel"),
-            ("info", "Info", "Print the add-on's [gh-stack] diagnostics"),
+            ("info", "Info", "Print the add-on's [stageloom] diagnostics"),
         ],
         default="info",
         update=_log_level_changed,
@@ -120,6 +143,27 @@ def cache_size_bytes():
     return int(_pref("cache_size_mb", DEFAULT_CACHE_MB)) * 1024 * 1024
 
 
+def _migrate_old_data_root():
+    """Move a saved preference still on the 0.3.x default to the extension dir.
+
+    Only the old default is touched; any deliberate data root is left alone.
+    The old frame cache is not moved: it is disposable and the new location is
+    the one the extension system keeps across upgrades.
+    """
+    try:
+        settings = bpy.context.preferences.addons[__package__.rsplit(".", 1)[0]].preferences
+    except (KeyError, AttributeError):
+        return
+    old = os.path.expanduser(OLD_DATA_ROOT)
+    if os.path.expanduser(settings.data_root) == old:
+        settings.data_root = DEFAULT_DATA_ROOT
+        log(
+            "[stageloom] data root moved from %s to %s; the old frame cache is disposable"
+            % (old, DEFAULT_DATA_ROOT),
+            flush=True,
+        )
+
+
 def _migrate_old_port():
     """Move a saved preference still on the old default to the new one.
 
@@ -133,20 +177,21 @@ def _migrate_old_port():
     if settings.port == OLD_DEFAULT_PORT:
         settings.port = DEFAULT_PORT
         log(
-            "[gh-stack] port preference 9130 (the old default, BlenderKit's) moved to %d; "
+            "[stageloom] port preference 9130 (the old default, BlenderKit's) moved to %d; "
             "change it in Preferences > Add-ons if you need 9130" % DEFAULT_PORT,
             flush=True,
         )
 
 
 def register():
-    bpy.utils.register_class(GhStackPreferences)
+    bpy.utils.register_class(StageloomPreferences)
     refresh_log_level()
     _migrate_old_port()
+    _migrate_old_data_root()
 
 
 def unregister():
     try:
-        bpy.utils.unregister_class(GhStackPreferences)
+        bpy.utils.unregister_class(StageloomPreferences)
     except (RuntimeError, ValueError):
         pass

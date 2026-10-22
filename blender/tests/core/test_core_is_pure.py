@@ -1,7 +1,7 @@
 import sys
 import unittest
 
-from blender.gh_stack.core import PROTOCOL_VERSION
+from blender.stageloom.core import PROTOCOL_VERSION
 
 
 class CoreIsPureTests(unittest.TestCase):

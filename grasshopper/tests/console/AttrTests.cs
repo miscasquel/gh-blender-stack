@@ -1,6 +1,6 @@
 // Layer C, attribute half: the store that carries attributes on geometry.
 //
-//     GhStackAttrTests.exe
+//     StageloomAttrTests.exe
 //
 // Rhino's ArchivableDictionary is a managed collection, so this runs under wine
 // without a Rhino process (built by grasshopper/build/build.sh, which references
@@ -18,10 +18,10 @@
 
 using System;
 using System.Collections.Generic;
-using GhStack.Core;
+using Stageloom.Core;
 using Rhino.Collections;
 
-namespace GhStack.Tests.Console
+namespace Stageloom.Tests.Console
 {
     public static class AttrTests
     {

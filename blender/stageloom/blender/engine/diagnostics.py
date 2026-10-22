@@ -76,15 +76,15 @@ _HANDLER_NAMES = (
     "undo_post",
     "redo_post",
 )
-# The engine package is loaded as `gh_stack.blender.engine` by the development
-# install and as `bl_ext.<repo>.gh_stack.blender.engine` by an extension. Both
+# The engine package is loaded as `stageloom.blender.engine` by the development
+# install and as `bl_ext.<repo>.stageloom.blender.engine` by an extension. Both
 # can exist on disk at once, so a registration check must see both. A filter on
-# `startswith("gh_stack")` misses every extension handler.
-_ENGINE_MODULE_TAIL = "gh_stack.blender.engine"
+# `startswith("stageloom")` misses every extension handler.
+_ENGINE_MODULE_TAIL = "stageloom.blender.engine"
 
 
 def _is_engine_module(module):
-    """Whether a module name belongs to any GH Stack engine generation."""
+    """Whether a module name belongs to any Stageloom engine generation."""
     if not module:
         return False
     if module == _ENGINE_MODULE_TAIL or module.startswith(_ENGINE_MODULE_TAIL + "."):
@@ -94,13 +94,13 @@ def _is_engine_module(module):
     ) in module
 
 
-def _enabled_gh_stack_addons():
-    """The enabled add-on modules that look like a GH Stack install."""
+def _enabled_stageloom_addons():
+    """The enabled add-on modules that look like a Stageloom install."""
     try:
         addons = engine.bpy.context.preferences.addons
     except AttributeError:
         return []
-    return sorted(item.module for item in addons if "gh_stack" in item.module)
+    return sorted(item.module for item in addons if "stageloom" in item.module)
 
 
 def registration_report():
@@ -125,7 +125,7 @@ def registration_report():
             module = getattr(handler, "__module__", "")
             if not _is_engine_module(module):
                 continue
-            timer = getattr(handler, "_gh_stack_engine_timer", None)
+            timer = getattr(handler, "_stageloom_engine_timer", None)
             entries.append(
                 {
                     "module": module,
@@ -143,7 +143,7 @@ def registration_report():
         "timer_id": id(engine._timer),
         "timer_registered": bool(engine.bpy.app.timers.is_registered(engine._timer)),
         "registered": bool(engine._registered),
-        "enabled_addons": _enabled_gh_stack_addons(),
+        "enabled_addons": _enabled_stageloom_addons(),
         "handler_counts": counts,
         "handlers": handlers,
         "stack_objects": len(engine._stack_objects),

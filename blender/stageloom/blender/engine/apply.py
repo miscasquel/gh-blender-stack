@@ -156,7 +156,7 @@ def _apply(obj, stage, sections, attributes=None):
                 # The response names a nested placement whose definition group
                 # is absent: keep it visible instead of building an empty block.
                 engine.prefs.log(
-                    "[gh-stack] %s: block %d nests definition %d, which the response does not carry"
+                    "[stageloom] %s: block %d nests definition %d, which the response does not carry"
                     % (stage.key, index, target),
                     flush=True,
                 )
@@ -235,7 +235,7 @@ def _rows_of(sections, prefix):
         return []
     if refs is None or mats is None or len(mats) < 16:
         engine.prefs.log(
-            "[gh-stack] %sinst.* rows are incomplete (ref_def=%s, transforms=%s); skipped"
+            "[stageloom] %sinst.* rows are incomplete (ref_def=%s, transforms=%s); skipped"
             % (prefix, refs is not None, mats is not None),
             flush=True,
         )
@@ -243,7 +243,7 @@ def _rows_of(sections, prefix):
     matrices = engine.np.asarray(mats, dtype=engine.np.float32).reshape(-1, 16)
     if len(refs) != len(matrices):
         engine.prefs.log(
-            "[gh-stack] %sinst.* row pair lengths differ (%d rows vs %d matrices); the shorter side is used"
+            "[stageloom] %sinst.* row pair lengths differ (%d rows vs %d matrices); the shorter side is used"
             % (prefix, len(refs), len(matrices)),
             flush=True,
         )
@@ -274,7 +274,7 @@ def _apply_instance_rows(obj, stage, definitions, top_rows, nested_rows):
         missing = [target for target, _matrix in rows if target not in known]
         if missing:
             engine.prefs.log(
-                "[gh-stack] %s: block %d nests definition %d, which the response does not carry"
+                "[stageloom] %s: block %d nests definition %d, which the response does not carry"
                 % (stage.key, index, missing[0]),
                 flush=True,
             )
@@ -346,7 +346,7 @@ def _write_rows_cloud(cloud, rows, stage_key, with_child=False):
             # position/rotation/scale) is the one shape the point-cloud
             # channel cannot carry; the transform is applied lossily.
             engine.prefs.log(
-                "[gh-stack] %s: instance transform %d has shear; "
+                "[stageloom] %s: instance transform %d has shear; "
                 "Blender can only carry position, rotation and scale" % (stage_key, row),
                 flush=True,
             )
@@ -419,7 +419,7 @@ def _apply_attributes(obj, stage, sections, attributes):
             continue
         engine._bump_id(helper)
         for note in engine.geometry_io.write_attributes(helper.data, entries, prune=True):
-            engine.prefs.log("[gh-stack] %s: %s" % (stage.key, note), flush=True)
+            engine.prefs.log("[stageloom] %s: %s" % (stage.key, note), flush=True)
         helper.update_tag()
 
 

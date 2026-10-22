@@ -1,23 +1,33 @@
 #!/usr/bin/env bash
 # Install the built extension zip into Blender's user repository and enable it.
 #
-#     scripts/install-extension [path/to/gh_stack-x.y.z.zip]
+#     scripts/install-extension [path/to/stageloom-x.y.z.zip]
 #
-# Without an argument, the newest zip in dist/ is used. Build one first with
-# scripts/build-extension.
+# Without an argument, the zip matching the manifest version is used. Build one
+# first with scripts/build-extension.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
+MANIFEST="$REPO/blender/stageloom/blender_manifest.toml"
+VERSION="$(grep -E '^version' "$MANIFEST" | head -1 | cut -d'"' -f2)"
 
-ZIP="${1:-}"
-if [ -z "$ZIP" ]; then
-  ZIP="$(ls -t "$REPO"/dist/gh_stack-*.zip 2>/dev/null | head -1 || true)"
-fi
-if [ -z "$ZIP" ] || [ ! -f "$ZIP" ]; then
-  echo "no extension zip; run scripts/build-extension first" >&2
+ZIP="${1:-$REPO/dist/stageloom-$VERSION.zip}"
+if [ ! -f "$ZIP" ]; then
+  echo "no extension zip at $ZIP; run scripts/build-extension first" >&2
   exit 1
 fi
 
-blender --command extension install-file -r user_default -e "$ZIP" 2>&1 | grep -v '^DEBUG' || true
+LOG="$(mktemp)"
+set +e
+blender --command extension install-file -r user_default -e "$ZIP" >"$LOG" 2>&1
+CODE=$?
+set -e
+grep -v '^DEBUG' "$LOG" || true
+rm -f "$LOG"
+if [ "$CODE" -ne 0 ]; then
+  echo "install failed: $ZIP" >&2
+  exit "$CODE"
+fi
+
 echo "installed and enabled: $ZIP"
-echo "the add-on appears as 'GH Stack' in Preferences > Add-ons > Extensions"
+echo "the add-on appears as 'Stageloom' in Preferences > Add-ons > Extensions"

@@ -31,16 +31,16 @@ class RegistrationOrderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
+        bpy.ops.preferences.addon_enable(module="stageloom")
 
     @classmethod
     def tearDownClass(cls):
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_prefs_register_before_the_engine_starts_the_server(self):
-        import gh_stack
+        import stageloom
 
-        order = list(gh_stack.MODULE_ORDER)
+        order = list(stageloom.MODULE_ORDER)
         self.assertLess(
             order.index("prefs"),
             order.index("engine"),
@@ -52,9 +52,9 @@ class RegistrationOrderTests(unittest.TestCase):
         """A preference Blender saved while the default was 9130 would keep
         winning over the new default — and 9130 is BlenderKit's. Only the old
         default moves; a deliberate port is left alone."""
-        from gh_stack.blender import prefs as prefs_mod
+        from stageloom.blender import prefs as prefs_mod
 
-        settings = bpy.context.preferences.addons["gh_stack"].preferences
+        settings = bpy.context.preferences.addons["stageloom"].preferences
         original = settings.port
         try:
             settings.port = prefs_mod.OLD_DEFAULT_PORT
@@ -67,10 +67,10 @@ class RegistrationOrderTests(unittest.TestCase):
             settings.port = original
 
     def test_the_server_follows_the_preference(self):
-        import gh_stack.blender.engine as engine
-        from gh_stack.blender import server as server_mod
+        import stageloom.blender.engine as engine
+        from stageloom.blender import server as server_mod
 
-        prefs = bpy.context.preferences.addons["gh_stack"].preferences
+        prefs = bpy.context.preferences.addons["stageloom"].preferences
         original = prefs.port
         try:
             prefs.port = 9157
@@ -88,6 +88,18 @@ class RegistrationOrderTests(unittest.TestCase):
             engine.start_server()
 
 
+class DataRootTests(unittest.TestCase):
+    """The default data root is a real absolute path, not a hard-coded Linux one
+    in the extension install."""
+
+    def test_the_development_fallback_is_absolute_and_branded(self):
+        import stageloom.blender.prefs as prefs
+
+        root = prefs.DEFAULT_DATA_ROOT
+        self.assertTrue(os.path.isabs(root), root)
+        self.assertIn("stageloom", root, root)
+
+
 class RegistrationReportTests(unittest.TestCase):
     """The Phase 0 report: one visible generation, both install paths, no writes.
 
@@ -99,14 +111,14 @@ class RegistrationReportTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="gh_stack")
+        bpy.ops.preferences.addon_enable(module="stageloom")
 
     @classmethod
     def tearDownClass(cls):
-        bpy.ops.preferences.addon_disable(module="gh_stack")
+        bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_report_finds_one_engine_generation(self):
-        import gh_stack.blender.engine as engine
+        import stageloom.blender.engine as engine
 
         report = engine.registration_report()
         self.assertTrue(report["timer_registered"], "the timer is not registered")
@@ -120,18 +132,18 @@ class RegistrationReportTests(unittest.TestCase):
                 "redo_post": 1,
             },
         )
-        self.assertEqual(report["enabled_addons"], ["gh_stack"])
+        self.assertEqual(report["enabled_addons"], ["stageloom"])
         self.assertTrue(
             os.path.normpath(report["engine_file"]).endswith(
                 os.path.join("engine", "__init__.py")
             ),
             report["engine_file"],
         )
-        self.assertEqual(report["timer_module"], "gh_stack.blender.engine.triggers")
+        self.assertEqual(report["timer_module"], "stageloom.blender.engine.triggers")
         self.assertEqual(report["stack_objects"], 0)
 
     def test_a_foreign_handler_is_not_counted(self):
-        import gh_stack.blender.engine as engine
+        import stageloom.blender.engine as engine
 
         def foreign(scene, depsgraph=None):
             return None
@@ -147,7 +159,7 @@ class RegistrationReportTests(unittest.TestCase):
             handlers.remove(foreign)
 
     def test_load_restores_a_missing_timer(self):
-        import gh_stack.blender.engine as engine
+        import stageloom.blender.engine as engine
 
         bpy.app.timers.unregister(engine._timer)
         try:
@@ -165,21 +177,21 @@ class RegistrationReportTests(unittest.TestCase):
                 )
 
     def test_predicate_covers_development_and_extension_installs(self):
-        import gh_stack.blender.engine as engine
+        import stageloom.blender.engine as engine
 
         for module in (
-            "gh_stack.blender.engine",
-            "gh_stack.blender.engine.triggers",
-            "bl_ext.user_default.gh_stack.blender.engine",
-            "bl_ext.user_default.gh_stack.blender.engine.triggers",
-            "bl_ext.system.gh_stack.blender.engine.messages",
+            "stageloom.blender.engine",
+            "stageloom.blender.engine.triggers",
+            "bl_ext.user_default.stageloom.blender.engine",
+            "bl_ext.user_default.stageloom.blender.engine.triggers",
+            "bl_ext.system.stageloom.blender.engine.messages",
         ):
             self.assertTrue(engine._is_engine_module(module), module)
         for module in (
             "",
             "other.addon",
-            "gh_stack.blender.engine_extra",
-            "other.gh_stack.blender.engine_extra",
-            "my_gh_stack.blender.engine",
+            "stageloom.blender.engine_extra",
+            "other.stageloom.blender.engine_extra",
+            "my_stageloom.blender.engine",
         ):
             self.assertFalse(engine._is_engine_module(module), module)

@@ -16,10 +16,10 @@
 using System;
 using System.Collections.Generic;
 using Grasshopper.Kernel.Types;
-using GhStack.Core;
+using Stageloom.Core;
 using Rhino.Geometry;
 
-namespace GhStack
+namespace Stageloom
 {
     public static class StageGeometry
     {

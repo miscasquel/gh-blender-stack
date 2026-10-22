@@ -1,16 +1,16 @@
-// A minimal WebSocket client for the GH Stack link: one binary message in each
+// A minimal WebSocket client for the Stageloom link: one binary message in each
 // direction, loopback. RFC 6455 framing with client-side masking.
 //
 // This file has no Grasshopper references, so it can be built and run headlessly
 // (spikes/s1/build-wstest.sh) without Rhino. Findings about Mono and
-// ClientWebSocket are recorded in GhStackSpike.cs.
+// ClientWebSocket are recorded in StageloomSpike.cs.
 
 using System;
 using System.IO;
 using System.Net.Sockets;
 using System.Text;
 
-namespace GhStack
+namespace Stageloom
 {
     public class MiniWsClient : IDisposable
     {
