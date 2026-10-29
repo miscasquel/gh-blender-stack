@@ -1,6 +1,9 @@
 # Stageloom — extensions.blender.org submission packet
 
-Paste-ready copy for the first upload. Version **0.4.0**, extension id
+**Status:** deferred. Stageloom 0.4.0 ships on GitHub first; this packet is
+retained for a later platform upload.
+
+Paste-ready copy for the upload. Version **0.4.0**, extension id
 **`stageloom`**. Stageloom is the new name for GH Stack.
 
 ## Listing fields
@@ -58,7 +61,7 @@ cache format is per machine and disposable; instance-heavy definitions still nee
 a live re-measure; Windows-native Rhino is the target but the tested build path
 is wine. The add-on is a working demo, not the full v1 scope.
 
-## Self-containment (G7)
+## Self-containment
 
 The add-on is self-contained: it installs from the extension zip, checks
 `bpy.app.online_access`, and reports a clear `disconnected` state when nothing is
@@ -67,13 +70,11 @@ is open source under GPL-3.0-or-later in the same repository. It communicates
 only over `127.0.0.1` (localhost), never an external server. The repository
 bundles `tools/fake_gh` so a reviewer can complete the loop without Rhino.
 
-Moderator thread: **TBD after the pre-ask** (record the URL here).
-
 ## Release notes (0.4.0)
 
 Stageloom is the new name for GH Stack. This release carries curve and wire-edge
 attributes, moves the frame cache to the extension's user data directory, and
-prepares the add-on for the extensions platform.
+prepares the add-on for a future extensions-platform release.
 
 **Upgrade:** remove the old GH Stack add-on and `GhStack.gha` before installing
 0.4.0. The extension id, Python package and C# assembly changed, and the old
@@ -98,9 +99,9 @@ The extension build validates the source and the artifact, pins the
 into a throwaway Blender config and completes the round trip from the installed
 location.
 
-## Upload checklist
+## Upload checklist (deferred)
 
-- [ ] G7 answer recorded and linked above.
+- [ ] Platform upload resumed by the repository owner.
 - [ ] `dist/stageloom-0.4.0.zip` built and validated.
 - [ ] Icon and three screenshots uploaded (`docs/listing/`).
 - [ ] Name, tagline, description, tags, support URL and release notes entered.

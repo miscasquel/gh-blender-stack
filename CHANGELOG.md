@@ -14,7 +14,7 @@ Notable changes to this project, following
 
 Stageloom is the new name for GH Stack. This release also carries curve and
 wire-edge attributes, moves the frame cache to the extension's user data
-directory, and prepares the add-on for the extensions platform.
+directory, and prepares the add-on for a future extensions-platform release.
 
 **Upgrade:** remove the old GH Stack add-on and `GhStack.gha` before installing
 0.4.0. The extension id, Python package and C# assembly changed, and the old

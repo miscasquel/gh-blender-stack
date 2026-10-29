@@ -1,12 +1,13 @@
-# Handoff: Stageloom 0.4.0 — rebrand and extensions.blender.org upload
+# Handoff: Stageloom 0.4.0 — rebrand and GitHub release
 
 **Date:** 2026-10-22
-**Status:** in progress (2026-10-22). The rebrand and compliance code are
-implemented and the test layers pass; the release and platform upload remain.
+**Status:** in progress (2026-10-22; updated 2026-10-29). The rebrand and
+compliance code are implemented and the test layers pass; the GitHub release
+remains. The platform upload is deferred.
 **Starting tree:** `5837fd9` (`Add-on/Plugin: carry wire-edge and curve
 attributes`), one commit after `v0.3.1`. The 0.4.0 changes are on top.
-**Target:** **Stageloom 0.4.0**, full rebrand, first upload to
-`extensions.blender.org`.
+**Target:** **Stageloom 0.4.0**, full rebrand, GitHub release. The
+extensions.blender.org upload is deferred and is not part of this milestone.
 **Companion plugin:** the Grasshopper `.gha` — same repository, same release.
 
 **Progress:**
@@ -20,10 +21,7 @@ attributes`), one commit after `v0.3.1`. The 0.4.0 changes are on top.
 - [x] Extension user data root; dev fallback; tests.
 - [x] Manifest tags and 5.2 floor.
 - [x] README reviewer path, support line, `docs/submission.md`, icon.
-- [ ] Screenshots.
-- [ ] G7 pre-ask and answer.
-- [ ] 0.4.0 GitHub release and platform upload.
-- [ ] Platform acceptance and clean-config install.
+- [ ] 0.4.0 GitHub release and artifacts.
 - [ ] CI build/validate on tags.
 
 ---
@@ -43,8 +41,8 @@ state. The remaining work is:
 2. **Close the compliance audit** and fix the remaining should-fix items:
    ruff, truthful packaging scripts, a negative online-access test, tags, and
    the data-root default.
-3. **Prepare the listing** and the G7 self-containment pre-ask.
-4. **Ship 0.4.0** on GitHub and upload it to the extensions platform.
+3. **Ship 0.4.0 on GitHub.** The platform upload is deferred; the listing
+   packet stays in the repository for a later upload.
 
 The product name and version were deliberately chosen before the first upload
 because the platform extension id is permanent. `stageloom` is free in the
@@ -66,8 +64,8 @@ final check. If it is taken, fall back to **Stagesmith**.
 - Support URL: **https://github.com/miscasquel/stageloom/issues** (or the
   existing repo if it is not renamed). This is listing/README metadata, not a
   manifest field.
-- G7 pre-ask: **the repository owner posts it** on Blender Chat
-  `#extension-moderators`. Draft in Appendix A.
+- Platform upload: **deferred**. The repository owner handles any platform
+  communication directly; it is not tracked in this handoff.
 
 **Assumptions to confirm before implementation:**
 
@@ -224,7 +222,7 @@ rename mechanics, ruff, the build-script dedup or other internal churn.
 | G3/G4 `files` + `clipboard` | Done |
 | G5 licence | Done (`LICENSE`, README, manifest) |
 | G6 `bl_info` | Done; generated only by `scripts/install-addon` |
-| G7 self-containment | Open — pre-ask + listing |
+| G7 self-containment | Deferred with the platform upload |
 | S1 floor | Settled: keep 5.2.0 |
 | S2 tags | Open — add three official tags |
 | S3 `log_level` | Done |
@@ -328,12 +326,12 @@ bpy.utils.extension_path_user(__package__, path="data", create=True)
 - Add a Support line pointing at GitHub Issues.
 - Create `docs/submission.md` with paste-ready listing copy:
   name, tagline, short/long description, requirements, limitations, support,
-  licence/source, self-containment statement, test-evidence commands, G7 thread
-  link, release notes.
+  licence/source, self-containment statement, test-evidence commands and
+  release notes.
 - No McNeel/Rhino/Grasshopper logos in the icon or screenshots. Descriptive use
   of “Grasshopper” in the tagline/description is fine.
 
-### 4.8 Listing assets
+### 4.8 Listing assets (deferred with the platform upload)
 
 - Icon: 256×256 PNG, original Stageloom loom/stack motif.
 - Three 16:9 static screenshots, under ~2 MB each, no heavy GIFs:
@@ -343,13 +341,10 @@ bpy.utils.extension_path_user(__package__, path="data", create=True)
 - Store in `docs/listing/` for reproducibility. Use `DEMO.md`, not private
   FiraTower data.
 
-### 4.9 G7 pre-ask (owner action)
+### 4.9 Platform communication (owner action)
 
-Post the draft in Appendix A on Blender Chat `#extension-moderators` before the
-upload. Record the thread URL and answer in `docs/extensions-compliance.md` and
-`docs/submission.md`. Do not upload until the answer is clear. If the answer is
-negative, keep GitHub-only distribution and ask for the specific change; do not
-hide the companion.
+The repository owner handles any platform communication directly. It is not
+tracked in this handoff, and no draft is stored in the repository.
 
 ### 4.10 Compliance record
 
@@ -358,47 +353,48 @@ plan:
 
 - G1–G6/S3/S7/S8 closed at 0.3.1/0.4.0, with evidence.
 - S1 settled: 5.2.0, with the layered-action reason.
-- S2/S5/S9 open with the 0.4.0 fixes.
-- G7 and the listing open.
+- S2/S5/S9 closed with the 0.4.0 fixes.
+- The listing is deferred with the platform upload.
 - Correct the stale study: `support` is listing metadata (manifest schema 1.0.0
   has only `website`); G1 line references moved to `server.py` and the engine
   package; S5 is the engine-facade F401 set; S9 is the data-root move.
-- Record the G7 thread and answer when it arrives.
 
 ---
 
 ## 5. Workstream C — release, upload, acceptance
 
-### 5.1 Release 0.4.0
+### 5.1 Release 0.4.0 (GitHub)
 
-1. Finish the rebrand and compliance work; run the full verification matrix.
-2. Bump to 0.4.0 in the six version-sync locations.
-3. Fold `Unreleased` into the 0.4.0 changelog section; add the upgrade note.
-4. Update `docs/plan.md` status, `docs/backlog.md`, and rewrite
-   `docs/extensions-compliance.md` as the current Stageloom record.
-5. Build:
-   - `scripts/build-extension` → `dist/stageloom-0.4.0.zip`
-   - `grasshopper/build/build-gha.sh` → `grasshopper/build/out/Stageloom.gha`
-   - `grasshopper/deploy/deploy.sh`
-   - `scripts/check-deployed`
-6. Validate the zip; inspect its contents; remove the old `GhStack.gha` from
-   the wine Libraries before deploying the new one.
-7. Commit, tag `v0.4.0`, push, and create the GitHub release with the zip and
-   `Stageloom.gha`. Use the 0.4.0 changelog section as the body.
+- [x] Rebrand, compliance work and the full verification matrix.
+- [x] Version 0.4.0 in the six version-sync locations.
+- [x] `Unreleased` folded into the 0.4.0 changelog section; upgrade note added.
+- [x] `docs/plan.md`, `docs/backlog.md` and `docs/extensions-compliance.md`
+      current.
+- [x] `dist/stageloom-0.4.0.zip` built and validated.
+- [x] `grasshopper/build/out/Stageloom.gha` built.
+- [ ] Commit the corrected docs, tag `v0.4.0` and push.
+- [ ] Rebuild both artifacts from the tagged commit and re-run the verification
+      matrix.
+- [ ] Create the GitHub release with `stageloom-0.4.0.zip` and
+      `Stageloom.gha`; use the 0.4.0 changelog section as the body.
+- [ ] Local wine check: deploy `Stageloom.gha`, run `scripts/check-deployed`,
+      and confirm the old `GhStack.gha` is removed.
 
-### 5.2 Platform upload
+### 5.2 Platform upload (deferred)
+
+Not part of 0.4.0. When the owner resumes it:
 
 - First upload is **manual** via the profile “Upload Add-on” form on
   `extensions.blender.org`; the CI/CD upload API is for later versions.
 - Fill: zip, icon, screenshots, name “Stageloom”, tagline, description, tags,
-  support URL, licence/source, release notes, G7 thread link.
+  support URL, licence/source and release notes.
 - The platform final-checks the `stageloom` id; fallback name is Stagesmith.
 - Moderation: answer questions; each revision bumps the version (0.4.1, …).
 - On acceptance, install from the platform in a **clean** Blender config (not
   the local zip), run the `fake_gh` round trip, and verify the wheel, the
   online-access gate and the data root.
 
-### 5.3 After acceptance
+### 5.3 After platform acceptance (deferred)
 
 - Update README with “Install from Blender’s Get Extensions”, the listing URL
   and the `.gha` release link.
@@ -441,7 +437,8 @@ Also check:
 - Old add-on and old `.gha` removed before the new install; no duplicate GUIDs
   or port conflict.
 - Ruff clean; build/install scripts fail on a deliberate error.
-- Platform clean install + `fake_gh` round trip.
+- Platform clean install + `fake_gh` round trip (when the platform upload
+  resumes).
 
 ---
 
@@ -453,9 +450,8 @@ Also check:
   not reserved until the first upload.
 - **Old/new coexistence.** The old add-on can hold the port and the old `.gha`
   has duplicate GUIDs. The release notes must say to remove both.
-- **G7.** The only architectural rejection risk. Do not upload before the
-  moderator answer; keep GitHub-only as the fallback.
-- **Platform id.** `stageloom` looked free; if taken, Stagesmith.
+- **Platform id.** `stageloom` looked free; if taken when the upload resumes,
+  Stagesmith.
 - **Windows-native Rhino** is still untested; the add-on is pure Python and the
   wheel is platform-neutral. State this honestly in the listing.
 - **Historical records** keep the old name. Do not sweep `spikes/`, the review,
@@ -476,41 +472,16 @@ Also check:
 - [x] Data root uses the extension user directory; override works.
 - [x] Manifest tags/floor/permissions validated.
 - [x] README reviewer quick start + support; `docs/submission.md` ready.
-- [ ] Icon ready; three screenshots still pending.
-- [ ] G7 answer recorded and linked.
+- [x] Icon ready; screenshots are platform-only and deferred.
 - [ ] `v0.4.0` GitHub release with `stageloom-0.4.0.zip` and
       `Stageloom.gha`.
-- [ ] Platform upload accepted; clean install from the platform completes the
-      `fake_gh` round trip.
-- [ ] Compliance doc closed; README points at the platform listing; CI builds
-      and validates the zip on tags.
+- [x] Platform upload deferred; not part of this milestone.
+- [x] Compliance record retained for a later platform upload.
+- [ ] CI builds and validates the zip on tags.
 
 ---
 
-## Appendix A — G7 draft
-
-> Hi #extension-moderators — I’m preparing to submit **Stageloom** (formerly
-> GH Stack), a Blender add-on that drives Grasshopper definitions from Blender
-> as stackable modifiers.
->
-> The Blender add-on is self-contained: it installs from the extension zip,
-> checks `bpy.app.online_access`, and shows a clear disconnected state when
-> nothing is connected. The Grasshopper companion (Stage In/Out, Param) is
-> built from the same GPL-3.0-or-later repository and talks to Blender only
-> over a loopback WebSocket (`127.0.0.1`). It is optional for inspecting the
-> add-on; the repo bundles `tools/fake_gh`, a stand-in that completes the loop
-> without Rhino.
->
-> Does this fit the “self-contained / localhost is fine / no external servers”
-> guidance? I want to confirm before uploading, since the companion is external
-> software even though it is open source and in the same repository.
->
-> Repo: https://github.com/miscasquel/stageloom
-> No-Rhino path: README → Requirements / Reviewer quick start
-
----
-
-## Appendix B — key paths
+## Appendix A — key paths
 
 | What | Path |
 |---|---|
@@ -531,5 +502,5 @@ Also check:
 | Headless tests | `blender/tests/headless/` |
 | Installed extension test | `blender/tests/installed/run.py` |
 | Compliance study | `docs/extensions-compliance.md` |
-| Submission packet | `docs/submission.md` (to create) |
-| Listing assets | `docs/listing/` (to create) |
+| Submission packet | `docs/submission.md` |
+| Listing assets | `docs/listing/` |

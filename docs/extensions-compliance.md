@@ -1,8 +1,9 @@
 # Stageloom compliance record
 
-**Status:** 0.4.0 in preparation (2026-10-22), based on `5837fd9` plus the
-full Stageloom rebrand. This is the current record; the 2026-10-14 study below
-is retained as historical evidence.
+**Status:** 0.4.0 in preparation for a GitHub release (2026-10-22), based on
+`5837fd9` plus the full Stageloom rebrand. The extensions.blender.org upload is
+deferred; this record is retained for a later submission. The 2026-10-14 study
+below is retained as historical evidence.
 
 ## Current audit
 
@@ -14,7 +15,6 @@ is retained as historical evidence.
 | G4 `clipboard` | **Closed** | manifest |
 | G5 licence | **Closed** | `LICENSE` grant + copyright, manifest `SPDX:GPL-3.0-or-later`, README |
 | G6 `bl_info` | **Closed** | shipped `__init__.py` has none; `scripts/install-addon` generates it from the manifest |
-| G7 self-containment | **Open** | owner pre-ask on `#extension-moderators`; listing copy in `docs/submission.md` |
 | S1 Blender floor | **Settled** | `blender_version_min = "5.2.0"`; the layered-action API is the reason; 4.2 is a separate compatibility project |
 | S2 tags | **Closed** | `tags = ["Geometry Nodes", "Pipeline", "Modeling"]` |
 | S3 `log_level` | **Closed** | `prefs.log()` gates `[stageloom]` output |
@@ -23,7 +23,8 @@ is retained as historical evidence.
 | S8 wheel integrity | **Closed** | digest pinned and verified in `scripts/build-extension` |
 | S9 data root | **Closed** | `bpy.utils.extension_path_user(...)`; dev fallback; override retained |
 | Packaging truthfulness | **Closed** | build/install/test fail on validator/build/install error; version-specific zip |
-| Listing assets/support | **In progress** | icon in `docs/listing/`; screenshots pending; support URL is listing metadata |
+| Listing assets/support | **Deferred** | icon in `docs/listing/`; screenshots pending for a later upload; support URL is listing metadata |
+| Platform upload | **Deferred** | 0.4.0 ships on GitHub first; the listing packet is retained in `docs/submission.md` |
 
 **Corrections to the historical study.** Manifest schema 1.0.0 has no
 `support` field; the support URL belongs in the listing and README. G1 now
@@ -379,10 +380,9 @@ permissions · `G5` licence + copyright · `G6` drop `bl_info` · `S3` `log_leve
 `S5` ruff · `S8` wheel hash · validate the built zip · README/listing
 "Requirements" section.
 
-**Phase 1 — at upload.**
-`G7` pre-ask `#extension-moderators` and link the answer · `S1` version-floor
-decision · `S2` tags · `S9` data-root default · `support` URL · screenshots ·
-release notes.
+**Phase 1 — at upload (deferred).**
+`S1` version-floor decision · `S2` tags · `S9` data-root default · `support`
+URL · screenshots · release notes.
 
 **Phase 2 — after acceptance.**
 P7-1/P7-2 repo hygiene · `S4` comments · `S6` helper creation · a 4.2 LTS test
@@ -394,7 +394,7 @@ pass if the floor widens · CI upload automation.
 
 - **`numpy`.** Ships with Blender; not a declared dependency.
 - **The `.gha` is not in the zip.** It is an external application, not an add-on
-  dependency. The submission explains it (`G7`).
+  dependency. The submission explains it when the platform upload resumes.
 - **`vendor/` exists in git.** Only the zip contents matter, and the zip
   excludes it.
 - **Writing the frame cache to the data root.** The guidance is only "do not

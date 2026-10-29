@@ -6,10 +6,10 @@ record of one review rather than a plan. If something is not here, it is either
 done or was judged not worth doing — it is not missing.
 
 **Active handoff:** [`docs/handoff-stageloom-0.4.0-2026-10-22.md`](handoff-stageloom-0.4.0-2026-10-22.md)
-— the Stageloom 0.4.0 full rebrand and extensions.blender.org upload. It
-supersedes the extension-upload line below until 0.4.0 is published.
+— the Stageloom 0.4.0 rebrand and GitHub release. The extensions.blender.org
+upload is deferred.
 
-**Next session:** v0.3.1 is published (2026-10-21); v0.4.0 is in preparation under the active handoff (rebrand plus extensions-platform upload). The post-0.3.0 review
+**Next session:** v0.3.1 is published (2026-10-21); v0.4.0 is in preparation under the active handoff (rebrand plus GitHub release; platform upload deferred). The post-0.3.0 review
 batches are in it: the Stage In/GhLink batch (`C-LINK-1`, `C-COMP-2`,
 `C-LINK-3`, `C-LINK-4`, `C-ATT-2`; review §16), the engine batch (`B-ENG-4`,
 `B-ENG-2`, `B-ENG-3`, `B-ENG-1`; review §17), the prefix batch (review §18) and
@@ -20,9 +20,9 @@ cleanup flush and geometry read/apply. Phase 7 live acceptance passed
 2026-10-19; the S6 display half, S7 and acceptance A1–A10 passed 2026-10-20
 (`docs/live-sync-report-2026-10-19.md` §5). The viewport choppiness was the
 unconditional per-tick depsgraph drain; gating it on work fixed it. A10 is done
-and covered headless, and the icon pass is in. The next work is the
-extensions-platform upload (compliance Phase 1, G7 pre-ask included), the
-instance-latency re-measure and the old-component migration.
+and covered headless, and the icon pass is in. The next work is the 0.4.0
+GitHub release, the instance-latency re-measure and the old-component
+migration. The platform upload is deferred.
 
 Each item says what it is, where, and why it matters. Effort is not estimated:
 the last three batches each looked like an afternoon and were not.
