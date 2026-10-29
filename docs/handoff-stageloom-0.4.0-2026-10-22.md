@@ -1,9 +1,9 @@
 # Handoff: Stageloom 0.4.0 — rebrand and GitHub release
 
 **Date:** 2026-10-22
-**Status:** in progress (2026-10-22; updated 2026-10-29). The rebrand and
-compliance code are implemented and the test layers pass; the GitHub release
-remains. The platform upload is deferred.
+**Status:** released (2026-10-29; handoff dated 2026-10-22). The GitHub release
+is published; the platform upload is deferred. The only open item is CI
+build/validate on tags.
 **Starting tree:** `5837fd9` (`Add-on/Plugin: carry wire-edge and curve
 attributes`), one commit after `v0.3.1`. The 0.4.0 changes are on top.
 **Target:** **Stageloom 0.4.0**, full rebrand, GitHub release. The
@@ -21,8 +21,10 @@ extensions.blender.org upload is deferred and is not part of this milestone.
 - [x] Extension user data root; dev fallback; tests.
 - [x] Manifest tags and 5.2 floor.
 - [x] README reviewer path, support line, `docs/submission.md`, icon.
-- [ ] 0.4.0 GitHub release and artifacts.
+- [x] 0.4.0 GitHub release and artifacts.
 - [ ] CI build/validate on tags.
+
+**Release:** https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.4.0
 
 ---
 
@@ -372,13 +374,22 @@ plan:
       current.
 - [x] `dist/stageloom-0.4.0.zip` built and validated.
 - [x] `grasshopper/build/out/Stageloom.gha` built.
-- [ ] Commit the corrected docs, tag `v0.4.0` and push.
-- [ ] Rebuild both artifacts from the tagged commit and re-run the verification
+- [x] Commit the corrected docs, tag `v0.4.0` and push.
+- [x] Rebuild both artifacts from the tagged commit and re-run the verification
       matrix.
-- [ ] Create the GitHub release with `stageloom-0.4.0.zip` and
+- [x] Create the GitHub release with `stageloom-0.4.0.zip` and
       `Stageloom.gha`; use the 0.4.0 changelog section as the body.
-- [ ] Local wine check: deploy `Stageloom.gha`, run `scripts/check-deployed`,
+- [x] Local wine check: deploy `Stageloom.gha`, run `scripts/check-deployed`,
       and confirm the old `GhStack.gha` is removed.
+
+Release: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.4.0
+
+Artifacts:
+
+- `stageloom-0.4.0.zip` — sha256
+  `dfd382c45000a0b81a8853344e824c4cae9f98e24c3011b46a9749914a27fcc3`
+- `Stageloom.gha` — sha256
+  `9836ed81f28ec35e377f6ca0e4481b3582b0473f13a27b72c0b9703d81b101ce`
 
 ### 5.2 Platform upload (deferred)
 
@@ -473,7 +484,7 @@ Also check:
 - [x] Manifest tags/floor/permissions validated.
 - [x] README reviewer quick start + support; `docs/submission.md` ready.
 - [x] Icon ready; screenshots are platform-only and deferred.
-- [ ] `v0.4.0` GitHub release with `stageloom-0.4.0.zip` and
+- [x] `v0.4.0` GitHub release with `stageloom-0.4.0.zip` and
       `Stageloom.gha`.
 - [x] Platform upload deferred; not part of this milestone.
 - [x] Compliance record retained for a later platform upload.

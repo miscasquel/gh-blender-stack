@@ -10,7 +10,7 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0] — 2026-10-22
+## [0.4.0] — 2026-10-29
 
 Stageloom is the new name for GH Stack. This release also carries curve and
 wire-edge attributes, moves the frame cache to the extension's user data

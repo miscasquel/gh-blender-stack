@@ -129,6 +129,10 @@ by default; the **Data root** preference in the add-on settings overrides it.
 
 ## Install
 
+Download the add-on zip and the Grasshopper `.gha` from the
+[v0.4.0 release](https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.4.0).
+The commands below are the build path.
+
 Release path: the add-on ships as a Blender extension with the official
 pure-Python `websockets` wheel.
 
