@@ -84,6 +84,8 @@ migrate on load. The old frame cache is not read.
 
 ## Test evidence
 
+At the 0.4.0 release (2026-10-29):
+
 ```text
 scripts/test-core        57 tests pass
 scripts/test-blender     204 tests pass (rebrand migration + offline gate)
@@ -102,7 +104,7 @@ location.
 ## Upload checklist (deferred)
 
 - [ ] Platform upload resumed by the repository owner.
-- [ ] `dist/stageloom-0.4.0.zip` built and validated.
+- [x] `dist/stageloom-0.4.0.zip` built and validated.
 - [ ] Icon and three screenshots uploaded (`docs/listing/`).
 - [ ] Name, tagline, description, tags, support URL and release notes entered.
 - [ ] First upload submitted; moderation questions answered.

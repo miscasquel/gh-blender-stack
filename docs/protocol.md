@@ -2,7 +2,9 @@
 
 Stageloom is the new name for GH Stack. The wire protocol is unchanged (v2).
 
-**Status:** draft (M0). Frozen at M2, after spikes S1–S4 have run. Until then, changes are made here and recorded in the changelog at the end.
+**Status:** protocol v2, frozen at M2 (2026-10-11). Additive changes stay
+within v2 and are recorded in the changelog (§11); a breaking change needs a
+version bump.
 **Scope:** the messages between the Blender add-on (`stageloom`, WebSocket server) and the Grasshopper plugin (`Stageloom.gha`, WebSocket client).
 
 ---

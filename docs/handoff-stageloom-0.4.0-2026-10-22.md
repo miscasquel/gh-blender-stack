@@ -412,9 +412,10 @@ Not part of 0.4.0. When the owner resumes it:
 - Close `docs/extensions-compliance.md` with the listing URL and outcome.
 - Add a tag-triggered CI job that builds/validates the zip; optionally upload
   via the platform API.
-- Optional repo hygiene: remove the tracked Linux `.so` under the new
-  package’s `vendor/websockets/` from git (it is excluded from the zip but is a
-  reviewer question); confirm no `.exe`/`.so`/`.pyc` are tracked.
+- Optional repo hygiene: the tracked Linux `.so` under the new package’s
+  `vendor/websockets/` was removed after the release (it was excluded from the
+  zip but was a reviewer question); `*.so` is ignored and no `.exe`/`.so`/`.pyc`
+  are tracked.
 - The 4.2 LTS compatibility project remains separate.
 
 ---
@@ -486,6 +487,7 @@ Also check:
 - [x] Icon ready; screenshots are platform-only and deferred.
 - [x] `v0.4.0` GitHub release with `stageloom-0.4.0.zip` and
       `Stageloom.gha`.
+- [x] No compiled binaries are tracked (`vendor/websockets` is source-only).
 - [x] Platform upload deferred; not part of this milestone.
 - [x] Compliance record retained for a later platform upload.
 - [ ] CI builds and validates the zip on tags.

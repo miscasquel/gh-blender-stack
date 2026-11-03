@@ -77,7 +77,7 @@ Blender                                          Rhino / Grasshopper (wine)
 ## What is deliberately not here yet
 
 - Breps and surfaces arrive as meshes (lossy, warned); Blender surface objects
-  are meshed on the way in. There is no B-rep on the wire. There are some issues with the meshing an it's obviously a lossy conversion. That won't be solved without a proper surface kernel inside blender (surface psycho may bridge this gap)
+  are meshed on the way in. There is no B-rep on the wire. There are some issues with the meshing, and it is obviously a lossy conversion. That won't be solved without a proper surface kernel inside blender (surface psycho may bridge this gap)
 - The frame cache's disk format is per machine and has no persistent promise.
 - There is no separate Preview operator: a stage's output is its modifier, so
   the viewport and render toggles are the preview switch. Freeze, Pull, Key all

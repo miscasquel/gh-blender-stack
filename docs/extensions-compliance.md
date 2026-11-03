@@ -1,6 +1,6 @@
 # Stageloom compliance record
 
-**Status:** 0.4.0 in preparation for a GitHub release (2026-10-22), based on
+**Status:** 0.4.0 published on GitHub (2026-10-29; tag `v0.4.0`), built on
 `5837fd9` plus the full Stageloom rebrand. The extensions.blender.org upload is
 deferred; this record is retained for a later submission. The 2026-10-14 study
 below is retained as historical evidence.
@@ -32,7 +32,7 @@ lives in `blender/stageloom/blender/server.py` and the engine package. S5 was th
 engine facade's F401 set (fixed with an explicit `__all__`). S9 is the
 extension-user data directory, not the old Linux path.
 
-**Current verification (2026-10-22).**
+**Pre-release verification (2026-10-22).**
 
 ```text
 scripts/test-core        57 tests pass

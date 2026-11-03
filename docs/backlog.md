@@ -5,24 +5,25 @@ measured evidence behind the bigger items lives in `polish-plan.md`, which is a
 record of one review rather than a plan. If something is not here, it is either
 done or was judged not worth doing — it is not missing.
 
-**Active handoff:** [`docs/handoff-stageloom-0.4.0-2026-10-22.md`](handoff-stageloom-0.4.0-2026-10-22.md)
-— the Stageloom 0.4.0 rebrand and GitHub release. The release is published; the
-extensions.blender.org upload is deferred.
+**Latest handoff:** [`docs/handoff-stageloom-0.4.0-2026-10-22.md`](handoff-stageloom-0.4.0-2026-10-22.md)
+— the Stageloom 0.4.0 rebrand and GitHub release are complete (2026-10-29);
+the only item still open in that handoff is the tag-triggered CI
+build/validate, and the extensions.blender.org upload is deferred.
 
-**Next session:** v0.3.1 is published (2026-10-21); v0.4.0 is published (2026-10-29) under the active handoff (rebrand plus GitHub release; platform upload deferred). The post-0.3.0 review
-batches are in it: the Stage In/GhLink batch (`C-LINK-1`, `C-COMP-2`,
-`C-LINK-3`, `C-LINK-4`, `C-ATT-2`; review §16), the engine batch (`B-ENG-4`,
-`B-ENG-2`, `B-ENG-3`, `B-ENG-1`; review §17), the prefix batch (review §18) and
-the Phase 0 registration diagnostics. On FiraTower a dirty Cube pass is now
-~46 ms (was ~115 ms) because the three stage prefixes share one depsgraph
-update; idle passes are ~1.5 ms. The residual cost is the single update, the
-cleanup flush and geometry read/apply. Phase 7 live acceptance passed
-2026-10-19; the S6 display half, S7 and acceptance A1–A10 passed 2026-10-20
+**Current state:** v0.4.0 is published (2026-10-29). v0.3.1 (2026-10-21)
+carried the post-0.3.0 review batches: the Stage In/GhLink batch
+(`C-LINK-1`, `C-COMP-2`, `C-LINK-3`, `C-LINK-4`, `C-ATT-2`; review §16), the
+engine batch (`B-ENG-4`, `B-ENG-2`, `B-ENG-3`, `B-ENG-1`; review §17), the
+prefix batch (review §18) and the Phase 0 registration diagnostics. On
+FiraTower a dirty Cube pass is now ~46 ms (was ~115 ms) because the three stage
+prefixes share one depsgraph update; idle passes are ~1.5 ms. The residual
+cost is the single update, the cleanup flush and geometry read/apply. Phase 7
+live acceptance passed 2026-10-19; the S6 display half, S7 and acceptance A1–A10
+passed 2026-10-20
 (`docs/live-sync-report-2026-10-19.md` §5). The viewport choppiness was the
 unconditional per-tick depsgraph drain; gating it on work fixed it. A10 is done
 and covered headless, and the icon pass is in. The next work is the
-instance-latency re-measure and the old-component migration. The platform
-upload is deferred.
+instance-latency re-measure and the old-component migration.
 
 Each item says what it is, where, and why it matters. Effort is not estimated:
 the last three batches each looked like an afternoon and were not.
@@ -127,8 +128,7 @@ Settled by evidence; the code that rests on them must not drift from them.
 - **The vendored wheel.** `blender/stageloom/vendor/websockets` is now
   development- and test-only (the shipped zip carries the official wheel from
   PyPI, digest-pinned in `scripts/build-extension`). The Linux-only speedups
-  build stays out of the repo on purpose; both facts are easy to re-derive from
-  the scripts.
+  binary is not tracked; both facts are easy to re-derive from the scripts.
 
 ---
 
