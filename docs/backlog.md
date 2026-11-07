@@ -15,7 +15,8 @@ build/validate, and the extensions.blender.org upload is deferred.
 fixes were verified; the follow-up audit findings were fixed in the later
 hardening commits. The remaining follow-up is live Rhino/Blender verification.
 
-**Current state:** v0.4.0 is published (2026-10-29). v0.3.1 (2026-10-21)
+**Current state:** v0.4.1 is published (2026-11-07), a bug-fix release for
+multi-stage stacks. v0.3.1 (2026-10-21)
 carried the post-0.3.0 review batches: the Stage In/GhLink batch
 (`C-LINK-1`, `C-COMP-2`, `C-LINK-3`, `C-LINK-4`, `C-ATT-2`; review §16), the
 engine batch (`B-ENG-4`, `B-ENG-2`, `B-ENG-3`, `B-ENG-1`; review §17), the

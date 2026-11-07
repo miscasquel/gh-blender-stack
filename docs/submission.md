@@ -1,9 +1,9 @@
 # Stageloom — extensions.blender.org submission packet
 
-**Status:** deferred. Stageloom 0.4.0 ships on GitHub first; this packet is
+**Status:** deferred. Stageloom 0.4.1 ships on GitHub first; this packet is
 retained for a later platform upload.
 
-Paste-ready copy for the upload. Version **0.4.0**, extension id
+Paste-ready copy for the upload. Version **0.4.1**, extension id
 **`stageloom`**. Stageloom is the new name for GH Stack.
 
 ## Listing fields
@@ -70,29 +70,28 @@ is open source under GPL-3.0-or-later in the same repository. It communicates
 only over `127.0.0.1` (localhost), never an external server. The repository
 bundles `tools/fake_gh` so a reviewer can complete the loop without Rhino.
 
-## Release notes (0.4.0)
+## Release notes (0.4.1)
 
-Stageloom is the new name for GH Stack. This release carries curve and wire-edge
-attributes, moves the frame cache to the extension's user data directory, and
-prepares the add-on for a future extensions-platform release.
+Stageloom 0.4.1 is a bug-fix release for multi-stage stacks. Stage Out now
+handles n-gons and holey n-gons, responses are gated to real requests, stages
+follow the modifier stack, surface objects are refused cleanly, and file-load
+state is reset before verification. Protocol v2 is unchanged.
 
-**Upgrade:** remove the old GH Stack add-on and `GhStack.gha` before installing
-0.4.0. The extension id, Python package and C# assembly changed, and the old
-`.gha` shares component GUIDs. Protocol v2 is unchanged; existing `.blend`
-stages, parameters and animation are preserved; helper, scene and modifier names
-migrate on load. The old frame cache is not read.
+**Upgrade:** rebuild and redeploy `Stageloom.gha`, then restart Rhino. The
+Blender add-on upgrades in place; existing `.blend` stages, parameters and
+animation are preserved.
 
 ## Test evidence
 
-At the 0.4.0 release (2026-10-29):
+At the 0.4.1 release (2026-11-07):
 
 ```text
 scripts/test-core        57 tests pass
-scripts/test-blender     204 tests pass (rebrand migration + offline gate)
-scripts/test-gha         12 fixtures + attribute store + link round trip + build guard
+scripts/test-blender     226 tests pass (including the offline gate)
+scripts/test-gha         12 fixtures + attribute store + link + component status + stage guard
 scripts/test-extension   installed extension round trip: pass
 uvx ruff check --output-format=concise --ignore=E402,E741,E731 .
-blender --command extension validate dist/stageloom-0.4.0.zip
+blender --command extension validate dist/stageloom-0.4.1.zip
 ```
 
 The extension build validates the source and the artifact, pins the
@@ -104,7 +103,7 @@ location.
 ## Upload checklist (deferred)
 
 - [ ] Platform upload resumed by the repository owner.
-- [x] `dist/stageloom-0.4.0.zip` built and validated.
+- [x] `dist/stageloom-0.4.1.zip` built and validated.
 - [ ] Icon and three screenshots uploaded (`docs/listing/`).
 - [ ] Name, tagline, description, tags, support URL and release notes entered.
 - [ ] First upload submitted; moderation questions answered.

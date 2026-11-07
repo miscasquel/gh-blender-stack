@@ -10,7 +10,16 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.1] — 2026-11-07
+
+A bug-fix release for multi-stage stacks. Stage Out now handles n-gons and
+holey n-gons, responses are gated to real requests, stages follow the modifier
+stack, surface objects are refused cleanly, and file-load state is reset before
+verification. Protocol v2 is unchanged.
+
+**Upgrade:** rebuild and redeploy `Stageloom.gha`, then restart Rhino. The
+Blender add-on upgrades in place; existing `.blend` stages, parameters and
+animation are preserved.
 
 ### Fixed
 
@@ -29,13 +38,13 @@ Notable changes to this project, following
 - **Multi-stage responses are gated.** A document-wide solve can run a stage
   whose Stage Out has no request; the empty `rid=""` response is no longer sent,
   and Blender ignores missing/empty request ids and missing output hashes. Stage
-  In and Stage Out now report their own status, errors evict cached successes,
-  and frozen or disabled stages keep their last output.
+  In and Stage Out now report their own status, an active error evicts its
+  cached answer, and frozen or disabled stages keep their last output.
 - **Stage order follows the modifier stack.** Dragging a stage modifier now
   changes the evaluation and request order; the stale stage-record order is no
-  longer authoritative. A prefix batch is discarded after an apply, so a
-  downstream stage sees the upstream stage's current output instead of the
-  pre-apply helper.
+  longer authoritative. The affected downstream prefix entries are discarded
+  after an apply, so a downstream stage sees the upstream stage's current
+  output instead of the pre-apply helper.
 - **Surface objects are refused cleanly.** Blender 5.2 cannot give a surface
   object the Geometry Nodes modifier a stage needs, so Add Stage explains that
   and asks for a mesh instead of creating a stage record and crashing. The
@@ -799,3 +808,4 @@ First public release: a working demo of the Blender ↔ Grasshopper loop.
 [0.3.0]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.3.0
 [0.3.1]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.3.1
 [0.4.0]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.4.0
+[0.4.1]: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.4.1

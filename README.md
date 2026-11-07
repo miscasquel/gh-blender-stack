@@ -7,7 +7,7 @@ native Geometry Nodes modifiers, in one visible object per stack. Geometry and
 parameters can flow through the stack, so parameters can be keyframed, driven,
 and played back.
 
-That is the v1 goal. **v0.4.0 is a working demo**: geometry (meshes, curves,
+That is the v1 goal. **v0.4.1 is a working demo**: geometry (meshes, curves,
 points, SubD cages) driven by a real Grasshopper definition, with named
 attributes and Grasshopper blocks (instances) travelling both ways, parameters
 you can edit and keyframe in Blender, packaged as a Blender extension.
@@ -135,7 +135,7 @@ by default; the **Data root** preference in the add-on settings overrides it.
 ## Install
 
 Download the add-on zip and the Grasshopper `.gha` from the
-[v0.4.0 release](https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.4.0).
+[v0.4.1 release](https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.4.1).
 The commands below are the build path.
 
 Release path: the add-on ships as a Blender extension with the official

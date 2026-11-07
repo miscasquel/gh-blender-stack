@@ -1,9 +1,9 @@
 # Stageloom compliance record
 
-**Status:** 0.4.0 published on GitHub (2026-10-29; tag `v0.4.0`), built on
-`5837fd9` plus the full Stageloom rebrand. The extensions.blender.org upload is
-deferred; this record is retained for a later submission. The 2026-10-14 study
-below is retained as historical evidence.
+**Status:** 0.4.1 published on GitHub (2026-11-07; tag `v0.4.1`), superseding
+0.4.0. The extensions.blender.org upload is deferred; this record is retained
+for a later submission. The 2026-10-14 study below is retained as historical
+evidence.
 
 ## Current audit
 
@@ -24,7 +24,7 @@ below is retained as historical evidence.
 | S9 data root | **Closed** | `bpy.utils.extension_path_user(...)`; dev fallback; override retained |
 | Packaging truthfulness | **Closed** | build/install/test fail on validator/build/install error; version-specific zip |
 | Listing assets/support | **Deferred** | icon in `docs/listing/`; screenshots pending for a later upload; support URL is listing metadata |
-| Platform upload | **Deferred** | 0.4.0 ships on GitHub first; the listing packet is retained in `docs/submission.md` |
+| Platform upload | **Deferred** | 0.4.1 ships on GitHub first; the listing packet is retained in `docs/submission.md` |
 
 **Corrections to the historical study.** Manifest schema 1.0.0 has no
 `support` field; the support URL belongs in the listing and README. G1 now
@@ -32,20 +32,22 @@ lives in `blender/stageloom/blender/server.py` and the engine package. S5 was th
 engine facade's F401 set (fixed with an explicit `__all__`). S9 is the
 extension-user data directory, not the old Linux path.
 
-**Pre-release verification (2026-10-22).**
+**0.4.1 release verification (2026-11-07).**
 
 ```text
 scripts/test-core        57 tests pass
-scripts/test-blender     204 tests pass (including the rebrand migration and the offline gate)
-scripts/test-gha         12 fixtures + attribute store + link round trip + build guard pass
+scripts/test-blender     226 tests pass (including the offline gate)
+scripts/test-gha         12 fixtures + attribute store + link + component status + stage guard pass
 scripts/test-extension   installed extension round trip: pass
 uvx ruff check ...       All checks passed
 blender --command extension validate blender/stageloom
-blender --command extension validate dist/stageloom-0.4.0.zip
+blender --command extension validate dist/stageloom-0.4.1.zip
 ```
 
-The plan and task breakdown are in
-[`handoff-stageloom-0.4.0-2026-10-22.md`](handoff-stageloom-0.4.0-2026-10-22.md).
+The 0.4.0 plan and task breakdown are in
+[`handoff-stageloom-0.4.0-2026-10-22.md`](handoff-stageloom-0.4.0-2026-10-22.md);
+the 0.4.1 fixes and audit are in
+[`handoff-audit-p1-p2-2026-11-07.md`](handoff-audit-p1-p2-2026-11-07.md).
 The listing packet is in [`submission.md`](submission.md).
 
 ## Historical study (2026-10-14, GH Stack)
