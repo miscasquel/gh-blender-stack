@@ -11,7 +11,12 @@ from bpy.props import IntProperty, StringProperty
 
 from . import bridge, engine, helpers, nodes, props, stack as stack_mod
 
-STACK_TYPES = {"MESH", "CURVE", "POINTCLOUD", "SURFACE"}
+STACK_TYPES = {"MESH", "CURVE", "POINTCLOUD"}
+SURFACE_MESSAGE = (
+    "surface objects cannot hold a Stageloom stage in Blender 5.2 "
+    "(a surface object cannot take a Geometry Nodes modifier); "
+    "convert it to a mesh first (Object > Convert > Mesh)"
+)
 
 
 def _stage(context, index):
@@ -33,8 +38,15 @@ class STAGELOOM_OT_add_stage(bpy.types.Operator):
 
     def execute(self, context):
         obj = context.object
+        if obj is not None and obj.type == "SURFACE":
+            # Blender 5.2 surfaces cannot take a Geometry Nodes modifier
+            # (`modifiers.new(type="NODES")` returns None), so the stage has no
+            # anchor and the old path crashed after adding a stage record.
+            # Refuse before creating anything and point at the supported route.
+            self.report({"ERROR"}, SURFACE_MESSAGE)
+            return {"CANCELLED"}
         if obj is None or obj.type not in STACK_TYPES:
-            self.report({"ERROR"}, "select a mesh, curve, point cloud or surface first")
+            self.report({"ERROR"}, "select a mesh, curve or point cloud first")
             return {"CANCELLED"}
         record = stack_mod.ensure_stack(obj)
         if record is None:

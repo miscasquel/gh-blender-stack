@@ -18,6 +18,8 @@ using System.Collections.Generic;
 using System.Text;
 using System.Threading;
 using Grasshopper.Kernel;
+using Grasshopper.Kernel.Types;
+using Rhino.Geometry;
 using Stageloom.Core;
 
 namespace Stageloom.Tests.Console
@@ -304,6 +306,7 @@ namespace Stageloom.Tests.Console
             RunSenderLifecycle();
             RunSolveRetry();
             RunSlotStatus();
+            RunDefinitionContentGuard();
 
             System.Console.WriteLine();
             if (_failures == 0)
@@ -405,6 +408,24 @@ namespace Stageloom.Tests.Console
             Check("SetSlotStatus alias leaves the in half alone",
                 split.InStatus == "waiting" && split.InMessage == "",
                 "in=" + split.InStatus + " message=" + split.InMessage);
+        }
+
+        /// <summary>A definition whose objects all vanished must not become an
+        /// empty block: Stage Out drops the row and warns. The input lists are
+        /// all that decides this, so no Rhino/GH native object is needed.</summary>
+        private static void RunDefinitionContentGuard()
+        {
+            System.Console.WriteLine("instance definition content guard");
+            var noRows = new List<GH_InstanceReference>();
+            Check("all-null definition has no content",
+                !Instances.HasDefinitionContent(
+                    new List<Mesh>(), new List<Curve>(), new List<Point3d>(),
+                    new List<SubD>(), new List<Brep>(), noRows), "");
+            Check("a nested row counts as content",
+                Instances.HasDefinitionContent(
+                    new List<Mesh>(), new List<Curve>(), new List<Point3d>(),
+                    new List<SubD>(), new List<Brep>(),
+                    new List<GH_InstanceReference> { null }), "");
         }
 
         // ------------------------------------------------------------ helpers

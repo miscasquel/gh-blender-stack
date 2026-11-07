@@ -172,6 +172,7 @@ def _on_load(scene=None):
     engine.helpers.adopt_existing()
     engine._pending.clear()
     engine._sent.clear()
+    engine._pull_permits.clear()
     engine._prefix_memo.clear()
     engine._state_since.clear()
     engine._last_no_send.clear()
@@ -195,10 +196,13 @@ def _on_load(scene=None):
         for stage in record.stages:
             if stage.state == engine.stack_mod.STATE_WAITING:
                 engine._set(stage, "state", engine.stack_mod.STATE_IDLE)
-            if stage.frozen:
-                # Freeze owns the last output. A saved request id must not let
-                # a late response apply to a stage that is parked.
-                stage.rid = ""
+            # A saved request id names a request from the session that just
+            # ended. A response queued at load must not apply it before
+            # `_verify` has asked Grasshopper again, so clear it on every stage;
+            # for a frozen stage it also keeps a late answer from unparking the
+            # output. Pull permits belong to that old session too: an armed Pull
+            # must not fire into a stage the file saved frozen.
+            engine._set(stage, "rid", "")
             if stage.geom_hash:
                 # We cannot know that GH kept the geometry: ask again in full.
                 stage.geom_hash = ""

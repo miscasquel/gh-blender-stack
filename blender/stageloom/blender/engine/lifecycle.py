@@ -228,17 +228,6 @@ def _process_object(obj):
     busy = engine._drop_removed_stages(obj, record)
     if engine._split_duplicate_stages(obj, record):
         busy = True
-    if obj.type == "SURFACE" and len(record.stages) > 1:
-        # The surface prefix has no modifier-stack evaluation path: every stage
-        # used to receive the base surface, so the second stage silently ran on
-        # the first stage's input. Refuse the configuration instead of sending
-        # wrong geometry.
-        message = "Multiple Stageloom stages on a surface object are not supported"
-        for stage in record.stages:
-            engine._set(stage, "state", engine.stack_mod.STATE_ERROR)
-            engine._set(stage, "error", message)
-            engine._no_send(record, stage, "multi-stage surface")
-        return busy
     engine._prefix_batch.clear()
     engine._prefix_batch_built = False
     engine._prefix_batching = True

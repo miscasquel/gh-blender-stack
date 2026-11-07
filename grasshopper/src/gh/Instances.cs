@@ -386,6 +386,18 @@ namespace Stageloom
                 warnings.Add(warning.Message);
         }
 
+        /// <summary>Whether a definition carries anything the wire can name.
+        /// A definition whose objects were all null (or none had a wire form)
+        /// would otherwise become an empty block that Blender draws as nothing;
+        /// the writer skips its instance row instead.</summary>
+        internal static bool HasDefinitionContent(
+            List<Mesh> meshes, List<Curve> curves, List<Point3d> points,
+            List<SubD> subds, List<Brep> breps, List<GH_InstanceReference> nested)
+        {
+            return meshes.Count > 0 || curves.Count > 0 || points.Count > 0
+                || subds.Count > 0 || breps.Count > 0 || nested.Count > 0;
+        }
+
         private class DefinitionWriter
         {
             private readonly double _scale;
@@ -449,12 +461,6 @@ namespace Stageloom
                 int known;
                 if (key != null && _byKey.TryGetValue(key, out known)) return known;
 
-                int index = _definitions.Count;
-                var entry = new Dictionary<string, object>();
-                entry["name"] = DisplayName(paired);
-                _definitions.Add(entry);
-                if (key != null) _byKey[key] = index;
-
                 var meshes = new List<Mesh>();
                 var curves = new List<Curve>();
                 var points = new List<Point3d>();
@@ -468,6 +474,24 @@ namespace Stageloom
                     foreach (ModelObject obj in paired.Objects)
                         CollectObject(obj, meshes, curves, points, subds, breps, nested, sources);
                 }
+
+                string name = DisplayName(paired);
+                if (!HasDefinitionContent(meshes, curves, points, subds, breps, nested))
+                {
+                    // All the definition's objects were null (or none survived):
+                    // writing the table entry would give the row an empty block,
+                    // which Blender would draw as nothing. Drop the row instead.
+                    _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
+                        "Block definition \"" + (string.IsNullOrEmpty(name) ? "(unnamed)" : name)
+                        + "\" has no objects and was skipped"));
+                    return -1;
+                }
+
+                int index = _definitions.Count;
+                var entry = new Dictionary<string, object>();
+                entry["name"] = name;
+                _definitions.Add(entry);
+                if (key != null) _byKey[key] = index;
 
                 string prefix = "idef." + index + ".";
                 WriteGeometry(prefix, meshes, curves, points, subds, breps, nested, sources, index);
@@ -498,12 +522,6 @@ namespace Stageloom
                 }
                 try
                 {
-                    int index = _definitions.Count;
-                    var entry = new Dictionary<string, object>();
-                    entry["name"] = docDef.Name ?? "";
-                    _definitions.Add(entry);
-                    _byKey[key] = index;
-
                     var meshes = new List<Mesh>();
                     var curves = new List<Curve>();
                     var points = new List<Point3d>();
@@ -513,9 +531,28 @@ namespace Stageloom
                     var sources = new List<GeometryBase>();
                     foreach (RhinoObject obj in docDef.GetObjects())
                     {
-                        if (obj == null) continue;
+                        if (obj == null)
+                        {
+                            _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
+                                "A null object in block definition (" + key + ") was skipped"));
+                            continue;
+                        }
                         CollectGeometry(obj.Geometry, meshes, curves, points, subds, breps, nested, sources);
                     }
+
+                    if (!HasDefinitionContent(meshes, curves, points, subds, breps, nested))
+                    {
+                        _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
+                            "Block definition \"" + (docDef.Name ?? "(unnamed)")
+                            + "\" has no objects and was skipped"));
+                        return -1;
+                    }
+
+                    int index = _definitions.Count;
+                    var entry = new Dictionary<string, object>();
+                    entry["name"] = docDef.Name ?? "";
+                    _definitions.Add(entry);
+                    _byKey[key] = index;
 
                     string prefix = "idef." + index + ".";
                     WriteGeometry(prefix, meshes, curves, points, subds, breps, nested, sources, index);
@@ -573,7 +610,12 @@ namespace Stageloom
                                        List<GH_InstanceReference> nested,
                                        List<GeometryBase> sources)
             {
-                if (obj == null) return;
+                if (obj == null)
+                {
+                    _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
+                        "A null object in a block definition was skipped"));
+                    return;
+                }
                 // A block instance ModelObject (graph-side or document-backed) is
                 // the one definitive way to reach the child definition and its
                 // transform: CastTo<InstanceReferenceGeometry> refuses it, the

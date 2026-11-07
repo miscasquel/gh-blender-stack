@@ -29,11 +29,18 @@ Notable changes to this project, following
   changes the evaluation and request order; the stale stage-record order is no
   longer authoritative. A prefix batch is discarded after an apply, so a
   downstream stage sees the upstream stage's current output instead of the
-  pre-apply helper. A multi-stage surface stack is refused with a clear error
-  rather than silently sending the base surface to every stage.
+  pre-apply helper.
+- **Surface objects are refused cleanly.** Blender 5.2 cannot give a surface
+  object the Geometry Nodes modifier a stage needs, so Add Stage explains that
+  and asks for a mesh instead of creating a stage record and crashing. The
+  unreachable multi-stage surface error is gone.
+- **A file load cannot replay the old session's requests.** Every saved request
+  id and Pull permit is cleared on load, so a response queued before the
+  verification request cannot apply, and a stage saved frozen stays parked.
 - **Null SubD and block entries are skipped.** A null SubD no longer reaches
   the control-net encoder, and null definition objects are ignored instead of
-  raising during Stage Out.
+  raising during Stage Out. A block definition with no usable objects is now
+  skipped with a warning instead of producing an empty block and instance row.
 
 ## [0.4.0] — 2026-10-29
 

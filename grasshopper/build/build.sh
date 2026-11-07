@@ -70,8 +70,11 @@ if [ -f "$GH_DLL" ] && [ -f "$GHIO_DLL" ] && [ -f "$RC_DLL" ]; then
     /r:System.Drawing.dll \
     "$(win_path "$REPO/grasshopper/src/core/Json.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
+    "$(win_path "$REPO/grasshopper/src/core/Conversion.cs")" \
+    "$(win_path "$REPO/grasshopper/src/core/Attributes.cs")" \
     "$(win_path "$REPO/grasshopper/src/gh/GhLink.cs")" \
     "$(win_path "$REPO/grasshopper/src/gh/MiniWsClient.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/Instances.cs")" \
     "$(win_path "$REPO/grasshopper/tests/console/FakeServer.cs")" \
     "$(win_path "$REPO/grasshopper/tests/console/LinkTests.cs")"
   [ -f "$LINK_OUT" ] || { echo "build failed: $LINK_OUT not produced" >&2; exit 1; }

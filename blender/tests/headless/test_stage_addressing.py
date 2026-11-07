@@ -318,6 +318,49 @@ class CachedPrefixBatchTests(unittest.TestCase):
                 self.obj.modifiers.move(stacked.index(modifier), position)
 
 
+class SurfaceStageRejectionTests(unittest.TestCase):
+    """A surface object cannot take the Geometry Nodes modifier a stage needs.
+
+    Blender 5.2 returns None from ``modifiers.new(type="NODES")`` there, so Add
+    Stage used to create a stage record and then crash. The supported object
+    types no longer include SURFACE; the operator refuses before touching the
+    record.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        enable()
+        import stageloom.blender.ops as ops
+
+        cls.ops = ops
+
+    @classmethod
+    def tearDownClass(cls):
+        bpy.ops.preferences.addon_disable(module="stageloom")
+
+    def test_01_surface_is_not_a_stack_type_and_add_stage_refuses_cleanly(self):
+        self.assertNotIn("SURFACE", self.ops.STACK_TYPES)
+        bpy.ops.surface.primitive_nurbs_surface_sphere_add(radius=1.0)
+        obj = bpy.context.object
+        self.assertEqual(obj.type, "SURFACE")
+
+        with self.assertRaises(RuntimeError) as caught:
+            bpy.ops.stageloom.add_stage(label="Surface")
+
+        message = str(caught.exception).lower()
+        self.assertIn("surface objects cannot hold", message)
+        self.assertEqual(
+            len(obj.gh_stack.stages),
+            0,
+            "the refused add left a stage record behind",
+        )
+        self.assertEqual(
+            [modifier for modifier in obj.modifiers if modifier.type == "NODES"],
+            [],
+            "the refused add created a Geometry Nodes modifier",
+        )
+
+
 class _FakeGroup(object):
     def __init__(self, name):
         self.name = name

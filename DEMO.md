@@ -16,8 +16,8 @@ Blender                                     Rhino / Grasshopper (wine)
 ## What is deliberately not here yet
 
 - A Rhino Brep or surface is meshed on the way out (warned); Blender has no
-  B-rep. A Blender surface object is meshed on the way in, the same loss in the
-  other direction.
+  B-rep. A Blender surface object cannot hold a stage in Blender 5.2 (it cannot
+  take a Geometry Nodes modifier); convert it to a mesh first.
 - There is no separate Preview operator: a stage's output is its modifier, so
   the viewport and render toggles are the preview switch. Freeze, Pull, Key all
   and Purge orphans live in the Stageloom panel and the Diagnostics section.

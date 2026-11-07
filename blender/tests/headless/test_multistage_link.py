@@ -14,7 +14,9 @@ These checks pin the response gate:
 5. a disabled stage ignores the answer;
 6. a stale error leaves the cached frame and a newer pending request intact;
 7. an error does not unfreeze a frozen stage;
-8. disabling a stage forgets its pending request.
+8. disabling a stage forgets its pending request;
+9. a file load clears every saved request id and any armed Pull before the
+   verification request can go out.
 """
 
 import os
@@ -62,6 +64,7 @@ class ResponseValidationTests(unittest.TestCase):
         self.engine._cache_bytes.clear()
         self.engine._pending.clear()
         self.engine._sent.clear()
+        self.engine._pull_permits.clear()
         self.stage.enabled = True
         self.stage.frozen = False
         self.stage.state = self.stack_mod.STATE_OK
@@ -364,3 +367,52 @@ class ResponseValidationTests(unittest.TestCase):
             "",
             "the disabled stage kept the sent request id",
         )
+
+    def test_10_load_clears_a_live_stage_request_id_before_verify(self):
+        import stageloom.blender.bridge as bridge
+
+        rid = "sha256:saved-live-rid"
+        self.stage.frozen = False
+        self.stage.rid = rid
+        self.stage.state = self.stack_mod.STATE_OK
+        self.stage.applied_out_hash = "sha256:before-load"
+        header, sections, raw = self._frame(rid, "sha256:after-load")
+
+        self.engine._on_load()
+
+        self.assertEqual(
+            self.stage.rid,
+            "",
+            "a non-frozen stage kept the request id saved with the file",
+        )
+        # A response was already queued when the file opened. It must be
+        # cached, not applied: the load has to verify with Grasshopper first.
+        bridge.post_incoming(header, sections, raw)
+        self.engine._handle_incoming()
+        self.assertEqual(
+            self.stage.applied_out_hash,
+            "sha256:before-load",
+            "a response queued at load applied before the verify request",
+        )
+
+    def test_11_load_clears_a_pull_permit_armed_before_save(self):
+        key = (self.record.stack_id, self.stage.key)
+        self.stage.frozen = True
+        self.stage.state = self.stack_mod.STATE_FROZEN
+        self.stage.rid = "sha256:saved-frozen-rid"
+        self.engine._pull_permits.add(key)
+
+        self.engine._on_load()
+
+        self.assertEqual(self.stage.rid, "")
+        self.assertNotIn(
+            key,
+            self.engine._pull_permits,
+            "a Pull armed before the save survived the load",
+        )
+        self.assertEqual(
+            self.engine._process_stage(self.obj, self.record, self.stage),
+            "idle",
+            "the saved frozen stage sent the old Pull after reopening",
+        )
+        self.assertEqual(self.stage.state, self.stack_mod.STATE_FROZEN)

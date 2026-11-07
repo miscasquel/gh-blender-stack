@@ -9,7 +9,7 @@ themselves, and the standard property decorators.
 
 import bpy
 
-from . import bridge, engine, prefs, props, server as server_mod, stack as stack_mod
+from . import bridge, engine, ops, prefs, props, server as server_mod, stack as stack_mod
 
 # IMPORT_EXPORT (the two-way glyph) landed after Blender 5.2. Keep the N-panel
 # drawable on the declared floor: fall back to the bidirectional arrow when this
@@ -48,9 +48,16 @@ class STAGELOOM_PT_panel(bpy.types.Panel):
 
         obj = context.object
         record = stack_mod.stack_of(obj) if obj is not None else None
-        if obj is None or record is None or not record.stages:
+        if obj is not None and obj.type == "SURFACE":
+            layout.label(text="Surface objects cannot hold a Stageloom stage", icon="ERROR")
+            layout.label(text="Convert it to a mesh first (Object > Convert > Mesh)", icon="INFO")
+            return
+        if obj is None or obj.type not in ops.STACK_TYPES:
+            layout.label(text="Select a mesh, curve or point cloud", icon="INFO")
+            return
+        if record is None or not record.stages:
             layout.operator("stageloom.add_stage", icon="ADD")
-            layout.label(text="Select a mesh and add a stage", icon="INFO")
+            layout.label(text="Add a stage to this object", icon="INFO")
             return
 
         row = layout.row()
