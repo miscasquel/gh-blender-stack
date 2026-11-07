@@ -9,19 +9,22 @@
 - `8205919` — `Add-on/Plugin: harden multi-stage response handling`
 - `16161cd` — `Add-on/Plugin: harden stage addressing and prefix replay`
 
-**Status:** audit complete. H1 and M1–M4 are fixed in `2b9c426`; M5/M6 and
-the low findings remain.
+**Status:** audit complete and follow-up fixes applied. H1/M1–M4 are fixed in
+`2b9c426`; M5/M6 and L1–L6 are fixed in `ce61b43`, `fa37571`, `3b33e5d`,
+`0d2d71d`, `f8b3635`, and `1ca977d`.
 
 The audit was run independently four ways and the material findings were
 re-verified directly on this tree. The original n-gon crash and the
-empty-`rid` cache-poisoning path are genuinely fixed. One clear data-loss
-regression and several incomplete hardening paths remained.
+empty-`rid` cache-poisoning path are genuinely fixed.
 
-**Fix batch (`2b9c426`):** keep legacy stages with ambiguous modifier names,
-move the prefix generation on every apply (including instance-only frames),
-gate retry/error handling on real requests, and clear pending state when a
-stage is disabled. The fix batch is committed but not deployed; Rhino still has
-the prior P2 `.gha` until it is rebuilt/deployed and restarted.
+**Fix batches:** `2b9c426` keeps legacy stages with ambiguous modifier names,
+moves the prefix generation on every apply, gates retry/error handling on real
+requests, and clears pending state when a stage is disabled. The later batch
+covers downstream-only prefix-batch invalidation, Stage In status ownership,
+the `SetSlotStatus` compatibility alias, surface rejection, file-load state,
+empty block definitions, modifier-order UI/operator rows, and holey n-gon
+fallback. The new `.gha` is built and deployed; Rhino must be restarted to load
+it.
 
 ---
 
@@ -308,11 +311,14 @@ instance. Add a warning or skip the definition.
 
 ## 6. Environment / live state
 
-- Rhino still has the prior P2 `.gha` loaded; the fix batch `2b9c426` is built
-  but not deployed.
+- The final `.gha` is deployed to Grasshopper’s Libraries
+  (`25a9e0637e020110c96256ac3991dfae7db6abb7bae0e5c889fca387f7515dd1`); Rhino
+  must be restarted to load it.
 - Blender is running and holds the default add-on port 59130. The full offline
   gate was verified on port 59131.
 - P1/P2 and fix-batch Python changes still require a Blender add-on reload or
   restart to be active in the user’s live session.
-- The audited code commits, the fix batch, and this handoff are local; `main`
+- The audited code commits, the fix batches, and this handoff are local; `main`
   is ahead of `origin/main` and has not been pushed.
+- The Rhino-side n-gon check remains a manual live test; it is not part of the
+  wine test suite because RhinoCommon’s mesh/ngon types need native RhinoCore.

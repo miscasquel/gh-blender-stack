@@ -12,8 +12,8 @@ build/validate, and the extensions.blender.org upload is deferred.
 
 **Audit handoff:** [`docs/handoff-audit-p1-p2-2026-11-07.md`](handoff-audit-p1-p2-2026-11-07.md)
 — independent audit of the P1/P2 hardening commits. The n-gon and empty-rid
-fixes are verified; a legacy-name data-loss regression and several medium
-hardening gaps remain.
+fixes were verified; the follow-up audit findings were fixed in the later
+hardening commits. The remaining follow-up is live Rhino/Blender verification.
 
 **Current state:** v0.4.0 is published (2026-10-29). v0.3.1 (2026-10-21)
 carried the post-0.3.0 review batches: the Stage In/GhLink batch
