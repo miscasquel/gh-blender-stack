@@ -69,7 +69,7 @@ class STAGELOOM_PT_panel(bpy.types.Panel):
             row.use_property_split = True
             row.prop(record, "subd", text="Base is a SubD cage")
 
-        for index, stage in enumerate(record.stages):
+        for index, stage in enumerate(engine._ordered_stages(obj, record)):
             self.draw_stage(layout, obj, record, stage, index)
 
     def draw_stage(self, layout, obj, record, stage, index):
@@ -195,7 +195,7 @@ class STAGELOOM_PT_diagnostics(bpy.types.Panel):
         if record is None or not record.stages:
             layout.label(text="no stage on this object")
             return
-        for stage in record.stages:
+        for stage in engine._ordered_stages(obj, record):
             box = layout.box()
             box.label(text="%s (%s)" % (stage.key, stage.state))
             box.label(text="rid: %s" % (stage.rid[-16:] or "-"))

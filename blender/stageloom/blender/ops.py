@@ -20,12 +20,19 @@ SURFACE_MESSAGE = (
 
 
 def _stage(context, index):
-    """The (object, record, stage) the operator was pointed at, or Nones."""
+    """The (object, record, stage) the operator was pointed at, or Nones.
+
+    The index is the row number in the panel, which lists stages in modifier
+    stack order — the same order evaluation uses. The record keeps its own
+    creation order, so an index into ``record.stages`` would address the wrong
+    stage after a modifier drag.
+    """
     obj = context.object
     record = stack_mod.stack_of(obj) if obj is not None else None
-    if record is None or not (0 <= index < len(record.stages)):
+    stages = engine._ordered_stages(obj, record) if record is not None else []
+    if not (0 <= index < len(stages)):
         return None, None, None
-    return obj, record, record.stages[index]
+    return obj, record, stages[index]
 
 
 class STAGELOOM_OT_add_stage(bpy.types.Operator):

@@ -16,6 +16,7 @@ import os
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 
 import bpy
 import numpy as np
@@ -50,10 +51,12 @@ class StageOrderTests(unittest.TestCase):
         enable()
         import stageloom.blender.engine as engine
         import stageloom.blender.nodes as nodes
+        import stageloom.blender.ops as ops
         import stageloom.blender.stack as stack_mod
 
         cls.engine = engine
         cls.nodes = nodes
+        cls.ops = ops
         cls.stack_mod = stack_mod
         cls.obj = make_stack_object("Ordered")
         bpy.ops.stageloom.add_stage(label="First")
@@ -91,6 +94,31 @@ class StageOrderTests(unittest.TestCase):
                 calls,
                 [self.stage_b.key, self.stage_a.key],
                 "stages were processed in record order, not modifier order",
+            )
+
+            ordered = self.engine._ordered_stages(self.obj, self.record)
+            self.assertEqual(
+                [stage.key for stage in ordered],
+                [self.stage_b.key, self.stage_a.key],
+                "the panel/operator order did not follow the modifier stack",
+            )
+            # The operators receive the panel row number, so the same index must
+            # name the same stage the panel drew on that row.
+            context = SimpleNamespace(object=self.obj)
+            for index, expected in enumerate(ordered):
+                obj, record, stage = self.ops._stage(context, index)
+                self.assertIs(obj, self.obj)
+                self.assertEqual(record.stack_id, self.record.stack_id)
+                self.assertEqual(
+                    stage.key,
+                    expected.key,
+                    "operator index %d addressed %r, not %r"
+                    % (index, getattr(stage, "key", None), expected.key),
+                )
+            self.assertEqual(
+                self.ops._stage(context, len(ordered)),
+                (None, None, None),
+                "an out-of-range operator index resolved to a stage",
             )
         finally:
             # Restore the original order for any later pass in this class.

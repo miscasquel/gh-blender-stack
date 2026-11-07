@@ -201,7 +201,9 @@ def _ordered_stages(obj, record):
     Dragging a stage modifier is the authoritative reorder control, but the
     record keeps its creation order. Processing the record order made the
     downstream stage look upstream: its prefix was evaluated before the stage
-    that actually sits above it in the stack.
+    that actually sits above it in the stack. This is the one stage order: the
+    N-panel, its operator indices and the diagnostics panel use it too, so the
+    row the user clicks is the stage the modifier stack evaluates there.
     """
     positioned = []
     for record_index, stage in enumerate(record.stages):
