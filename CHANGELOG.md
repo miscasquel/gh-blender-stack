@@ -20,6 +20,12 @@ Notable changes to this project, following
   `Object reference not set to an instance of an object.` Stage Out now uses
   `MeshNgon.FaceIndexList()` and validates the boundary. The live report was a
   second stage after a modifier chain that produced pentagons.
+- **Holey or slit n-gons are sent as their fan faces, with a warning.** The wire
+  format carries one polygon per face and cannot express an inner boundary, so
+  an n-gon with holes or a slit is no longer collapsed to its outer boundary.
+  Its underlying faces travel unchanged (topology preserved) and the response
+  carries an `ngon_holes` warning. Callers with no warning channel get a
+  readable `FrameException` instead of a silent topology change.
 - **Multi-stage responses are gated.** A document-wide solve can run a stage
   whose Stage Out has no request; the empty `rid=""` response is no longer sent,
   and Blender ignores missing/empty request ids and missing output hashes. Stage

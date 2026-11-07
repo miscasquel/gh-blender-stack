@@ -111,6 +111,7 @@ Sent after `hello`, and again whenever a Param component's declaration changes.
 - `out_hash` identifies the output. Blender compares it for equality and never recomputes it (see §6.3).
 - `attributes` (optional) lists the attribute sections the response carries (§5.1), exactly like a request's.
 - `warnings` carries every loss or approximation, each with a code and a message. Blender shows them in the stage status and logs them.
+- An n-gon with holes or slits cannot travel as one wire polygon; the sender emits its underlying faces and reports an `ngon_holes` warning instead of dropping the inner boundary.
 
 ### 4.5 `ping` / `pong`
 

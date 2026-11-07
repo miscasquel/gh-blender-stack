@@ -53,6 +53,7 @@ namespace Stageloom.Core
         public const string SubdJoined = "subd_joined";
         public const string BrepMeshed = "brep_meshed";
         public const string InstanceSkipped = "instance_skipped";
+        public const string NgonHoles = "ngon_holes";
     }
 
     public static class Conversion
@@ -168,13 +169,27 @@ namespace Stageloom.Core
         // ------------------------------------------------------- mesh -> sections
 
         /// <summary>Encode a Rhino mesh as mesh.* sections. Vertex colours are
-        /// included only when the mesh has one colour per vertex.</summary>
+        /// included only when the mesh has one colour per vertex. This overload
+        /// has no warning channel, so a mesh whose n-gons cannot be represented
+        /// (holes/slits) is rejected instead of silently flattened; use the
+        /// overload with <paramref name="warnings"/> to send the fan faces.</summary>
         public static List<Section> SectionsFromMesh(Mesh mesh, double scale)
         {
-            return MeshSections(mesh, scale, "mesh", true);
+            return MeshSections(mesh, scale, "mesh", true, null);
         }
 
-        private static List<Section> MeshSections(Mesh mesh, double scale, string prefix, bool includeColors)
+        /// <summary>Encode a Rhino mesh as mesh.* sections and report every
+        /// conversion loss. An n-gon with holes or slits cannot travel as one
+        /// wire polygon, so its underlying fan faces are sent instead (the
+        /// topology is preserved) with an <see cref="WarningCodes.NgonHoles"/>
+        /// warning.</summary>
+        public static List<Section> SectionsFromMesh(Mesh mesh, double scale, List<WireWarning> warnings)
+        {
+            return MeshSections(mesh, scale, "mesh", true, warnings);
+        }
+
+        private static List<Section> MeshSections(Mesh mesh, double scale, string prefix,
+                                                  bool includeColors, List<WireWarning> warnings)
         {
             var sections = new List<Section>();
 
@@ -186,7 +201,10 @@ namespace Stageloom.Core
 
             var counts = new List<uint>();
             var indices = new List<uint>();
-            bool[] inNgon = NgonFaceMask(mesh);
+            // An n-gon that cannot be represented as one wire polygon is not
+            // masked out: its fan faces travel as ordinary faces below.
+            bool[] flatten = NgonFallbackMask(mesh);
+            bool[] inNgon = NgonFaceMask(mesh, flatten);
             for (int f = 0; f < mesh.Faces.Count; f++)
             {
                 if (inNgon[f]) continue;
@@ -199,6 +217,7 @@ namespace Stageloom.Core
             }
             for (int i = 0; i < mesh.Ngons.Count; i++)
             {
+                if (flatten[i]) continue;
                 MeshNgon ngon = mesh.Ngons.GetNgon(i);
                 var faceList = new List<int>();
                 foreach (uint faceIndex in ngon.FaceIndexList())
@@ -212,6 +231,19 @@ namespace Stageloom.Core
             }
             sections.Add(Section.U32(prefix + ".face_counts", counts.ToArray()));
             sections.Add(Section.U32(prefix + ".face_indices", indices.ToArray()));
+
+            int flattened = 0;
+            foreach (bool value in flatten)
+                if (value) flattened++;
+            if (flattened > 0)
+            {
+                string message = flattened == 1
+                    ? "An n-gon with holes or a slit was sent as its underlying faces; the wire format cannot carry holes"
+                    : flattened + " n-gons with holes or slits were sent as their underlying faces; the wire format cannot carry holes";
+                if (warnings == null)
+                    throw new FrameException("bad_frame", message);
+                warnings.Add(new WireWarning(WarningCodes.NgonHoles, message));
+            }
 
             if (includeColors && mesh.VertexColors.Count == mesh.Vertices.Count && mesh.Vertices.Count > 0)
             {
@@ -230,11 +262,41 @@ namespace Stageloom.Core
             return sections;
         }
 
-        private static bool[] NgonFaceMask(Mesh mesh)
+        /// <summary>Which n-gons cannot travel as one wire polygon. RhinoCommon's
+        /// <c>NgonHasHoles</c> is true when the complete edge count differs from
+        /// the outer edge count; its remarks call out slits as the same shape.
+        /// A repeated outer-boundary vertex is also non-simple and would be
+        /// rejected or altered by Blender, so it takes the fan-face path too.</summary>
+        private static bool[] NgonFallbackMask(Mesh mesh)
+        {
+            var flatten = new bool[mesh.Ngons.Count];
+            for (int i = 0; i < mesh.Ngons.Count; i++)
+                flatten[i] = NgonNeedsFanFallback(mesh, i);
+            return flatten;
+        }
+
+        private static bool NgonNeedsFanFallback(Mesh mesh, int index)
+        {
+            if (mesh.Ngons.NgonHasHoles(index)) return true;
+            MeshNgon ngon = mesh.Ngons.GetNgon(index);
+            uint[] boundary = ngon.BoundaryVertexIndexList();
+            int outer = mesh.Ngons.GetNgonOuterEdgeCount(index);
+            if (boundary == null || boundary.Length == 0 || outer <= 0 || boundary.Length != outer)
+                return true;
+            var seen = new HashSet<uint>();
+            foreach (uint vertex in boundary)
+                if (!seen.Add(vertex)) return true;
+            return false;
+        }
+
+        private static bool[] NgonFaceMask(Mesh mesh, bool[] flatten)
         {
             var mask = new bool[mesh.Faces.Count];
             for (int i = 0; i < mesh.Ngons.Count; i++)
             {
+                // Flattened n-gons leave their fan faces in the ordinary face
+                // stream, so they must not be masked out here.
+                if (flatten[i]) continue;
                 MeshNgon ngon = mesh.Ngons.GetNgon(i);
                 foreach (uint faceIndex in ngon.FaceIndexList())
                 {
@@ -921,7 +983,7 @@ namespace Stageloom.Core
             if (cage == null)
                 throw new FrameException("bad_frame",
                     "SubD control net could not be built");
-            var sections = MeshSections(cage, scale, "subd", false);
+            var sections = MeshSections(cage, scale, "subd", false, warnings);
 
             var creaseEdges = new List<uint>();
             var creaseValues = new List<float>();
@@ -991,7 +1053,7 @@ namespace Stageloom.Core
                     joined.Normals.ComputeNormals();
                     joined.Compact();
                 }
-                sections.AddRange(MeshSections(joined, scale, "mesh", true));
+                sections.AddRange(MeshSections(joined, scale, "mesh", true, warnings));
                 meshCount = 1;
             }
 
