@@ -108,6 +108,33 @@ def _payload_missing(obj, stage, sections):
     return False
 
 
+def _invalidate_prefix_batch(obj, stage):
+    """Drop the prefix batch entries an apply made stale.
+
+    A prefix ends just before its stage's modifier, so a written output only
+    changes the prefixes *below* the writing stage in the modifier stack.
+    Entries above it — and the stage's own entry, whose prefix does not contain
+    its output — stay valid for the rest of the pass. Stack order is
+    authoritative: the stage record keeps creation order and a dragged modifier
+    must not make an upstream stage look downstream (or the reverse).
+    """
+    record = engine.stack_mod.stack_of(obj)
+    if record is None:
+        engine._prefix_batch.pop((obj.as_pointer(), stage.key), None)
+        return
+    ordered = engine._ordered_stages(obj, record)
+    try:
+        position = ordered.index(stage)
+    except ValueError:
+        # A stale response for a stage no longer in the record: only its own
+        # entry can be named safely.
+        engine._prefix_batch.pop((obj.as_pointer(), stage.key), None)
+        return
+    pointer = obj.as_pointer()
+    for candidate in ordered[position + 1:]:
+        engine._prefix_batch.pop((pointer, candidate.key), None)
+
+
 def _apply(obj, stage, sections, attributes=None):
     """Write the response geometry into the stage's helpers, one per kind, then
     its attributes into the helpers that can hold them.
@@ -125,10 +152,12 @@ def _apply(obj, stage, sections, attributes=None):
     group instances from.
     """
     # A prefix batch built earlier in this pass evaluated the helpers before
-    # this write. Later stages must rebuild their prefix from the new output,
-    # not reuse the stale batch entry.
-    engine._prefix_batch.clear()
-    engine._prefix_batch_built = False
+    # this write. Only the entries *downstream* of this stage in the modifier
+    # stack are stale: an upstream prefix cannot contain this stage's output,
+    # and neither can this stage's own prefix (which ends before its modifier).
+    # Clearing the whole batch on every apply rebuilt all N prefixes for every
+    # stage of a cached multi-stage pass, which is quadratic on playback.
+    _invalidate_prefix_batch(obj, stage)
     # The per-helper writes stamp their own geometry, but instance rows,
     # definition collections and cloud removals only touch helper data the memo
     # does not watch. Stamp the apply itself so every real apply — including

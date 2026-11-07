@@ -116,7 +116,7 @@ class ApplyInvalidationTests(unittest.TestCase):
     def tearDownClass(cls):
         bpy.ops.preferences.addon_disable(module="stageloom")
 
-    def test_01_apply_clears_the_prefix_batch_and_bumps_an_empty_clear(self):
+    def test_01_apply_keeps_entries_outside_its_stack_and_bumps_an_empty_clear(self):
         self.engine._apply(
             self.obj,
             self.stage,
@@ -130,19 +130,192 @@ class ApplyInvalidationTests(unittest.TestCase):
             },
         )
 
-        self.engine._prefix_batch[("stale", "entry")] = ({}, [], [])
+        pointer = self.obj.as_pointer()
+        own = (pointer, self.stage.key)
+        unrelated = ("stale", "entry")
+        self.engine._prefix_batch[own] = ({}, [], [])
+        self.engine._prefix_batch[unrelated] = ({}, [], [])
         self.engine._prefix_batch_built = True
         before = self.engine._prefix_epoch
 
         self.engine._apply(self.obj, self.stage, {})
 
-        self.assertFalse(self.engine._prefix_batch, "the stale prefix batch survived")
-        self.assertFalse(self.engine._prefix_batch_built)
+        # The stage's own prefix ends before its modifier, so this write cannot
+        # change it; an unrelated object's entry must not be touched either.
+        # Only downstream stages (none here) are invalidated.
+        self.assertIn(own, self.engine._prefix_batch, "the applied stage's own entry was dropped")
+        self.assertIn(unrelated, self.engine._prefix_batch, "an unrelated batch entry was dropped")
         self.assertGreater(
             self.engine._prefix_epoch,
             before,
             "clearing a non-empty helper did not move the prefix generation",
         )
+
+
+class CachedPrefixBatchTests(unittest.TestCase):
+    """A cached multi-stage pass rebuilds only the prefixes it still needs.
+
+    Every apply used to clear the global batch, so a three-stage pass rebuilt
+    all three prefixes after each apply. That is quadratic on the frame-cache
+    playback path. An apply can only stale the prefixes *downstream* of the
+    writing stage in the modifier stack — its own prefix ends before its
+    modifier and upstream prefixes cannot contain its output — so those entries
+    survive and the pass rebuilds one prefix at a time.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        enable()
+        import stageloom.blender.engine as engine
+        import stageloom.blender.stack as stack_mod
+
+        cls.engine = engine
+        cls.stack_mod = stack_mod
+        cls.obj = make_stack_object("Batch")
+        for label in ("BatchA", "BatchB", "BatchC"):
+            bpy.ops.stageloom.add_stage(label=label)
+        cls.record = stack_mod.stack_of(cls.obj)
+        cls.stages = list(cls.record.stages)
+        cls.position = {stage.key: index for index, stage in enumerate(cls.stages)}
+
+    @classmethod
+    def tearDownClass(cls):
+        bpy.ops.preferences.addon_disable(module="stageloom")
+
+    def setUp(self):
+        self.connected_before = self.engine.bridge.state["connected"]
+        self.engine.bridge.state["connected"] = False
+
+    def tearDown(self):
+        self.engine.bridge.state["connected"] = self.connected_before
+        self._clear_session()
+
+    def _clear_session(self):
+        engine = self.engine
+        engine._prefix_memo.clear()
+        engine._prefix_batch.clear()
+        engine._prefix_batch_built = False
+        engine._prefix_batching = False
+        engine._pending.clear()
+        engine._sent.clear()
+        engine._verify.clear()
+        for stage in self.stages:
+            stage.applied_out_hash = ""
+            stage.rid = ""
+            stage.state = "ok"
+
+    def _seed_cached_frames(self):
+        """Store one identity response per stage under the rid its prefix asks for.
+
+        Each response is applied as it is seeded, so the next stage's rid is the
+        one a later pass computes for the same input — exactly the state a
+        cached playback pass asks the cache for.
+        """
+        engine = self.engine
+        self._clear_session()
+        for stage in self.stages:
+            prefixes, geom_hash, _attributes, _definitions = engine._prefix_sections(
+                self.obj, self.record, stage
+            )
+            sections = {name: values for name, _dtype, values in prefixes}
+            rid = engine.hashing.request_id(
+                stage.key,
+                engine.props.canonical_json(self.obj, stage),
+                geom_hash,
+                "m",
+                "stack-local",
+                stage.nonce,
+            )
+            header = {
+                "type": "response",
+                "status": "ok",
+                "stage": stage.key,
+                "rid": rid,
+                "out_hash": "cached-" + stage.key,
+            }
+            raw = engine.codec.encode_frame(
+                header, [(name, dtype, values) for name, dtype, values in prefixes]
+            )
+            engine._remember(self.record, stage, rid, header, sections, raw)
+            engine._apply(self.obj, stage, sections)
+        self._clear_session()
+
+    def test_01_cached_pass_builds_only_the_prefix_it_needs(self):
+        self._seed_cached_frames()
+        engine = self.engine
+        calls = []
+        snapshots = []
+        real_clone_prefixes = engine._clone_prefixes
+        real_apply = engine._apply
+
+        def counting_clone_prefixes(obj, stages, subd):
+            calls.append(len(stages))
+            return real_clone_prefixes(obj, stages, subd)
+
+        def recording_apply(obj, stage, sections, attributes=None):
+            result = real_apply(obj, stage, sections, attributes)
+            snapshots.append((stage.key, dict(engine._prefix_batch)))
+            return result
+
+        engine._clone_prefixes = counting_clone_prefixes
+        engine._apply = recording_apply
+        sends_before = engine.stats["sends"]
+        try:
+            engine._process_object(self.obj)
+        finally:
+            engine._clone_prefixes = real_clone_prefixes
+            engine._apply = real_apply
+
+        self.assertEqual(engine.stats["sends"], sends_before, "the cached pass sent a request")
+        for stage in self.stages:
+            self.assertEqual(stage.state, "ok", stage.error)
+            self.assertTrue(
+                stage.applied_out_hash.startswith("cached-"),
+                "stage %s did not apply its cached frame" % stage.key,
+            )
+
+        # One full batch, then one prefix per downstream stage. The old global
+        # clear made this [3, 3, 3].
+        self.assertEqual(calls, [3, 1, 1], "a downstream apply rebuilt the whole batch")
+        self.assertLess(sum(calls), 3 * len(self.stages))
+
+        pointer = self.obj.as_pointer()
+        for stage_key, batch in snapshots:
+            applied = self.position[stage_key]
+            for upstream in self.stages[:applied]:
+                self.assertIn(
+                    (pointer, upstream.key),
+                    batch,
+                    "apply of %s invalidated upstream %s" % (stage_key, upstream.key),
+                )
+
+    def test_02_invalidation_follows_the_modifier_stack_not_the_record(self):
+        engine = self.engine
+        pointer = self.obj.as_pointer()
+        stage_a, stage_b, stage_c = self.stages
+        modifier_a = engine.nodes.modifier_of(self.obj, stage_a)
+        modifier_c = engine.nodes.modifier_of(self.obj, stage_c)
+        original = list(self.obj.modifiers)
+        current = list(self.obj.modifiers)
+        self._clear_session()
+        try:
+            # Stack: C, A, B. The record still says A, B, C, so an apply of A
+            # must stale B (below it in the stack), not C (above it).
+            self.obj.modifiers.move(current.index(modifier_c), current.index(modifier_a))
+            for stage in self.stages:
+                engine._prefix_batch[(pointer, stage.key)] = ({}, [], [])
+            engine._prefix_batch_built = True
+
+            engine._apply(self.obj, stage_a, {})
+
+            keys = {key for (owner, key) in engine._prefix_batch if owner == pointer}
+            self.assertIn(stage_c.key, keys, "an upstream stack entry was invalidated")
+            self.assertIn(stage_a.key, keys, "the applied stage's own prefix was invalidated")
+            self.assertNotIn(stage_b.key, keys, "a downstream stack entry survived")
+        finally:
+            for position, modifier in enumerate(original):
+                stacked = list(self.obj.modifiers)
+                self.obj.modifiers.move(stacked.index(modifier), position)
 
 
 class _FakeGroup(object):

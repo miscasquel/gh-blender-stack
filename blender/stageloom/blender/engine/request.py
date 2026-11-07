@@ -297,9 +297,11 @@ def _prefix_sections(obj, record, stage):
     subd = bool(record.subd)
     batched = None
     if engine._prefix_batching:
-        if not engine._prefix_batch_built:
-            engine._build_prefix_batch(obj, record)
-        batched = engine._prefix_batch.get((obj.as_pointer(), stage.key))
+        pointer = obj.as_pointer()
+        batched = engine._prefix_batch.get((pointer, stage.key))
+        if batched is None:
+            engine._build_prefix_batch(obj, record, stage)
+            batched = engine._prefix_batch.get((pointer, stage.key))
     if batched is not None:
         sections, attributes, definitions = batched
     else:
@@ -383,8 +385,8 @@ def _close_enough(old_values, new_values):
     return bool(engine.np.allclose(old, new, rtol=1e-5, atol=1e-9, equal_nan=True))
 
 
-def _build_prefix_batch(obj, record):
-    """Evaluate every stage prefix of one object in a single depsgraph update.
+def _build_prefix_batch(obj, record, stage=None):
+    """Evaluate stage prefixes in a single depsgraph update.
 
     Linking a clone and asking for `evaluated_depsgraph_get()` costs a full
     depsgraph update, ~17 ms on the FiraTower scene, and doing that once per
@@ -392,16 +394,25 @@ def _build_prefix_batch(obj, record):
     The clones are independent objects with different modifier subsets, so they
     can coexist for one update; their evaluated sections are identical to the
     per-stage reads (checked against the old hashes).
+
+    The first build of a pass evaluates every stage. After an apply, only the
+    prefix the pass is about to read can still be valid: `_invalidate_prefix_batch`
+    removed every downstream entry, and pre-evaluating the rest would only be
+    thrown away by the next apply. `stage` names the stage asking now, so those
+    rebuilds evaluate one prefix instead of the whole stack.
     """
     if obj.type == "SURFACE" or len(record.stages) < 2:
         engine._prefix_batch_built = True
         return
+    rebuild_one = stage is not None and engine._prefix_batch_built
     stages = []
-    for stage in record.stages:
-        modifier = engine.nodes.modifier_of(obj, stage)
-        if modifier is None and not stage.modifier_uid:
-            modifier = engine.nodes.modifier_by_name(obj, stage)
-        stages.append((stage, engine._modifier_index(obj, modifier)))
+    for candidate in record.stages:
+        if rebuild_one and candidate.key != stage.key:
+            continue
+        modifier = engine.nodes.modifier_of(obj, candidate)
+        if modifier is None and not candidate.modifier_uid:
+            modifier = engine.nodes.modifier_by_name(obj, candidate)
+        stages.append((candidate, engine._modifier_index(obj, modifier)))
     results = engine._clone_prefixes(obj, stages, bool(record.subd))
     pointer = obj.as_pointer()
     engine._prefix_batch.update(

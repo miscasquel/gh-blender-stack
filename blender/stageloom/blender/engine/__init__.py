@@ -55,9 +55,11 @@ _cache_bytes = {}  # (stack_id, stage_key) -> bytes currently held by its cache
 _stores = {}  # (stack_id, stage_key) -> ResponseStore; the backing store
 _prefix_memo = {}  # (obj.as_pointer(), stage key) -> {"revision": tuple, "sections": list}
 # One depsgraph evaluation can serve every stage prefix on an object. The batch
-# is built on the first cache miss in a pass and cleared when that pass ends.
+# is built on the first cache miss in a pass; an apply drops the entries below
+# it in the modifier stack (upstream entries and its own prefix stay valid), and
+# the pass clears what is left when it ends.
 _prefix_batch = {}  # (obj.as_pointer(), stage key) -> (sections, attributes, definitions)
-_prefix_batch_built = False
+_prefix_batch_built = False  # the pass's first (full-stack) build has run
 _prefix_batching = False
 # (stack_id, stage_key) pairs allowed exactly one request while frozen: Pull.
 # Transient session state, like `_pending` — never saved, cleared on register.
@@ -527,6 +529,7 @@ from .apply import (
     _group_has_geometry,
     _has_generic_attributes,
     _helper_has_data,
+    _invalidate_prefix_batch,
     _kind_of,
     _nested_rows_of,
     _payload_missing,
@@ -562,6 +565,7 @@ from .lifecycle import (
     _forget_prefix,
     _mark_dirty_all,
     _mark_object_dirty,
+    _ordered_stages,
     _process_object,
     _rebuild_index,
     _reindex_object,
@@ -650,6 +654,7 @@ __all__ = [
     "_group_has_geometry",
     "_has_generic_attributes",
     "_helper_has_data",
+    "_invalidate_prefix_batch",
     "_kind_of",
     "_nested_rows_of",
     "_payload_missing",
@@ -681,6 +686,7 @@ __all__ = [
     "_forget_prefix",
     "_mark_dirty_all",
     "_mark_object_dirty",
+    "_ordered_stages",
     "_process_object",
     "_rebuild_index",
     "_reindex_object",
