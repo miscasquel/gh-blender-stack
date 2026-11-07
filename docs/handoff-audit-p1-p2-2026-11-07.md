@@ -9,9 +9,10 @@
 - `8205919` — `Add-on/Plugin: harden multi-stage response handling`
 - `16161cd` — `Add-on/Plugin: harden stage addressing and prefix replay`
 
-**Status:** audit complete and follow-up fixes applied. H1/M1–M4 are fixed in
-`2b9c426`; M5/M6 and L1–L6 are fixed in `ce61b43`, `fa37571`, `3b33e5d`,
-`0d2d71d`, `f8b3635`, and `1ca977d`.
+**Status:** audit complete and follow-up fixes released as **0.4.1** on
+2026-11-07. H1/M1–M4 are fixed in `2b9c426`; M5/M6 and L1–L6 are fixed in
+`ce61b43`, `fa37571`, `3b33e5d`, `0d2d71d`, `f8b3635`, and `1ca977d`.
+Release: https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.4.1
 
 The audit was run independently four ways and the material findings were
 re-verified directly on this tree. The original n-gon crash and the
@@ -311,9 +312,14 @@ instance. Add a warning or skip the definition.
 
 ## 6. Environment / live state
 
-- The final `.gha` is deployed to Grasshopper’s Libraries
-  (`25a9e0637e020110c96256ac3991dfae7db6abb7bae0e5c889fca387f7515dd1`); Rhino
+- The final 0.4.1 `.gha` is deployed to Grasshopper’s Libraries
+  (`b1d06057f979f85ff733b2fb23b73af16b3943cbe475cabbe1c25d622921775c`); Rhino
   must be restarted to load it.
+- Release artifacts:
+  - `stageloom-0.4.1.zip` — sha256
+    `0d3dfc60b2f92cf756b1290740041676440cc6913135ba82402cb70bba1ca5d0`
+  - `Stageloom.gha` — sha256
+    `b1d06057f979f85ff733b2fb23b73af16b3943cbe475cabbe1c25d622921775c`
 - Blender is running and holds the default add-on port 59130. The full offline
   gate was verified on port 59131.
 - P1/P2 and fix-batch Python changes still require a Blender add-on reload or
