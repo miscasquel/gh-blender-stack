@@ -421,8 +421,8 @@ namespace Stageloom.Tests.Console
                 !Instances.HasDefinitionContent(
                     new List<Mesh>(), new List<Curve>(), new List<Point3d>(),
                     new List<SubD>(), new List<Brep>(), noRows), "");
-            Check("a nested row counts as content",
-                Instances.HasDefinitionContent(
+            Check("a null nested row is not content",
+                !Instances.HasDefinitionContent(
                     new List<Mesh>(), new List<Curve>(), new List<Point3d>(),
                     new List<SubD>(), new List<Brep>(),
                     new List<GH_InstanceReference> { null }), "");

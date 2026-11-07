@@ -394,8 +394,12 @@ namespace Stageloom
             List<Mesh> meshes, List<Curve> curves, List<Point3d> points,
             List<SubD> subds, List<Brep> breps, List<GH_InstanceReference> nested)
         {
-            return meshes.Count > 0 || curves.Count > 0 || points.Count > 0
-                || subds.Count > 0 || breps.Count > 0 || nested.Count > 0;
+            if (meshes.Count > 0 || curves.Count > 0 || points.Count > 0
+                || subds.Count > 0 || breps.Count > 0)
+                return true;
+            foreach (GH_InstanceReference goo in nested)
+                if (goo != null && goo.Value != null) return true;
+            return false;
         }
 
         private class DefinitionWriter
