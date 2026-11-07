@@ -10,6 +10,11 @@ done or was judged not worth doing — it is not missing.
 the only item still open in that handoff is the tag-triggered CI
 build/validate, and the extensions.blender.org upload is deferred.
 
+**Audit handoff:** [`docs/handoff-audit-p1-p2-2026-11-07.md`](handoff-audit-p1-p2-2026-11-07.md)
+— independent audit of the P1/P2 hardening commits. The n-gon and empty-rid
+fixes are verified; a legacy-name data-loss regression and several medium
+hardening gaps remain.
+
 **Current state:** v0.4.0 is published (2026-10-29). v0.3.1 (2026-10-21)
 carried the post-0.3.0 review batches: the Stage In/GhLink batch
 (`C-LINK-1`, `C-COMP-2`, `C-LINK-3`, `C-LINK-4`, `C-ATT-2`; review §16), the
