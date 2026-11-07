@@ -1,7 +1,5 @@
 # Stageloom
 
-**Stageloom** is the new name for GH Stack.
-
 Drive Grasshopper definitions from Blender as stackable modifiers, next to
 native Geometry Nodes modifiers, in one visible object per stack. Geometry and
 parameters can flow through the stack, so parameters can be keyframed, driven,
