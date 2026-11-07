@@ -107,8 +107,10 @@ namespace Stageloom
 
             StageSlot slot = GhLink.Slot(key);
             // Read the frame once: a request arriving during this solve must
-            // not pair its sections with this frame's attributes or rid.
-            HeldFrame held = slot.Frame;
+            // not pair its sections with this frame's attributes or rid. The
+            // epoch is read with it so a late verdict can be dropped.
+            int statusEpoch;
+            HeldFrame held = GhLink.ReadFrame(slot, out statusEpoch);
             string status = slot.InStatus;
             string message = slot.InMessage;
             string requestRid = held.Rid;
@@ -140,6 +142,7 @@ namespace Stageloom
                     // and keep the component alive for the next frame.
                     status = "error";
                     message = error;
+                    GhLink.SetInStatus(slot, held, statusEpoch, status, message);
                     AddRuntimeMessage(GH_RuntimeMessageLevel.Error,
                         "Stage In: " + error);
                 }
@@ -150,11 +153,24 @@ namespace Stageloom
                     // Stage In failure.
                     status = "ok";
                     message = "";
+                    GhLink.SetInStatus(slot, held, statusEpoch, status, message);
                 }
             }
             else
             {
-                status = GhLink.Connected ? "waiting" : "disconnected";
+                // No frame. A protocol error can still name this stage, so keep
+                // its verdict instead of reporting `waiting` over an error
+                // message; otherwise report the link state.
+                if (slot.InStatus == "error" || slot.InStatus == "unknown_ref")
+                {
+                    status = slot.InStatus;
+                    message = slot.InMessage;
+                }
+                else
+                {
+                    status = GhLink.Connected ? "waiting" : "disconnected";
+                    message = "";
+                }
                 if (string.IsNullOrEmpty(requestRid)) requestRid = slot.Rid;
             }
             da.SetDataList("Geometry", geometry);

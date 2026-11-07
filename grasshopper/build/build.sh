@@ -72,11 +72,37 @@ if [ -f "$GH_DLL" ] && [ -f "$GHIO_DLL" ] && [ -f "$RC_DLL" ]; then
     "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
     "$(win_path "$REPO/grasshopper/src/gh/GhLink.cs")" \
     "$(win_path "$REPO/grasshopper/src/gh/MiniWsClient.cs")" \
+    "$(win_path "$REPO/grasshopper/tests/console/FakeServer.cs")" \
     "$(win_path "$REPO/grasshopper/tests/console/LinkTests.cs")"
   [ -f "$LINK_OUT" ] || { echo "build failed: $LINK_OUT not produced" >&2; exit 1; }
   echo "built $LINK_OUT ($(stat -c%s "$LINK_OUT") bytes)"
 else
   echo "note: no Grasshopper/RhinoCommon under the prefix; link tests not built" >&2
+fi
+
+# The stage components' status halves. This compiles the full component source
+# set (the same one build-gha.sh ships), so a compile break in Components.cs,
+# GooDispatch.cs or Instances.cs cannot pass this suite unnoticed.
+COMP_OUT="$OUT_DIR/StageloomComponentTests.exe"
+if [ -f "$GH_DLL" ] && [ -f "$GHIO_DLL" ] && [ -f "$RC_DLL" ]; then
+  cp -f "$RC_DLL" "$GH_DLL" "$GHIO_DLL" "$OUT_DIR/"
+  rm -f "$COMP_OUT"
+  COMP_SOURCES=()
+  for f in "$REPO"/grasshopper/src/core/*.cs "$REPO"/grasshopper/src/gh/*.cs; do
+    COMP_SOURCES+=("$(win_path "$f")")
+  done
+  run_csc \
+    /nologo /target:exe \
+    /out:"$(win_path "$COMP_OUT")" \
+    /r:"$(win_path "$GH_DLL")" /r:"$(win_path "$GHIO_DLL")" /r:"$(win_path "$RC_DLL")" \
+    /r:System.Drawing.dll \
+    "${COMP_SOURCES[@]}" \
+    "$(win_path "$REPO/grasshopper/tests/console/FakeServer.cs")" \
+    "$(win_path "$REPO/grasshopper/tests/console/ComponentTests.cs")"
+  [ -f "$COMP_OUT" ] || { echo "build failed: $COMP_OUT not produced" >&2; exit 1; }
+  echo "built $COMP_OUT ($(stat -c%s "$COMP_OUT") bytes)"
+else
+  echo "note: no Grasshopper/RhinoCommon under the prefix; component tests not built" >&2
 fi
 
 # Stage In's build guard. It has no Rhino types, so it builds and runs without

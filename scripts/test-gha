@@ -31,6 +31,13 @@ if [ -f grasshopper/build/out/StageloomLinkTests.exe ]; then
     "$(win_path "$PWD/grasshopper/build/out/StageloomLinkTests.exe")" >>"$LOG" 2>&1
   CODE=$(( CODE | $? ))
 fi
+# The stage components' own status halves: the full plugin source set plus a
+# scripted IGH_DataAccess and WebSocket server.
+if [ -f grasshopper/build/out/StageloomComponentTests.exe ]; then
+  run_wine \
+    "$(win_path "$PWD/grasshopper/build/out/StageloomComponentTests.exe")" >>"$LOG" 2>&1
+  CODE=$(( CODE | $? ))
+fi
 # Stage In's build guard, without a Grasshopper document or a solve.
 if [ -f grasshopper/build/out/StageloomStageTests.exe ]; then
   run_wine \

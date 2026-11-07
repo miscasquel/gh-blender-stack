@@ -85,6 +85,12 @@ namespace Stageloom
         }
         public volatile string Status = "waiting";
         public volatile string Message = "";
+        /// <summary>Bumped under Gate whenever an inbound request or protocol
+        /// error resets the direction statuses. A Stage In solve captures it
+        /// with the frame and writes its verdict only when no newer event has
+        /// intervened, even when the held frame itself did not change (an
+        /// unservable ref).</summary>
+        internal volatile int StatusEpoch = 0;
         /// <summary>The Stage In half's own verdict. Stage Out must not write
         /// this: a failed export is not a failed import, and the shared status
         /// made the live Stage In report Stage Out's NullReferenceException.</summary>
@@ -358,6 +364,51 @@ namespace Stageloom
             }
         }
 
+        /// <summary>The import verdict for a stage, written under the same lock
+        /// every reader takes. <paramref name="frame"/> and
+        /// <paramref name="statusEpoch"/> are the snapshot the solve read; when
+        /// a newer request or protocol error arrived while the geometry was
+        /// building, that event is authoritative and this late write is
+        /// dropped. Stage In owns only the In half: the aggregate status stays
+        /// with Stage Out, the component that answers Blender.</summary>
+        public static void SetInStatus(StageSlot slot, HeldFrame frame, int statusEpoch,
+                                       string status, string message)
+        {
+            if (slot == null) return;
+            lock (Gate)
+            {
+                if (frame == null || slot.StatusEpoch != statusEpoch
+                    || !object.ReferenceEquals(slot.Frame, frame)) return;
+                slot.InStatus = status;
+                slot.InMessage = message ?? "";
+            }
+        }
+
+        /// <summary>One frame/epoch snapshot for Stage In, read together under
+        /// Gate so a request arriving between the two cannot pair a new epoch
+        /// with an old frame.</summary>
+        internal static HeldFrame ReadFrame(StageSlot slot, out int statusEpoch)
+        {
+            if (slot == null)
+            {
+                statusEpoch = 0;
+                return HeldFrame.Empty;
+            }
+            lock (Gate)
+            {
+                statusEpoch = slot.StatusEpoch;
+                return slot.Frame;
+            }
+        }
+
+        /// <summary>Compatibility alias for saved script components that call
+        /// the pre-0.4.1 public name. New code should use
+        /// <see cref="SetOutStatus"/>.</summary>
+        public static void SetSlotStatus(StageSlot slot, string status, string message)
+        {
+            SetOutStatus(slot, status, message);
+        }
+
         // -------------------------------------------------------------- socket
 
         public static void Start()
@@ -556,6 +607,7 @@ namespace Stageloom
                         target.InMessage = problem + ": " + detail;
                         target.OutStatus = "error";
                         target.OutMessage = problem + ": " + detail;
+                        target.StatusEpoch++;
                     }
                 }
                 Note("protocol error " + problem + ": " + detail);
@@ -617,6 +669,7 @@ namespace Stageloom
                 slot.InMessage = "";
                 slot.OutStatus = "waiting";
                 slot.OutMessage = "";
+                slot.StatusEpoch++;
                 slot.RequestedAt = DateTime.UtcNow;
                 slot.ResolveAttempts = 0;
                 // Build the dictionary locally and publish it in one assignment:
@@ -668,6 +721,7 @@ namespace Stageloom
                     slot.InMessage = message;
                     slot.OutStatus = "unknown_ref";
                     slot.OutMessage = message;
+                    slot.StatusEpoch++;
                 }
                 Enqueue(ErrorFrame("unknown_ref", "no geometry for hash " + (hash ?? "(none)"), key, rid));
                 return;
