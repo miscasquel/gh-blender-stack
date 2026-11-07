@@ -195,6 +195,10 @@ def _on_load(scene=None):
         for stage in record.stages:
             if stage.state == engine.stack_mod.STATE_WAITING:
                 engine._set(stage, "state", engine.stack_mod.STATE_IDLE)
+            if stage.frozen:
+                # Freeze owns the last output. A saved request id must not let
+                # a late response apply to a stage that is parked.
+                stage.rid = ""
             if stage.geom_hash:
                 # We cannot know that GH kept the geometry: ask again in full.
                 stage.geom_hash = ""

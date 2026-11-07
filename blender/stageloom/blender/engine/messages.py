@@ -167,9 +167,41 @@ def _handle_schema(header):
 def _handle_response(header, sections, raw=None):
     key = header.get("stage")
     rid = header.get("rid")
+    status = header.get("status")
+    if not isinstance(key, str) or not key:
+        engine.prefs.log("[stageloom] response without a stage key ignored", flush=True)
+        return
+    if not isinstance(rid, str) or not rid:
+        # A Stage Out solve that was triggered by another stage has no request
+        # to answer. It must not be cached or applied as an empty success.
+        engine.prefs.log(
+            "[stageloom] response for %r without a request id ignored" % (key,),
+            flush=True,
+        )
+        return
+    if status not in ("ok", "error"):
+        engine.prefs.log(
+            "[stageloom] response for %r has invalid status %r ignored"
+            % (key, status),
+            flush=True,
+        )
+        return
+    if status == "ok":
+        out_hash = header.get("out_hash")
+        if not isinstance(out_hash, str) or not out_hash:
+            engine.prefs.log(
+                "[stageloom] ok response for %r has no output hash ignored" % (key,),
+                flush=True,
+            )
+            return
+
     for obj, record, stage in engine._stage_views(key):
         if not record.stack_id:
             record.stack_id = engine.stack_mod.ensure_stack(obj).stack_id
+
+        if not stage.enabled:
+            engine._forget(record.stack_id, stage.key)
+            continue
 
         if header.get("status") == "error":
             error = header.get("error") or {}
@@ -181,6 +213,7 @@ def _handle_response(header, sections, raw=None):
                 engine._resend_in_full(obj, record, stage, "unknown_ref response")
                 continue
             engine._forget(record.stack_id, stage.key)
+            engine._forget_frame(record, stage, rid)
             engine._set(stage, "state", engine.stack_mod.STATE_ERROR)
             engine._set(stage, "error", error.get("message") if isinstance(error, dict) else str(error))
             # Deliberately no retry here: a solve that just failed would fail
@@ -218,6 +251,9 @@ def _handle_response(header, sections, raw=None):
         if sent_at is not None:
             engine._record_timing(record, stage, "rtt_ms", engine._timed_since(sent_at))
         applied = False
+        # A frozen stage is parked with rid="" and must ignore unsolicited
+        # answers. Pull deliberately sends one request while frozen; its answer
+        # carries the stage's current rid, so rid equality is the permission.
         if rid == stage.rid and (
             out_hash != stage.applied_out_hash or engine._payload_missing(obj, stage, sections)
         ):

@@ -75,6 +75,8 @@ def _drop_hot(record, stage, rid):
 
 def _store_frame(record, stage, rid, header, sections, raw=None):
     """Persist a response as the raw protocol frame plus a metadata sidecar."""
+    if not isinstance(rid, str) or not rid:
+        return
     if header.get("status") != "ok":
         return
     if raw is None:
@@ -108,6 +110,8 @@ def _remember(record, stage, rid, header, sections, raw=None):
     wire-size accounting could exceed the bound by a wide margin. A replay
     decodes the bytes again; the apply path already dominates that cost.
     """
+    if not isinstance(rid, str) or not rid:
+        return
     if raw is None:
         try:
             raw = engine._frame_bytes(header, sections)
@@ -144,6 +148,8 @@ def _remember(record, stage, rid, header, sections, raw=None):
 def _cached_response(record, stage, rid):
     """A stored response for this rid: memory first, then disk. Entries that do
     not match the current generation or definition are dropped on the way."""
+    if not isinstance(rid, str) or not rid:
+        return None
     memory = engine._cache.get((record.stack_id, stage.key))
     if memory is not None:
         hit = memory.get(rid)

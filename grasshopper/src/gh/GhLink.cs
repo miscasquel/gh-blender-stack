@@ -85,6 +85,14 @@ namespace Stageloom
         }
         public volatile string Status = "waiting";
         public volatile string Message = "";
+        /// <summary>The Stage In half's own verdict. Stage Out must not write
+        /// this: a failed export is not a failed import, and the shared status
+        /// made the live Stage In report Stage Out's NullReferenceException.</summary>
+        public volatile string InStatus = "waiting";
+        public volatile string InMessage = "";
+        /// <summary>The Stage Out half's own verdict.</summary>
+        public volatile string OutStatus = "waiting";
+        public volatile string OutMessage = "";
         public DateTime RequestedAt = DateTime.UtcNow;
         public int ResolveAttempts = 0;
         /// <summary>True while the solve scheduled for this slot is running.
@@ -337,10 +345,14 @@ namespace Stageloom
         /// <summary>The solve verdict for a stage, written under the same lock
         /// every reader takes (RetryStaleSolves, Handle). Only the UI thread
         /// writes it.</summary>
-        public static void SetSlotStatus(StageSlot slot, string status, string message)
+        public static void SetOutStatus(StageSlot slot, string status, string message)
         {
             lock (Gate)
             {
+                slot.OutStatus = status;
+                slot.OutMessage = message ?? "";
+                // Keep the aggregate/retry status in step with the only
+                // component that answers Blender.
                 slot.Status = status;
                 slot.Message = message ?? "";
             }
@@ -540,6 +552,10 @@ namespace Stageloom
                     {
                         target.Status = "error";
                         target.Message = problem + ": " + detail;
+                        target.InStatus = "error";
+                        target.InMessage = problem + ": " + detail;
+                        target.OutStatus = "error";
+                        target.OutMessage = problem + ": " + detail;
                     }
                 }
                 Note("protocol error " + problem + ": " + detail);
@@ -597,6 +613,10 @@ namespace Stageloom
                 slot.Rid = rid;
                 slot.Status = "waiting";
                 slot.Message = "";
+                slot.InStatus = "waiting";
+                slot.InMessage = "";
+                slot.OutStatus = "waiting";
+                slot.OutMessage = "";
                 slot.RequestedAt = DateTime.UtcNow;
                 slot.ResolveAttempts = 0;
                 // Build the dictionary locally and publish it in one assignment:
@@ -641,8 +661,13 @@ namespace Stageloom
                 // like: no geometry, no error, forever.
                 lock (Gate)
                 {
+                    string message = "Not holding this geometry; asking Blender to resend it";
                     slot.Status = "unknown_ref";
-                    slot.Message = "Not holding this geometry; asking Blender to resend it";
+                    slot.Message = message;
+                    slot.InStatus = "unknown_ref";
+                    slot.InMessage = message;
+                    slot.OutStatus = "unknown_ref";
+                    slot.OutMessage = message;
                 }
                 Enqueue(ErrorFrame("unknown_ref", "no geometry for hash " + (hash ?? "(none)"), key, rid));
                 return;

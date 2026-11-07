@@ -306,6 +306,7 @@ namespace Stageloom.Tests.Console
 
             RunSenderLifecycle();
             RunSolveRetry();
+            RunSlotStatus();
 
             System.Console.WriteLine();
             if (_failures == 0)
@@ -315,6 +316,36 @@ namespace Stageloom.Tests.Console
             }
             System.Console.WriteLine("RESULT: link round-trip FAIL (" + _failures + ")");
             return 1;
+        }
+
+        private static void RunSlotStatus()
+        {
+            var slot = new StageSlot();
+            Check("slot starts waiting",
+                slot.InStatus == "waiting" && slot.OutStatus == "waiting",
+                "in=" + slot.InStatus + " out=" + slot.OutStatus);
+
+            slot.InStatus = "ok";
+            GhLink.SetOutStatus(slot, "error", "boom");
+            Check("out status reaches the out half",
+                slot.OutStatus == "error" && slot.OutMessage == "boom",
+                "out=" + slot.OutStatus + " message=" + slot.OutMessage);
+            Check("out status leaves the in half alone",
+                slot.InStatus == "ok" && slot.InMessage == "",
+                "in=" + slot.InStatus + " message=" + slot.InMessage);
+            Check("out status updates the aggregate",
+                slot.Status == "error" && slot.Message == "boom",
+                "status=" + slot.Status + " message=" + slot.Message);
+
+            var empty = new StageSlot();
+            Check("answer rid is empty with no request", GhLink.AnswerRid(empty) == "",
+                "rid=" + GhLink.AnswerRid(empty));
+            empty.Rid = "sha256:latest";
+            Check("answer rid falls back to the slot", GhLink.AnswerRid(empty) == "sha256:latest",
+                "rid=" + GhLink.AnswerRid(empty));
+            empty.SolveRid = "sha256:solving";
+            Check("answer rid uses the pinned rid", GhLink.AnswerRid(empty) == "sha256:solving",
+                "rid=" + GhLink.AnswerRid(empty));
         }
 
         // ------------------------------------------------------------ helpers

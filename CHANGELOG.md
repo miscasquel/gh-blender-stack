@@ -20,6 +20,11 @@ Notable changes to this project, following
   `Object reference not set to an instance of an object.` Stage Out now uses
   `MeshNgon.FaceIndexList()` and validates the boundary. The live report was a
   second stage after a modifier chain that produced pentagons.
+- **Multi-stage responses are gated.** A document-wide solve can run a stage
+  whose Stage Out has no request; the empty `rid=""` response is no longer sent,
+  and Blender ignores missing/empty request ids and missing output hashes. Stage
+  In and Stage Out now report their own status, errors evict cached successes,
+  and frozen or disabled stages keep their last output.
 
 ## [0.4.0] — 2026-10-29
 

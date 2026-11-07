@@ -109,8 +109,8 @@ namespace Stageloom
             // Read the frame once: a request arriving during this solve must
             // not pair its sections with this frame's attributes or rid.
             HeldFrame held = slot.Frame;
-            string status = slot.Status;
-            string message = slot.Message;
+            string status = slot.InStatus;
+            string message = slot.InMessage;
             string requestRid = held.Rid;
             var geometry = new List<IGH_Goo>();
             if (held.Sections.Count > 0)
@@ -142,6 +142,14 @@ namespace Stageloom
                     message = error;
                     AddRuntimeMessage(GH_RuntimeMessageLevel.Error,
                         "Stage In: " + error);
+                }
+                else
+                {
+                    // The import succeeded. Do not inherit Stage Out's verdict:
+                    // the shared status made a Stage Out failure look like a
+                    // Stage In failure.
+                    status = "ok";
+                    message = "";
                 }
             }
             else
@@ -245,9 +253,15 @@ namespace Stageloom
             StageSlot slot = GhLink.Slot(key);
             bool sent = false;
             string outHash = "";
-            string status = slot.Status;
+            string status = slot.OutStatus;
+            // A document-wide solve can run this component for another
+            // stage's request. If this stage has never been asked for
+            // anything, answering with rid="" would create an empty ok
+            // response that Blender could cache or apply to a stage with no
+            // current request.
+            string answerRid = GhLink.AnswerRid(slot);
 
-            if (enabled && GhLink.Connected)
+            if (enabled && GhLink.Connected && !string.IsNullOrEmpty(answerRid))
             {
                 try
                 {
@@ -308,7 +322,7 @@ namespace Stageloom
                     var header = new Dictionary<string, object>();
                     header["type"] = "response";
                     header["stage"] = key;
-                    header["rid"] = GhLink.AnswerRid(slot);
+                    header["rid"] = answerRid;
                     header["out_hash"] = outHash;
                     header["status"] = "ok";
                     header["warnings"] = warningList;
@@ -320,7 +334,7 @@ namespace Stageloom
                     GhLink.Enqueue(FrameCodec.Encode(header, sections));
                     sent = true;
                     status = "ok";
-                    GhLink.SetSlotStatus(slot, "ok", "");
+                    GhLink.SetOutStatus(slot, "ok", "");
                     foreach (WireWarning warning in warnings)
                         AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, warning.Message);
                 }
@@ -349,17 +363,24 @@ namespace Stageloom
                         var errorHeader = new Dictionary<string, object>();
                         errorHeader["type"] = "response";
                         errorHeader["stage"] = key;
-                        errorHeader["rid"] = GhLink.AnswerRid(slot);
+                        errorHeader["rid"] = answerRid;
                         errorHeader["out_hash"] = "";
                         errorHeader["status"] = "error";
                         errorHeader["error"] = error;
                         errorHeader["warnings"] = new List<object>();
                         errorHeader["counts"] = errorCounts;
-                        GhLink.SetSlotStatus(slot, "error", ex.Message);
+                        GhLink.SetOutStatus(slot, "error", ex.Message);
                         GhLink.Enqueue(FrameCodec.Encode(errorHeader, null));
                     }
                     AddRuntimeMessage(GH_RuntimeMessageLevel.Error, "Stage Out: " + ex.Message);
                 }
+            }
+            else if (enabled && GhLink.Connected)
+            {
+                // The document solved for another stage: this stage has no
+                // request to answer yet. Stay waiting instead of sending an
+                // unsolicited empty ok frame.
+                status = "waiting";
             }
             da.SetData("Sent", sent);
             da.SetData("Output hash", outHash);
