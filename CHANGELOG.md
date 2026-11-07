@@ -10,6 +10,17 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Stage Out handles meshes with n-gons.** Rhino mesh n-gons were encoded with
+  boundary vertex indices where fan-face indices were required, so any stage
+  whose input contained a face with more than four sides failed with
+  `Object reference not set to an instance of an object.` Stage Out now uses
+  `MeshNgon.FaceIndexList()` and validates the boundary. The live report was a
+  second stage after a modifier chain that produced pentagons.
+
 ## [0.4.0] — 2026-10-29
 
 Stageloom is the new name for GH Stack. This release also carries curve and

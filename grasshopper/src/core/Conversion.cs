@@ -201,8 +201,12 @@ namespace Stageloom.Core
             {
                 MeshNgon ngon = mesh.Ngons.GetNgon(i);
                 var faceList = new List<int>();
-                for (int k = 0; k < ngon.FaceCount; k++) faceList.Add(ngon[k]);
+                foreach (uint faceIndex in ngon.FaceIndexList())
+                    faceList.Add((int)faceIndex);
                 int[] boundary = mesh.Ngons.GetNgonBoundary(faceList);
+                if (boundary == null)
+                    throw new FrameException("bad_frame",
+                        "n-gon boundary could not be resolved from its fan faces");
                 counts.Add((uint)boundary.Length);
                 foreach (int v in boundary) indices.Add((uint)v);
             }
@@ -232,8 +236,13 @@ namespace Stageloom.Core
             for (int i = 0; i < mesh.Ngons.Count; i++)
             {
                 MeshNgon ngon = mesh.Ngons.GetNgon(i);
-                int count = ngon.FaceCount;
-                for (int k = 0; k < count; k++) mask[ngon[k]] = true;
+                foreach (uint faceIndex in ngon.FaceIndexList())
+                {
+                    if (faceIndex >= (uint)mask.Length)
+                        throw new FrameException("bad_frame",
+                            "n-gon fan face index is outside the mesh face list");
+                    mask[(int)faceIndex] = true;
+                }
             }
             return mask;
         }
