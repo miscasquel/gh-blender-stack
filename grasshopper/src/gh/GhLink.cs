@@ -913,6 +913,9 @@ namespace Stageloom
                 {
                     StageSlot slot = kv.Value;
                     if (slot.Status != "waiting") continue;
+                    // No request to answer: an unsolicited document solve must
+                    // not leave a Stage Out looking like a stalled request.
+                    if (string.IsNullOrEmpty(slot.Rid)) continue;
                     if (slot.SolveInFlight)
                     {
                         if ((now - slot.SolveStartedAt).TotalSeconds < SolveWatchdogSeconds)

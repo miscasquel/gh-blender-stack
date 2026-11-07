@@ -280,11 +280,24 @@ def _drop_removed_stages(obj, record):
             # ambiguity into data loss.
             engine._no_send(record, stage, "ambiguous modifier uid")
             continue
-        if not stage.modifier_uid and engine.nodes.modifier_by_name(obj, stage) is not None:
-            # A record from before the uid existed, whose node group is gone
-            # too: the modifier is there but has nothing to match on. Keep the
-            # stage — removal is data loss, and the pass repairs it.
-            continue
+        if not stage.modifier_uid:
+            candidates = engine.nodes.modifier_name_candidates(obj, stage)
+            if candidates:
+                # A record from before the uid existed, whose node group is
+                # gone too: the modifier is there but has nothing to match on.
+                # Keep the stage — removal is data loss, and the pass repairs
+                # it. With more than one same-name candidate there is no safe
+                # binding, so report the ambiguity instead of guessing.
+                if len(candidates) > 1:
+                    engine._set(stage, "state", engine.stack_mod.STATE_ERROR)
+                    engine._set(
+                        stage,
+                        "error",
+                        "ambiguous modifier name: %d unattached modifiers match %r"
+                        % (len(candidates), stage.label or stage.key),
+                    )
+                    engine._no_send(record, stage, "ambiguous modifier name")
+                continue
         key = (record.stack_id, stage.key)
         engine._forget(record.stack_id, stage.key)
         engine._sent.pop(key, None)

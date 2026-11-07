@@ -11,7 +11,10 @@ These checks pin the response gate:
 2. an `ok` response without an output hash is ignored;
 3. a real error evicts a cached success for the same rid;
 4. a frozen stage stores the answer but keeps its applied output;
-5. a disabled stage ignores the answer.
+5. a disabled stage ignores the answer;
+6. a stale error leaves the cached frame and a newer pending request intact;
+7. an error does not unfreeze a frozen stage;
+8. disabling a stage forgets its pending request.
 """
 
 import os
@@ -159,6 +162,8 @@ class ResponseValidationTests(unittest.TestCase):
         header, sections, raw = self._frame(rid, "sha256:before")
         self.engine._remember(self.record, self.stage, rid, header, sections, raw)
         self.engine._store_frame(self.record, self.stage, rid, header, sections, raw)
+        key = (self.record.stack_id, self.stage.key)
+        self.engine._pending[key] = {rid: time.monotonic()}
         self.assertIsNotNone(
             self.engine._cached_response(self.record, self.stage, rid),
             "the test did not seed a cached success",
@@ -217,4 +222,145 @@ class ResponseValidationTests(unittest.TestCase):
             self.stage.applied_out_hash,
             "sha256:before",
             "a disabled stage applied a response",
+        )
+
+    def test_06_stale_error_keeps_the_cached_frame_and_newer_pending(self):
+        import stageloom.blender.bridge as bridge
+
+        old_rid = "sha256:cached-before-stale-error"
+        new_rid = "sha256:newer-pending"
+        header, sections, raw = self._frame(old_rid, "sha256:old")
+        self.engine._remember(self.record, self.stage, old_rid, header, sections, raw)
+        self.engine._store_frame(self.record, self.stage, old_rid, header, sections, raw)
+
+        key = (self.record.stack_id, self.stage.key)
+        self.stage.rid = new_rid
+        self.stage.state = self.stack_mod.STATE_WAITING
+        self.engine._pending[key] = {new_rid: time.monotonic()}
+
+        error = {
+            "type": "response",
+            "stage": self.stage.key,
+            "rid": old_rid,
+            "status": "error",
+            "error": {"code": "gh_solve_failed", "message": "stale boom"},
+            "warnings": [],
+        }
+        bridge.post_incoming(error, {})
+        self.engine._handle_incoming()
+
+        self.assertIsNotNone(
+            self.engine._cached_response(self.record, self.stage, old_rid),
+            "a stale error evicted a good cached frame",
+        )
+        self.assertIn(
+            new_rid,
+            self.engine._pending_of(self.record.stack_id, self.stage.key),
+            "a stale error cleared the newer pending request",
+        )
+        self.assertEqual(self.stage.rid, new_rid)
+        self.assertEqual(self.stage.state, self.stack_mod.STATE_WAITING)
+        self.assertNotIn("stale boom", self.stage.error)
+
+    def test_07_frozen_stage_keeps_frozen_on_error(self):
+        import stageloom.blender.bridge as bridge
+
+        rid = "sha256:frozen-error"
+        self.stage.frozen = True
+        self.stage.state = self.stack_mod.STATE_FROZEN
+        self.stage.rid = rid
+        key = (self.record.stack_id, self.stage.key)
+        self.engine._pending[key] = {rid: time.monotonic()}
+
+        error = {
+            "type": "response",
+            "stage": self.stage.key,
+            "rid": rid,
+            "status": "error",
+            "error": {"code": "gh_solve_failed", "message": "frozen boom"},
+            "warnings": [],
+        }
+        bridge.post_incoming(error, {})
+        self.engine._handle_incoming()
+
+        self.assertEqual(
+            self.stage.state,
+            self.stack_mod.STATE_FROZEN,
+            "an error unfroze the stage",
+        )
+        self.assertIn("frozen boom", self.stage.error)
+
+    def test_09_error_without_pending_is_ignored(self):
+        import stageloom.blender.bridge as bridge
+
+        rid = "sha256:idle-last-rid"
+        self.stage.rid = rid
+        self.stage.state = self.stack_mod.STATE_OK
+        header, sections, raw = self._frame(rid, "sha256:good")
+        self.engine._remember(self.record, self.stage, rid, header, sections, raw)
+        self.engine._store_frame(self.record, self.stage, rid, header, sections, raw)
+
+        error = {
+            "type": "response",
+            "stage": self.stage.key,
+            "rid": rid,
+            "status": "error",
+            "error": {"code": "gh_solve_failed", "message": "unsolicited boom"},
+            "warnings": [],
+        }
+        bridge.post_incoming(error, {})
+        self.engine._handle_incoming()
+
+        self.assertIsNotNone(
+            self.engine._cached_response(self.record, self.stage, rid),
+            "an unsolicited error evicted an idle stage's cached frame",
+        )
+        self.assertEqual(self.stage.state, self.stack_mod.STATE_OK)
+        self.assertEqual(self.stage.error, "")
+
+    def test_08_disabled_stage_forgets_pending(self):
+        import stageloom.blender.nodes as nodes
+
+        rid = "sha256:disabled-pending"
+        key = (self.record.stack_id, self.stage.key)
+        self.engine._pending[key] = {rid: time.monotonic()}
+        self.engine._sent[key] = (rid, "sha256:geom")
+        self.stage.rid = rid
+        self.stage.state = self.stack_mod.STATE_WAITING
+
+        modifier = nodes.modifier_of(self.obj, self.stage)
+        self.assertIsNotNone(modifier)
+        toggles = (
+            modifier.show_viewport,
+            modifier.show_render,
+            modifier.show_in_editmode,
+        )
+        modifier.show_viewport = False
+        modifier.show_render = False
+        modifier.show_in_editmode = False
+        try:
+            outcome = self.engine._process_stage(self.obj, self.record, self.stage)
+        finally:
+            (
+                modifier.show_viewport,
+                modifier.show_render,
+                modifier.show_in_editmode,
+            ) = toggles
+
+        self.assertEqual(outcome, "idle")
+        self.assertEqual(self.stage.state, self.stack_mod.STATE_DISABLED)
+        self.assertNotIn(
+            key,
+            self.engine._pending,
+            "the disabled stage kept its in-flight request pending",
+        )
+        self.assertNotIn(
+            key,
+            self.engine._sent,
+            "the disabled stage kept its sent request bookkeeping",
+        )
+        self.assertEqual(
+            self.stage.rid,
+            "",
+            "the disabled stage kept the sent request id",
         )

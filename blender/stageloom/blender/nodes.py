@@ -423,17 +423,14 @@ def modifier_of(stack_obj, stage):
     return modifier_for(stack_obj, stage.key)
 
 
-def modifier_by_name(stack_obj, stage):
-    """Last-resort finder for a record saved before the uid existed whose node
-    group is gone too, when the group-name link has nothing to match: the
-    modifier's creation name (``Stageloom · <label>``). Only an *unattached* modifier
-    (``node_group`` None) qualifies — one that still holds a group belongs to
-    whoever owns that group's name — and binding it attaches a group, so a
-    second same-label stage cannot claim the same modifier afterwards.
+def modifier_name_candidates(stack_obj, stage):
+    """Every unattached modifier whose creation name could belong to the stage.
 
-    Blender's duplicate names (``... .001``) share the creation-name prefix.
-    Return a match only when exactly one unattached modifier fits, so two
-    same-label stages cannot claim each other.
+    Blender's duplicate names (``... .001``) share the creation-name prefix. A
+    record saved before the uid existed has no other link once its node group is
+    gone, so these are its possible modifiers. More than one is ambiguous, but
+    even then the stage must be kept: a name collision is not proof that the
+    modifier was deleted.
     """
     wanted = MODIFIER_PREFIX + (stage.label or stage.key)
     matches = []
@@ -442,6 +439,23 @@ def modifier_by_name(stack_obj, stage):
             continue
         if mod.name == wanted or mod.name.startswith(wanted + "."):
             matches.append(mod)
+    return matches
+
+
+def modifier_by_name(stack_obj, stage):
+    """Last-resort finder for a record saved before the uid existed whose node
+    group is gone too, when the group-name link has nothing to match: the
+    modifier's creation name (``Stageloom · <label>``). Only an *unattached* modifier
+    (``node_group`` None) qualifies — one that still holds a group belongs to
+    whoever owns that group's name — and binding it attaches a group, so a
+    second same-label stage cannot claim the same modifier afterwards.
+
+    Return a match only when exactly one unattached modifier fits, so two
+    same-label stages cannot claim each other. Callers deciding whether the
+    stage still exists must use :func:`modifier_name_candidates`: an ambiguous
+    name is still evidence the modifier is there.
+    """
+    matches = modifier_name_candidates(stack_obj, stage)
     return matches[0] if len(matches) == 1 else None
 
 

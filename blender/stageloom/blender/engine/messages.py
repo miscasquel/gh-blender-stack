@@ -203,6 +203,17 @@ def _handle_response(header, sections, raw=None):
             engine._forget(record.stack_id, stage.key)
             continue
 
+        pending_key = (record.stack_id, stage.key)
+        pending = engine._pending.get(pending_key) or {}
+        pending_here = rid in pending
+        if header.get("status") == "error" and not pending_here:
+            # An error answers a request we are waiting for. If this rid is not
+            # pending, the error is stale or unsolicited — often a
+            # document-wide solve answering with the stage's last rid. Acting
+            # on it would evict a good cached frame and could abandon a newer
+            # request.
+            continue
+
         if header.get("status") == "error":
             error = header.get("error") or {}
             code = error.get("code") if isinstance(error, dict) else None
@@ -212,9 +223,15 @@ def _handle_response(header, sections, raw=None):
                 # not a result and must not be cached.
                 engine._resend_in_full(obj, record, stage, "unknown_ref response")
                 continue
-            engine._forget(record.stack_id, stage.key)
+            if pending_here:
+                # Remove only this request. A different pending entry belongs
+                # to a newer request and must survive a late error.
+                pending.pop(rid, None)
+                if not pending:
+                    engine._pending.pop(pending_key, None)
             engine._forget_frame(record, stage, rid)
-            engine._set(stage, "state", engine.stack_mod.STATE_ERROR)
+            if not stage.frozen:
+                engine._set(stage, "state", engine.stack_mod.STATE_ERROR)
             engine._set(stage, "error", error.get("message") if isinstance(error, dict) else str(error))
             # Deliberately no retry here: a solve that just failed would fail
             # again the moment it was asked, turning one broken component into

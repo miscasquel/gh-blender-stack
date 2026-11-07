@@ -129,6 +129,12 @@ def _apply(obj, stage, sections, attributes=None):
     # not reuse the stale batch entry.
     engine._prefix_batch.clear()
     engine._prefix_batch_built = False
+    # The per-helper writes stamp their own geometry, but instance rows,
+    # definition collections and cloud removals only touch helper data the memo
+    # does not watch. Stamp the apply itself so every real apply — including
+    # an instance-only or definition-only frame — retires every prefix memo
+    # downstream of it.
+    engine._bump_id(stage)
 
     base = {"mesh": [], "curves": [], "points": []}
     definitions = {}

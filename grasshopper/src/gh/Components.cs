@@ -378,9 +378,11 @@ namespace Stageloom
             else if (enabled && GhLink.Connected)
             {
                 // The document solved for another stage: this stage has no
-                // request to answer yet. Stay waiting instead of sending an
-                // unsolicited empty ok frame.
-                status = "waiting";
+                // request to answer yet. Stay idle instead of sending an
+                // unsolicited empty ok frame or looking like a stalled request
+                // to RetryStaleSolves.
+                status = "idle";
+                GhLink.SetOutStatus(slot, "idle", "");
             }
             da.SetData("Sent", sent);
             da.SetData("Output hash", outHash);

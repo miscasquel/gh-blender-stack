@@ -483,6 +483,56 @@ class UpstreamOutputTests(unittest.TestCase):
     def tearDownClass(cls):
         bpy.ops.preferences.addon_disable(module="stageloom")
 
+    def test_an_instance_only_apply_moves_the_downstream_prefix(self):
+        import numpy as np
+        import stageloom.blender.engine as engine
+
+        record = self.obj.gh_stack
+        before, before_hash, _attributes, _definitions = engine._prefix_sections(
+            self.obj, record, self.stage_b
+        )
+
+        matrix = np.eye(4, dtype=np.float32)
+        matrix[0, 3] = 10.0
+        # An instance-only frame: no idef geometry, so only the row cloud (and
+        # the definition wiring) changes.
+        engine._apply(
+            self.obj,
+            self.stage_a,
+            {
+                "inst.ref_def": np.array([0], dtype=np.uint32),
+                "inst.transforms": matrix.reshape(-1),
+            },
+        )
+
+        after, after_hash, _attributes, _definitions = engine._prefix_sections(
+            self.obj, record, self.stage_b
+        )
+
+        def values(sections, name):
+            for section_name, _dtype, data in sections:
+                if section_name == name:
+                    return np.asarray(data).reshape(-1)
+            return None
+
+        before_transform = values(before, "inst.transforms")
+        after_transform = values(after, "inst.transforms")
+        self.assertIsNotNone(
+            after_transform,
+            "the downstream prefix did not see the instance rows",
+        )
+        self.assertNotEqual(
+            before_transform.tolist() if before_transform is not None else None,
+            after_transform.tolist(),
+            "the downstream prefix reused the pre-apply instance transform",
+        )
+        self.assertAlmostEqual(float(after_transform.reshape(-1, 16)[0][3]), 10.0, places=4)
+        self.assertNotEqual(
+            before_hash,
+            after_hash,
+            "an instance-only apply did not move the downstream geometry hash",
+        )
+
     def test_the_engine_write_moves_the_downstream_revision(self):
         import stageloom.blender.engine as engine
 

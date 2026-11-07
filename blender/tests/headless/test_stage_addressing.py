@@ -209,4 +209,56 @@ class ModifierAmbiguityTests(unittest.TestCase):
         self.assertIs(nodes.modifier_by_name(_FakeObject([one]), stage), one)
 
         two = _FakeModifier(0, "Stageloom · A.002", None)
-        self.assertIsNone(nodes.modifier_by_name(_FakeObject([one, two]), stage))
+        stack = _FakeObject([one, two])
+        self.assertIsNone(nodes.modifier_by_name(stack, stage))
+        self.assertEqual(nodes.modifier_name_candidates(stack, stage), [one, two])
+
+
+class LegacyNameAmbiguityTests(unittest.TestCase):
+    """Two pre-uid stages with the same label must survive an ambiguous name.
+
+    Before the modifier uid existed, a lost node group left the creation name
+    as the only link. Two same-label stages therefore have two candidate
+    modifiers and no safe way to tell which is which. That is a repair case,
+    not a deletion: removing both records destroyed the stage data.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        enable()
+        import stageloom.blender.engine as engine
+        import stageloom.blender.stack as stack_mod
+
+        cls.engine = engine
+        cls.stack_mod = stack_mod
+        cls.obj = make_stack_object("LegacyNames")
+        bpy.ops.stageloom.add_stage(label="Stage")
+        bpy.ops.stageloom.add_stage(label="Stage")
+        cls.record = stack_mod.stack_of(cls.obj)
+
+    @classmethod
+    def tearDownClass(cls):
+        bpy.ops.preferences.addon_disable(module="stageloom")
+
+    def test_two_same_label_pre_uid_stages_are_kept(self):
+        stages = list(self.record.stages)
+        self.assertEqual(len(stages), 2)
+        modifiers = [mod for mod in self.obj.modifiers if mod.type == "NODES"]
+        self.assertEqual(len(modifiers), 2)
+        for modifier in modifiers:
+            modifier.node_group = None
+        for stage in stages:
+            stage.modifier_uid = 0
+
+        keys = [stage.key for stage in stages]
+        removed = self.engine._drop_removed_stages(self.obj, self.record)
+
+        self.assertFalse(removed, "an ambiguous name deleted the stage records")
+        self.assertEqual(
+            [stage.key for stage in self.record.stages],
+            keys,
+            "the ambiguous stage records were not preserved",
+        )
+        for stage in self.record.stages:
+            self.assertEqual(stage.state, self.stack_mod.STATE_ERROR)
+            self.assertIn("ambiguous modifier name", stage.error)

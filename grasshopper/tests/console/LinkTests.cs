@@ -406,6 +406,7 @@ namespace Stageloom.Tests.Console
         {
             System.Console.WriteLine("link solve retry");
             StageSlot slot = GhLink.Slot("retry-test");
+            slot.Rid = "sha256:retry-test";
             slot.Status = "waiting";
             slot.RequestedAt = DateTime.UtcNow.AddSeconds(-1);
             slot.ResolveAttempts = 0;
@@ -430,6 +431,20 @@ namespace Stageloom.Tests.Console
             GhLink.RetryStaleSolves();
             Check("a lost SolutionEnd does not block the retry",
                 slot.ResolveAttempts == 1, "attempts=" + slot.ResolveAttempts);
+
+            // A stage with no request (a document-wide solve ran it before any
+            // request named it) must not look like a stalled request.
+            StageSlot idle = GhLink.Slot("no-request-retry-test");
+            idle.Rid = "";
+            idle.Status = "waiting";
+            idle.RequestedAt = DateTime.UtcNow.AddSeconds(-1);
+            idle.ResolveAttempts = 0;
+            idle.SolveInFlight = false;
+            retries = GhLink.RetryRequests;
+            GhLink.RetryStaleSolves();
+            Check("a slot without a request is not retried",
+                idle.ResolveAttempts == 0 && GhLink.RetryRequests == retries,
+                "attempts=" + idle.ResolveAttempts + " retries=" + GhLink.RetryRequests);
         }
 
         private static Dictionary<string, object> Header(string type, string stage, string rid)

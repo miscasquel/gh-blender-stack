@@ -56,6 +56,14 @@ def _process_stage(obj, record, stage):
     # where a toggle in the modifiers panel was undone by the next pass.
     engine._set(stage, "enabled", active)
     if not active:
+        # A request already in flight is no longer awaited: leaving it pending
+        # keeps the stall nudge dirtying the object forever for an answer the
+        # disabled stage will ignore. Drop the sent bookkeeping too, so
+        # re-enabling starts from the scene rather than assuming the client
+        # still holds geometry for a request the stage never saw answered.
+        engine._forget(record.stack_id, stage.key)
+        engine._sent.pop((record.stack_id, stage.key), None)
+        engine._set(stage, "rid", "")
         engine._set(stage, "state", engine.stack_mod.STATE_DISABLED)
         engine._no_send(record, stage, "disabled")
         return "idle"
