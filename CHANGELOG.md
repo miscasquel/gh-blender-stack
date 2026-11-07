@@ -25,6 +25,15 @@ Notable changes to this project, following
   and Blender ignores missing/empty request ids and missing output hashes. Stage
   In and Stage Out now report their own status, errors evict cached successes,
   and frozen or disabled stages keep their last output.
+- **Stage order follows the modifier stack.** Dragging a stage modifier now
+  changes the evaluation and request order; the stale stage-record order is no
+  longer authoritative. A prefix batch is discarded after an apply, so a
+  downstream stage sees the upstream stage's current output instead of the
+  pre-apply helper. A multi-stage surface stack is refused with a clear error
+  rather than silently sending the base surface to every stage.
+- **Null SubD and block entries are skipped.** A null SubD no longer reaches
+  the control-net encoder, and null definition objects are ignored instead of
+  raising during Stage Out.
 
 ## [0.4.0] — 2026-10-29
 

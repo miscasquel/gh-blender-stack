@@ -195,6 +195,30 @@ def _split_duplicate_stages(obj, record):
     return True
 
 
+def _ordered_stages(obj, record):
+    """Stages in modifier-stack order, with record order as the tie-breaker.
+
+    Dragging a stage modifier is the authoritative reorder control, but the
+    record keeps its creation order. Processing the record order made the
+    downstream stage look upstream: its prefix was evaluated before the stage
+    that actually sits above it in the stack.
+    """
+    positioned = []
+    for record_index, stage in enumerate(record.stages):
+        modifier = engine.nodes.modifier_of(obj, stage)
+        if modifier is None and not stage.modifier_uid:
+            modifier = engine.nodes.modifier_by_name(obj, stage)
+        index = len(obj.modifiers)
+        if modifier is not None:
+            for i, candidate in enumerate(obj.modifiers):
+                if candidate == modifier:
+                    index = i
+                    break
+        positioned.append((index, record_index, stage))
+    positioned.sort(key=lambda item: (item[0], item[1]))
+    return [stage for _index, _record_index, stage in positioned]
+
+
 def _process_object(obj):
     record = engine.stack_mod.stack_of(obj)
     if record is None or not record.stages:
@@ -204,11 +228,22 @@ def _process_object(obj):
     busy = engine._drop_removed_stages(obj, record)
     if engine._split_duplicate_stages(obj, record):
         busy = True
+    if obj.type == "SURFACE" and len(record.stages) > 1:
+        # The surface prefix has no modifier-stack evaluation path: every stage
+        # used to receive the base surface, so the second stage silently ran on
+        # the first stage's input. Refuse the configuration instead of sending
+        # wrong geometry.
+        message = "Multiple Stageloom stages on a surface object are not supported"
+        for stage in record.stages:
+            engine._set(stage, "state", engine.stack_mod.STATE_ERROR)
+            engine._set(stage, "error", message)
+            engine._no_send(record, stage, "multi-stage surface")
+        return busy
     engine._prefix_batch.clear()
     engine._prefix_batch_built = False
     engine._prefix_batching = True
     try:
-        for stage in record.stages:
+        for stage in _ordered_stages(obj, record):
             outcome = engine._process_stage(obj, record, stage)
             if outcome == "waiting":
                 # Later stages would run on a prefix that is not final yet (§9.1.5).
@@ -235,6 +270,15 @@ def _drop_removed_stages(obj, record):
     for index in range(len(record.stages) - 1, -1, -1):
         stage = record.stages[index]
         if engine.nodes.modifier_of(obj, stage) is not None:
+            continue
+        if (
+            stage.modifier_uid
+            and engine.nodes.modifier_uid_count(obj, stage.modifier_uid) > 1
+        ):
+            # The uid is shared by more than one modifier, so modifier_of()
+            # refuses to guess. Keep the stage: deleting it would turn an
+            # ambiguity into data loss.
+            engine._no_send(record, stage, "ambiguous modifier uid")
             continue
         if not stage.modifier_uid and engine.nodes.modifier_by_name(obj, stage) is not None:
             # A record from before the uid existed, whose node group is gone

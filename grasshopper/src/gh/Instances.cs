@@ -512,7 +512,10 @@ namespace Stageloom
                     var nested = new List<GH_InstanceReference>();
                     var sources = new List<GeometryBase>();
                     foreach (RhinoObject obj in docDef.GetObjects())
+                    {
+                        if (obj == null) continue;
                         CollectGeometry(obj.Geometry, meshes, curves, points, subds, breps, nested, sources);
+                    }
 
                     string prefix = "idef." + index + ".";
                     WriteGeometry(prefix, meshes, curves, points, subds, breps, nested, sources, index);
@@ -570,6 +573,7 @@ namespace Stageloom
                                        List<GH_InstanceReference> nested,
                                        List<GeometryBase> sources)
             {
+                if (obj == null) return;
                 // A block instance ModelObject (graph-side or document-backed) is
                 // the one definitive way to reach the child definition and its
                 // transform: CastTo<InstanceReferenceGeometry> refuses it, the

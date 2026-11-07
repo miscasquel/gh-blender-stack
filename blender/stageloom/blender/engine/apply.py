@@ -124,6 +124,12 @@ def _apply(obj, stage, sections, attributes=None):
     `idef.<i>.inst.*` rows fill its nested placement cloud, which the node
     group instances from.
     """
+    # A prefix batch built earlier in this pass evaluated the helpers before
+    # this write. Later stages must rebuild their prefix from the new output,
+    # not reuse the stale batch entry.
+    engine._prefix_batch.clear()
+    engine._prefix_batch_built = False
+
     base = {"mesh": [], "curves": [], "points": []}
     definitions = {}
 
@@ -427,6 +433,7 @@ def _apply_mesh(helper, entries):
     mesh = helper.data
     if not entries:
         if len(mesh.vertices) or len(mesh.polygons):
+            engine._bump_id(helper)
             mesh.clear_geometry()
             helper.update_tag()
         return
@@ -448,6 +455,7 @@ def _apply_mesh(helper, entries):
 def _apply_curves(helper, entries):
     if not entries:
         if len(helper.data.splines):
+            engine._bump_id(helper)
             helper.data.splines.clear()
             helper.update_tag()
         return
@@ -465,6 +473,7 @@ def _apply_curves(helper, entries):
 def _apply_points(helper, entries):
     if not entries:
         if len(helper.data.points):
+            engine._bump_id(helper)
             helper.data.resize(0)
             helper.update_tag()
         return

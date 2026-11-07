@@ -76,8 +76,13 @@ namespace Stageloom
                 GH_SubD subdGoo = goo as GH_SubD;
                 if (subdGoo != null)
                 {
+                    if (subdGoo.Value == null)
+                    {
+                        if (ignored != null) ignored.Add("null SubD");
+                        continue;
+                    }
                     subds.Add(subdGoo.Value);
-                    if (sources != null && subdGoo.Value != null) sources.Add(subdGoo.Value);
+                    if (sources != null) sources.Add(subdGoo.Value);
                     continue;
                 }
                 // A point cloud is how Stage In hands points over; expand it so

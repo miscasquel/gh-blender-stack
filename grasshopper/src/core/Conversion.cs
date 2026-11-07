@@ -918,6 +918,9 @@ namespace Stageloom.Core
         public static List<Section> SectionsFromSubD(SubD subd, double scale, List<WireWarning> warnings)
         {
             Mesh cage = Mesh.CreateFromSubDControlNet(subd);
+            if (cage == null)
+                throw new FrameException("bad_frame",
+                    "SubD control net could not be built");
             var sections = MeshSections(cage, scale, "subd", false);
 
             var creaseEdges = new List<uint>();
@@ -991,6 +994,11 @@ namespace Stageloom.Core
                 sections.AddRange(MeshSections(joined, scale, "mesh", true));
                 meshCount = 1;
             }
+
+            var validSubds = new List<SubD>();
+            foreach (SubD candidate in subds)
+                if (candidate != null) validSubds.Add(candidate);
+            subds = validSubds;
 
             int subdCount = 0;
             if (subds.Count > 0)

@@ -378,6 +378,18 @@ def modifier_for(stack_obj, stage_key):
     return None
 
 
+def modifier_uid_count(stack_obj, uid):
+    """How many modifiers carry one persistent uid. More than one is ambiguous:
+    guessing would repair the wrong stage onto the wrong modifier."""
+    if not uid:
+        return 0
+    count = 0
+    for mod in stack_obj.modifiers:
+        if mod.persistent_uid == uid:
+            count += 1
+    return count
+
+
 def modifier_of(stack_obj, stage):
     """The stage's modifier, found by its persistent uid first.
 
@@ -387,12 +399,27 @@ def modifier_of(stack_obj, stage):
     group is rebuilt); the group-name link alone cannot. The name link stays as
     the fallback for records saved before the uid existed. (Object duplication
     copies the uid verbatim in Blender 5.2, so a duplicate resolves through the
-    per-object search either way.)"""
+    per-object search either way.)
+
+    A repeated uid is ambiguous. Prefer the match whose node group names this
+    stage; if that still leaves more than one, return None rather than adopting
+    another stage's modifier.
+    """
     uid = getattr(stage, "modifier_uid", 0)
     if uid:
-        for mod in stack_obj.modifiers:
-            if mod.persistent_uid == uid:
-                return mod
+        matches = [mod for mod in stack_obj.modifiers if mod.persistent_uid == uid]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            wanted = group_name(stage.key)
+            named = [
+                mod for mod in matches
+                if mod.type == "NODES" and mod.node_group is not None
+                and mod.node_group.name == wanted
+            ]
+            if len(named) == 1:
+                return named[0]
+            return None
     return modifier_for(stack_obj, stage.key)
 
 
@@ -402,12 +429,20 @@ def modifier_by_name(stack_obj, stage):
     modifier's creation name (``Stageloom · <label>``). Only an *unattached* modifier
     (``node_group`` None) qualifies — one that still holds a group belongs to
     whoever owns that group's name — and binding it attaches a group, so a
-    second same-label stage cannot claim the same modifier afterwards."""
+    second same-label stage cannot claim the same modifier afterwards.
+
+    Blender's duplicate names (``... .001``) share the creation-name prefix.
+    Return a match only when exactly one unattached modifier fits, so two
+    same-label stages cannot claim each other.
+    """
     wanted = MODIFIER_PREFIX + (stage.label or stage.key)
+    matches = []
     for mod in stack_obj.modifiers:
-        if mod.type == "NODES" and mod.node_group is None and mod.name == wanted:
-            return mod
-    return None
+        if mod.type != "NODES" or mod.node_group is not None:
+            continue
+        if mod.name == wanted or mod.name.startswith(wanted + "."):
+            matches.append(mod)
+    return matches[0] if len(matches) == 1 else None
 
 
 def modifier_active(modifier):
