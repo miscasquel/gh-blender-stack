@@ -27,9 +27,9 @@ OLD_MODIFIER_PREFIX = "GH · "
 # required by _group_matches: a group from an older build (no stamp, no nested
 # chain) is stale even when the object set matches, which is what lets a
 # same-hash frame repair a session that has not applied since the format
-# changed. Version 3: nested placements are instances (one Instance on Points
-# per child, fed by the placement clouds), not baked Transform copies.
-GROUP_FORMAT = 3
+# changed. Version 4: the stage output passes through a native Bake node, so
+# the modifier carries a bake cache that renders without Grasshopper.
+GROUP_FORMAT = 4
 
 
 def group_name(stage_key):
@@ -81,6 +81,14 @@ def ensure_group(stack_obj, stage_key, nested_rows=None):
 
     join = group.nodes.new("GeometryNodeJoinGeometry")
     join.location = (0.0, 0.0)
+
+    bake = group.nodes.new("GeometryNodeBake")
+    bake.name = "Bake"
+    bake.location = (200.0, 0.0)
+    # The standard Geometry input is a real bake item only when one is declared.
+    # Without it the node emits empty geometry, even before a bake, so every
+    # stage group carries one.
+    bake.bake_items.new(socket_type="GEOMETRY", name="Geometry")
 
     output = group.nodes.new("NodeGroupOutput")
     output.location = (400.0, 0.0)
@@ -192,7 +200,8 @@ def ensure_group(stack_obj, stage_key, nested_rows=None):
 
         group.links.new(iono.outputs["Instances"], join.inputs["Geometry"])
 
-    group.links.new(join.outputs["Geometry"], output.inputs["Geometry"])
+    group.links.new(join.outputs["Geometry"], bake.inputs["Geometry"])
+    group.links.new(bake.outputs["Geometry"], output.inputs["Geometry"])
     group["gh_stack_nested"] = signature
     group["gh_stack_format"] = GROUP_FORMAT
     return group
@@ -316,8 +325,11 @@ def _reachable(definitions, wired):
 
 def _group_matches(group, helpers_map, definitions, signature="", nested_rows=None):
     """Whether the group already reads exactly this set of objects, the same
-    nested structure, and the current format."""
+    nested structure, the current format, and has the stage Bake node."""
     if group.get("gh_stack_format") != GROUP_FORMAT:
+        return False
+    bake = next((node for node in group.nodes if node.bl_idname == "GeometryNodeBake"), None)
+    if bake is None or not any(item.socket_type == "GEOMETRY" for item in bake.bake_items):
         return False
     if group.get("gh_stack_nested") != signature:
         return False

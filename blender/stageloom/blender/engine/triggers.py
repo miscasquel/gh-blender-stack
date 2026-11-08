@@ -185,6 +185,8 @@ def _on_load(scene=None):
     engine._guard_owner = None
     engine._evaluating_since = None
     engine._ticking = False
+    engine._playback_sync = False
+    engine._bake_sync = False
     for obj in engine.bpy.data.objects:
         record = engine.stack_mod.stack_of(obj)
         if record is None:
@@ -257,6 +259,12 @@ def _timer():
     panel state instead.
     """
     try:
+        if engine._playback_sync or engine._bake_sync:
+            # Play Every Frame or a native Bake is driving the stage pass
+            # synchronously from frame_change_post; an asynchronous pass for
+            # the live playhead must not race it. The playback/bake end hooks
+            # clear their flag, so the timer resumes afterwards.
+            return engine.IDLE_INTERVAL
         engine.stats["passes"] += 1
         engine._ticking = True
         # Before anything else: a guard already up at the start of a tick cannot

@@ -72,6 +72,8 @@ def recent_activity(count=8):
 _HANDLER_NAMES = (
     "depsgraph_update_post",
     "frame_change_post",
+    "animation_playback_pre",
+    "animation_playback_post",
     "load_post",
     "undo_post",
     "redo_post",

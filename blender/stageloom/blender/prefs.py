@@ -88,6 +88,17 @@ class StageloomPreferences(bpy.types.AddonPreferences):
         default=30.0,
         min=1.0,
     )
+    playback_timeout: FloatProperty(
+        name="Sync wait limit (s)",
+        description=(
+            "Play Every Frame and stage bakes wait this long for one stage per "
+            "frame before keeping the last output; 0 waits until the answer or "
+            "a disconnect"
+        ),
+        default=0.0,
+        min=0.0,
+        max=3600.0,
+    )
     data_root: StringProperty(
         name="Data root",
         description="Where the frame cache and logs live",
@@ -115,6 +126,7 @@ class StageloomPreferences(bpy.types.AddonPreferences):
         layout = self.layout
         layout.prop(self, "port")
         layout.prop(self, "timeout")
+        layout.prop(self, "playback_timeout")
         layout.prop(self, "data_root")
         layout.prop(self, "cache_size_mb")
         layout.prop(self, "log_level")

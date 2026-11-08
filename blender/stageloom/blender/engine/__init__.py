@@ -142,6 +142,17 @@ _state_since = {}
 # clone tags the depsgraph; without the guard every pass would re-mark every
 # stack dirty and the engine would never idle.
 _evaluating = False
+# True between animation_playback_pre and animation_playback_post while
+# Blender is playing in Play Every Frame (sync_mode "NONE") and the scene has a
+# stage. The playback gate then runs the stage pass synchronously inside
+# frame_change_post and the engine timer stays out of the way. Frame Drop
+# leaves this false and keeps the existing asynchronous engine behaviour.
+_playback_sync = False
+# True while a native Geometry Nodes Bake is running. Its bake job steps frames
+# and fires frame_change_post, so the same synchronous stage pass runs per frame
+# and the Bake node caches the current Grasshopper output. The timer stays out
+# of the way for the duration.
+_bake_sync = False
 # Who set the guard, and when: written once per clone, so the watchdog at the
 # top of `_timer` can name the object and stage that left it up without
 # formatting a traceback per clone. `_ticking` tells the depsgraph handler
@@ -163,6 +174,12 @@ stats = {
     "timeouts": 0,  # requests given up on after the timeout and retried in full
     "undelivered": 0,  # requests not even sent: no client socket to carry them
     "index_rebuilds": 0,  # full-scene index scans (diagnostics/tests)
+    # Playback gate: frames entered, frames fully ready, stage failures. A frame
+    # can be entered and not ready (disconnected, error, timeout), which is why
+    # the first two can differ.
+    "playback_frames": 0,
+    "playback_synced": 0,
+    "playback_failures": 0,
 }
 
 
@@ -406,7 +423,7 @@ _OWNED_COLLECTIONS = {
 def register():
     global _registered, _hot_until, _index_dirty
     global _evaluating, _guard_owner, _evaluating_since, _ticking
-    global _prefix_batch_built, _prefix_batching
+    global _prefix_batch_built, _prefix_batching, _playback_sync, _bake_sync
     if _registered:
         return
     _stage_index.clear()
@@ -439,6 +456,8 @@ def register():
     _guard_owner = None
     _evaluating_since = None
     _ticking = False
+    _playback_sync = False
+    _bake_sync = False
     for field in _heartbeat:
         _heartbeat[field] = 0 if field in ("trigger_count", "trigger_updates") else None
     _hot_until = 0.0
@@ -456,6 +475,9 @@ def register():
     for handler_list, handler in (
         (bpy.app.handlers.depsgraph_update_post, _on_depsgraph),
         (bpy.app.handlers.frame_change_post, _on_frame_change),
+        (bpy.app.handlers.frame_change_post, _on_frame_change_sync),
+        (bpy.app.handlers.animation_playback_pre, _on_playback_pre),
+        (bpy.app.handlers.animation_playback_post, _on_playback_post),
         (bpy.app.handlers.load_post, _on_load),
         (bpy.app.handlers.undo_post, _on_undo),
         (bpy.app.handlers.redo_post, _on_redo),
@@ -475,7 +497,7 @@ def register():
 
 
 def unregister():
-    global _registered
+    global _registered, _playback_sync, _bake_sync
     if not _registered:
         return
     stack_mod.set_param_changed_hook(None)
@@ -484,12 +506,17 @@ def unregister():
     for handler_list, handler in (
         (bpy.app.handlers.depsgraph_update_post, _on_depsgraph),
         (bpy.app.handlers.frame_change_post, _on_frame_change),
+        (bpy.app.handlers.frame_change_post, _on_frame_change_sync),
+        (bpy.app.handlers.animation_playback_pre, _on_playback_pre),
+        (bpy.app.handlers.animation_playback_post, _on_playback_post),
         (bpy.app.handlers.load_post, _on_load),
         (bpy.app.handlers.undo_post, _on_undo),
         (bpy.app.handlers.redo_post, _on_redo),
     ):
         if handler in handler_list:
             handler_list.remove(handler)
+    _playback_sync = False
+    _bake_sync = False
     _registered = False
 
 from .diagnostics import (
@@ -605,6 +632,12 @@ from .messages import (
     _on_client_hello,
     _report_message_failure,
     _resend_in_full,
+)
+from .playback import (
+    _on_frame_change_sync,
+    _on_playback_post,
+    _on_playback_pre,
+    _sync_playback_frame,
 )
 
 __all__ = [
@@ -722,4 +755,8 @@ __all__ = [
     "_on_client_hello",
     "_report_message_failure",
     "_resend_in_full",
+    "_on_frame_change_sync",
+    "_on_playback_post",
+    "_on_playback_pre",
+    "_sync_playback_frame",
 ]

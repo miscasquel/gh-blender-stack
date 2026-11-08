@@ -163,6 +163,176 @@ class STAGELOOM_OT_purge_orphans(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class STAGELOOM_OT_bake(bpy.types.Operator):
+    bl_idname = "stageloom.bake"
+    bl_label = "Bake Stage"
+    bl_description = (
+        "Bake this stage's output into its native Geometry Nodes Bake node over "
+        "the scene frame range. The per-frame gate waits for Grasshopper, so a "
+        "stateful definition is stepped in order; renders then read the bake"
+    )
+    bl_options = {"REGISTER"}
+
+    index: IntProperty(name="Index", default=-1)
+
+    def execute(self, context):
+        obj, _record, stage = _stage(context, self.index)
+        if stage is None:
+            return {"CANCELLED"}
+        if not bpy.data.is_saved:
+            self.report(
+                {"ERROR"},
+                "save the .blend before baking; Blender requires a saved file for bakes",
+            )
+            return {"CANCELLED"}
+        scene = context.scene
+        if scene.frame_start > scene.frame_end:
+            self.report({"ERROR"}, "the scene frame range is reversed")
+            return {"CANCELLED"}
+        group = nodes.ensure_group(obj, stage.key)
+        modifier = nodes.modifier_of(obj, stage)
+        if modifier is None:
+            self.report({"ERROR"}, "this stage has no modifier")
+            return {"CANCELLED"}
+        if not nodes.modifier_active(modifier):
+            self.report({"ERROR"}, "enable the stage modifier before baking")
+            return {"CANCELLED"}
+        modifier.node_group = group
+        # The depsgraph creates the modifier's bake entry when it sees the Bake
+        # node; force that before looking it up.
+        context.view_layer.update()
+        bake_node = next(
+            (node for node in group.nodes if node.bl_idname == "GeometryNodeBake"),
+            None,
+        )
+        entry = None
+        if bake_node is not None:
+            entry = next((item for item in modifier.bakes if item.node == bake_node), None)
+        if entry is None:
+            self.report({"ERROR"}, "the stage's Bake node is missing; rebuild the stage group")
+            return {"CANCELLED"}
+
+        entry.bake_mode = "ANIMATION"
+        entry.use_custom_simulation_frame_range = True
+        entry.frame_start = int(scene.frame_start)
+        entry.frame_end = int(scene.frame_end)
+
+        # A frozen stage would skip the per-frame gate, so a rebake has to thaw
+        # it for the duration and freeze it again on success.
+        was_frozen = bool(stage.frozen)
+        if was_frozen:
+            stage.frozen = False
+            engine.unfreeze(obj, stage)
+
+        # The native bake steps frames and fires frame_change_post. Arm the same
+        # synchronous stage pass Play Every Frame uses; the Bake node then
+        # caches the output of each frame, in order.
+        engine._bake_sync = True
+        for counter in ("playback_frames", "playback_synced", "playback_failures"):
+            engine.stats[counter] = 0
+        original = scene.frame_current
+        context.view_layer.objects.active = obj
+        obj.select_set(True)
+        try:
+            result = bpy.ops.object.geometry_node_bake_single(
+                session_uid=getattr(obj, "session_uid", 0),
+                modifier_name=modifier.name,
+                bake_id=entry.bake_id,
+            )
+        except Exception as exc:
+            result = {"CANCELLED"}
+            self.report({"ERROR"}, "bake failed: %r" % (exc,))
+        finally:
+            engine._bake_sync = False
+            try:
+                scene.frame_set(original)
+            except Exception:
+                pass
+        if "FINISHED" not in result:
+            if was_frozen:
+                stage.frozen = True
+                engine.freeze(obj, stage)
+            return {"CANCELLED"}
+        # The native cache is now the render source: stop asking Grasshopper
+        # for every frame until the user clears the bake.
+        stage.baked = True
+        stage.frozen = True
+        engine.freeze(obj, stage)
+        stats = engine.stats
+        target = entry.bake_target
+        if target == "INHERIT":
+            target = modifier.bake_target
+        keep = "; save the .blend to keep the packed bake" if target == "PACKED" else ""
+        self.report(
+            {"INFO"},
+            "Baked %d frame(s): %d ready, %d failure(s); stage frozen%s"
+            % (
+                stats["playback_frames"],
+                stats["playback_synced"],
+                stats["playback_failures"],
+                keep,
+            ),
+        )
+        return {"FINISHED"}
+
+
+class STAGELOOM_OT_clear_bake(bpy.types.Operator):
+    bl_idname = "stageloom.clear_bake"
+    bl_label = "Clear Bake"
+    bl_description = (
+        "Delete this stage's native Bake data and resume live Grasshopper. "
+        "The Bake node then passes the live stage output through again"
+    )
+    bl_options = {"REGISTER"}
+
+    index: IntProperty(name="Index", default=-1)
+
+    def execute(self, context):
+        obj, _record, stage = _stage(context, self.index)
+        if stage is None:
+            return {"CANCELLED"}
+        modifier = nodes.modifier_of(obj, stage)
+        group = modifier.node_group if modifier is not None else None
+        bake_node = None
+        entry = None
+        if group is not None:
+            bake_node = next(
+                (node for node in group.nodes if node.bl_idname == "GeometryNodeBake"),
+                None,
+            )
+            if bake_node is not None:
+                context.view_layer.update()
+                entry = next(
+                    (item for item in modifier.bakes if item.node == bake_node),
+                    None,
+                )
+        if modifier is not None and entry is not None:
+            context.view_layer.objects.active = obj
+            obj.select_set(True)
+            try:
+                result = bpy.ops.object.geometry_node_bake_delete_single(
+                    session_uid=getattr(obj, "session_uid", 0),
+                    modifier_name=modifier.name,
+                    bake_id=entry.bake_id,
+                )
+            except Exception as exc:
+                self.report({"ERROR"}, "could not delete the native bake: %r" % (exc,))
+                return {"CANCELLED"}
+            if "FINISHED" not in result:
+                self.report({"ERROR"}, "Blender did not delete the native bake")
+                return {"CANCELLED"}
+
+        stage.baked = False
+        stage.frozen = False
+        engine.unfreeze(obj, stage)
+        self.report(
+            {"INFO"},
+            "Cleared the stage bake; live Grasshopper resumed; save the .blend "
+            "to keep the cleared state",
+        )
+        return {"FINISHED"}
+
+
 class STAGELOOM_OT_copy_key(bpy.types.Operator):
     bl_idname = "stageloom.copy_key"
     bl_label = "Copy stage key"
@@ -207,6 +377,8 @@ def register():
         STAGELOOM_OT_push,
         STAGELOOM_OT_pull,
         STAGELOOM_OT_freeze,
+        STAGELOOM_OT_bake,
+        STAGELOOM_OT_clear_bake,
         STAGELOOM_OT_key_all,
         STAGELOOM_OT_purge_orphans,
         STAGELOOM_OT_copy_key,
@@ -221,6 +393,8 @@ def unregister():
         STAGELOOM_OT_copy_key,
         STAGELOOM_OT_purge_orphans,
         STAGELOOM_OT_key_all,
+        STAGELOOM_OT_bake,
+        STAGELOOM_OT_clear_bake,
         STAGELOOM_OT_freeze,
         STAGELOOM_OT_pull,
         STAGELOOM_OT_push,

@@ -19,6 +19,7 @@ _ICON_NAMES = {
     for item in bpy.types.UILayout.bl_rna.functions["label"].parameters["icon"].enum_items
 }
 _STAGE_ICON = "IMPORT_EXPORT" if "IMPORT_EXPORT" in _ICON_NAMES else "ARROW_LEFTRIGHT"
+_BAKE_ICON = "FILE_CACHE" if "FILE_CACHE" in _ICON_NAMES else "RECORD_ON"
 
 
 class STAGELOOM_PT_panel(bpy.types.Panel):
@@ -83,6 +84,12 @@ class STAGELOOM_PT_panel(bpy.types.Panel):
         row.operator("stageloom.pull", text="", icon="IMPORT").index = index
         row.operator("stageloom.freeze", text="", icon="FREEZE", depress=stage.frozen).index = index
         row.operator("stageloom.copy_key", text="", icon="COPYDOWN").index = index
+
+        row = box.row()
+        if stage.baked:
+            row.operator("stageloom.clear_bake", text="Clear Bake", icon=_BAKE_ICON).index = index
+        else:
+            row.operator("stageloom.bake", text="Bake stage", icon=_BAKE_ICON).index = index
 
         row = box.row()
         row.label(text="Key")

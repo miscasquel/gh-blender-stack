@@ -53,16 +53,25 @@ def _typed_default(entry):
 
 
 def schema_signature(stage):
-    """What the stage currently holds, for comparison with an incoming schema."""
+    """What the stage currently holds, for comparison with an incoming schema.
+
+    The declared *default* is deliberately not in here. It is only the fallback
+    shown when no value has been sent; a definition that drives the Param's
+    Default input (a frame value, for example) republishes a different default
+    every solve. Treating that as a definition change reset the generation and
+    threw away every cached frame on every playback step. Labels, types,
+    ranges and value lists still compare, because those are real declaration
+    changes.
+    """
     return [
-        (e.param_id, e.label, e.type, e.group, e.default, e.has_range,
+        (e.param_id, e.label, e.type, e.group, e.has_range,
          round(e.min, 6), round(e.max, 6), round(e.step, 6), e.values)
         for e in stage.params
     ]
 
 
 def incoming_signature(params):
-    """The same shape, built from a schema message."""
+    """The same shape, built from a schema message, without the default."""
     out = []
     for param in params:
         values = param.get("values") or []
@@ -72,7 +81,6 @@ def incoming_signature(params):
                 param.get("label") or param.get("id", ""),
                 param.get("type", "float"),
                 param.get("group") or "",
-                _default_text(param),
                 param.get("min") is not None or param.get("max") is not None,
                 round(float(param.get("min") or 0.0), 6),
                 round(float(param.get("max") or 1.0), 6),

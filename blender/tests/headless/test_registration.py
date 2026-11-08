@@ -126,7 +126,9 @@ class RegistrationReportTests(unittest.TestCase):
             report["handler_counts"],
             {
                 "depsgraph_update_post": 1,
-                "frame_change_post": 1,
+                "frame_change_post": 2,
+                "animation_playback_pre": 1,
+                "animation_playback_post": 1,
                 "load_post": 1,
                 "undo_post": 1,
                 "redo_post": 1,

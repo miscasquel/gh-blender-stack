@@ -131,6 +131,9 @@ class StageloomStage(bpy.types.PropertyGroup):
     # Freeze: no requests, and no cache replay either — the helpers keep their
     # last output. Pull still refreshes on demand (plan §9.2, §9.8).
     frozen: BoolProperty(name="Frozen", default=False)
+    # True while the stage's native Bake node holds render data. Baking freezes
+    # the stage automatically; Clear Bake removes the data and unfreezes it.
+    baked: BoolProperty(name="Baked", default=False)
     # The modifier's persistent_uid, written when the modifier is created or
     # first seen. It is what tells "the modifier was deleted" (the stage goes
     # with it) apart from "the node group was deleted" (the group is rebuilt),
