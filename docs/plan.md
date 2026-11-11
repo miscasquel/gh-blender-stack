@@ -2,7 +2,7 @@
 
 Stageloom is the new name for GH Stack. The wire protocol is unchanged.
 
-**Status:** rev 2 approved. M0 done (2026-10-10): repository skeleton, this plan, protocol draft (`docs/protocol.md`), decision records (`docs/decisions/`), spike scripts (`spikes/`). **S2 passed 2026-10-11** (transport on a background thread, `spikes/results/s2-gui.txt`, `s2-background.txt`): `websockets` 17.2 runs on a plain thread in Blender 5.2, queue handoff works, and a 4 ms `bpy.app.timers` drain holds ~5 ms median under a 2 MB load. **S1 passed 2026-10-11** (the transport gate, `spikes/results/s1.txt`): a C# `.gha` under wine connects, a background message triggers `SolveInstance` on the UI thread through `ScheduleSolution`, replies come back in 20–65 ms, and save/reopen reconnects with no dialog. The plan's `ClientWebSocket` choice was replaced by a TcpClient client (see §19). **M2 done 2026-10-11**: protocol core, ten golden fixtures verified by both codecs. **S3 passed 2026-10-11** (`spikes/results/s3.txt`): mesh round trips match exactly at 1k/10k/100k; 100k costs 30.3 ms end to end, inside the §13 budget. **S4 passed 2026-10-11** (`spikes/results/s4.txt`): the SubD tag setter works, cage SubDs are valid, curve conversion is lossless except when weights are dropped. **Demo v0 works** (`DEMO.md`): a mesh in Blender driven through Stage In/Out and a Param in Grasshopper. **S5 passed 2026-10-12**: the parameter UI (keyframes, decorators, arrays, value-list dropdown) is confirmed in the GUI. **v0.1.0 published on GitHub 2026-10-12** (ADR 0007). **S6 conversions passed 2026-10-12** (`spikes/results/s6.txt`): curves, points, SubD cages with tags, and Breps round-trip through the product conversions inside Rhino. Curves became exact by construction — each piecewise-Bezier span is a single rational Bezier Blender holds exactly — after the live run exposed a homogeneous-vs-Euclidean coordinate mix-up that distorted every rational curve. **S8 passed 2026-10-12**: the add-on ships as a Blender extension with the official pure-Python `websockets` wheel. **Prefix evaluation done 2026-10-12**: a stage sees everything before its own modifier (`GH → GN → GH` chains), a waiting stage pauses the ones after it, and layer B covers the chain (54 headless tests); reconnect resends (§8.8) and `unknown_ref` full resends (§4.3) are implemented. **W2 done 2026-10-12** (ADR 0008): the simulation-style frame cache replaced the bake operator — frames fill as the user plays/scrubs, live on disk under the data root, reset per stage on a Grasshopper-side change, schema change, document change or Push, replay with Grasshopper closed, and idle passes write nothing so Cycles accumulates (60 core + 69 headless tests). **v0.3.1 published (2026-10-21):** the post-0.3.0 review batches (review §§16–18) and the Phase 0 registration diagnostics are in; on FiraTower a dirty multi-stage pass is ~46 ms (was ~115 ms) and an idle pass ~1.5 ms. Phase 7 live acceptance, the S6 display half, S7 and acceptance A1–A10 all passed. **v0.4.0 published (2026-10-29):** the full Stageloom rebrand and the GitHub release. **v0.4.1 published (2026-11-07):** a bug-fix release for n-gon and multi-stage handling. **Playback sync and native stage bake landed 2026-11-08:** Play Every Frame waits for each stage, Frame Drop keeps latest-wins, and each stage group carries a native Geometry Nodes Bake node with Bake stage / Clear Bake. **Compact Param landed 2026-11-11:** new Param nodes hide unused optional inputs. The next work is the instance-latency re-measure and the old-component migration; the first extensions.blender.org upload is deferred.
+**Status:** rev 2 approved. M0 done (2026-10-10): repository skeleton, this plan, protocol draft (`docs/protocol.md`), decision records (`docs/decisions/`), spike scripts (`spikes/`). **S2 passed 2026-10-11** (transport on a background thread, `spikes/results/s2-gui.txt`, `s2-background.txt`): `websockets` 17.2 runs on a plain thread in Blender 5.2, queue handoff works, and a 4 ms `bpy.app.timers` drain holds ~5 ms median under a 2 MB load. **S1 passed 2026-10-11** (the transport gate, `spikes/results/s1.txt`): a C# `.gha` under wine connects, a background message triggers `SolveInstance` on the UI thread through `ScheduleSolution`, replies come back in 20–65 ms, and save/reopen reconnects with no dialog. The plan's `ClientWebSocket` choice was replaced by a TcpClient client (see §19). **M2 done 2026-10-11**: protocol core, ten golden fixtures verified by both codecs. **S3 passed 2026-10-11** (`spikes/results/s3.txt`): mesh round trips match exactly at 1k/10k/100k; 100k costs 30.3 ms end to end, inside the §13 budget. **S4 passed 2026-10-11** (`spikes/results/s4.txt`): the SubD tag setter works, cage SubDs are valid, curve conversion is lossless except when weights are dropped. **Demo v0 works** (`DEMO.md`): a mesh in Blender driven through Stage In/Out and a Param in Grasshopper. **S5 passed 2026-10-12**: the parameter UI (keyframes, decorators, arrays, value-list dropdown) is confirmed in the GUI. **v0.1.0 published on GitHub 2026-10-12** (ADR 0007). **S6 conversions passed 2026-10-12** (`spikes/results/s6.txt`): curves, points, SubD cages with tags, and Breps round-trip through the product conversions inside Rhino. Curves became exact by construction — each piecewise-Bezier span is a single rational Bezier Blender holds exactly — after the live run exposed a homogeneous-vs-Euclidean coordinate mix-up that distorted every rational curve. **S8 passed 2026-10-12**: the add-on ships as a Blender extension with the official pure-Python `websockets` wheel. **Prefix evaluation done 2026-10-12**: a stage sees everything before its own modifier (`GH → GN → GH` chains), a waiting stage pauses the ones after it, and layer B covers the chain (54 headless tests); reconnect resends (§8.8) and `unknown_ref` full resends (§4.3) are implemented. **W2 done 2026-10-12** (ADR 0008): the simulation-style frame cache replaced the bake operator — frames fill as the user plays/scrubs, live on disk under the data root, reset per stage on a Grasshopper-side change, schema change, document change or Push, replay with Grasshopper closed, and idle passes write nothing so Cycles accumulates (60 core + 69 headless tests). **v0.3.1 published (2026-10-21):** the post-0.3.0 review batches (review §§16–18) and the Phase 0 registration diagnostics are in; on FiraTower a dirty multi-stage pass is ~46 ms (was ~115 ms) and an idle pass ~1.5 ms. Phase 7 live acceptance, the S6 display half, S7 and acceptance A1–A10 all passed. **v0.4.0 published (2026-10-29):** the full Stageloom rebrand and the GitHub release. **v0.4.1 published (2026-11-07):** a bug-fix release for n-gon and multi-stage handling. **Playback sync and native stage bake landed 2026-11-08:** Play Every Frame waits for each stage, Frame Drop keeps latest-wins, and each stage group carries a native Geometry Nodes Bake node with Bake stage / Clear Bake. **Compact Param landed 2026-11-11:** new Param nodes hide unused optional inputs. **v0.5.0 published (2026-11-12):** Play Every Frame sync, native stage bake, compact Param and dormant stage-less files are released, and the live Rhino playback/bake acceptance passed. The next work is the instance-latency re-measure and the old-component migration; the first extensions.blender.org upload is deferred.
 **Authoritative copy:** `docs/plan.md` in the repository.
 **Date:** 2026-10-10.
 **Replaces:** `handoff-1-grasshopper-3dm-plugin.md` and `handoff-2-blender-3dm-addon.md` (deleted; their useful facts are in §19).
@@ -23,7 +23,7 @@ Stageloom is the new name for GH Stack. The wire protocol is unchanged.
 | D3 | Curves that cannot be represented exactly are approximated and reported as warnings. Never silent. | Decided |
 | D4 | The handoffs are removed. This document replaces them. | Done |
 | D5 | The repository (`gh-blender-stack`) lives on the local machine at `~/workspace/gh-blender-stack`. All work happens here. | Decided |
-| — | Carried over: GPL-3.0, Blender extension packaging, data root `~/.local/share/gh-stack/`, no file protocol, no rhino3dm, no GhPython. | Decided |
+| — | Carried over: GPL-3.0, Blender extension packaging, data root in the extension user data directory (Data root preference overrides), no file protocol, no rhino3dm, no GhPython. | Decided |
 
 ---
 
@@ -97,7 +97,7 @@ Blender 5.2 (this machine)                     Grasshopper / Rhino 8 (wine, this
 | `stageloom` add-on | Blender | UI, stack model, engine, WebSocket server, geometry conversion, parameter properties, frame cache |
 | `Stageloom.gha` | Grasshopper | Stage In, Stage Out, Param components; WebSocket client; schema publication |
 | Protocol | both | Versioned binary-plus-JSON messages (§8) |
-| Data root | this machine | `~/.local/share/gh-stack/`: frame cache and logs |
+| Data root | this machine | The extension user data directory (Data root preference overrides): frame cache and logs |
 
 Portal (`Portal.Gh` 0.5.2 and the patched Portal.blender 0.3.0) stays installed side by side. It uses its own port and shares no code or state with this project.
 
@@ -443,7 +443,7 @@ blender/tests/
 - Sync wait limit for Play Every Frame and stage bakes (default 0 = wait until the answer or a disconnect; max 3600 s).
 - Curve deviation warning threshold (default 0.1 mm).
 - Cache size limit.
-- Data root (default `~/.local/share/gh-stack/`).
+- Data root (default: the extension user data directory; the legacy `~/.local/share/gh-stack/` remains available as an override).
 - Log level.
 
 **UI**
@@ -480,10 +480,11 @@ gh-blender-stack/
 
 **Working loop.** Everything is local: edit, `csc` under wine, Blender headless tests, live tests with GH under wine. No SSH steps. The old cross-machine scripts are not needed.
 
-**Data root:** `~/.local/share/gh-stack/`
+**Data root:** the extension user data directory by default; the **Data root**
+preference overrides it, including the legacy `~/.local/share/gh-stack/`.
 - `cache/<stack_id>/<stage_key>/<request_id>.bin`
 - `logs/`
-- In wine, `Z:\home\<user>\.local\share\gh-stack\`
+- In wine, the same tree under the extension data directory.
 
 ---
 
@@ -588,7 +589,9 @@ drag. Instance-heavy definitions remain the one accepted performance limitation
 The 2026-11-08 playback sync and stage bake are covered headless by
 `blender/tests/headless/test_playback_sync.py` (mode selection, one request per
 frame, warm-cache replay, disconnect, timeout preference, driven default, Bake
-node); a live Rhino playback/bake pass is still pending.
+node); the live Rhino playback/bake pass passed 2026-11-11 (Play Every Frame,
+bake over the scene range, render with Grasshopper closed, Clear Bake, and a
+packed bake saved and reloaded).
 
 ---
 
@@ -645,7 +648,7 @@ Facts this plan relies on, and how each was checked. Scratch scripts live in `/t
 - GN PLY import caches by path. Rewriting the same path leaves stale geometry.
 - Setting an object-typed modifier input from Python hung headless evaluation.
 - **Instances and blocks (verified 2026-10-16/17).** Definitions are named graph-side `ModelInstanceDefinition`s (the Model Block Definition route): valid, previewing and baking with no document write at solve time. Nested placements are one `Instance on Points` per distinct child fed by placement clouds; Blender 5.2 cannot evaluate recursive node groups, so the chains are shared and static (`nodes.GROUP_FORMAT` 4, which adds the native Bake node to the stage group). A `List<T>` never casts to `List<object>`: wire-parsed headers must be read through non-generic `IList` or kept in wire shape (two silent block drops). Blender does not draw instances that reference a viewport-hidden datablock: prototypes reach `Instance on Points` through Object Info + Join copies, not Collection Info references (A/B render: 0 vs 1613 lit pixels). A referenced collection's members are references too.
-- **Live debugging recipes.** Open the autosave/`quit.blend`, enable the add-on and call `engine._prefix_sections(obj, record, stage)` to see exactly what Blender would send. Decode the newest cache file under `~/.local/share/gh-stack/cache/<stack_id>/<stage_key>/` with `codec.decode_frame` to see what Grasshopper answered. Push forces a fresh exchange; a tiny Cycles render with lit pixels counted proves drawing, not just evaluation.
+- **Live debugging recipes.** Open the autosave/`quit.blend`, enable the add-on and call `engine._prefix_sections(obj, record, stage)` to see exactly what Blender would send. Decode the newest cache file under the data root's `cache/<stack_id>/<stage_key>/` with `codec.decode_frame` to see what Grasshopper answered. Push forces a fresh exchange; a tiny Cycles render with lit pixels counted proves drawing, not just evaluation.
 - Blender ships Python 3.14.7 with numpy.
 - **S2 (2026-10-11):** `websockets` 17.2 runs on a plain background thread in Blender 5.2, with queue handoff; a 4 ms `bpy.app.timers` request holds ~5 ms median under a 2 MB stream load (max 73 ms). Two bounds: timers only fire once a script returns to the event loop, and `bpy.app.timers` is inert under `blender -b`, so layer B tests call the drain directly instead.
 - **S1 build (2026-10-11):** the wine `csc.exe` is **Mono's mcs**, not Microsoft's compiler. `ClientWebSocket` exists in Mono's real `System.dll`, but referencing it makes mcs import two `System.dll`s and fail on ambiguous types, and `/nostdlib` is not honoured by this build. The spike therefore uses a hand-rolled client over `TcpClient` (`spikes/s1/miniws.cs`), which compiles with `/sdk:4.5` and runs. `DataContractJsonSerializer` works via `/r:System.ServiceModel.Web.dll` + `/r:System.Runtime.Serialization.dll`. M4 must revisit the client choice before the transport is settled.
@@ -711,8 +714,9 @@ v0.3.1 is published (2026-10-21): the extension zip and `.gha` are built and
 verified, and on FiraTower a dirty multi-stage pass is ~46 ms (was ~115 ms).
 v0.4.0 is published (2026-10-29): the full Stageloom rebrand and the GitHub
 release. v0.4.1 is published (2026-11-07): a bug-fix release for n-gon and
-multi-stage handling. Playback sync and native stage bake landed 2026-11-08:
-Play Every Frame waits for each stage, and Bake stage / Clear Bake use a native
-Geometry Nodes Bake node. Compact Param nodes landed 2026-11-11. The next work
-is the instance-latency re-measure and the old-component migration; the first
+multi-stage handling. v0.5.0 is published (2026-11-12): Play Every Frame waits
+for each stage, Bake stage / Clear Bake use a native Geometry Nodes Bake node,
+compact Param nodes land, and a stage-less file runs no engine work. The live
+Rhino playback/bake acceptance passed 2026-11-11. The next work is the
+instance-latency re-measure and the old-component migration; the first
 extensions.blender.org upload is deferred.

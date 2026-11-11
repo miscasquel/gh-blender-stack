@@ -10,7 +10,18 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] — 2026-11-12
+
+Play Every Frame now waits for each stage, a stage can bake natively for
+rendering, and new Param nodes stay compact until you open them. A file with no
+stages no longer pays for engine work, and an edit with Grasshopper closed no
+longer reads the stage prefix.
+
+**Upgrade:** rebuild and redeploy `Stageloom.gha`, then restart Rhino. The
+Blender add-on upgrades in place; existing `.blend` stages, parameters and
+animation are preserved. Each stage's node group is rebuilt once to add its
+native Bake node, and the frame cache refills once after the upgrade. Protocol
+v2 is unchanged.
 
 ### Added
 

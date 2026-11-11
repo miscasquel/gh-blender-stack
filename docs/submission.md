@@ -1,9 +1,9 @@
 # Stageloom — extensions.blender.org submission packet
 
-**Status:** deferred. Stageloom 0.4.1 ships on GitHub first; this packet is
+**Status:** deferred. Stageloom 0.5.0 ships on GitHub first; this packet is
 retained for a later platform upload.
 
-Paste-ready copy for the upload. Version **0.4.1**, extension id
+Paste-ready copy for the upload. Version **0.5.0**, extension id
 **`stageloom`**. Stageloom is the new name for GH Stack.
 
 ## Listing fields
@@ -35,7 +35,10 @@ own stage key, cache, node group and helpers, with its parameters and animation.
 - Meshes, curves, point clouds, SubD cages with crease tags, Breps (meshed, lossy)
 - Named attributes in both directions, including `CURVE`/`POINT` curve attributes
 - Grasshopper block definitions and nested instances, both ways
-- Parameters with ranges, value lists, keyframes and drivers
+- Play Every Frame waits for each stage; native Geometry Nodes bakes render
+  without Grasshopper
+- Parameters with ranges, value lists, keyframes and drivers; compact Param
+  nodes reveal optional inputs on demand
 - Pull, Freeze, Key all, Purge orphans, a bounded disk cache, and Diagnostics
 - Loopback WebSocket only; no external service and no document writes at solve time
 
@@ -70,28 +73,29 @@ is open source under GPL-3.0-or-later in the same repository. It communicates
 only over `127.0.0.1` (localhost), never an external server. The repository
 bundles `tools/fake_gh` so a reviewer can complete the loop without Rhino.
 
-## Release notes (0.4.1)
+## Release notes (0.5.0)
 
-Stageloom 0.4.1 is a bug-fix release for multi-stage stacks. Stage Out now
-handles n-gons and holey n-gons, responses are gated to real requests, stages
-follow the modifier stack, surface objects are refused cleanly, and file-load
-state is reset before verification. Protocol v2 is unchanged.
+Stageloom 0.5.0 makes Play Every Frame wait for each stage, adds native stage
+bakes for rendering, and keeps new Param nodes compact. A stage-less file no
+longer runs the engine, and edits with Grasshopper closed skip the stage read.
+Protocol v2 is unchanged.
 
 **Upgrade:** rebuild and redeploy `Stageloom.gha`, then restart Rhino. The
 Blender add-on upgrades in place; existing `.blend` stages, parameters and
-animation are preserved.
+animation are preserved. Stage node groups rebuild once to add the native Bake
+node.
 
 ## Test evidence
 
-At the 0.4.1 release (2026-11-07):
+At the 0.5.0 release (2026-11-12):
 
 ```text
 scripts/test-core        57 tests pass
-scripts/test-blender     226 tests pass (including the offline gate)
-scripts/test-gha         12 fixtures + attribute store + link + component status + stage guard
+scripts/test-blender     238 tests pass (including the offline gate)
+scripts/test-gha         fixtures + attribute store + link + component status + stage guard pass
 scripts/test-extension   installed extension round trip: pass
 uvx ruff check --output-format=concise --ignore=E402,E741,E731 .
-blender --command extension validate dist/stageloom-0.4.1.zip
+blender --command extension validate dist/stageloom-0.5.0.zip
 ```
 
 The extension build validates the source and the artifact, pins the
@@ -103,7 +107,7 @@ location.
 ## Upload checklist (deferred)
 
 - [ ] Platform upload resumed by the repository owner.
-- [x] `dist/stageloom-0.4.1.zip` built and validated.
+- [x] `dist/stageloom-0.5.0.zip` built and validated.
 - [ ] Icon and three screenshots uploaded (`docs/listing/`).
 - [ ] Name, tagline, description, tags, support URL and release notes entered.
 - [ ] First upload submitted; moderation questions answered.

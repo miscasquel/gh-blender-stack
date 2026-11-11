@@ -13,25 +13,14 @@ build/validate, and the extensions.blender.org upload is deferred.
 **Audit handoff:** [`docs/handoff-audit-p1-p2-2026-11-07.md`](handoff-audit-p1-p2-2026-11-07.md)
 — independent audit of the P1/P2 hardening commits. The n-gon and empty-rid
 fixes were verified; the follow-up audit findings were fixed in the later
-hardening commits. The remaining follow-up is live Rhino/Blender verification.
+hardening commits. The remaining live Rhino/Blender verification passed
+2026-11-11.
 
-**Current state:** v0.4.1 is published (2026-11-07), a bug-fix release for
-multi-stage stacks. v0.3.1 (2026-10-21)
-carried the post-0.3.0 review batches: the Stage In/GhLink batch
-(`C-LINK-1`, `C-COMP-2`, `C-LINK-3`, `C-LINK-4`, `C-ATT-2`; review §16), the
-engine batch (`B-ENG-4`, `B-ENG-2`, `B-ENG-3`, `B-ENG-1`; review §17), the
-prefix batch (review §18) and the Phase 0 registration diagnostics. On
-FiraTower a dirty Cube pass is now ~46 ms (was ~115 ms) because the three stage
-prefixes share one depsgraph update; idle passes are ~1.5 ms. The residual
-cost is the single update, the cleanup flush and geometry read/apply. Phase 7
-live acceptance passed 2026-10-19; the S6 display half, S7 and acceptance A1–A10
-passed 2026-10-20
-(`docs/live-sync-report-2026-10-19.md` §5). The viewport choppiness was the
-unconditional per-tick depsgraph drain; gating it on work fixed it. A10 is done
-and covered headless, and the icon pass is in. The unreleased window adds Play
-Every Frame sync and native stage bakes (2026-11-08), and compact Param inputs
-(2026-11-11). The next work is the instance-latency re-measure and the
-old-component migration.
+**Current state:** v0.5.0 is published (2026-11-12), carrying Play Every Frame
+sync, native stage bakes, compact Param inputs and the dormant stage-less
+engine. Live playback/bake acceptance passed 2026-11-11. The next work is the
+instance-latency re-measure and the old-component migration. On FiraTower a
+dirty Cube pass is ~46 ms and an idle pass ~1.5 ms (2026-10-21).
 
 Each item says what it is, where, and why it matters. Effort is not estimated:
 the last three batches each looked like an afternoon and were not.
@@ -39,15 +28,6 @@ the last three batches each looked like an afternoon and were not.
 ---
 
 ## Reliability
-
-### Playback and bake
-
-- **Live playback and bake acceptance is pending** (2026-11-08). The Play Every
-  Frame gate and native stage bake are covered headless
-  (`blender/tests/headless/test_playback_sync.py`). Still to check live in Rhino:
-  a stateful definition stepped frame by frame in Play Every Frame, a bake over
-  the scene range, a render from the bake with Grasshopper closed, Clear Bake
-  resuming live output, and the packed-bake save/reload path.
 
 ### Grasshopper plugin
 
@@ -64,10 +44,10 @@ the last three batches each looked like an afternoon and were not.
 ## Performance
 
 Live concern recorded 2026-10-19; no cause measured yet. Transport is ruled
-out (S3: 30 ms round trip at 100k triangles, 10 ms C# mesh build). **In 0.3.1**
-the instance latency is still accepted as a known issue (the release notes name
-it); the investigation starts by re-measuring it with the rebuilt `.gha`
-loaded. The viewport choppiness from the same session was the unconditional idle
+out (S3: 30 ms round trip at 100k triangles, 10 ms C# mesh build). **Through
+0.5.0** the instance latency is still accepted as a known issue (the release
+notes name it); the investigation starts by re-measuring it with the rebuilt
+`.gha` loaded. The viewport choppiness from the same session was the unconditional idle
 depsgraph drain; gating it on work (`f69f5fc`) fixed it.
 
 - **Stage In latency with instances (300–800 ms).** One geometry instanced 13×:
@@ -110,8 +90,8 @@ depsgraph drain; gating it on work (`f69f5fc`) fixed it.
   external/system-side; re-open only if it
   reproduces with both installs disabled and the host quiet. Reproduction and
   the diagnostics are in `docs/handoff-viewport-stutter-2026-10-21.md`.
-  The unreleased engine is now dormant in a file with no stages, so that case
-  has no timer or per-frame handler to blame at all.
+  The engine is now dormant in a file with no stages, so that case has no timer
+  or per-frame handler to blame at all.
 
 ---
 
