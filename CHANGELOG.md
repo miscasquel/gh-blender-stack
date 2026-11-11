@@ -14,12 +14,36 @@ Notable changes to this project, following
 
 ### Added
 
+- **Play Every Frame waits for each stage.** In **Play Every Frame**, the
+  stage pass runs synchronously in `frame_change_post`, so the playhead
+  advances only after the current frame's Grasshopper output has been applied;
+  cached frames replay, and a disconnected stage keeps its last output.
+  **Frame Drop** keeps the existing latest-wins behaviour. A new **Sync wait
+  limit** preference caps one stage's wait per frame; 0, the default, waits
+  until the answer or a disconnect.
+- **Stages bake natively for rendering.** Each stage node group now carries a
+  native Geometry Nodes Bake node. **Bake stage** arms the same per-frame gate
+  while Blender's bake job steps the scene frame range, then freezes the stage
+  so no further Grasshopper requests are made; renders read the baked data
+  directly. **Clear Bake** deletes the native bake and unfreezes the stage. The
+  bake follows Blender's own bake target, so save the `.blend` to keep a packed
+  bake.
 - **Param nodes hide their unused optional inputs.** A new Param shows Key,
   Label and Type; the chevron at the bottom of the node (or the right-click
   menu) reveals Default, Min, Max, Step, Values and Group, and **Hide unused
   inputs** removes the optional fields with no value and no wire. An input with
   a value or a wire always stays visible. The parameter list is saved with the
   definition, so the choice sticks. Existing definitions open unchanged.
+
+### Fixed
+
+- **A driven Param default no longer resets the frame cache.** The declared
+  default is only the fallback used when no value has been sent, so it is no
+  longer part of the definition identity. A definition that drives a Param's
+  Default input (a frame value, for example) republishes a different default
+  every solve; that used to reset the stage generation and discard every cached
+  frame on each playback step. Labels, types, groups, ranges and value lists
+  still count as declaration changes.
 
 ## [0.4.1] — 2026-11-07
 

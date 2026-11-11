@@ -28,8 +28,10 @@ live acceptance passed 2026-10-19; the S6 display half, S7 and acceptance A1–A
 passed 2026-10-20
 (`docs/live-sync-report-2026-10-19.md` §5). The viewport choppiness was the
 unconditional per-tick depsgraph drain; gating it on work fixed it. A10 is done
-and covered headless, and the icon pass is in. The next work is the
-instance-latency re-measure and the old-component migration.
+and covered headless, and the icon pass is in. The unreleased window adds Play
+Every Frame sync and native stage bakes (2026-11-08), and compact Param inputs
+(2026-11-11). The next work is the instance-latency re-measure and the
+old-component migration.
 
 Each item says what it is, where, and why it matters. Effort is not estimated:
 the last three batches each looked like an afternoon and were not.
@@ -37,6 +39,15 @@ the last three batches each looked like an afternoon and were not.
 ---
 
 ## Reliability
+
+### Playback and bake
+
+- **Live playback and bake acceptance is pending** (2026-11-08). The Play Every
+  Frame gate and native stage bake are covered headless
+  (`blender/tests/headless/test_playback_sync.py`). Still to check live in Rhino:
+  a stateful definition stepped frame by frame in Play Every Frame, a bake over
+  the scene range, a render from the bake with Grasshopper closed, Clear Bake
+  resuming live output, and the packed-bake save/reload path.
 
 ### Grasshopper plugin
 

@@ -69,10 +69,19 @@ Blender                                          Rhino / Grasshopper (wine)
   backoff. The stage's modifier is its lifecycle: its toggles enable and disable
   it, deleting it removes the stage, Pull refreshes it once, Freeze parks it.
   Inspectable from the UI.
+- **Playback.** In **Play Every Frame**, the playhead waits for each stage's
+  output for the frame before advancing; cached frames replay and a disconnected
+  stage keeps its last output. **Frame Drop** keeps requests latest-wins. A
+  **Sync wait limit** preference caps the wait per stage (0 waits until the
+  answer or a disconnect).
 - **Frame cache.** The cache behaves like a simulation cache: it fills as you
   play and scrub, stores frames on disk (content-addressed, bounded, resettable
   per stage), replays with Grasshopper closed, and leaves an idle scene alone so
-  Cycles keeps accumulating samples. No explicit bake operator.
+  Cycles keeps accumulating samples.
+- **Bake.** Each stage group carries a native Geometry Nodes Bake node. **Bake
+  stage** steps the scene frame range through the same gate, freezes the stage
+  and renders from the bake with no Grasshopper request; **Clear Bake** removes
+  it and resumes live output. A packed bake is kept when the `.blend` is saved.
 - **Tests.** `scripts/test-core` (standard library only), `scripts/test-blender`
   (Blender headless against `tools/fake_gh`), `scripts/test-gha` (the C# codec
   against the golden fixtures, under wine), `scripts/test-extension` (installed
@@ -87,8 +96,8 @@ Blender                                          Rhino / Grasshopper (wine)
   kernel inside blender (surface psycho may bridge this gap)
 - The frame cache's disk format is per machine and has no persistent promise.
 - There is no separate Preview operator: a stage's output is its modifier, so
-  the viewport and render toggles are the preview switch. Freeze, Pull, Key all
-  and Purge orphans are in the Stageloom panel.
+  the viewport and render toggles are the preview switch. Freeze, Pull, Bake
+  stage, Clear Bake, Key all and Purge orphans are in the Stageloom panel.
 
 The authoritative roadmap and scope are in [docs/plan.md](docs/plan.md).
 

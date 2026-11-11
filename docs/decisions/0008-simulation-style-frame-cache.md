@@ -1,7 +1,10 @@
 # 0008 — Simulation-style frame cache, no bake operator
 
-**Status:** Accepted, 2026-10-12. Supersedes the plan's bake operator
-(`docs/plan.md` rev 2, §7 "Bake", §9.8 "Bake range").
+**Status:** Accepted, 2026-10-12. Amended by
+[0009](0009-playback-sync-and-native-stage-bake.md), 2026-11-08: the frame cache
+remains the default path, but an opt-in native stage bake and the Play Every
+Frame sync gate were added later. This record supersedes the plan's original
+bake operator (`docs/plan.md` rev 2, §7 "Bake", §9.8 "Bake range").
 
 ## Context
 
@@ -34,9 +37,10 @@ substance lives in this ADR and in the polish plan's P4 items).
 - **Reconnect and reload keep frames when the fingerprint matches** — the
   handoff's open question 2, answered yes: reopening a `.blend` reuses the disk
   cache and deletes only what mismatches.
-- **Playback never blocks.** Uncached frames keep the last good output; one
-  request is in flight per stage (Blender-like coalescing to the playhead). A
-  response for a rid the scene has moved past is cached, never displayed.
+- **Playback never blocks in Frame Drop.** Uncached frames keep the last good
+  output; one request is in flight per stage (Blender-like coalescing to the
+  playhead). A response for a rid the scene has moved past is cached, never
+  displayed. Play Every Frame later became synchronous (0009).
 - **Cached frames replay with Grasshopper closed**, so renders work from the
   cache. The cache lookup happens before the connection check.
 - **Idle stability.** Engine writes are change-gated; the prefix evaluation is
@@ -49,7 +53,8 @@ substance lives in this ADR and in the polish plan's P4 items).
 
 Out: the Bake operator, manual frame ranges, cache management UI, the
 per-stage cache readout (the state row already reads "waiting"). The disk format
-is private and has no stability promise.
+is private and has no stability promise. (Amended by 0009: an opt-in native
+Bake node now exists for rendering; the frame cache is unchanged.)
 
 ## Consequences
 

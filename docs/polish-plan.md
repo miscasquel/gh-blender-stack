@@ -1150,7 +1150,8 @@ Deliberately **not** in this plan, with reasons.
   scope; noted for the next protocol revision.
 - **`docs/plan.md` §7/§9.8/§13** still describe the bake operator that ADR 0008
   supersedes. That is a roadmap edit, not cleanup, and belongs with the next
-  planning pass.
+  planning pass. *(Resolved 2026-11-08: the plan now describes the frame cache,
+  the Play Every Frame gate and the opt-in native stage bake; see ADR 0009.)*
 
 ---
 

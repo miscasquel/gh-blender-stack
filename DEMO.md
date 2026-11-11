@@ -19,12 +19,15 @@ Blender                                     Rhino / Grasshopper (wine)
   B-rep. A Blender surface object cannot hold a stage in Blender 5.2 (it cannot
   take a Geometry Nodes modifier); convert it to a mesh first.
 - There is no separate Preview operator: a stage's output is its modifier, so
-  the viewport and render toggles are the preview switch. Freeze, Pull, Key all
-  and Purge orphans live in the Stageloom panel and the Diagnostics section.
+  the viewport and render toggles are the preview switch. Freeze, Pull, Bake
+  stage, Clear Bake, Key all and Purge orphans live in the Stageloom panel and
+  the Diagnostics section.
 - The frame cache writes to disk (`~/.local/share/gh-stack/`) and fills as you
-  play and scrub; there is no bake operator.
-- The `Param` component takes a **Key** input (a demo deviation from the plan's
-  signature; the plan assumes one stage per document).
+  play and scrub. For a final render, **Bake stage** caches the output through a
+  native Geometry Nodes Bake node; **Clear Bake** returns the stage to live
+  Grasshopper.
+- The `Param` component takes a **Key** input, which ties the parameter to its
+  stage.
 - Text parameters have a plain field (not animatable, by design). A value-list
   parameter (Type 5) draws a dropdown; its output is the selected index.
 
@@ -94,8 +97,8 @@ in Blender's Preferences > Add-ons. The panel is in the 3D viewport sidebar
 
    Put a **Panel** on the canvas containing the stage key text, and connect that
    Panel to `Stage In.Key`, `Stage Out.Key` and `Param.Key`. The Param defaults
-   are fine as they are: label `parameter`, type 0 (float), default 1.0, and no
-   min/max until you give one.
+   are fine as they are: label `parameter`, type 0 (float), and Default left
+   hidden (it falls back to 1.0), with no min/max until you give one.
 
 3. **Watch Blender.** Within a tick the stage goes to `ok`, the object shows the
    scaled mesh, and the panel gains a **Scale** slider. Drag it: the mesh follows.

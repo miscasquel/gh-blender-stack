@@ -75,6 +75,7 @@ Sent after `hello`, and again whenever a Param component's declaration changes.
 - `type` is one of: `float`, `int`, `bool`, `vector3`, `color`, `value_list`, `text`.
 - `values` is used only for `value_list`: the entries offered as a dropdown in Blender (a list of strings). The parameter value is the index into that list, so the wire value is an integer.
 - `id` is a GUID generated once per Param component. It never changes, so keyframes survive renames.
+- `default` is the fallback value, not part of the declaration identity: a graph can drive it and republish a different value on every solve, so Blender does not treat that as a schema change. Labels, types, groups, ranges, steps and value lists still count as declaration changes.
 - Removed parameters are omitted from later `schema` messages. Blender moves their keys to the orphan list. It does not delete them.
 
 ### 4.3 `request` (Blender → GH)

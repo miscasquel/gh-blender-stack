@@ -2,7 +2,7 @@
 
 Stageloom is the new name for GH Stack. The wire protocol is unchanged.
 
-**Status:** rev 2 approved. M0 done (2026-10-10): repository skeleton, this plan, protocol draft (`docs/protocol.md`), decision records (`docs/decisions/`), spike scripts (`spikes/`). **S2 passed 2026-10-11** (transport on a background thread, `spikes/results/s2-gui.txt`, `s2-background.txt`): `websockets` 17.2 runs on a plain thread in Blender 5.2, queue handoff works, and a 4 ms `bpy.app.timers` drain holds ~5 ms median under a 2 MB load. **S1 passed 2026-10-11** (the transport gate, `spikes/results/s1.txt`): a C# `.gha` under wine connects, a background message triggers `SolveInstance` on the UI thread through `ScheduleSolution`, replies come back in 20–65 ms, and save/reopen reconnects with no dialog. The plan's `ClientWebSocket` choice was replaced by a TcpClient client (see §19). **M2 done 2026-10-11**: protocol core, ten golden fixtures verified by both codecs. **S3 passed 2026-10-11** (`spikes/results/s3.txt`): mesh round trips match exactly at 1k/10k/100k; 100k costs 30.3 ms end to end, inside the §13 budget. **S4 passed 2026-10-11** (`spikes/results/s4.txt`): the SubD tag setter works, cage SubDs are valid, curve conversion is lossless except when weights are dropped. **Demo v0 works** (`DEMO.md`): a mesh in Blender driven through Stage In/Out and a Param in Grasshopper. **S5 passed 2026-10-12**: the parameter UI (keyframes, decorators, arrays, value-list dropdown) is confirmed in the GUI. **v0.1.0 published on GitHub 2026-10-12** (ADR 0007). **S6 conversions passed 2026-10-12** (`spikes/results/s6.txt`): curves, points, SubD cages with tags, and Breps round-trip through the product conversions inside Rhino. Curves became exact by construction — each piecewise-Bezier span is a single rational Bezier Blender holds exactly — after the live run exposed a homogeneous-vs-Euclidean coordinate mix-up that distorted every rational curve. **S8 passed 2026-10-12**: the add-on ships as a Blender extension with the official pure-Python `websockets` wheel. **Prefix evaluation done 2026-10-12**: a stage sees everything before its own modifier (`GH → GN → GH` chains), a waiting stage pauses the ones after it, and layer B covers the chain (54 headless tests); reconnect resends (§8.8) and `unknown_ref` full resends (§4.3) are implemented. **W2 done 2026-10-12** (ADR 0008): the simulation-style frame cache replaced the bake operator — frames fill as the user plays/scrubs, live on disk under the data root, reset per stage on a Grasshopper-side change, schema change, document change or Push, replay with Grasshopper closed, and idle passes write nothing so Cycles accumulates (60 core + 69 headless tests). **v0.3.1 published (2026-10-21):** the post-0.3.0 review batches (review §§16–18) and the Phase 0 registration diagnostics are in; on FiraTower a dirty multi-stage pass is ~46 ms (was ~115 ms) and an idle pass ~1.5 ms. Phase 7 live acceptance, the S6 display half, S7 and acceptance A1–A10 all passed. **v0.4.0 published (2026-10-29):** the full Stageloom rebrand and the GitHub release. **v0.4.1 published (2026-11-07):** a bug-fix release for n-gon and multi-stage handling. The next work is the instance-latency re-measure and the old-component migration; the first extensions.blender.org upload is deferred.
+**Status:** rev 2 approved. M0 done (2026-10-10): repository skeleton, this plan, protocol draft (`docs/protocol.md`), decision records (`docs/decisions/`), spike scripts (`spikes/`). **S2 passed 2026-10-11** (transport on a background thread, `spikes/results/s2-gui.txt`, `s2-background.txt`): `websockets` 17.2 runs on a plain thread in Blender 5.2, queue handoff works, and a 4 ms `bpy.app.timers` drain holds ~5 ms median under a 2 MB load. **S1 passed 2026-10-11** (the transport gate, `spikes/results/s1.txt`): a C# `.gha` under wine connects, a background message triggers `SolveInstance` on the UI thread through `ScheduleSolution`, replies come back in 20–65 ms, and save/reopen reconnects with no dialog. The plan's `ClientWebSocket` choice was replaced by a TcpClient client (see §19). **M2 done 2026-10-11**: protocol core, ten golden fixtures verified by both codecs. **S3 passed 2026-10-11** (`spikes/results/s3.txt`): mesh round trips match exactly at 1k/10k/100k; 100k costs 30.3 ms end to end, inside the §13 budget. **S4 passed 2026-10-11** (`spikes/results/s4.txt`): the SubD tag setter works, cage SubDs are valid, curve conversion is lossless except when weights are dropped. **Demo v0 works** (`DEMO.md`): a mesh in Blender driven through Stage In/Out and a Param in Grasshopper. **S5 passed 2026-10-12**: the parameter UI (keyframes, decorators, arrays, value-list dropdown) is confirmed in the GUI. **v0.1.0 published on GitHub 2026-10-12** (ADR 0007). **S6 conversions passed 2026-10-12** (`spikes/results/s6.txt`): curves, points, SubD cages with tags, and Breps round-trip through the product conversions inside Rhino. Curves became exact by construction — each piecewise-Bezier span is a single rational Bezier Blender holds exactly — after the live run exposed a homogeneous-vs-Euclidean coordinate mix-up that distorted every rational curve. **S8 passed 2026-10-12**: the add-on ships as a Blender extension with the official pure-Python `websockets` wheel. **Prefix evaluation done 2026-10-12**: a stage sees everything before its own modifier (`GH → GN → GH` chains), a waiting stage pauses the ones after it, and layer B covers the chain (54 headless tests); reconnect resends (§8.8) and `unknown_ref` full resends (§4.3) are implemented. **W2 done 2026-10-12** (ADR 0008): the simulation-style frame cache replaced the bake operator — frames fill as the user plays/scrubs, live on disk under the data root, reset per stage on a Grasshopper-side change, schema change, document change or Push, replay with Grasshopper closed, and idle passes write nothing so Cycles accumulates (60 core + 69 headless tests). **v0.3.1 published (2026-10-21):** the post-0.3.0 review batches (review §§16–18) and the Phase 0 registration diagnostics are in; on FiraTower a dirty multi-stage pass is ~46 ms (was ~115 ms) and an idle pass ~1.5 ms. Phase 7 live acceptance, the S6 display half, S7 and acceptance A1–A10 all passed. **v0.4.0 published (2026-10-29):** the full Stageloom rebrand and the GitHub release. **v0.4.1 published (2026-11-07):** a bug-fix release for n-gon and multi-stage handling. **Playback sync and native stage bake landed 2026-11-08:** Play Every Frame waits for each stage, Frame Drop keeps latest-wins, and each stage group carries a native Geometry Nodes Bake node with Bake stage / Clear Bake. **Compact Param landed 2026-11-11:** new Param nodes hide unused optional inputs. The next work is the instance-latency re-measure and the old-component migration; the first extensions.blender.org upload is deferred.
 **Authoritative copy:** `docs/plan.md` in the repository.
 **Date:** 2026-10-10.
 **Replaces:** `handoff-1-grasshopper-3dm-plugin.md` and `handoff-2-blender-3dm-addon.md` (deleted; their useful facts are in §19).
@@ -107,9 +107,9 @@ Portal (`Portal.Gh` 0.5.2 and the patched Portal.blender 0.3.0) stays installed 
 
 | Thing | Visible | Contents |
 |---|---|---|
-| Stack object | Yes | Base geometry, native modifiers, `gh_stack_id` (uuid), stage records (key, label, state, current request ID, applied output hash, last error, timings, frozen flag), and the parameter custom props. |
+| Stack object | Yes | Base geometry, native modifiers, `gh_stack_id` (uuid), stage records (key, label, state, current request ID, applied output hash, last error, timings, frozen flag, baked flag), and the parameter custom props. |
 | GH stage modifier | Yes, in the modifier panel | Geometry Nodes modifier built from the "Stageloom Stage" template. Named by its label, e.g. `Stageloom · Panelize`. |
-| Stage node group | No | One per stage, owned by that modifier. Named `SL <key>`. Custom props: `gh_stage_key`, `gh_stack_id`. Nodes: one Object Info per geometry type → Join Geometry → Group Output. The group input is ignored. |
+| Stage node group | No | One per stage, owned by that modifier. Named `SL <key>`. Custom props: `gh_stage_key`, `gh_stack_id`. Nodes: one Object Info per geometry type → Join Geometry → native Bake node → Group Output. The Bake node carries one Geometry bake item and passes the live output through until the stage is baked. The group input is ignored. |
 | Helpers | No | Hidden objects in `Stageloom Stage Data`, owned by the dedicated **Stageloom Stage** scene (never linked into the user's scene, so the outliner stays theirs). Created on first use, one per geometry type per stage (mesh, curves, points). Identity transform, data in stack-local space. Named `SL <stack>.<key>.<kind>`. |
 | Parameters | Yes, on the stack object | Custom props `gh/<stage_key>/<param_id>` with UI ranges and defaults. |
 | Cache | Disk and memory | Content-addressed responses, keyed by request ID. |
@@ -186,7 +186,10 @@ which has no attribute API to write back into.
 ## 7. Parameters and animation
 
 **GH side.** A `Param` component declares a parameter:
-- A GUID, a label, and a type: float, int, bool, vector3, color, value list, or text.
+- A Key (the stage it belongs to), a label, and a type: float, int, bool, vector3,
+  color, value list, or text.
+- A GUID generated once and stored on the component; it never changes, so
+  keyframes survive renames.
 - A default, a range, and a step.
 - A group label.
 
@@ -214,9 +217,13 @@ It outputs the value Blender sends when connected, or the default otherwise.
 
 **Parameter UI.** A "GH Parameters" panel per stage shows the widgets, with a "Key all" button that keys every parameter at the current frame (int, bool and value-list keys are constant-interpolated; text is not animatable). Single parameters are keyed and cleared through Blender's own decorators (the keyframe diamond, the context menu, the Dope Sheet). Keyframe and driver decorators are verified in spike S5. Parameters removed from GH move to an orphan list, so their keyframes are not dropped silently. Orphans can be purged explicitly.
 
-**Frame cache.** The cache behaves like Geometry Nodes simulation caches: it fills as the user plays and scrubs, with no bake setup and no frame range fields. The content-addressed response store *is* the frame cache — a keyframed parameter produces a different request ID per frame, so frames are keyed by their content, not by frame number. Frames are written to the disk store as they arrive (raw protocol frame plus a generation/fingerprint sidecar) and replay in any order. A per-stage generation resets the stage's frames when Grasshopper sends something that makes them describe the wrong definition: a slider upstream of Stage Out (the same request ID answered with a different output hash), a schema change, a reconnecting document, or a manual Push. A re-opened session reuses frames whose generation and definition fingerprint still match (ADR 0008). No bake operator exists.
+**Frame cache.** The cache behaves like Geometry Nodes simulation caches: it fills as the user plays and scrubs, with no required bake setup and no stage-side frame range. The content-addressed response store *is* the frame cache — a keyframed parameter produces a different request ID per frame, so frames are keyed by their content, not by frame number. Frames are written to the disk store as they arrive (raw protocol frame plus a generation/fingerprint sidecar) and replay in any order. A per-stage generation resets the stage's frames when Grasshopper sends something that makes them describe the wrong definition: a slider upstream of Stage Out (the same request ID answered with a different output hash), a declaration change, a reconnecting document, or a manual Push. A declaration change means the label, type, group, range, step or value list changed; the fallback default is deliberately excluded, because a graph can drive it and republish a different value every solve. A re-opened session reuses frames whose generation and definition fingerprint still match (ADR 0008).
 
-**Playback without a warm cache.** Frames that are not cached show last-good geometry; the state row reads "waiting". One request is in flight per stage (latest-wins): when the playhead moves while an answer is coming, the requested frames coalesce to wherever the playhead is when the answer arrives. A response for a request the scene has moved past is cached, never displayed. Cached frames replay with Grasshopper closed, so renders run from the cache.
+**Playback.** In **Play Every Frame**, a `frame_change_post` handler runs the normal engine pass synchronously, so the playhead waits until each stage has applied the current frame's output. Cached frames replay, and a disconnected client keeps the last output. **Frame Drop** keeps the asynchronous latest-wins path described next. A **Sync wait limit** preference caps one stage's wait per frame; the default 0 waits until the answer or a disconnect.
+
+**Playback without a warm cache (Frame Drop).** Frames that are not cached show last-good geometry; the state row reads "waiting". One request is in flight per stage (latest-wins): when the playhead moves while an answer is coming, the requested frames coalesce to wherever the playhead is when the answer arrives. A response for a request the scene has moved past is cached, never displayed. Cached frames replay with Grasshopper closed, so renders run from the cache.
+
+**Stage bake.** For a final render, **Bake stage** opts into a native Geometry Nodes Bake node in the stage group. It arms the same synchronous gate while Blender's bake job steps the scene frame range, then freezes the stage so no further Grasshopper requests are made. Renders read the baked data directly; there is no Grasshopper code in the render path. **Clear Bake** deletes the native bake and unfreezes the stage. The bake follows Blender's own bake target, so a packed bake survives only once the `.blend` is saved.
 
 ---
 
@@ -303,20 +310,23 @@ A stage's prefix never includes its own parameters, so a parameter change cannot
 ### 9.2 States
 `idle` · `waiting` · `ok` · `error` · `disconnected` · `disabled` (no requests; downstream receives input directly) · `frozen` (no requests; the helper keeps its last output) · `unbound` (no GH document has answered yet; also the state a rebuilt stage carries until an answer arrives).
 
-`disabled` is derived, not stored: a stage is active while its modifier is visible in any context — viewport, render, or edit mode — so all three toggles off is the off switch, and the add-on never writes a toggle back (plan §11). `frozen` is its own flag: it stops requests *and* cache replay, and Push skips frozen stages entirely.
+`disabled` is derived, not stored: a stage is active while its modifier is visible in any context — viewport, render, or edit mode — so all three toggles off is the off switch, and the add-on never writes a toggle back (plan §11). `frozen` is its own flag: it stops requests *and* cache replay, and Push skips frozen stages entirely. A stage baked through the native Bake node is frozen until **Clear Bake**.
 
 ### 9.3 Latest-wins
 - One request is in flight per stage. A new request supersedes the previous one.
 - Stale responses are cached, not discarded.
+- This is the normal asynchronous path and Frame Drop. Play Every Frame makes the pass synchronous instead (§7).
 
 ### 9.4 Triggers
 - Depsgraph updates, coalesced to one pass per tick. The timer drains the depsgraph before a pass that has work, so an update that is already tagged is delivered to the handler before a prefix clone can mute it; a GUI tick with nothing to process does not force an evaluation (background sessions, where the tests drive the timer directly, keep the drain every tick). The active Edit Mode datablock is flushed in the same breath. Any tagged update retires every memoized prefix (one global generation; see §9.6), and a reconnect or file load verifies each stage against Grasshopper once even when a cached frame answers. A pass whose stage has a young request outstanding returns before reading the prefix; past the soft retry (1 s) the current state supersedes the stale request, and the hard timeout resends in full.
 - Frame change, which also reaches parameters through the animation system.
+- Animation playback (`animation_playback_pre`/`animation_playback_post`) arms and disarms the Play Every Frame gate; `frame_change_post` runs the synchronous stage pass while the gate is armed, and while a native stage bake steps frames.
 - Incoming messages, drained from a queue by a main-thread timer: every 5 ms while any stage is waiting, every 20 ms otherwise. **Verified in S2:** a 4 ms timer request holds ~5 ms median in the GUI, including under a 2 MB load, so the 5 ms target is reachable. Two findings bound the design: timers only fire after a script returns to the event loop (they are inert during a blocking main-thread script), and `bpy.app.timers` does not tick at all in `blender -b`. Layer B tests therefore call the same drain function directly instead of waiting on timers.
 - Operators.
 
 ### 9.5 Timeouts and failures
 - Default timeout: 30 s, configurable.
+- The Play Every Frame and bake sync wait limit is separate (`playback_timeout`, default 0 = wait until the answer or a disconnect; max 3600 s).
 - A timeout or GH error sets `error`, keeps the last good output, and shows the message.
 - The engine retries on the next change or on Push. It does not loop on failures.
 
@@ -328,19 +338,22 @@ A stage's prefix never includes its own parameters, so a parameter change cannot
 
 ### 9.7 Undo, save, reload
 - Stage records, helper data, and node groups live in the `.blend`.
+- The `baked` flag and native bake data belong to the stage and modifier. Blender's bake target decides where the data lives; a packed bake is written only when the `.blend` is saved.
 - The disk cache is content-addressed, so restoring an earlier state is a cache hit.
 - On load, stages are re-bound by key. Missing helpers or node groups are rebuilt and marked `unbound`; a missing *modifier* is not repaired — deleting it removes the stage (§9.8).
 - The stage's modifier is linked by its `persistent_uid`, which survives a deleted or swapped node group; the group-name link stays as the fallback for records saved before the uid and for duplicated objects.
 - The engine's timer and handlers are persistent (Blender clears non-persistent ones on every file load), and a load resets mid-request stages, marks every stack for evaluation, and verifies each stage against Grasshopper once — cache or not — so a reopened file talks to Grasshopper without an edit and a document that changed while the file was closed cannot replay from the frame cache.
 
 ### 9.8 Operators
-Add Stage, Push, Pull, Freeze, Key all, Purge orphans. All are undo-safe. (Bake range is removed: the frame cache fills during playback, ADR 0008.)
+Add Stage, Push, Pull, Freeze, Bake stage, Clear Bake, Key all, Purge orphans. All are undo-safe. (The frame cache needs no bake; **Bake stage** is an optional native bake for rendering, ADR 0009.)
 
 - **Add Stage** creates a node group from the template, assigns a new key, creates the helpers on first use, and inserts the modifier after the active one.
 - **Remove Stage** is native: deleting the stage's modifier removes the stage, its helpers, its block definitions and its parameter properties. The node group is removed when it has no users. Cache entries are kept.
 - **Push** forces a fresh request for every live stage and resets the stack's frame cache. Frozen stages are skipped entirely.
 - **Pull** asks Grasshopper for one stage's output again without resetting the frame cache; it is also how a frozen stage is refreshed once, on demand.
 - **Freeze** stops requests and cache replay; the helpers keep their last output.
+- **Bake stage** requires a saved `.blend`, an active stage modifier and a forward scene frame range. It sets the stage Bake node to an animation bake over the scene range, arms the synchronous gate while Blender steps the frames, then freezes the stage. A packed bake is written when the `.blend` is saved.
+- **Clear Bake** deletes the native bake data, clears the baked flag, unfreezes the stage and resumes live Grasshopper.
 - **Key all** keys every parameter of a stage at the current frame (see §7).
 - **Purge orphans** deletes parameter properties Grasshopper no longer declares, with their keyframes; until then they stay in the orphan list (protocol §4.2).
 
@@ -426,6 +439,7 @@ blender/tests/
 **Preferences**
 - Server port (default 59130; 9130 through 0.2.2, where BlenderKit sits).
 - Timeout (default 30 s).
+- Sync wait limit for Play Every Frame and stage bakes (default 0 = wait until the answer or a disconnect; max 3600 s).
 - Curve deviation warning threshold (default 0.1 mm).
 - Cache size limit.
 - Data root (default `~/.local/share/gh-stack/`).
@@ -433,7 +447,7 @@ blender/tests/
 
 **UI**
 - Modifier panel: native and authoritative for lifecycle. GH stages appear as normal modifiers: the viewport, render and edit-mode toggles enable and disable the stage, drag reorders it, and X removes the stage with its helpers and parameters.
-- N-panel "Stageloom": per-stage rows showing label, copyable key, state, warnings, and errors, with Pull and Freeze buttons; Add Stage and Push at the stack. The Diagnostics child panel lists orphaned parameters and purges them.
+- N-panel "Stageloom": per-stage rows showing label, copyable key, state, warnings, and errors, with Pull, Freeze, Bake stage and Clear Bake buttons; Add Stage and Push at the stack. The Diagnostics child panel lists orphaned parameters and purges them.
 - N-panel "GH Parameters": one section per stage, with widgets, keyframe decorators, and Key all.
 - Status bar or header indicator for connection: listening, connected (with GH document name), or error.
 
@@ -481,9 +495,10 @@ gh-blender-stack/
 4. Binary arrays through `foreach_get` and `foreach_set`. Never `from_pydata` on the update path.
 5. Update mesh data in place. Objects and modifiers are never recreated.
 6. Drags are coalesced to one update per tick.
-7. Playback never blocks. Uncached frames show last-good output.
-8. Uncached frames never block playback; the cache fills as frames arrive and is bounded by the cache size limit.
-9. Per-tick engine work stays small. A large apply may cost one frame.
+7. Frame Drop never blocks. Uncached frames show last-good output.
+8. Play Every Frame waits for each stage's current output; the sync wait limit caps a single stage's wait.
+9. Uncached frames never block Frame Drop; the cache fills as frames arrive and is bounded by the cache size limit.
+10. Per-tick engine work stays small. A large apply may cost one frame.
 
 **Measured this session** (Blender 5.2.2; `websockets` 17.2 locally; about 100k triangles unless noted)
 
@@ -512,7 +527,7 @@ GH solve time will dominate real definitions. The transport is not the bottlenec
 ## 14. Testing
 
 - **Layer A, pure core.** Codec round trips, hashing, request-ID stability, rule decisions, latest-wins, stale responses, cache behavior. Standard-library `unittest`.
-- **Layer B, Blender headless.** `blender -b --factory-startup --python-exit-code 1`. Templates and ownership, in-place updates, prefix evaluation, parameters through keyframes and drivers, the frame cache (fill, replay, resets, eviction), undo and redo, save and reload, disconnect and reconnect. Runs against `tools/fake_gh`. Note: `bpy.app.timers` is inert under `-b` (S2), so layer B drives the queue drain directly rather than through the timer the GUI uses.
+- **Layer B, Blender headless.** `blender -b --factory-startup --python-exit-code 1`. Templates and ownership, in-place updates, prefix evaluation, parameters through keyframes and drivers, the frame cache (fill, replay, resets, eviction), the Play Every Frame sync gate and native bake (`test_playback_sync.py`), undo and redo, save and reload, disconnect and reconnect. Runs against `tools/fake_gh`. Note: `bpy.app.timers` is inert under `-b` (S2), so layer B drives the queue drain directly rather than through the timer the GUI uses.
 - **Layer C, GH.** Codec and conversion tests under wine on Linux. Live tests: one round trip, parameter changes, save and reopen, GH closed and reopened.
 - **Layer D, end-to-end and bench.** Real definitions and a GN chain. Timings at 1k, 10k, and 100k triangles per hop.
 - **Golden frames** in `protocol/fixtures/`. Both sides must encode and decode them identically.
@@ -569,6 +584,11 @@ for a 100k-triangle round trip and ~10% engine main-thread share on the 60-edit
 drag. Instance-heavy definitions remain the one accepted performance limitation
 (CHANGELOG known limitations).
 
+The 2026-11-08 playback sync and stage bake are covered headless by
+`blender/tests/headless/test_playback_sync.py` (mode selection, one request per
+frame, warm-cache replay, disconnect, timeout preference, driven default, Bake
+node); a live Rhino playback/bake pass is still pending.
+
 ---
 
 ## 17. Risks
@@ -584,7 +604,7 @@ drag. Instance-heavy definitions remain the one accepted performance limitation
 | Mixed geometry does not display or propagate as expected | S6 before stage types are finalized |
 | Curves need approximation | Approximate, count, and warn (D3) |
 | Parameter renames and schema changes orphan keyframes | Keys use GUIDs. Orphan list and purge |
-| Playback outruns GH | Latest-wins, cache-served playback; frames replay from the content-addressed cache |
+| Playback outruns GH | Frame Drop uses latest-wins, cache-served playback; Play Every Frame waits for each stage; frames replay from the content-addressed cache |
 | Int, bool, and value-list keyframes interpolate between values | Constant interpolation. GH casts the value |
 | Two GH documents claim one stage key | Conflict detection and error state |
 | Port clash with Portal's server | Separate default port, configurable |
@@ -623,7 +643,7 @@ Facts this plan relies on, and how each was checked. Scratch scripts live in `/t
 - `sharp_face` and `UVMap` stay in the generic attribute path (measured 2026-10-17, 100k triangles): UVMap adds 1.61 MB per frame (1.61 → 3.22 MB) and ~0.9 ms (hash + encode + read: 8.2 → 9.1 ms against the 16 ms tick budget); `sharp_face` adds ~50 KB and ~0.02 ms. A triangulated 100k (301k loops) leaves ~2 ms tick headroom; the round-trip figure is extrapolated, not measured. Decision: keep both.
 - GN PLY import caches by path. Rewriting the same path leaves stale geometry.
 - Setting an object-typed modifier input from Python hung headless evaluation.
-- **Instances and blocks (verified 2026-10-16/17).** Definitions are named graph-side `ModelInstanceDefinition`s (the Model Block Definition route): valid, previewing and baking with no document write at solve time. Nested placements are one `Instance on Points` per distinct child fed by placement clouds; Blender 5.2 cannot evaluate recursive node groups, so the chains are shared and static (`nodes.GROUP_FORMAT` 3). A `List<T>` never casts to `List<object>`: wire-parsed headers must be read through non-generic `IList` or kept in wire shape (two silent block drops). Blender does not draw instances that reference a viewport-hidden datablock: prototypes reach `Instance on Points` through Object Info + Join copies, not Collection Info references (A/B render: 0 vs 1613 lit pixels). A referenced collection's members are references too.
+- **Instances and blocks (verified 2026-10-16/17).** Definitions are named graph-side `ModelInstanceDefinition`s (the Model Block Definition route): valid, previewing and baking with no document write at solve time. Nested placements are one `Instance on Points` per distinct child fed by placement clouds; Blender 5.2 cannot evaluate recursive node groups, so the chains are shared and static (`nodes.GROUP_FORMAT` 4, which adds the native Bake node to the stage group). A `List<T>` never casts to `List<object>`: wire-parsed headers must be read through non-generic `IList` or kept in wire shape (two silent block drops). Blender does not draw instances that reference a viewport-hidden datablock: prototypes reach `Instance on Points` through Object Info + Join copies, not Collection Info references (A/B render: 0 vs 1613 lit pixels). A referenced collection's members are references too.
 - **Live debugging recipes.** Open the autosave/`quit.blend`, enable the add-on and call `engine._prefix_sections(obj, record, stage)` to see exactly what Blender would send. Decode the newest cache file under `~/.local/share/gh-stack/cache/<stack_id>/<stage_key>/` with `codec.decode_frame` to see what Grasshopper answered. Push forces a fresh exchange; a tiny Cycles render with lit pixels counted proves drawing, not just evaluation.
 - Blender ships Python 3.14.7 with numpy.
 - **S2 (2026-10-11):** `websockets` 17.2 runs on a plain background thread in Blender 5.2, with queue handoff; a 4 ms `bpy.app.timers` request holds ~5 ms median under a 2 MB stream load (max 73 ms). Two bounds: timers only fire once a script returns to the event loop, and `bpy.app.timers` is inert under `blender -b`, so layer B tests call the drain directly instead.
@@ -656,7 +676,7 @@ Facts this plan relies on, and how each was checked. Scratch scripts live in `/t
 
 **Earlier findings superseded by this plan**
 - rhino3dm: no longer used, since all Rhino work happens on the GH side. Its binary does contain SubD sharpness symbols, which remains a possible fallback, but D2 rules it out.
-- File protocol, `E<k>_<slug>` naming, the Base/Result split, the custom stack list, the GN Bake stage, per-piece `link.id`, and curves-as-loose-edges are all dropped.
+- File protocol, `E<k>_<slug>` naming, the Base/Result split, the custom stack list, the GN Bake stage, per-piece `link.id`, and curves-as-loose-edges are all dropped. (The native Geometry Nodes Bake node added 2026-11-08 is not the dropped GN Bake stage: it is Blender's own Bake node inside the stage group, used only by the opt-in stage bake.)
 
 ---
 
@@ -666,7 +686,8 @@ v0.1.0 is published (ADR 0007); the S6 conversion checks and S8 packaging have
 passed (`spikes/results/s6.txt`, `scripts/test-extension`), prefix evaluation is
 implemented (`blender/tests/headless/test_prefix.py`), and the simulation-style
 frame cache landed (ADR 0008, `blender/tests/headless/test_frame_cache.py`) with
-the bake operator dropped. Attributes landed 2026-10-16: Blender's named
+the original bake operator dropped; an opt-in native stage bake was added later
+(ADR 0009). Attributes landed 2026-10-16: Blender's named
 attributes travel with the geometry as `attr.*` sections (§5.1 of the protocol),
 stage in and out carry them, `Attribute Get`/`Set` read and write them, and the
 attribute store has console coverage. **S9 answered both of its questions**
@@ -689,5 +710,8 @@ v0.3.1 is published (2026-10-21): the extension zip and `.gha` are built and
 verified, and on FiraTower a dirty multi-stage pass is ~46 ms (was ~115 ms).
 v0.4.0 is published (2026-10-29): the full Stageloom rebrand and the GitHub
 release. v0.4.1 is published (2026-11-07): a bug-fix release for n-gon and
-multi-stage handling. The next work is the instance-latency re-measure and the
-old-component migration; the first extensions.blender.org upload is deferred.
+multi-stage handling. Playback sync and native stage bake landed 2026-11-08:
+Play Every Frame waits for each stage, and Bake stage / Clear Bake use a native
+Geometry Nodes Bake node. Compact Param nodes landed 2026-11-11. The next work
+is the instance-latency re-measure and the old-component migration; the first
+extensions.blender.org upload is deferred.
