@@ -669,6 +669,41 @@ class PendingUpdateTests(LiveSyncTestCase):
             "the drained edit never reached Grasshopper (report=%s)" % report_of(self.report),
         )
 
+    def test_02_an_all_dirty_pass_does_not_drain_twice(self):
+        """The clone's own evaluation sees a pending edit when every stack is
+        queued; forcing a second evaluation first is redundant and is the cost
+        the viewport feels during a drag."""
+        engine = self.engine
+        self.assertTrue(pump(seconds=15.0, until=lambda: self.stage.state == "ok"))
+        engine._dirty.clear()
+        engine._force_read.clear()
+        before = first_x(report_of(self.report))
+        sends = engine.stats["sends"]
+        drains = []
+        real_background = engine._in_background
+        real_drain = engine._drain_depsgraph
+        engine._in_background = lambda: False
+        engine._drain_depsgraph = lambda: drains.append(True)
+        try:
+            engine._mark_dirty_all()
+            self.obj.data.vertices[0].co.x += 1.0
+            # Deliberately no `view_layer.update()`: the edit is still pending.
+            engine._timer()
+            self.assertEqual(drains, [], "the all-dirty pass forced a redundant evaluation")
+            self.assertGreater(engine.stats["sends"], sends, "the pending edit was not sent")
+            self.assertTrue(
+                pump(
+                    seconds=15.0,
+                    until=lambda: first_x(report_of(self.report)) is not None
+                    and abs(first_x(report_of(self.report)) - (before + 1.0)) < 0.05,
+                ),
+                "the pending edit never reached Grasshopper (report=%s)"
+                % report_of(self.report),
+            )
+        finally:
+            engine._in_background = real_background
+            engine._drain_depsgraph = real_drain
+
 
 class ReconnectVerifyTests(LiveSyncTestCase):
     def test_01_a_reconnect_asks_instead_of_replaying(self):

@@ -145,12 +145,14 @@ def registration_report():
         "timer_id": id(engine._timer),
         "timer_registered": bool(engine.bpy.app.timers.is_registered(engine._timer)),
         "registered": bool(engine._registered),
+        "active": bool(engine._active),
         "enabled_addons": _enabled_stageloom_addons(),
         "handler_counts": counts,
         "handlers": handlers,
         "stack_objects": len(engine._stack_objects),
         "index_dirty": bool(engine._index_dirty),
         "dirty": sorted(engine._dirty),
+        "force_read": sorted(engine._force_read),
         "hot_seconds": max(0.0, engine._hot_until - now),
         "passes": engine.stats["passes"],
     }
@@ -163,7 +165,8 @@ def tick_rate(seconds=5.0):
     own module's `stats`; this measures the current generation only. It is still
     the way to tell an idle cadence from a hot one. Call it from Blender's
     Python console; it sleeps, so the window is unresponsive for ``seconds``.
-    In a background session the timer is inert and the result is zero.
+    A dormant engine (a file with no stages) has no timer, so the result is
+    zero. In a background session the timer is inert and the result is zero too.
     """
     seconds = max(0.1, float(seconds))
     before = engine.stats["passes"]

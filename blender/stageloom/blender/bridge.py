@@ -1,7 +1,8 @@
 """Queues between the server thread and the main thread (plan §11).
 
-The socket thread never touches bpy. It decodes frames and puts them here; the
-main thread drains them from a timer (5 ms while waiting or hot, 20 ms otherwise).
+The socket thread never touches bpy. It decodes frames and puts them here; while
+the engine is active, the main thread drains them from a timer (5 ms while
+waiting or hot, 20 ms otherwise). A file with no stages has no timer at all.
 Outgoing frames go the other way. `state` is written by the socket thread and
 read by the UI; the values are simple enough that no lock is needed.
 """

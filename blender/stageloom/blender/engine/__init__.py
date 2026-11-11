@@ -15,6 +15,10 @@ Cached frames replay with Grasshopper closed (renders use the cache). A frame
 that is not cached keeps the last good output; a pass that changes nothing writes
 nothing and tags nothing, so Cycles can accumulate samples while idle.
 
+The engine is dormant in a file with no stages: no timer and no per-update or
+per-frame handlers run. Adding, loading or undoing a stage activates it, and
+removing the last stage deactivates it again.
+
 Nothing here touches the socket directly: it posts frames through the bridge and
 drains what the server thread decoded.
 """
@@ -118,6 +122,10 @@ _pending = {}
 # decided against the geometry named here, not against a rolled-back field.
 _sent = {}
 _dirty = set()  # object names that need a pass
+# Object names whose pass must read the prefix even while no client is
+# connected: a cached frame may answer a frame/load/undo/request. An ordinary
+# edit cannot, so it keeps the last output without a clone (see _process_stage).
+_force_read = set()
 # Stage and stack lookup, rebuilt on load/undo and patched as stages change.
 # The handlers run on the main thread, so direct object references are safe;
 # a rename follows the reference, unlike a name-keyed index.
@@ -132,6 +140,11 @@ _index_object_count = -1
 _waiting_objects = set()
 _last_stall_check = 0.0
 _registered = False
+# True while the engine timer and its per-frame handlers are registered. The
+# engine is dormant in a file with no stages: there is nothing to evaluate, and
+# a dormant session must not wake Blender's main loop at all. Lifecycle handlers
+# (load/undo/redo) stay registered so a stage coming back activates it again.
+_active = False
 # Monotonic deadline until which the engine runs at the fast cadence; see
 # HOT_INTERVAL. Advanced by every edit, response and frame change.
 _hot_until = 0.0
@@ -420,6 +433,64 @@ _OWNED_COLLECTIONS = {
 
 
 
+def _activate():
+    """Register the timer and the per-frame handlers (idempotent)."""
+    global _active
+    if not _registered:
+        return False
+    if not bpy.app.timers.is_registered(_timer):
+        bpy.app.timers.register(_timer, first_interval=IDLE_INTERVAL, persistent=True)
+    for handler_list, handler in _ACTIVE_HANDLERS:
+        if handler not in handler_list:
+            handler_list.append(handler)
+    _active = True
+    return True
+
+
+def _deactivate():
+    """Go dormant: no timer, no per-update or per-frame handler.
+
+    Lifecycle handlers stay. Session state that belongs to the work is cleared
+    only after the last stage is gone; a file with no stages has nothing a
+    pending pass could still need.
+    """
+    global _active, _hot_until, _playback_sync, _bake_sync
+    if bpy.app.timers.is_registered(_timer):
+        bpy.app.timers.unregister(_timer)
+    for handler_list, handler in _ACTIVE_HANDLERS:
+        if handler in handler_list:
+            handler_list.remove(handler)
+    _active = False
+    _hot_until = 0.0
+    _playback_sync = False
+    _bake_sync = False
+    _dirty.clear()
+    _force_read.clear()
+    return False
+
+
+def _ensure_active():
+    """Make the engine active exactly when at least one stage exists.
+
+    Returns the resulting state. A file with no stages must not pay for a
+    timer wake-up; a file that gains one (add, load, undo) must not wait for an
+    unrelated edit to start it.
+    """
+    if not _registered:
+        return False
+    _ensure_index()
+    if _stack_objects:
+        return _activate()
+    return _deactivate()
+
+
+def _settle():
+    """Decide the engine state after `register()` ran under data restriction."""
+    if _registered and _ensure_active():
+        _mark_dirty_all()
+        _mark_hot()
+
+
 def register():
     global _registered, _hot_until, _index_dirty
     global _evaluating, _guard_owner, _evaluating_since, _ticking
@@ -448,6 +519,7 @@ def register():
     _pull_permits.clear()
     _last_no_send.clear()
     _timings.clear()
+    _force_read.clear()
     # The prefix guard and the tick flag are session state too: a wedge used to
     # survive disable/enable, so re-enabling the add-on inherited a mute that
     # dropped every edit until the watchdog fired. Registering is a clean start;
@@ -465,23 +537,11 @@ def register():
         stats[counter] = 0
     # A UI-driven parameter write (the choice dropdown) must reach the engine.
     stack_mod.set_param_changed_hook(_mark_object_dirty)
-    # Persistent: Blender clears non-persistent timers and handlers on every
-    # file load, which would otherwise silence the engine on reopen. The
-    # membership checks make a second register() harmless: appending the same
-    # handler twice would run the depsgraph path twice per update, and a leaked
-    # duplicate outlives the next disable.
-    if not bpy.app.timers.is_registered(_timer):
-        bpy.app.timers.register(_timer, first_interval=IDLE_INTERVAL, persistent=True)
-    for handler_list, handler in (
-        (bpy.app.handlers.depsgraph_update_post, _on_depsgraph),
-        (bpy.app.handlers.frame_change_post, _on_frame_change),
-        (bpy.app.handlers.frame_change_post, _on_frame_change_sync),
-        (bpy.app.handlers.animation_playback_pre, _on_playback_pre),
-        (bpy.app.handlers.animation_playback_post, _on_playback_post),
-        (bpy.app.handlers.load_post, _on_load),
-        (bpy.app.handlers.undo_post, _on_undo),
-        (bpy.app.handlers.redo_post, _on_redo),
-    ):
+    # Lifecycle handlers are persistent and always present: Blender clears
+    # non-persistent handlers and timers on every file load, and a dormant
+    # engine still has to notice a loaded file that contains stages. The
+    # membership checks make a second register() harmless.
+    for handler_list, handler in _LIFECYCLE_HANDLERS:
         if handler not in handler_list:
             handler_list.append(handler)
     _registered = True
@@ -489,34 +549,33 @@ def register():
         start_server()
     except Exception as exc:
         # A socket that cannot start is a visible error state (the panel shows
-        # it), not a reason to abort registration half-way: the timer, handlers
-        # and `_registered` must stay paired so unregister can tear them down.
-        # The user's Start/retry goes through the same `start_server`.
+        # it), not a reason to abort registration half-way: the lifecycle
+        # handlers and `_registered` must stay paired so unregister can tear
+        # them down. The user's Start/retry goes through `start_server`.
         bridge.state["error"] = "server start failed: %r" % (exc,)
         prefs.log("[stageloom] server start failed: %r" % (exc,), flush=True)
+    # Enable the per-update and per-frame work only when this file has stages.
+    # Blender restricts datablock access while an add-on enables; one shot on
+    # the event loop then settles the state, with the file readable.
+    if hasattr(bpy.data, "objects"):
+        if _ensure_active():
+            _mark_dirty_all()
+            _mark_hot()
+    elif not bpy.app.timers.is_registered(_settle):
+        bpy.app.timers.register(_settle, first_interval=0.0, persistent=True)
 
 
 def unregister():
-    global _registered, _playback_sync, _bake_sync
+    global _registered
     if not _registered:
         return
     stack_mod.set_param_changed_hook(None)
-    if bpy.app.timers.is_registered(_timer):
-        bpy.app.timers.unregister(_timer)
-    for handler_list, handler in (
-        (bpy.app.handlers.depsgraph_update_post, _on_depsgraph),
-        (bpy.app.handlers.frame_change_post, _on_frame_change),
-        (bpy.app.handlers.frame_change_post, _on_frame_change_sync),
-        (bpy.app.handlers.animation_playback_pre, _on_playback_pre),
-        (bpy.app.handlers.animation_playback_post, _on_playback_post),
-        (bpy.app.handlers.load_post, _on_load),
-        (bpy.app.handlers.undo_post, _on_undo),
-        (bpy.app.handlers.redo_post, _on_redo),
-    ):
+    _deactivate()
+    if bpy.app.timers.is_registered(_settle):
+        bpy.app.timers.unregister(_settle)
+    for handler_list, handler in _LIFECYCLE_HANDLERS:
         if handler in handler_list:
             handler_list.remove(handler)
-    _playback_sync = False
-    _bake_sync = False
     _registered = False
 
 from .diagnostics import (
@@ -608,10 +667,13 @@ from .lifecycle import (
 )
 from .triggers import (
     _after_history_step,
+    _all_stacks_dirty,
     _drain_depsgraph,
     _edit_mode_objects,
     _flush_edit_mode,
     _flush_object,
+    _in_background,
+    _needs_drain,
     _nudge_stalled_waits,
     _on_depsgraph,
     _on_frame_change,
@@ -638,6 +700,22 @@ from .playback import (
     _on_playback_post,
     _on_playback_pre,
     _sync_playback_frame,
+)
+
+# Handlers that exist only while a stage does. The lifecycle hooks below stay
+# registered in a dormant session; they are how a load, undo or redo brings the
+# stage back.
+_ACTIVE_HANDLERS = (
+    (bpy.app.handlers.depsgraph_update_post, _on_depsgraph),
+    (bpy.app.handlers.frame_change_post, _on_frame_change),
+    (bpy.app.handlers.frame_change_post, _on_frame_change_sync),
+    (bpy.app.handlers.animation_playback_pre, _on_playback_pre),
+    (bpy.app.handlers.animation_playback_post, _on_playback_post),
+)
+_LIFECYCLE_HANDLERS = (
+    (bpy.app.handlers.load_post, _on_load),
+    (bpy.app.handlers.undo_post, _on_undo),
+    (bpy.app.handlers.redo_post, _on_redo),
 )
 
 __all__ = [
@@ -732,8 +810,15 @@ __all__ = [
     "request_again",
     "start_server",
     "unfreeze",
+    "_activate",
+    "_deactivate",
+    "_ensure_active",
+    "_settle",
     "_after_history_step",
+    "_all_stacks_dirty",
     "_drain_depsgraph",
+    "_in_background",
+    "_needs_drain",
     "_edit_mode_objects",
     "_flush_edit_mode",
     "_flush_object",

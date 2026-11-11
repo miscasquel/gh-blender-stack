@@ -152,7 +152,9 @@ def _sync_stage(obj, record, stage, deadline):
     # session, not to this frame. Its answer is cached when it lands.
     engine._forget(record.stack_id, stage.key)
     while True:
-        outcome = engine._process_stage(obj, record, stage)
+        # A playback frame is a forced read: its answer may come from the frame
+        # cache even when Grasshopper is disconnected (cached playback).
+        outcome = engine._process_stage(obj, record, stage, force=True)
         if outcome == "idle":
             if stage.state == engine.stack_mod.STATE_DISCONNECTED:
                 _report(stage, "Grasshopper disconnected; keeping the last output")

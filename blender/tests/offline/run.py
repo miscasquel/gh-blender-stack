@@ -16,8 +16,10 @@ import bpy
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-if REPO not in sys.path:
-    sys.path.insert(0, REPO)
+# A second Blender process: provide the paths the headless runner sets up.
+for path in (REPO, os.path.join(REPO, "blender"), os.path.join(REPO, "blender", "stageloom", "vendor")):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 failures = []
 
@@ -46,6 +48,9 @@ def main():
 
     bpy.context.preferences.system.use_online_access = True
     check("online access now on", bpy.app.online_access)
+    # This process shares the machine with a user's Blender, which may already
+    # hold the default port. The gate is about online access, not the port.
+    bpy.context.preferences.addons["stageloom"].preferences.port = 9166
     result = bpy.ops.stageloom.start_server()
     time.sleep(0.3)
     check("Start brings the server up", "FINISHED" in result and server.SERVER.running)

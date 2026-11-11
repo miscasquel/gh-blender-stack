@@ -85,9 +85,14 @@ def _all_stack_objects():
             yield obj
 
 
-def _mark_dirty_all():
+def _mark_dirty_all(force=False):
+    """Queue every stack object. ``force`` also allows a prefix read while
+    disconnected, which only frame changes, loads, undo/redo and explicit
+    requests need (a cached frame may answer them)."""
     for obj in engine._all_stack_objects():
         engine._dirty.add(obj.name)
+        if force:
+            engine._force_read.add(obj.name)
 
 
 def _forget_prefix(obj, stage_key):
@@ -377,7 +382,11 @@ def request_again(obj, stage=None, skip_frozen=False):
         else:
             engine._set(item, "state", engine.stack_mod.STATE_IDLE)
     engine._reindex_object(obj)
+    # A new stage (or a Pull) brings the engine back from dormancy. The read is
+    # forced: a cached frame may answer it even with no client connected.
+    engine._ensure_active()
     engine._dirty.add(obj.name)
+    engine._force_read.add(obj.name)
     engine._mark_hot()
 
 
@@ -402,7 +411,10 @@ def unfreeze(obj, stage):
     if record is not None:
         engine._pull_permits.discard((record.stack_id, stage.key))
     engine._set(stage, "state", engine.stack_mod.STATE_IDLE)
+    engine._ensure_active()
     engine._dirty.add(obj.name)
+    # A cached frame may answer the frame the stage is showing.
+    engine._force_read.add(obj.name)
     engine._mark_hot()
 
 
@@ -426,6 +438,9 @@ def push(obj=None):
 
 
 def _mark_object_dirty(obj):
+    engine._ensure_active()
     engine._dirty.add(obj.name)
+    # A parameter change can return to a value whose frame is cached.
+    engine._force_read.add(obj.name)
     engine._mark_hot()
 

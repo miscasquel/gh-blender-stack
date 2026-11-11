@@ -7,6 +7,10 @@ engine = sys.modules[__package__]
 
 @engine.bpy.app.handlers.persistent
 def _on_depsgraph(scene, depsgraph=None):
+    # By design, every depsgraph update re-reads every stage prefix: Python
+    # cannot ask a node tree which datablocks it depends on, and a narrower
+    # filter is silent stale geometry when it misses one. The pass is coalesced
+    # to one per tick; only the redundant evaluation before it was removed.
     if engine._evaluating:
         engine._trace_guard_drop()
         return
@@ -104,9 +108,9 @@ def _flush_edit_mode():
 
 @engine.bpy.app.handlers.persistent
 def _on_frame_change(scene, depsgraph=None):
-    # A frame change tags nothing, which is why the frame is part of the prefix
-    # revision and this handler exists separately from the depsgraph one.
-    engine._mark_dirty_all()
+    # A frame change tags nothing (the frame is part of the prefix revision).
+    # It forces a read: the cache may answer the new frame with no client.
+    engine._mark_dirty_all(force=True)
     engine._mark_hot()
 
 
@@ -134,8 +138,11 @@ def _after_history_step():
             sent = engine._sent.get((record.stack_id, stage.key))
             engine._set(stage, "geom_hash", sent[1] if sent is not None else "")
     engine._prefix_memo.clear()
-    engine._mark_dirty_all()
-    engine._mark_hot()
+    # A restored step may name a frame the cache already holds, with or without
+    # a client: the prefix read is what finds that rid.
+    if engine._ensure_active():
+        engine._mark_dirty_all(force=True)
+        engine._mark_hot()
 
 
 @engine.bpy.app.handlers.persistent
@@ -165,8 +172,6 @@ def _on_load(scene=None):
     next request go out with `geom.mode = "full"`, which is what protocol §8.8
     already prescribes for the first request after a connection.
     """
-    if not engine.bpy.app.timers.is_registered(engine._timer):
-        engine.bpy.app.timers.register(engine._timer, first_interval=engine.IDLE_INTERVAL, persistent=True)
     # A file from before the stage scene still has its plumbing in the user's
     # scene: move it now, so the outliner is clean before the first apply.
     engine.helpers.adopt_existing()
@@ -221,8 +226,13 @@ def _on_load(scene=None):
             if modifier is not None:
                 engine._repair_plumbing(obj, record, stage, modifier)
     engine._rebuild_index()
-    engine._mark_dirty_all()
-    engine._mark_hot()
+    # Activate only when this file has stages. A load into a stage-less file
+    # must leave Blender with no Stageloom timer or per-frame handler at all.
+    if engine._ensure_active():
+        # The new frame may be answered from the cache, even with no client:
+        # the prefix read is what selects it.
+        engine._mark_dirty_all(force=True)
+        engine._mark_hot()
 
 
 def _recover_stuck_guard():
@@ -242,13 +252,39 @@ def _recover_stuck_guard():
     # "mark dirty" below read the edited scene instead of replaying the stale
     # prefix (and the old rid) one more time.
     engine._prefix_memo.clear()
-    engine._mark_dirty_all()
+    engine._mark_dirty_all(force=True)
     line = (
         "guard watchdog: prefix guard left up by %s %.2f s ago; cleared and all stacks marked dirty"
         % (where, age)
     )
     engine._trace.append(line)
     engine.prefs.log("[stageloom] " + line, flush=True)
+
+
+def _in_background():
+    """Whether this Blender has no GUI event loop (tests, headless renders)."""
+    return bool(engine.bpy.app.background)
+
+
+def _all_stacks_dirty():
+    """Whether every stack object in this file is already queued for a pass."""
+    engine._ensure_index()
+    names = {obj.name for obj in engine._stack_objects}
+    return bool(names) and names <= engine._dirty
+
+
+def _needs_drain(dirty_before):
+    """Whether this pass must deliver pending depsgraph updates before it clones.
+
+    A pass that clones every queued stack does not need a separate evaluation:
+    the clone sees the pending edit, and bumping the generation makes it read
+    the scene instead of a memo. A narrower pass drains, because the pending
+    update may name a stack that is not queued. Background sessions have no
+    event loop delivering updates, so they always drain.
+    """
+    if engine._in_background():
+        return True
+    return bool(dirty_before) and not _all_stacks_dirty()
 
 
 def _timer():
@@ -259,41 +295,42 @@ def _timer():
     panel state instead.
     """
     try:
+        if not engine._active:
+            # A stale tick after deactivation (or a direct test call): there is
+            # no stage to evaluate, so do not touch the scene.
+            return None
         if engine._playback_sync or engine._bake_sync:
             # Play Every Frame or a native Bake is driving the stage pass
             # synchronously from frame_change_post; an asynchronous pass for
             # the live playhead must not race it. The playback/bake end hooks
             # clear their flag, so the timer resumes afterwards.
             return engine.IDLE_INTERVAL
+        engine._ensure_index()
+        if not engine._stack_objects:
+            engine._deactivate()
+            return None
         engine.stats["passes"] += 1
         engine._ticking = True
         # Before anything else: a guard already up at the start of a tick cannot
         # belong to this pass, so it is the wedge the watchdog exists for.
         if engine._evaluating:
             engine._recover_stuck_guard()
-        # Before anything in this pass can evaluate a clone (and mute the
-        # handler), let Blender deliver whatever is already tagged. Every
-        # trigger the add-on has funnels through here, which is what makes the
-        # depsgraph authoritative rather than best-effort.
-        #
-        # Only pay for it when there is work: a tick with nothing to process
-        # must not force an evaluation. Forcing one every idle interval is a
-        # main-thread cost the viewport feels as choppiness, and there is
-        # nothing a clone could swallow if no clone is going to run.
+        # Drain only when the pass is narrower than the queues: an all-dirty
+        # pass clones every prefix anyway, and the clone sees the pending edit.
         dirty_before = bool(engine._dirty)
-        # In the GUI Blender's own event loop delivers a tagged update to
-        # `_on_depsgraph`; draining with nothing to process only forces an
-        # evaluation the viewport feels as choppiness. Background sessions have
-        # no such loop (and the tests drive this timer directly), so they keep
-        # the unconditional drain that makes a pending edit visible.
-        if dirty_before or engine.bpy.app.background:
+        if engine._needs_drain(dirty_before):
             engine._drain_depsgraph()
+        elif dirty_before:
+            engine._bump_epochs(None)
         engine._handle_incoming()
         engine._nudge_stalled_waits()
         if engine._dirty and not dirty_before:
             # Handling a message or the stall scan can produce work after the
             # gate above. Drain before the clone this pass is now about to run.
-            engine._drain_depsgraph()
+            if engine._needs_drain(True):
+                engine._drain_depsgraph()
+            else:
+                engine._bump_epochs(None)
         engine._flush_edit_mode()
         busy = False
         for name in list(engine._dirty):
@@ -316,6 +353,14 @@ def _timer():
                 if not engine._trace or engine._trace[-1] != line:
                     engine._trace.append(line)
             engine._dirty.discard(name)
+        # Every force-read source also queues the object, so one pass consumed
+        # them all. An object that vanished was discarded above.
+        engine._force_read.clear()
+        if not engine._stack_objects:
+            # The pass removed the last stage: stop the timer and the per-frame
+            # handlers until a load/undo/add brings one back.
+            engine._deactivate()
+            return None
         if busy:
             return engine.WAIT_INTERVAL
         if engine.time.monotonic() < engine._hot_until:

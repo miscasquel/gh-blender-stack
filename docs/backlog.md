@@ -110,6 +110,8 @@ depsgraph drain; gating it on work (`f69f5fc`) fixed it.
   external/system-side; re-open only if it
   reproduces with both installs disabled and the host quiet. Reproduction and
   the diagnostics are in `docs/handoff-viewport-stutter-2026-10-21.md`.
+  The unreleased engine is now dormant in a file with no stages, so that case
+  has no timer or per-frame handler to blame at all.
 
 ---
 

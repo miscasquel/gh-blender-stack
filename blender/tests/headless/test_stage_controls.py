@@ -269,6 +269,11 @@ class StageControlTests(unittest.TestCase):
         self.assertNotIn(key, self.engine._cache_bytes, "the cache accounting survived removal")
         self.assertNotIn(key, self.engine._state_since, "the wait stamp survived removal")
         self.assertNotIn(key, self.engine._timings, "the timings survived removal")
+        self.assertFalse(self.engine._active, "the last stage left the engine active")
+        self.assertFalse(
+            bpy.app.timers.is_registered(self.engine._timer),
+            "the last stage left the engine timer registered",
+        )
 
 
 if __name__ == "__main__":

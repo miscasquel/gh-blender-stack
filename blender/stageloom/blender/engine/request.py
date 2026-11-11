@@ -37,9 +37,17 @@ def _no_send(record, stage, reason, rid=None):
     engine._trace.append("%s: no send (%s)" % (stage.key, reason))
 
 
-def _process_stage(obj, record, stage):
+def _process_stage(obj, record, stage, force=None):
     """One stage's pass. Returns "waiting" (request in flight; stop the stack),
-    "busy" (work happened; keep the fast timer), or "idle"."""
+    "busy" (work happened; keep the fast timer), or "idle".
+
+    ``force`` allows a prefix read while no client is connected: a frame change,
+    load, undo/redo or explicit request may be answered by the frame cache. An
+    ordinary edit cannot, and returns before the expensive clone. When omitted,
+    the object's mark in `_force_read` decides; the playback gate passes True.
+    """
+    if force is None:
+        force = obj.name in engine._force_read
     modifier = engine.nodes.modifier_of(obj, stage)
     if modifier is None and not stage.modifier_uid:
         # A record saved before the uid existed, whose group is gone: the name
@@ -76,6 +84,26 @@ def _process_stage(obj, record, stage):
         engine._no_send(record, stage, "frozen")
         return "idle"
 
+    connected = bool(engine.bridge.state["connected"])
+    if not connected:
+        # No client can answer a new request. Drop any wait: it belonged to a
+        # client that is gone, and a reconnect's hello resets the rest. An
+        # ordinary edit cannot be answered by the cache, so it must not pay for
+        # a prefix clone; a forced read (frame, load, undo/redo, request) can,
+        # and falls through to the cache lookup below.
+        engine._forget(record.stack_id, stage.key)
+        engine._waiting_objects.discard(obj.name)
+        if not force:
+            engine._set(
+                stage,
+                "state",
+                engine.stack_mod.STATE_UNBOUND
+                if not stage.applied_out_hash
+                else engine.stack_mod.STATE_DISCONNECTED,
+            )
+            engine._no_send(record, stage, "disconnected")
+            return "idle"
+
     # While a request is young, a pass costs nothing: the prefix does not have
     # to be read to know nothing can go out before the soft retry. Without this
     # every edit during a slow solve re-evaluated the whole prefix and threw it
@@ -92,6 +120,10 @@ def _process_stage(obj, record, stage):
     engine._record_timing(record, stage, "prefix_ms", engine._timed_since(started))
     params_json = engine.props.canonical_json(obj, stage)
     rid = engine.hashing.request_id(stage.key, params_json, geom_hash, "m", "stack-local", stage.nonce)
+    # A client may have connected or disconnected while the prefix evaluated.
+    # The decision below must use the state at decision time, as before; only
+    # the fast path above uses the state at entry.
+    connected = bool(engine.bridge.state["connected"])
 
     # `stage.rid` is deliberately NOT set here. It names the request the stage is
     # waiting on — the answer it must recognise as its own — so it is written only
@@ -104,7 +136,6 @@ def _process_stage(obj, record, stage):
 
     verify_key = (record.stack_id, stage.key)
     cached = engine._cached_response(record, stage, rid)
-    connected = bool(engine.bridge.state["connected"])
     sent = engine._sent.get(verify_key)
     # Whether the client has been told *this* request. A frame in the cache is
     # Blender's answer, not the client's state: cancelling a transform (or an
@@ -147,7 +178,7 @@ def _process_stage(obj, record, stage):
         # through and send; the answer carries the same output and is not
         # re-applied.
 
-    if not engine.bridge.state["connected"]:
+    if not connected:
         # A miss with Grasshopper away keeps the last good output; only cached
         # frames replay (renders use the cache). A stage no document has ever
         # answered reads unbound instead of disconnected: disconnected means a

@@ -117,18 +117,34 @@ class RegistrationReportTests(unittest.TestCase):
     def tearDownClass(cls):
         bpy.ops.preferences.addon_disable(module="stageloom")
 
+    def _empty_scene(self):
+        import stageloom.blender.engine as engine
+
+        bpy.ops.object.select_all(action="SELECT")
+        bpy.ops.object.delete()
+        # A load (headless has no event loop for the activation settle) leaves
+        # a stage-less file dormant.
+        engine._on_load()
+
     def test_report_finds_one_engine_generation(self):
         import stageloom.blender.engine as engine
 
+        self._empty_scene()
         report = engine.registration_report()
-        self.assertTrue(report["timer_registered"], "the timer is not registered")
+        self.assertFalse(report["active"], "a file with no stages kept the engine active")
+        self.assertFalse(
+            report["timer_registered"],
+            "a file with no stages kept the engine timer registered",
+        )
         self.assertEqual(
             report["handler_counts"],
             {
-                "depsgraph_update_post": 1,
-                "frame_change_post": 2,
-                "animation_playback_pre": 1,
-                "animation_playback_post": 1,
+                # A stage-less file has no per-update or per-frame handlers: the
+                # lifecycle hooks are what reactivate a saved stage.
+                "depsgraph_update_post": 0,
+                "frame_change_post": 0,
+                "animation_playback_pre": 0,
+                "animation_playback_post": 0,
                 "load_post": 1,
                 "undo_post": 1,
                 "redo_post": 1,
@@ -147,6 +163,8 @@ class RegistrationReportTests(unittest.TestCase):
     def test_a_foreign_handler_is_not_counted(self):
         import stageloom.blender.engine as engine
 
+        self._empty_scene()
+
         def foreign(scene, depsgraph=None):
             return None
 
@@ -155,28 +173,68 @@ class RegistrationReportTests(unittest.TestCase):
         handlers.append(foreign)
         try:
             report = engine.registration_report()
-            self.assertEqual(len(handlers), 2)
-            self.assertEqual(report["handler_counts"]["depsgraph_update_post"], 1)
+            self.assertEqual(len(handlers), 1)
+            self.assertEqual(
+                report["handler_counts"]["depsgraph_update_post"],
+                0,
+                "the report counted a foreign handler",
+            )
         finally:
             handlers.remove(foreign)
 
+    def test_adding_and_removing_a_stage_activates_and_deactivates(self):
+        import stageloom.blender.engine as engine
+        import stageloom.blender.nodes as nodes
+
+        self._empty_scene()
+        bpy.ops.mesh.primitive_cube_add(size=2.0)
+        obj = bpy.context.object
+        bpy.ops.stageloom.add_stage(label="Dormant")
+        stage = obj.gh_stack.stages[0]
+
+        self.assertTrue(engine._active, "adding a stage did not activate the engine")
+        self.assertTrue(bpy.app.timers.is_registered(engine._timer))
+        self.assertIn(engine._on_depsgraph, bpy.app.handlers.depsgraph_update_post)
+
+        modifier = nodes.modifier_of(obj, stage)
+        self.assertIsNotNone(modifier)
+        obj.modifiers.remove(modifier)
+        engine._mark_object_dirty(obj)
+        self.assertIsNone(engine._timer(), "the last-stage pass kept the timer alive")
+
+        self.assertEqual(len(obj.gh_stack.stages), 0)
+        self.assertFalse(engine._active, "the last stage left the engine active")
+        self.assertFalse(bpy.app.timers.is_registered(engine._timer))
+
+        bpy.data.objects.remove(obj, do_unlink=True)
+        engine._ensure_active()
+
     def test_load_restores_a_missing_timer(self):
         import stageloom.blender.engine as engine
+        import stageloom.blender.nodes as nodes
+
+        self._empty_scene()
+        bpy.ops.mesh.primitive_cube_add(size=2.0)
+        obj = bpy.context.object
+        bpy.ops.stageloom.add_stage(label="Reload Timer")
+        stage = obj.gh_stack.stages[0]
+        self.assertTrue(engine._active, "adding a stage did not activate the engine")
 
         bpy.app.timers.unregister(engine._timer)
         try:
             engine._on_load()
             self.assertTrue(
                 bpy.app.timers.is_registered(engine._timer),
-                "a file load did not re-register the lost engine timer",
+                "a file load with a stage did not re-register the lost engine timer",
             )
         finally:
-            if not bpy.app.timers.is_registered(engine._timer):
-                bpy.app.timers.register(
-                    engine._timer,
-                    first_interval=engine.IDLE_INTERVAL,
-                    persistent=True,
-                )
+            modifier = nodes.modifier_of(obj, stage)
+            if modifier is not None:
+                obj.modifiers.remove(modifier)
+            engine._mark_object_dirty(obj)
+            engine._timer()
+            bpy.data.objects.remove(obj, do_unlink=True)
+            engine._ensure_active()
 
     def test_predicate_covers_development_and_extension_installs(self):
         import stageloom.blender.engine as engine

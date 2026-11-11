@@ -35,6 +35,22 @@ Notable changes to this project, following
   a value or a wire always stays visible. The parameter list is saved with the
   definition, so the choice sticks. Existing definitions open unchanged.
 
+### Changed
+
+- **A file with no stages costs nothing per update or per frame.** The engine
+  no longer registers its timer or its depsgraph/frame handlers until the file
+  has a Stageloom stage. Adding, loading or undoing a stage brings them back;
+  the load/undo/redo hooks stay registered so that can happen.
+- **Edits with Grasshopper closed skip the stage read.** With no client
+  connected, an ordinary edit keeps the last output without re-evaluating the
+  stage prefix. Frame changes, file loads, undo/redo and Pull/Push still read:
+  a cached frame may answer them, which is what keeps cached playback and
+  renders working offline.
+- **One less depsgraph evaluation per edit.** A pass that is already going to
+  clone every stack prefix no longer forces a separate evaluation first; the
+  clone sees the pending edit and retires the memoized prefix. A pass that
+  touches only some stacks still drains them to the handler first.
+
 ### Fixed
 
 - **A driven Param default no longer resets the frame cache.** The declared
