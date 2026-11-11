@@ -56,7 +56,11 @@ Blender                                          Rhino / Grasshopper (wine)
   scene, so your own scene and outliner stay clean.
 - **Parameters.** `Param` components declare float, int, bool, vector3, colour,
   value list, and text parameters. Blender draws them in the N-panel with
-  ranges, a value-list dropdown, keyframe decorators, and drivers.
+  ranges, a value-list dropdown, keyframe decorators, and drivers. A new Param
+  node starts compact with Key, Label and Type; **Show all inputs** reveals
+  Default, Min, Max, Step, Values and Group, and **Hide unused inputs** removes
+  any optional input that has no value and no wire. The parameter list is saved
+  with the definition, so the choice sticks.
 - **Protocol.** Binary frames with a canonical JSON header; geometry and
   parameters in the same stream. The Python and C# codecs are checked against
   twelve shared golden fixtures.

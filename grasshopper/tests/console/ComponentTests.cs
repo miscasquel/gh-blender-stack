@@ -17,6 +17,7 @@ using System.Collections.Generic;
 using System.Threading;
 using Grasshopper.Kernel;
 using Grasshopper.Kernel.Data;
+using Grasshopper.Kernel.Parameters;
 using Grasshopper.Kernel.Types;
 using Stageloom.Core;
 
@@ -47,6 +48,7 @@ namespace Stageloom.Tests.Console
                 RunStageInProtocolError(stageIn);
                 RunStageInLateWrite(server);
                 RunStageOutNoRequest(server, stageOut);
+                RunParamVisibilityTests();
             }
             catch (Exception ex)
             {
@@ -233,6 +235,102 @@ namespace Stageloom.Tests.Console
             Check("an idle stage out is not retried",
                 slot.ResolveAttempts == attempts,
                 "attempts=" + slot.ResolveAttempts);
+        }
+
+        // ------------------------------------------------------ param visibility
+
+        /// <summary>The Param node hides the optional inputs that carry no
+        /// data and have no wire, the same "hide unused" rule as Rhino 8's
+        /// native components. A value or a wire keeps an input visible.</summary>
+        private static void RunParamVisibilityTests()
+        {
+            System.Console.WriteLine();
+            System.Console.WriteLine("param input visibility");
+
+            var param = new ParamComponent();
+            Check("param starts with every input before placement",
+                param.Params.Input.Count == 9, "count=" + param.Params.Input.Count);
+
+            param.ApplyInitialVisibility();
+            Check("a new param node hides its unused inputs",
+                InputNames(param) == "Key,Label,Type", InputNames(param));
+
+            param.SetInputsCollapsed(false);
+            Check("show all restores every input",
+                InputNames(param) == "Key,Label,Type,Default,Min,Max,Step,Values,Group",
+                InputNames(param));
+
+            SetStringInput(param, "Default", "2.5");
+            SetNumberInput(param, "Min", -1.0);
+            param.SetInputsCollapsed(true);
+            Check("inputs with data stay visible",
+                InputNames(param) == "Key,Label,Type,Default,Min", InputNames(param));
+            Check("empty optional inputs are hidden",
+                FindInput(param, "Max") == null && FindInput(param, "Step") == null,
+                InputNames(param));
+
+            ClearStringInput(param, "Default");
+            ClearNumberInput(param, "Min");
+            param.SetInputsCollapsed(true);
+            Check("cleared inputs hide again",
+                InputNames(param) == "Key,Label,Type", InputNames(param));
+
+            // A wire keeps an input visible even when it is empty.
+            param.SetInputsCollapsed(false);
+            var source = new Param_Number();
+            IGH_Param maxInput = FindInput(param, "Max");
+            maxInput.AddSource(source);
+            param.SetInputsCollapsed(true);
+            Check("a wired input stays visible",
+                FindInput(param, "Max") != null, InputNames(param));
+            param.SetInputsCollapsed(false);
+            Check("show all still restores the rest",
+                param.Params.Input.Count == 9, InputNames(param));
+
+            // A loaded document keeps its saved parameter list; placement must
+            // not hide an old expanded node.
+            var legacy = new ParamComponent();
+            legacy.MarkLoaded();
+            legacy.ApplyInitialVisibility();
+            Check("a loaded document keeps its expanded inputs",
+                legacy.Params.Input.Count == 9, InputNames(legacy));
+        }
+
+        private static IGH_Param FindInput(IGH_Component component, string name)
+        {
+            int index = component.Params.IndexOfInputParam(name);
+            return index < 0 ? null : component.Params.Input[index];
+        }
+
+        private static string InputNames(IGH_Component component)
+        {
+            var names = new List<string>();
+            foreach (IGH_Param param in component.Params.Input) names.Add(param.Name);
+            return string.Join(",", names.ToArray());
+        }
+
+        private static void SetStringInput(IGH_Component component, string name, string value)
+        {
+            var param = (Param_String)FindInput(component, name);
+            param.PersistentData.Clear();
+            param.PersistentData.Append(new GH_String(value));
+        }
+
+        private static void SetNumberInput(IGH_Component component, string name, double value)
+        {
+            var param = (Param_Number)FindInput(component, name);
+            param.PersistentData.Clear();
+            param.PersistentData.Append(new GH_Number(value));
+        }
+
+        private static void ClearStringInput(IGH_Component component, string name)
+        {
+            ((Param_String)FindInput(component, name)).PersistentData.Clear();
+        }
+
+        private static void ClearNumberInput(IGH_Component component, string name)
+        {
+            ((Param_Number)FindInput(component, name)).PersistentData.Clear();
         }
 
         // ------------------------------------------------------------ helpers

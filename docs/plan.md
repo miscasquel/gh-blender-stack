@@ -192,6 +192,8 @@ which has no attribute API to write back into.
 
 It outputs the value Blender sends when connected, or the default otherwise.
 
+**Compact node.** A new `Param` shows only Key, Label and Type. Default, Min, Max, Step, Values and Group appear through **Show all inputs** (chevron at the bottom of the capsule or the right-click menu). **Hide unused inputs** removes the optional fields that carry no data and have no wire, the same rule as Rhino 8's native components. An input with a value or a wire always stays visible, so hiding never drops data or a connection. The parameter list is the saved state; definitions from before this change open with their existing inputs.
+
 **Blender side.** The schema becomes custom props on the stack object, named `gh/<stage_key>/<param_id>`:
 
 | GH type | Blender representation | Animatable | Notes |
@@ -356,7 +358,7 @@ Enable, disable and reorder are the modifier's own controls: the viewport, rende
 |---|---|---|
 | Stage In | Key, Root (ignored in v2, reserved), Enabled | Geometry (generic list: mesh, SubD cage, curves, point cloud), Request ID, Status, Message |
 | Stage Out | Key, Geometry (any Rhino geometry), Request ID, Enabled | Sent (bool), Output hash, Status |
-| Param | GUID (generated, hidden), Label, Type (menu), Default, Min, Max, Step, Choices, Group, Override (optional) | Value |
+| Param | Key, Label, Type; Default, Min, Max, Step, Values and Group shown on demand, unused fields hidden | Value |
 
 Component GUIDs are generated once and never change. Save and reload depend on them.
 

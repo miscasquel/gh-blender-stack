@@ -10,6 +10,17 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Param nodes hide their unused optional inputs.** A new Param shows Key,
+  Label and Type; the chevron at the bottom of the node (or the right-click
+  menu) reveals Default, Min, Max, Step, Values and Group, and **Hide unused
+  inputs** removes the optional fields with no value and no wire. An input with
+  a value or a wire always stays visible. The parameter list is saved with the
+  definition, so the choice sticks. Existing definitions open unchanged.
+
 ## [0.4.1] — 2026-11-07
 
 A bug-fix release for multi-stage stacks. Stage Out now handles n-gons and
