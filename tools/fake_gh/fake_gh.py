@@ -1,4 +1,4 @@
-"""A Python stand-in for the Grasshopper side, for layer B tests (plan §14).
+"""A Python stand-in for the Grasshopper side, for layer B tests.
 
     PYTHONPATH=blender/stageloom/vendor python3 tools/fake_gh/fake_gh.py \
         --port 59130 --stage <key> [--scale 2.0] [--report /tmp/report.json]

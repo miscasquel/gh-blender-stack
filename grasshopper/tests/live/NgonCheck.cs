@@ -9,9 +9,9 @@
 // Expected on the fixed build:
 //   PASS: n-gon encoding (pentagon boundary exact, holey n-gon flattened)
 //
-// The simple case is the live 2026-11-07 regression: the old code passed
-// ngon[k] (boundary vertices) to GetNgonBoundary instead of FaceIndexList(), so
-// Stage Out threw NullReferenceException on any face above four sides.
+// The simple case guards the n-gon boundary: Stage Out must use
+// FaceIndexList(), not the boundary vertex list, or faces above four sides
+// throw NullReferenceException.
 //
 // The holey case is the L2 guard: a ring of four quads registered as one
 // n-gon with an inner boundary must be sent as the underlying faces with an

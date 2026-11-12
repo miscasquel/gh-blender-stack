@@ -1,13 +1,4 @@
-"""Layer B, geometry kinds: curves, point clouds, SubD cages, mixed output.
-
-Run with:
-
-    scripts/test-blender
-
-Covers the section round trips for each geometry kind in Blender, then the
-engine path: a GH response carrying mesh + curves + points lands in the three
-per-kind helpers, and a later response without curves or points clears them.
-"""
+"""Layer B: curves, point clouds, SubD cages and mixed output."""
 
 import json
 import math

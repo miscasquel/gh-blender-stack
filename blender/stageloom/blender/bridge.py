@@ -1,4 +1,4 @@
-"""Queues between the server thread and the main thread (plan §11).
+"""Queues between the server thread and the main thread.
 
 The socket thread never touches bpy. It decodes frames and puts them here; while
 the engine is active, the main thread drains them from a timer (5 ms while

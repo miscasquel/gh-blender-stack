@@ -1,24 +1,9 @@
-"""Playback frame gate: Play Every Frame waits for Stageloom.
+"""Playback gate: Play Every Frame waits for each stage.
 
-Blender's playback has two behaviours (`Scene.sync_mode`):
-
-* ``NONE`` — Play Every Frame: the playhead advances one frame at a time and
-  waits for the dependency graph. A Grasshopper stage is outside that graph,
-  so playback used to advance without waiting for its answer.
-* ``FRAME_DROP`` — Frame Drop: playback keeps real time and shows whatever the
-  dependency graph had time to compute. Stageloom keeps its existing
-  latest-wins, skip-what-you-cannot-do behaviour here.
-
-This module makes ``NONE`` respect the Grasshopper stage: ``frame_change_post``
-runs after the frame's dependency graph evaluation, asks for the current
-frame's output, and blocks on the socket queue until it has been applied. The
-playback timer cannot advance until the handler returns, so the playhead waits
-exactly like it waits for a slow native modifier. ``FRAME_DROP`` is untouched.
-
-The gate is the normal engine pass made synchronous; it uses the same prefix,
-request IDs, cache and apply path as the timer. The engine timer is suppressed
-while ``_playback_sync`` is set, so an asynchronous pass for the live playhead
-cannot race the gate.
+While playback is armed, ``frame_change_post`` runs the normal stage pass
+synchronously, so the playhead cannot advance before the frame is applied.
+Frame Drop keeps the asynchronous latest-wins path. The engine timer is
+suppressed while the gate owns the frame.
 """
 
 import queue

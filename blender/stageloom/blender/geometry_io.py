@@ -1,21 +1,10 @@
-"""Geometry <-> protocol sections, on the Blender side (plan §6, §11).
+"""Geometry <-> protocol sections, on the Blender side.
 
-Reads an evaluated mesh into protocol v2 sections and writes sections back into a
-mesh in place where the topology allows, rebuilding when it does not. Numpy through
-``foreach_get``/``foreach_set``; ``from_pydata`` only on the rebuild path, which is
-the slow path and the one scripted changes take.
-
-Section names follow protocol §5: ``mesh.*`` for plain meshes, ``subd.*`` for a
-mesh flagged as a SubD control cage, ``crv.*`` for curves, ``pts.*`` for point
-clouds. The geometry hash order is the same order the sections are returned in.
-
-Curves: poly, Bezier, and NURBS splines map to the protocol's three curve types.
-A Blender Bezier spline travels as a degree-3 NURBS in Bezier knot mode (exact),
-and comes back as Bezier splines. NURBS splines keep order, weights, and the
-endpoint/uniform flag. Gaps in what Blender can express (arbitrary interior
-knots) are the GH side's job to approximate and warn about (D3).
-
-This module is the bpy layer: core stays pure (see blender/stageloom/core).
+Reads evaluated geometry into protocol v2 sections and writes sections back in
+place where topology allows. Section names follow protocol §5. Curves keep
+order, weights and endpoint/uniform modes; what Blender cannot express exactly
+is approximated and warned about on the GH side. This is the bpy layer; core
+stays pure.
 """
 
 import numpy as np
@@ -585,9 +574,8 @@ def _domain_length(owner, domain):
 def _decode_strings(values, offsets):
     """The wire's concatenated UTF-8 bytes plus per-string lengths, as bytes.
 
-    The declared lengths must cover the value bytes exactly. A short slice or a
-    sum mismatch used to pass silently and resurrect a truncated string, so a
-    malformed STRING raises and the caller skips just that attribute.
+    A short slice or sum mismatch is a malformed STRING: raise, and let the
+    caller skip just that attribute.
     """
     raw = (
         np.asarray(values, dtype=np.uint8).tobytes()
@@ -768,9 +756,9 @@ def geometry_set_to_sections(geometry, as_subd=False):
     that itself holds instances recurses into the same flat table.
 
     Curves components carry their ``CURVE`` and ``POINT`` attributes (the same
-    per-curve/per-point mapping used for wire-mesh edges). A legacy Curve
-    datablock used as a stage helper still cannot store attributes on the way
-    back; that return path is separate.
+    per-curve/per-point mapping used for wire-mesh edges). A Curve datablock
+    used as a stage helper cannot store attributes on the way back; that return
+    path is separate.
     """
     sections = []
     attributes = []

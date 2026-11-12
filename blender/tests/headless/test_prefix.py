@@ -1,18 +1,4 @@
-"""Layer B, prefix evaluation: a stage sees everything before its own modifier.
-
-Run with:
-
-    scripts/test-blender
-
-What it proves (plan §9.1, acceptance A3):
-
-1. A native modifier placed before the first stage is part of that stage's input.
-2. A second stage receives the first stage's output, with the modifier between
-   them applied: the `GH -> GN -> GH` chain works.
-3. A waiting stage stops the stack; later stages never run on a stale prefix.
-4. Base edits propagate through the whole chain.
-5. Steady state is quiet: prefix clones do not keep the engine busy.
-"""
+"""Layer B: prefix evaluation — a stage sees everything before its modifier."""
 
 import json
 import os
@@ -36,7 +22,7 @@ SCALE_PARAM = "00000000-0000-4000-8000-0000000000aa"
 
 
 def pump(seconds=8.0, until=None):
-    """Drive the engine timer directly: bpy.app.timers is inert under -b (S2)."""
+    """Drive the engine timer directly: bpy.app.timers is inert under -b."""
     import stageloom.blender.engine as engine
 
     deadline = time.time() + seconds
@@ -197,7 +183,7 @@ class PrefixChainTests(unittest.TestCase):
 
     def test_05_one_depsgraph_update_serves_every_stage_prefix(self):
         # Link every stage's clone first, then evaluate them in one update.
-        # The old path paid one full update per stage (~17 ms each on FiraTower).
+        # One update per stage cost ~17 ms each on FiraTower.
         engine = self.engine
         calls = []
         original = engine._clone_prefixes
@@ -440,7 +426,7 @@ class ComponentPrefixTests(unittest.TestCase):
 
 
 class NestedGroupPrefixTests(unittest.TestCase):
-    """P4-2: an edit inside a *nested* node group must invalidate the prefix
+    """An edit inside a *nested* node group must invalidate the prefix
     memo, not replay the geometry from before the edit.
 
     The prefix modifier is a group (`Outer`) that contains another group

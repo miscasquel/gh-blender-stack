@@ -1,7 +1,7 @@
-"""The response cache: index, disk store, and eviction (plan §4, §7, §9.2).
+"""The response cache: index, disk store, and eviction.
 
 Content-addressed by request ID. The disk layout under the data root is
-``cache/<stack_id>/<stage_key>/<request_id>.bin`` (plan §12), with a small JSON
+``cache/<stack_id>/<stage_key>/<request_id>.bin``, with a small JSON
 sidecar next to each frame holding the metadata that decides whether a stored
 frame still describes the current definition: the stage's generation counter and
 the definition fingerprint (protocol version + schema signature, computed by the

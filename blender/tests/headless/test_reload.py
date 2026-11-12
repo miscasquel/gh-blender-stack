@@ -1,20 +1,4 @@
-"""Layer B, file-load lifecycle: a reopened .blend keeps the engine alive.
-
-Run with:
-
-    scripts/test-blender
-
-What it proves (the "reopened files do not connect" bug):
-
-1. Blender clears non-persistent app handlers and timers on every file load.
-   The engine's timer and handlers are persistent, so they survive and the
-   engine is still ticking after `open_mainfile`.
-2. A file load behaves like a reconnect: a stage saved mid-request is reset,
-   and every loaded stack is marked dirty so it is evaluated against the cache
-   and Grasshopper without waiting for an edit.
-3. A stage in a reopened file actually talks to Grasshopper when the client was
-   already connected before the load (no new `hello` arrives to save the day).
-"""
+"""Layer B: file-load lifecycle and plumbing repair."""
 
 import json
 import os
@@ -36,7 +20,7 @@ PORT = 9147
 
 
 def pump(seconds=8.0, until=None):
-    """Drive the engine timer directly: bpy.app.timers is inert under -b (S2)."""
+    """Drive the engine timer directly: bpy.app.timers is inert under -b."""
     import stageloom.blender.engine as engine
 
     deadline = time.time() + seconds
@@ -164,8 +148,8 @@ class ReopenTests(unittest.TestCase):
 
 class RepairTests(unittest.TestCase):
     """Plumbing deleted before a save is rebuilt on load, and the stage is marked
-    unbound until an answer arrives (plan §9.7). Deleting the *modifier* is not
-    repaired — that is removal (plan §9.8), covered by test_stage_controls."""
+    unbound until an answer arrives. Deleting the *modifier* is not
+    repaired — that is removal, covered by test_stage_controls."""
 
     @classmethod
     def setUpClass(cls):

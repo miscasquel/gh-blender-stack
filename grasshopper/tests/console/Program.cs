@@ -148,7 +148,7 @@ namespace Stageloom.Tests.Console
             // Exercise the typed accessors on a couple of fixtures, so a broken
             // conversion path cannot hide behind the raw-byte checks. Guarded:
             // the fixture is regenerated from time to time and a missing
-            // section must report, not dereference null (P6-18).
+            // section must report, not dereference null.
             if (name == "response-mixed")
             {
                 Section verts = decoded.Find("mesh.verts");
@@ -224,7 +224,7 @@ namespace Stageloom.Tests.Console
             if ((bool)ParamValues.Cast("bool", "not a bool") != false)
                 problems.Add("Cast(bool, string) was not neutral");
 
-            // P5-1, the two sides' int rules read from params.py: `int` is
+            // The two sides' int rules read from params.py: `int` is
             // int(round(float(v))) — banker's rounding — and `value_list` is
             // int(v), truncation. A disagreement would compute one input as two
             // different request IDs, one per side.
@@ -255,12 +255,12 @@ namespace Stageloom.Tests.Console
         }
 
         /// <summary>Decoder boundary: malformed input must fail as a classified
-        /// exception, never as a raw one a caller cannot catch (P2-1/2/3).</summary>
+        /// exception, never as a raw one a caller cannot catch.</summary>
         private static void CheckDecoderBoundary()
         {
             var problems = new List<string>();
 
-            // P2-1: the parser's contract is JsonException.
+            // The parser's contract is JsonException.
             CheckThrows<JsonException>(problems, "\\uZZZZ escape",
                 delegate { Json.Parse("\"\\uZZZZ\""); });
             CheckThrows<JsonException>(problems, "1.2.3",
@@ -272,8 +272,7 @@ namespace Stageloom.Tests.Console
             CheckThrows<JsonException>(problems, "deep nesting",
                 delegate { Json.Parse(new string('[', 1000) + new string(']', 1000)); });
 
-            // P5-2: the number grammar is JSON's, not double.TryParse's. Python's
-            // json rejects these tokens, so a peer must not be accepted here.
+            // The number grammar is JSON's, not double.TryParse's.
             CheckThrows<JsonException>(problems, "+2",
                 delegate { Json.Parse("+2"); });
             CheckThrows<JsonException>(problems, "01",
@@ -297,7 +296,7 @@ namespace Stageloom.Tests.Console
             CheckFrameProblem(problems, "deeply nested header",
                 FrameWithHeader(new string('[', 1000) + new string(']', 1000)), "bad_frame");
 
-            // P2-3: unknown dtype and a missing name are bad_frames.
+            // Unknown dtype and a missing name are bad_frames.
             CheckFrameProblem(problems, "unknown dtype",
                 FrameCodec.Encode(PingHeader(),
                     new List<Section> { new Section("mesh.verts", "f64", new byte[4]) }),
@@ -308,9 +307,8 @@ namespace Stageloom.Tests.Console
                 "bad_frame");
 
             // The section table's field types are part of the contract: a
-            // number where a name belongs used to throw InvalidCastException
-            // out of Json.GetString, and a string where a length belongs a
-            // FormatException out of Json.GetLong (P2-1's remaining inputs).
+            // number where a name belongs, or a string where a length belongs,
+            // is a bad_frame.
             CheckFrameProblem(problems, "numeric section name",
                 FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":7,\"dtype\":\"f32\",\"bytes\":4}]}"),
                 "bad_frame");
@@ -338,7 +336,7 @@ namespace Stageloom.Tests.Console
 
             // The size caps are too_large, the code protocol §4.6 reserves for
             // "message exceeds the size limit"; answerable frames are the ones
-            // the receive path sends an error for (P5-4).
+            // the receive path sends an error for.
             byte[] overCap = new byte[4];
             long cap = FrameCodec.MaxHeaderBytes + 1;
             overCap[0] = (byte)(cap & 0xFF);
@@ -414,7 +412,7 @@ namespace Stageloom.Tests.Console
             return frame;
         }
 
-        /// <summary>FormatDouble's boundary (P5-3): byte-identical to Python's
+        /// <summary>FormatDouble's boundary: byte-identical to Python's
         /// repr for every value whose shortest form needs at most 15 significant
         /// digits — the protocol's practical range (counts, short decimals,
         /// exponents). A 16-17-digit value round-trips but can carry one digit
@@ -466,10 +464,7 @@ namespace Stageloom.Tests.Console
         private static void CheckJsonWriter()
         {            var problems = new List<string>();
 
-            // A typed list encodes exactly like List<object>. The writer used to
-            // reject anything but List<object>, which crashed a live canvas the
-            // first time it met the attribute descriptor list
-            // ("Stage Out: cannot encode List`1").
+            // A typed list encodes exactly like List<object>.
             var descriptors = new List<Dictionary<string, object>>();
             var entry = new Dictionary<string, object>();
             entry["name"] = "test";

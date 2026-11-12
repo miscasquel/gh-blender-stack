@@ -1,19 +1,4 @@
-"""Layer B, engine demo: the Blender side against tools/fake_gh.
-
-Run with:
-
-    scripts/test-blender
-
-What it proves, headless:
-1. The add-on registers and starts its server.
-2. Add Stage creates a stage, a hidden helper, and a GN modifier.
-3. A request goes out with full geometry; the response is applied to the helper.
-4. The stack object's evaluated mesh shows the GH output through the modifier.
-5. Changing a parameter sends a `ref` request (no geometry) and the result
-   updates; the fake's report shows full=1 and ref>=1.
-6. The modifier's own visibility toggles are the control: the engine reads them
-   and never writes them back.
-"""
+"""Layer B: the engine demo against tools/fake_gh."""
 
 import json
 import os
@@ -35,7 +20,7 @@ PORT = 9141
 
 
 def pump(seconds=8.0, until=None):
-    """Drive the engine timer directly: bpy.app.timers is inert under -b (S2)."""
+    """Drive the engine timer directly: bpy.app.timers is inert under -b."""
     import stageloom.blender.engine as engine
 
     deadline = time.time() + seconds

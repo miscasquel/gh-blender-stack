@@ -1,5 +1,5 @@
 // Protocol v2 frame codec: encode and decode the binary frames, plus the two
-// hashes. The C# twin of blender/gh_stack/core/codec.py and hashing.py, checked
+// hashes. The C# twin of blender/stageloom/core/codec.py and hashing.py, checked
 // against the same golden fixtures (protocol/fixtures, docs/protocol.md §9).
 //
 // No RhinoCommon and no Grasshopper references live here, so this file builds into
@@ -220,8 +220,8 @@ namespace Stageloom.Core
 
             object v = Json.Get(header, "v");
             // A number compares like Python's `v != expect`, so 2.0 == 2 holds
-            // and a string "2" does not (P5-2). A non-number must land here as a
-            // proto_mismatch, not as a converter exception (P2-2): the caller
+            // and a string "2" does not. A non-number must land here as a
+            // proto_mismatch, not as a converter exception: the caller
             // would otherwise tear down a healthy connection over one bad frame.
             bool versionOk = Json.IsNumber(v)
                              && Convert.ToDouble(v, CultureInfo.InvariantCulture) == ProtocolVersion;
@@ -250,7 +250,7 @@ namespace Stageloom.Core
                     // InvalidCastException or FormatException for a number
                     // where a string belongs (or a string where a number
                     // belongs), which is not the classified failure the decoder
-                    // contract promises (P2-1).
+                    // contract promises.
                     string name = Json.Get(entry, "name") as string;
                     if (string.IsNullOrEmpty(name))
                         throw new FrameException("bad_frame", "section entry without a name");

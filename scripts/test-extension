@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# S8 gate: build the extension, install it into a throwaway Blender config, and
-# prove it registers and completes a round trip from its install location.
+# Extension gate: build, install into a throwaway Blender config, and prove a
+# round trip from the install location.
 #
 #     scripts/test-extension
 set -euo pipefail

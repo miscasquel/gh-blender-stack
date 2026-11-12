@@ -73,10 +73,8 @@ def saved_port_check(server, prefs):
 def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
-    # default_set=True matters twice: it creates the preferences entry this test
-    # needs to write (under --factory-startup nothing is enabled yet), and it is
-    # what makes the data-root redirect below take effect instead of silently
-    # raising the KeyError that used to be swallowed here.
+    # default_set=True creates the preferences entry this test writes and makes
+    # the data-root redirect below take effect.
     addon_utils.enable(MODULE, default_set=True)
     import importlib
 

@@ -61,18 +61,11 @@ def _cloud_has_rows(obj, stage, index, nested=False):
 
 
 def _payload_missing(obj, stage, sections):
-    """Whether a frame that names geometry is displayed over empty helpers.
+    """Whether a frame names geometry that an empty helper is not displaying.
 
-    The one case the applied hash cannot see: the helpers were emptied while
-    the hash stayed, so the skip rule would refuse every response — and Push
-    too. A frame that carries geometry over empty helpers is re-applied
-    instead, which is idempotent when the output really is empty.
-
-    Every section group is checked against the helper it actually writes:
-    top-level base geometry against the top-level helper, `idef.<i>.*` against
-    definition i's helper, and `inst.*` rows against the row clouds. A
-    definition-only output has empty top-level helpers and used to look
-    "missing" on every pass, so it was re-applied forever.
+    Each section group is checked against the helper it writes: base geometry,
+    `idef.<i>.*` and `inst.*` rows separately. A cleared helper must be repaired
+    even when the applied hash still matches.
     """
     for name in sections:
         index, rest = engine._definition_split(name)
@@ -264,11 +257,9 @@ def _kind_of(name):
 
 
 def _rows_of(sections, prefix):
-    """The decoded row pairs of one scope as ``[(definition index, matrix 4x4)]``.
+    """The decoded row pairs of one scope as ``[(definition index, matrix)]``.
 
-    Both halves are all-or-nothing (protocol §5.2). A missing or mismatched
-    pair is reported rather than silently degraded: a truncated pair used to
-    keep the shorter side and leave no trace.
+    Both halves are all-or-nothing; a missing or mismatched pair is reported.
     """
     refs = sections.get(prefix + "inst.ref_def")
     mats = sections.get(prefix + "inst.transforms")
@@ -299,9 +290,8 @@ def _apply_instance_rows(obj, stage, definitions, top_rows, nested_rows):
     target as an INT ``child`` attribute, which the group's per-child instance
     selections compare against. Nothing bakes: the node group instances the
     child's prototype chain at these points (see nodes.ensure_group)."""
-    # Legacy leftovers: earlier builds represented a nested placement as an
-    # Empty with a collection instance; the node graph carries them now, so any
-    # such object is removed on sight.
+    # Earlier builds used an Empty with a collection instance for a nested
+    # placement; the node graph carries it now, so remove any such object.
     for index in sorted(definitions):
         collection, _objects = engine.helpers.ensure_definition(obj, stage.key, index)
         for child in list(collection.objects):
@@ -415,8 +405,8 @@ def _apply_attributes(obj, stage, sections, attributes):
     mesh and subd share the mesh helper (a SubD cage is a mesh); points go to
     the point cloud helper. A descriptor with a ``definition`` index targets
     that definition's helper instead (protocol §5.2). Curve attributes are not
-    transferred yet — Blender's curve helper is a legacy Curve datablock, which
-    cannot store attributes.
+    transferred yet: Blender's curve helper is a Curve datablock, which cannot
+    store attributes.
 
     Absent means none: a helper the frame gives no descriptors is pruned of
     its previous generic attributes. The native colour channel is handled by

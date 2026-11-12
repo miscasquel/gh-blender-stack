@@ -3,8 +3,8 @@
 Launched by ``blender/tests/installed/run.py`` as a *second* Blender process on
 the same throwaway config, with no ``--factory-startup``: the point is that the
 saved preference is read while the add-on registers at startup, which is the path
-a user takes and the one a single-process test cannot reach. Phase 1 set the port
-and saved the preferences; this process asserts the server bound it.
+a user takes and the one a single-process test cannot reach. The first process
+set the port and saved the preferences; this process asserts the server bound it.
 
     blender -b --python port_phase2.py     (BLENDER_USER_CONFIG must be the config
                                             phase 1 saved into; STAGELOOM_PORT_EXPECT

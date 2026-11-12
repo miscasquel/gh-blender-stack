@@ -1,17 +1,4 @@
-"""Layer B, registration: what `register()` can see, in the order it runs.
-
-Run with:
-
-    scripts/test-blender
-
-`engine.register()` starts the server, and the server reads the port preference.
-That only works if the preferences class is registered *first* — with `prefs`
-last in `MODULE_ORDER` the engine saw no preferences, fell back to the default,
-and the panel (which reads the preference) reported a port nothing was
-listening on. The order assertion below is the tripwire; the installed layer
-(`tests/installed/`) reproduces the failure across two Blender launches, which is
-the shape it actually takes for a user.
-"""
+"""Layer B: registration order, reports and preference migration."""
 
 import os
 import sys
@@ -101,12 +88,7 @@ class DataRootTests(unittest.TestCase):
 
 
 class RegistrationReportTests(unittest.TestCase):
-    """The Phase 0 report: one visible generation, both install paths, no writes.
-
-    The reload investigation starts by counting handlers. This report is the
-    console-facing tripwire; if it says two, the handoff's duplicate-generation
-    cause is confirmed before any fix is written.
-    """
+    """The registration report: one visible generation, both install paths."""
 
     @classmethod
     def setUpClass(cls):

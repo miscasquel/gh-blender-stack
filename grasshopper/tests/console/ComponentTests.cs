@@ -288,12 +288,12 @@ namespace Stageloom.Tests.Console
                 param.Params.Input.Count == 9, InputNames(param));
 
             // A loaded document keeps its saved parameter list; placement must
-            // not hide an old expanded node.
-            var legacy = new ParamComponent();
-            legacy.MarkLoaded();
-            legacy.ApplyInitialVisibility();
+            // not hide an expanded node.
+            var loaded = new ParamComponent();
+            loaded.MarkLoaded();
+            loaded.ApplyInitialVisibility();
             Check("a loaded document keeps its expanded inputs",
-                legacy.Params.Input.Count == 9, InputNames(legacy));
+                loaded.Params.Input.Count == 9, InputNames(loaded));
         }
 
         private static IGH_Param FindInput(IGH_Component component, string name)

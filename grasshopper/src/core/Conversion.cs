@@ -1,21 +1,10 @@
 // Protocol sections <-> Rhino geometry. RhinoCommon only; no Grasshopper and no
-// bpy. The twin of blender/gh_stack/blender/geometry_io.py.
+// bpy. The twin of blender/stageloom/blender/geometry_io.py.
 //
-// Meshes (n-gons, vertex colours), SubD cages with tag creases, curves (poly,
-// NURBS, Bezier nets), points, and Breps (meshed, warned). Approximations and
-// losses are always reported through the warnings list (plan §3, principle 6).
-//
-// Units: the wire is meters (protocol §8.3), so both directions take the document
-// scale (document units per meter). The caller gets it from
-// RhinoMath.UnitScale(UnitSystem.Meters, doc.ModelUnitSystem).
-//
-// Curve exactness: Blender NURBS splines can express uniform-open, clamped-
-// uniform (endpoint), and uniform-periodic knots, any order 2..6, with weights
-// (Blender's cyclic+endpoint combination has no standard form and the periodic
-// construction is used for it). Curves in that set travel NURBS to NURBS,
-// exactly, as one curve. Everything else is converted to Bezier spans
-// (MakePiecewiseBezier, lossless); dropping weights off a rational curve is the
-// lossy step D3 warns about.
+// Meshes, SubD cages, curves, points and Breps (meshed, warned). The wire is
+// metres; both directions take the document scale. Curves travel exactly when
+// Blender's knots are representable, otherwise as Bezier spans; every loss is
+// reported through the warnings list.
 
 using System;
 using System.Collections.Generic;
@@ -29,7 +18,7 @@ namespace Stageloom.Core
     /// documented code plus the human-readable message. The channel keeps this
     /// shape rather than bare strings so a response header carries the
     /// per-cause code the fixture pins (`curve_approximated`), not one blanket
-    /// "conversion" (P6-9). The text-only overloads of the conversion entry
+    /// "conversion". The text-only overloads of the conversion entry
     /// points stay for callers that just print a line.</summary>
     public sealed class WireWarning
     {
@@ -90,7 +79,7 @@ namespace Stageloom.Core
             // Vertices.AddVertices(IEnumerable<Point3f>) does not resolve with the
             // Mono profile mcs compiles against (its metadata mentions
             // IReadOnlyList, absent from the 4.0-api mscorlib mcs loads), so the
-            // loop is deliberate. S3 measures what this actually costs.
+            // loop is deliberate; the benchmarks measure its cost.
             for (int i = 0; i < positions.Length; i += 3)
             {
                 Point3d point = FromWire(positions[i], positions[i + 1], positions[i + 2], scale);
@@ -611,7 +600,7 @@ namespace Stageloom.Core
                 pts, counts, types, orders, modes, cyclic);
         }
 
-        /// <summary>0.1 mm on the wire (the plan's default budget), in meters.</summary>
+        /// <summary>0.1 mm on the wire (default budget), in meters.</summary>
         private const double DeviationBudgetMeters = 1e-4;
 
         /// <summary>Kinks sharper than 1 degree survive as kinks in the fit.</summary>
@@ -652,8 +641,8 @@ namespace Stageloom.Core
             return net;
         }
 
-        /// <summary>Largest distance from samples on the approximation back to the
-        /// original (the S4 recipe).</summary>
+        /// <summary>Largest distance from samples on the approximation back to
+        /// the original.</summary>
         private static double SpanDeviation(NurbsCurve original, NurbsCurve approximation, int samples)
         {
             double max = 0.0;
@@ -765,11 +754,8 @@ namespace Stageloom.Core
             return curve.IsValid ? curve : null;
         }
 
-        /// <summary>One wire NURBS curve. ``order`` is Blender's order; once
-        /// uniform knots were rejected this builds the exact open forms, and for
-        /// a cyclic curve the periodic uniform form — passing the *degree*, not
-        /// the order, to ``NurbsCurve.Create`` (the call that used to build every
-        /// cyclic curve one degree too high).</summary>
+        /// <summary>One wire NURBS curve. ``order`` is Blender's order; pass the
+        /// *degree*, not the order, to ``NurbsCurve.Create``.</summary>
         private static NurbsCurve BuildNurbs(
             List<Point3d> ps, List<double> ws, int order, bool endpoint, bool cyclic)
         {
@@ -847,7 +833,7 @@ namespace Stageloom.Core
 
         /// <summary>The wire's metres into document units. One place for the
         /// multiply: the four converted loops this replaces had drifted apart
-        /// copies, which is exactly where a units bug hides (P6-14).</summary>
+        /// copies, which is exactly where a units bug hides.</summary>
         private static Point3d FromWire(double x, double y, double z, double scale)
         {
             return new Point3d(x * scale, y * scale, z * scale);
@@ -1003,7 +989,7 @@ namespace Stageloom.Core
                 sections.Add(Section.Floats("subd.crease_values", creaseValues.ToArray()));
                 // The warning is about what was sent: a cage with no tagged
                 // creases has nothing to lose, and warning anyway made every
-                // SubD stage read as lossy (P6-10).
+                // SubD stage read as lossy.
                 warnings.Add(new WireWarning(WarningCodes.SubdCreases,
                     "Creases transferred as tags; semi-sharp and vertex creases are not available from RhinoCommon"));
             }
@@ -1095,7 +1081,7 @@ namespace Stageloom.Core
 
         /// <summary>Curves actually written, not the input goo count:
         /// SectionsFromCurves drops null curves and curves that defeat every
-        /// representation, and the header's counts describe the frame (P6-11).
+        /// representation, and the header's counts describe the frame.
         /// The fixture's `counts.curves` is the emitted count.</summary>
         private static int EmittedCurveCount(List<Section> sections)
         {
@@ -1144,10 +1130,8 @@ namespace Stageloom.Core
 
         // ------------------------------------------------- text-only warnings
 
-        // The S6/S9 spike checks compile against these overloads and only ever
-        // print a warning line, so they keep the plain-string view. The plugin
-        // uses the WireWarning overloads above, which is the one that carries
-        // the protocol §4.4 code.
+        // The live checks compile against these overloads and only print a
+        // warning line. The plugin uses the WireWarning overloads above.
 
         /// <summary>Text-only view of SectionsFromCurves' warnings.</summary>
         public static List<Section> SectionsFromCurves(

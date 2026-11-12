@@ -1,4 +1,4 @@
-"""The N-panel: connection status, stages, parameters (plan §11, demo v0/S5).
+"""The N-panel: connection status, stages, parameters.
 
 Icons are Blender's own icon names, the same glyphs the Grasshopper components
 carry (see grasshopper/src/gh/icons); where this Blender build lacks one (the
@@ -76,8 +76,8 @@ class STAGELOOM_PT_panel(bpy.types.Panel):
     def draw_stage(self, layout, obj, record, stage, index):
         box = layout.box()
         row = box.row()
-        # Enable, disable, reorder and remove are the modifier's own controls
-        # (plan §11): the row carries only what the modifiers panel cannot —
+        # Enable, disable, reorder and remove are the modifier's own controls:
+        # the row carries only what the modifiers panel cannot —
         # Pull, Freeze, and the key to paste into Grasshopper.
         row.label(text=stage.label or stage.key, icon=_STAGE_ICON)
         row.label(text=stage.state, icon=_state_icon(stage))
@@ -225,7 +225,7 @@ class STAGELOOM_PT_diagnostics(bpy.types.Panel):
                 box.label(text="%s: %s" % (entry.label or entry.param_id, detail))
             # Parameters Grasshopper no longer declares keep their properties
             # and keyframes (protocol §4.2); the list is derived, and purge is
-            # explicit (plan §7).
+            # explicit.
             orphaned = props.orphans(obj, stage)
             if orphaned:
                 box.label(text="Orphans: %d" % len(orphaned), icon="ORPHAN_DATA")

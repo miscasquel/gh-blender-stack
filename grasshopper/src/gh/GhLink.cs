@@ -1,15 +1,12 @@
-// Stageloom link: the Grasshopper side of the protocol (plan §10).
+// Stageloom link: the Grasshopper side of the protocol.
 //
 // Owns the socket thread, the per-stage latest slots, and the publication of
-// `hello` and `schema`. Adapted from the S1/S3 spike, which passed the transport
-// gate; the lessons are kept in the comments.
+// `hello` and `schema`.
 //
-// Threading (plan §3, principle 7): GH objects only on the UI thread. The socket
-// thread decodes frames and stores them in slots; it asks the UI thread to solve
-// through GH_Document.ScheduleSolution(10, ...). A non-zero delay is required:
-// ScheduleSolution(0, ...) coalesces and silently drops the delegate (S1).
-// Replies are queued and sent by a dedicated sender thread, so a reply never
-// waits for the next inbound frame (S1).
+// Threading: GH objects only on the UI thread. The socket thread decodes frames
+// and stores them in slots; it asks the UI thread to solve through
+// GH_Document.ScheduleSolution(10, ...). Replies are queued and sent by a
+// dedicated sender thread.
 
 using System;
 using System.Collections.Generic;
@@ -24,7 +21,7 @@ namespace Stageloom
     ///
     /// A solve reads Sections, Attributes, Definitions, GeometryHash and Rid
     /// together. Keeping them as separate fields let a request arriving between
-    /// the reads pair old sections with a new attribute list or a new rid (F5).
+    /// the reads pair old sections with a new attribute list or a new rid.
     /// The lists are never mutated after construction; a `ref` publishes a new
     /// object that reuses the previous geometry lists and carries the new rid.</summary>
     public sealed class HeldFrame
@@ -66,10 +63,9 @@ namespace Stageloom
         /// solve, when the slot's own `Rid` is the answer.</summary>
         public volatile string SolveRid = "";
         private volatile Dictionary<string, object> _params = new Dictionary<string, object>();
-        /// <summary>The request's parameter values. The socket thread publishes a
-        /// fresh dictionary per request and never mutates it afterwards; the
-        /// volatile reference is what makes the UI thread see a whole snapshot
-        /// (P3-3).</summary>
+        /// <summary>The request's parameter values. The socket thread publishes
+        /// a fresh dictionary per request; the volatile reference lets the UI
+        /// thread see a whole snapshot.</summary>
         public Dictionary<string, object> Params
         {
             get { return _params; }
@@ -110,7 +106,7 @@ namespace Stageloom
         /// has claimed yet: the first request can arrive while the document is
         /// still loading, before the first solve publishes the keys. The solve
         /// that follows either claims the key or the slot is refused as
-        /// `unknown_stage` and pruned (P3-5).</summary>
+        /// `unknown_stage` and pruned.</summary>
         internal bool Provisional = false;
     }
 
@@ -136,7 +132,7 @@ namespace Stageloom
 
         // One worker per Start: the running flag lives in the worker, not in a
         // static, so an old thread that a Stop could not join in time can never
-        // revive against a later Start (P3-1).
+        // revive against a later Start.
         private sealed class Worker
         {
             public volatile bool Running;
@@ -162,13 +158,13 @@ namespace Stageloom
         // a stage that waits forever. The normal path clears the flag in
         // OnSolutionEnd; this only covers a missed event or a wedged document.
         private const double SolveWatchdogSeconds = 30.0;
-        // Published once per connection; read and reserved under Gate (P3-4).
+        // Published once per connection; read and reserved under Gate.
         private static bool _publishedThisConnection = false;
         private static MiniWsClient _client;  // under Gate; Stop disposes it
 
         // The keys live components have published. Every publish replaces its
         // owner's one entry, so the union is the document's live key set and
-        // ReconcileOwnership can prune everything else (P3-5). Ownership is
+        // ReconcileOwnership can prune everything else. Ownership is
         // reference identity, not Equals: two components of one class must not
         // collapse.
         private class Claim
@@ -212,7 +208,7 @@ namespace Stageloom
                 last = Components.Count == 0;
             }
             // The keys this component published go with it; keys another live
-            // component still claims stay (P3-5).
+            // component still claims stay.
             ReconcileOwnership();
             if (last)
             {
@@ -401,9 +397,8 @@ namespace Stageloom
             }
         }
 
-        /// <summary>Compatibility alias for saved script components that call
-        /// the pre-0.4.1 public name. New code should use
-        /// <see cref="SetOutStatus"/>.</summary>
+        /// <summary>Compatibility alias for older scripted components. New code
+        /// should use <see cref="SetOutStatus"/>.</summary>
         public static void SetSlotStatus(StageSlot slot, string status, string message)
         {
             SetOutStatus(slot, status, message);
@@ -505,9 +500,7 @@ namespace Stageloom
                     }
                     finally
                     {
-                        // Always stop the sender with the connection. A receive
-                        // exception used to skip both lines, leaving the old
-                        // sender alive to publish on the next connection.
+                        // Always stop the sender with the connection.
                         stopSend.Set();
                         sender.Join(500);
                     }
@@ -572,7 +565,7 @@ namespace Stageloom
                 }
                 catch (Exception ex)
                 {
-                    // Last resort (P2-1): no single frame may tear down a
+                    // Last resort: no single frame may tear down a
                     // healthy connection — Loop's outer catch would dispose the
                     // client and reconnect. Anything reaching here is a decoder
                     // gap; note it and keep reading.
@@ -786,7 +779,7 @@ namespace Stageloom
                 {
                     // Reconcile when the solve has finished: every component has
                     // published by then, so an unclaimed provisional slot is
-                    // genuinely foreign (P3-5). Subscribing here and
+                    // genuinely foreign. Subscribing here and
                     // unsubscribing in the handler keeps one subscription per
                     // scheduled solve.
                     d.SolutionEnd += OnSolutionEnd;
@@ -795,7 +788,7 @@ namespace Stageloom
                         // Pin the rid each solve is answering before the inputs
                         // are read: a request arriving mid-solve overwrites
                         // slot.Rid, and answering that newer rid would label the
-                        // old-geometry answer as the new request's (F5).
+                        // old-geometry answer as the new request's.
                         DateTime started = DateTime.UtcNow;
                         foreach (KeyValuePair<string, StageSlot> pair in Slots)
                         {
@@ -1067,7 +1060,7 @@ namespace Stageloom
 
         private static volatile string _lastDocName = "(unsaved)";
         // The heartbeat timestamp is a long read/written with Interlocked: a
-        // DateTime wraps two ints, which this 32-bit runtime can tear (P3-4).
+        // DateTime wraps two ints, which this 32-bit runtime can tear.
         private static long _lastPublishTicks = DateTime.MinValue.Ticks;
 
         private static DateTime LastPublishAt()
@@ -1096,7 +1089,7 @@ namespace Stageloom
             }
 
             // Reserve the once-per-connection hello under Gate: two threads
-            // reading the flag independently both sent one (P3-4).
+            // reading the flag independently both sent one.
             bool needHello;
             lock (Gate)
             {
@@ -1136,11 +1129,8 @@ namespace Stageloom
 
             foreach (var kv in paramsByStage)
             {
-                // The heartbeat used to enqueue one schema per stage every two
-                // seconds, even when nothing had changed; Blender then decoded
-                // each frame and scanned the scene just to skip the UI work.
-                // Keep the periodic hello as the safety net, and gate the schema
-                // on its canonical content.
+                // Publish a schema only when its canonical content changes; the
+                // periodic hello remains the safety net.
                 string signature = Json.WriteCanonical(kv.Value);
                 bool changed;
                 lock (Gate)

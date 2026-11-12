@@ -1,21 +1,10 @@
-"""Helper objects, block definitions and row clouds in the Stageloom Stage scene (plan §5).
+"""Helper objects, block definitions and row clouds in the Stageloom Stage scene.
 
-Helpers are hidden objects that carry a stage's output geometry, one per
-geometry kind: a mesh, a curve, and a point cloud. A node group reads them with
-Object Info (Original transform space, so the data stays in stack-local
-coordinates), which is what makes GH output ride along with native modifiers.
-
-A SubD cage is a mesh, so it shares the mesh helper.
-
-Instance definitions (§5.2) are the same idea one level up: each definition is
-a small hidden collection holding its own per-kind helpers, read by the stage's
-node group through Object Info, and each definition's rows are hidden point
-clouds (position/rotation/scale) fed into Instance on Points: one cloud for the
-definition's top-level rows, and one for the placements nested inside it.
-
-All of it is owned by the dedicated `Stageloom Stage` scene, not the user's: the
-outliner stays theirs, while the node graph still resolves the datablocks
-through Object Info (verified across scenes, render included).
+Helpers are hidden objects per geometry kind, read by the stage's node group in
+Original transform space so their data stays stack-local. A SubD cage shares the
+mesh helper. Instance definitions hold their own per-kind helpers and placement
+clouds. Everything lives in the dedicated `Stageloom Stage` scene, never the
+user's.
 """
 
 import bpy
@@ -82,11 +71,7 @@ def adopt_existing():
 
 
 def _migrate_old_names():
-    """Rename the 0.3.x scene, collection, helpers and node objects in place.
-
-    The stage records, parameter properties and keyframes are not touched; the
-    persisted keys deliberately keep their old names (see stack.py/props.py).
-    """
+    """Rename pre-Stageloom scene, collection, helper and node names in place."""
     old_scene = bpy.data.scenes.get(OLD_SCENE_NAME)
     if old_scene is not None and bpy.data.scenes.get(SCENE_NAME) is None:
         old_scene.name = SCENE_NAME

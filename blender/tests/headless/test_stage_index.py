@@ -1,14 +1,4 @@
-"""Layer B, the stage index: message paths must not walk the whole blend.
-
-Run with:
-
-    scripts/test-blender
-
-The engine used to scan `bpy.data.objects` on every response, schema heartbeat,
-hello and error. The index is built once on register/load and patched as stages
-change; these checks pin the lookup shape and the fact that a warm index is not
-rebuilt by message handling.
-"""
+"""Layer B: message paths use the stage index, not a full scene scan."""
 
 import unittest
 

@@ -1,17 +1,11 @@
 // The unified Stage In geometry: one frame, one list of goos.
 //
-// Stage In used to grow one typed output per geometry kind. The owner's call
-// (2026-10-15): everything leaves through `Geometry`, in a fixed order —
-// mesh, SubD cage, curves, points — so a stage's geometry is one wire and one
-// output no matter what combination Blender sent.
+// Everything leaves through `Geometry`, in a fixed order — mesh, SubD cage,
+// curves, points. The kind is decided by the protocol sections (`mesh.*`,
+// `subd.*`, `crv.*`, `pts.*`); absent and empty groups contribute nothing.
 //
-// The kind carried per group is decided by the section names, exactly as the
-// protocol defines them (protocol §5): `mesh.verts`, `subd.verts`, `crv.*`,
-// `pts.*`. A group that is absent contributes nothing; a group that is present
-// but empty contributes nothing either.
-//
-// This lives outside Conversion.cs because it builds Grasshopper goos, and the
-// core conversions stay RhinoCommon-only so the console tests can compile them.
+// This lives outside Conversion.cs because it builds Grasshopper goos; the core
+// conversions stay RhinoCommon-only for the console tests.
 
 using System;
 using System.Collections.Generic;

@@ -1,4 +1,4 @@
-"""Parameter schemas and value casting (plan §7).
+"""Parameter schemas and value casting.
 
 The schema a GH Param component publishes becomes Blender custom properties. This
 module is the pure logic of that mapping: given a GH-ish schema, produce values that
@@ -28,7 +28,7 @@ PARAM_TYPES = (
     PARAM_TEXT,
 )
 
-# Which of them may be keyframed (plan §7). Text is documented as not animatable.
+# Which of them may be keyframed. Text is documented as not animatable.
 ANIMATABLE = frozenset(
     (PARAM_FLOAT, PARAM_INT, PARAM_BOOL, PARAM_VECTOR3, PARAM_COLOR, PARAM_VALUE_LIST)
 )

@@ -1,4 +1,4 @@
-"""WebSocket server on a background thread (plan §8.1, S2).
+"""WebSocket server on a background thread.
 
 The dependency is the official pure-Python `websockets` wheel the extension
 declares (Blender installs it into the extension's `_libs` on `sys.path`; the

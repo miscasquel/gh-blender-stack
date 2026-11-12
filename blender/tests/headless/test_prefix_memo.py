@@ -43,7 +43,7 @@ SCALE_PARAM = "00000000-0000-4000-8000-0000000000aa"
 
 
 def pump(seconds=10.0, until=None):
-    """Drive the engine timer directly: bpy.app.timers is inert under -b (S2)."""
+    """Drive the engine timer directly: bpy.app.timers is inert under -b."""
     import stageloom.blender.engine as engine
 
     deadline = time.time() + seconds
@@ -317,9 +317,8 @@ class ResetRetiresMemoTests(unittest.TestCase):
         set_gn_input(self.gn, 10.0, self.obj)
         self.engine.push(self.obj)
 
-        # The report is written when the fake *receives* the request; the stage
-        # is only `ok` once the answer is back and applied. Waiting for both
-        # removes the race that used to flake this test as 'waiting' != 'ok'.
+        # The report is written when the fake receives the request; the stage is
+        # only `ok` once the answer is back and applied. Wait for both.
         def delivered():
             return self._seen(9.0) and self.stage.state == "ok"
 
@@ -432,7 +431,7 @@ class ReferencedObjectTests(unittest.TestCase):
 
         self.assertTrue(
             pump(seconds=10.0, until=followed),
-            "the prefix kept reading the referenced object where it used to be: "
+            "the prefix kept reading the referenced object's old position: "
             "an Object reference must follow the object",
         )
         self.assertGreaterEqual(report_of(self.report).get("full", 0), 2)

@@ -1,12 +1,4 @@
-"""S5: parameter UI plumbing that can be checked headless.
-
-Keyframes, constant interpolation, per-component array keyframes, drivers, and
-the choice dropdown's proxy property. The visual decorators (the keyframe diamond
-and driver badge) are a GUI check; these tests prove the underlying properties
-behave.
-
-Run with scripts/test-blender.
-"""
+"""Parameter UI plumbing that can be checked headless."""
 
 import os
 import sys
@@ -46,7 +38,7 @@ class ParamUiTests(unittest.TestCase):
         record = stack_mod.ensure_stack(cls.obj)
         stage = record.stages.add()
         stage.key = "s5-test"
-        stage.label = "S5"
+        stage.label = "Params"
         cls.stage = stage
         props.apply_schema(
             cls.obj,
@@ -101,7 +93,7 @@ class ParamUiTests(unittest.TestCase):
         self.assertNotEqual(value, 1.0)
 
     def test_03_fcurves_use_the_layered_action_api(self):
-        # The plan's note: Blender 5.2 has no action.fcurves; keyframes live under
+        # Blender 5.2 has no action.fcurves; keyframes live under
         # layers/strips/channelbags.
         obj = self.obj
         action = obj.animation_data.action
@@ -299,7 +291,7 @@ class ParamUiTests(unittest.TestCase):
         name = self.name("t1")
         obj[name] = "changed"
         self.assertEqual(obj[name], "changed")
-        # Text is not animatable by design (plan §7); no keyframe test.
+        # Text is not animatable by design; no keyframe test.
 
 
 if __name__ == "__main__":

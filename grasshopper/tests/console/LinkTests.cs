@@ -5,7 +5,7 @@
 // Drives the product GhLink over a scripted fake WebSocket server: hello and
 // schema content, slot bookkeeping, the unknown_ref refusal, the error path,
 // a same-rid re-send, and the frames the receive path answers for a version
-// mismatch and an oversized frame (P5-4). GhLink only needs Grasshopper types
+// mismatch and an oversized frame. GhLink only needs Grasshopper types
 // for its solve trigger; a component that is not on a GH_Document makes
 // OnPingDocument() return null, so no GH solve machinery (and no Rhino) is
 // exercised here. The connection, decoder, slots, notes and outbox are all the
@@ -146,8 +146,7 @@ namespace Stageloom.Tests.Console
                     WaitFor(delegate { return GhLink.FindSlot("k1").Status == "unknown_ref"; }), "");
 
                 // 7. the client re-sends on its own, same rid: the slot must
-                //    come back to waiting and keep answering that rid (P0-4's
-                //    GH-side half).
+                //    come back to waiting and keep answering that rid.
                 server.Send(Frame(requestHeader, MeshSections()));
                 Check("same-rid re-send returns to waiting",
                     WaitFor(delegate { return GhLink.FindSlot("k1").Status == "waiting"; }), "");
@@ -279,7 +278,7 @@ namespace Stageloom.Tests.Console
                 Check("claimed slot survives a sibling unregister", GhLink.FindSlot("k1") != null, "");
 
                 // 11. the last component leaving stops the worker and closes
-                //     the connection (P3-1).
+                //     the connection.
                 GhLink.Unregister(stage);
                 Check("last unregister closes the socket", server.DrainClosed(2000), "");
                 GhLink.Stop();  // idempotent
@@ -449,7 +448,7 @@ namespace Stageloom.Tests.Console
                     WaitFor(delegate { return GhLink.ActiveSenders == 1; }),
                     "senders=" + GhLink.ActiveSenders);
                 // A reset, not a clean close: ReceiveBinary throws and Loop takes
-                // its catch path, which is the path that used to leak the sender.
+                // its catch path, which must still stop the sender.
                 server.ResetClient();
                 Check("reset took the exception path",
                     WaitFor(delegate

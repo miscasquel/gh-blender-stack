@@ -1,26 +1,9 @@
-"""The engine: one tick per timer pass, per stack object (plan §9, §7 frame cache).
+"""The engine: one tick per timer pass, per stack object.
 
-One pass per stage: compute the prefix geometry, hash it, build the request id,
-then serve the frame from the memory cache, the disk store, or Grasshopper. The
-response store *is* the frame cache: keyframed parameters produce a different rid
-per frame, so frames cached under their rids replay in any order, with no bake
-operator and no frame range (the handoff, 2026-10-12).
-
-A per-stage generation resets the cache when Grasshopper sends something that
-makes old frames describe the wrong definition: a changed schema, a response that
-contradicts the stored one for the same rid, a reconnect with a different
-document, or a manual Push.
-
-Cached frames replay with Grasshopper closed (renders use the cache). A frame
-that is not cached keeps the last good output; a pass that changes nothing writes
-nothing and tags nothing, so Cycles can accumulate samples while idle.
-
-The engine is dormant in a file with no stages: no timer and no per-update or
-per-frame handlers run. Adding, loading or undoing a stage activates it, and
-removing the last stage deactivates it again.
-
-Nothing here touches the socket directly: it posts frames through the bridge and
-drains what the server thread decoded.
+A pass serves each stage from the memory cache, the disk store, or Grasshopper.
+Cached frames replay with Grasshopper closed; an uncached frame keeps the last
+good output. A stage-less file runs no timer or per-frame handlers. Nothing here
+touches the socket directly: frames go through the bridge.
 """
 
 import sys
@@ -520,10 +503,8 @@ def register():
     _last_no_send.clear()
     _timings.clear()
     _force_read.clear()
-    # The prefix guard and the tick flag are session state too: a wedge used to
-    # survive disable/enable, so re-enabling the add-on inherited a mute that
-    # dropped every edit until the watchdog fired. Registering is a clean start;
-    # the watchdog stays as the belt-and-braces for a leak within a session.
+    # The prefix guard and tick flag are session state: register is a clean
+    # start, with the watchdog left as the in-session guard.
     _evaluating = False
     _guard_owner = None
     _evaluating_since = None

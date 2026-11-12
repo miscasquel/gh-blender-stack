@@ -1,9 +1,8 @@
 """Protocol v2 hashing: geometry hashes, request IDs, output hashes.
 
 All three are SHA-256, prefixed ``sha256:`` and hex-encoded, per protocol §6.
-This module is pure Python. The plan says the geometry hash is computed with numpy
-on the Blender side; nothing here needs numpy, because the hash is over bytes the
-caller already has (``section_bytes`` in :mod:`codec`).
+This module is pure Python: the hash is over bytes the caller already has
+(``section_bytes`` in :mod:`codec`), so no numpy is needed here.
 """
 
 import hashlib

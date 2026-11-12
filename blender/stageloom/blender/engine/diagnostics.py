@@ -106,17 +106,11 @@ def _enabled_stageloom_addons():
 
 
 def registration_report():
-    """A read-only snapshot of who is registered, for the reload investigation.
+    """A read-only snapshot of who is registered.
 
-    The handoff's first check counted handlers by module name; this reports the
-    same thing plus the pieces that decide whether the engine can be trusted:
-    the module path actually loaded, the timer in this generation, the stack
-    index, the hot deadline and the dirty set. It never writes engine state.
-
-    Handler counts are the visible part of a leaked generation. Timers cannot be
-    enumerated through `bpy.app.timers`; `tick_rate` measures this generation
-    only, so a stale timer with its own module state is invisible there. A
-    leaked generation with handlers still attached is the reliable signal.
+    Handler counts reveal a leaked generation: timers cannot be enumerated
+    through `bpy.app.timers`, but a stale generation with handlers still
+    attached is visible here. Never writes engine state.
     """
     now = engine.time.monotonic()
     handlers = {}

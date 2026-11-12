@@ -1,16 +1,4 @@
-"""Layer B, stage addressing and prefix invalidation.
-
-The multi-stage live report exposed three latent addressing assumptions:
-1. record order was treated as stack order, so dragging a stage modifier could
-   make a downstream stage evaluate its prefix before the upstream stage;
-2. a prefix batch built earlier in the pass was reused after an apply, so a
-   downstream stage could read the pre-apply helper;
-3. a surface object silently gave every stage the base surface, so a second
-   surface stage ran on the first stage's input.
-
-The modifier-uid tests use small fakes: the point is the ambiguity rule, not a
-real Blender modifier.
-"""
+"""Layer B: stage addressing, modifier order and prefix invalidation."""
 
 import os
 import sys
@@ -183,12 +171,8 @@ class ApplyInvalidationTests(unittest.TestCase):
 class CachedPrefixBatchTests(unittest.TestCase):
     """A cached multi-stage pass rebuilds only the prefixes it still needs.
 
-    Every apply used to clear the global batch, so a three-stage pass rebuilt
-    all three prefixes after each apply. That is quadratic on the frame-cache
-    playback path. An apply can only stale the prefixes *downstream* of the
-    writing stage in the modifier stack — its own prefix ends before its
-    modifier and upstream prefixes cannot contain its output — so those entries
-    survive and the pass rebuilds one prefix at a time.
+    An apply can only stale the prefixes downstream of the writing stage, so the
+    other entries survive and the pass rebuilds one prefix at a time.
     """
 
     @classmethod
@@ -347,13 +331,7 @@ class CachedPrefixBatchTests(unittest.TestCase):
 
 
 class SurfaceStageRejectionTests(unittest.TestCase):
-    """A surface object cannot take the Geometry Nodes modifier a stage needs.
-
-    Blender 5.2 returns None from ``modifiers.new(type="NODES")`` there, so Add
-    Stage used to create a stage record and then crash. The supported object
-    types no longer include SURFACE; the operator refuses before touching the
-    record.
-    """
+    """A surface object cannot take the Geometry Nodes modifier a stage needs."""
 
     @classmethod
     def setUpClass(cls):

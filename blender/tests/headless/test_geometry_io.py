@@ -137,7 +137,7 @@ class SectionRoundTripTests(unittest.TestCase):
         self.assertIn("mesh.crease_edges", by)
         expected_edges = int((values > 0).sum())
         self.assertEqual(len(by["mesh.crease_edges"]), expected_edges)
-        # Fractional values pass through, per the plan's Blender -> GH rule.
+        # Fractional values pass through.
         np.testing.assert_allclose(
             by["mesh.crease_values"], values[values > 0], rtol=0, atol=1e-6
         )
@@ -191,7 +191,7 @@ class SectionRoundTripTests(unittest.TestCase):
 
 
 class PerformanceTests(unittest.TestCase):
-    """S3's Blender-side numbers: extraction, frame encode, apply."""
+    """The measured Blender-side numbers: extraction, frame encode, apply."""
 
     def setUp(self):
         bpy.ops.wm.read_factory_settings(use_empty=True)

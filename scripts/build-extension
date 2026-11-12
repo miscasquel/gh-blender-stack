@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the Blender extension zip (S8).
+# Build the Blender extension zip.
 #
 #     scripts/build-extension
 #

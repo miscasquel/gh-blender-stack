@@ -164,7 +164,7 @@ def _on_load(scene=None):
     silent on reopen and never talks to Grasshopper again. A freshly loaded
     file must behave like a reconnect: an in-flight request belonged to the old
     session, a stage saved mid-request must not wait for it, and every stack is
-    evaluated against the cache and Grasshopper (plan §9.7).
+    evaluated against the cache and Grasshopper.
 
     A load is also a *new session from Grasshopper's point of view*: the client
     may be a fresh process or a different document, so the geometry hash — a
@@ -220,7 +220,7 @@ def _on_load(scene=None):
             engine._verify.add((record.stack_id, stage.key))
             # Plumbing lost with the file (helpers or the node group deleted
             # before the save) is rebuilt here and the stage marked unbound
-            # until an answer arrives (plan §9.7). A missing *modifier* is not
+            # until an answer arrives. A missing *modifier* is not
             # repaired: deleting it is how a stage is removed (§9.8).
             modifier = engine.nodes.modifier_of(obj, stage)
             if modifier is not None:

@@ -10,8 +10,7 @@ def _rebuild_index():
 
     Lifecycle paths (register, load, undo, a stage being added) invalidate the
     index; message paths call :func:`_ensure_index` and then search only the
-    matching stages. The old handlers walked every object in the blend for each
-    response and schema heartbeat.
+    matching stages.
     """
     engine._stage_index.clear()
     del engine._stack_objects[:]
@@ -145,7 +144,7 @@ def _split_stage(obj, stage):
     stage.key = new_key
     for entry in stage.params:
         entry.stage_key = new_key
-    # A new key has no document that has answered it yet (plan §9.2).
+    # A new key has no document that has answered it yet.
     engine._set(stage, "state", engine.stack_mod.STATE_UNBOUND)
     engine._set(stage, "rid", "")
     engine._set(stage, "geom_hash", "")
@@ -323,7 +322,7 @@ def _repair_plumbing(obj, record, stage, modifier):
     """Rebuild plumbing a saved file (or the outliner) lost: the node group and
     the helper objects. A rebuilt stage is marked unbound until an answer
     arrives, and its applied hash is cleared so a cached frame with the same
-    out_hash is re-applied instead of skipped over empty helpers (plan §9.7).
+    out_hash is re-applied instead of skipped over empty helpers.
     Returns True when something was rebuilt."""
     rebuilt = False
     if engine.helpers.missing_kinds(obj, stage.key):
@@ -421,7 +420,7 @@ def unfreeze(obj, stage):
 def push(obj=None):
     """Force a fresh request for every live stage of a stack (increments the
     nonce) and reset its frame cache: Push exists to get past anything cached.
-    Frozen stages are parked and skipped entirely (plan §9.8)."""
+    Frozen stages are parked and skipped entirely."""
     obj = obj or engine.bpy.context.object
     if obj is None:
         return

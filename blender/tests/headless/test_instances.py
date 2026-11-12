@@ -1,15 +1,4 @@
-"""Layer B, instances: Blender's instance component <-> protocol §5.2.
-
-Run with:
-
-    scripts/test-blender
-
-Covers the Blender -> GH half: an evaluated GeometrySet whose instances
-reference a collection (the Collection Info shape, hoisted into the definition)
-or an object, with per-instance transforms; a nested case keeps the inner rows
-as the definition's own ``idef.<i>.inst.*`` pair. The GH -> Blender apply half
-is covered in the engine tests, and the live S9 pass covers the two together.
-"""
+"""Layer B: Blender instances <-> Grasshopper blocks (protocol §5.2)."""
 
 import os
 import sys
@@ -185,7 +174,7 @@ class InstanceReadTests(unittest.TestCase):
         self.assertEqual([row[0][3], row[1][3], row[2][3]], [5.0, 0.0, 0.0])
 
     def test_two_collection_members_keep_separate_definitions(self):
-        # Two members used to collapse into one definition with colliding
+        # Two members must not collapse into one definition with colliding
         # section names; all but one member was lost, and Python and the GH
         # codec disagreed on which survived.
         first = _quad("two-a")
@@ -960,8 +949,8 @@ class InstanceApplyTests(unittest.TestCase):
 
     def test_the_group_is_reused_when_nothing_changed(self):
         # The rebuild check must agree with the wiring it just produced (it
-        # used to count the base points helper as a row cloud and rebuild on
-        # every apply — churn, caught by the 2026-10-16 audit).
+        # must not count the base points helper as a row cloud and rebuild on
+        # every apply.
         from blender.stageloom.blender import engine, helpers, nodes
 
         obj, stage = self._stage()

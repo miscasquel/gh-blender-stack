@@ -11,10 +11,8 @@
 // round-trip text with ".0" appended to integral values, lowercase exponent —
 // with one known boundary (see FormatDouble).
 //
-// Deliberate deviation from the plan's "DataContractJsonSerializer" (§10): that
-// serializer emits members in declaration order and cannot sort keys, which the
-// canonical header requires. A hand-written writer keeps the no-third-party rule
-// and gives byte-stable output.
+// A hand-written writer keeps the no-third-party rule and gives byte-stable
+// output with sorted keys.
 
 using System;
 using System.Collections.Generic;
@@ -145,7 +143,7 @@ namespace Stageloom.Core
         /// The grammar is enforced here rather than left to double.TryParse:
         /// TryParse also takes "+2", "01" and "1.", which Python's json module
         /// rejects, and a peer must not be accepted on one side and refused on
-        /// the other (P5-2). A syntactically valid number double cannot hold is
+        /// the other. A syntactically valid number double cannot hold is
         /// an infinity, exactly as Python's float() reads it, so an out-of-range
         /// `v` classifies the same way on both sides.</summary>
         private static object ParseNumber(string s, ref int pos)

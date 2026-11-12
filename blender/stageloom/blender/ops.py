@@ -1,9 +1,8 @@
 """Operators: Add Stage, Push, Pull, Freeze, Key all, Purge orphans, server
-control (plan §9.8).
+control.
 
 Stage removal and enable/disable are native: deleting the stage's modifier
-removes the stage, and the modifier's own visibility toggles are the switch
-(plan §11). The add-on never writes those toggles after creation.
+removes the stage, and the modifier's own visibility toggles are the switch. The add-on never writes those toggles after creation.
 """
 
 import bpy
@@ -46,10 +45,8 @@ class STAGELOOM_OT_add_stage(bpy.types.Operator):
     def execute(self, context):
         obj = context.object
         if obj is not None and obj.type == "SURFACE":
-            # Blender 5.2 surfaces cannot take a Geometry Nodes modifier
-            # (`modifiers.new(type="NODES")` returns None), so the stage has no
-            # anchor and the old path crashed after adding a stage record.
-            # Refuse before creating anything and point at the supported route.
+            # Blender 5.2 surfaces cannot take a Geometry Nodes modifier, so a
+            # stage has no anchor. Refuse before creating anything.
             self.report({"ERROR"}, SURFACE_MESSAGE)
             return {"CANCELLED"}
         if obj is None or obj.type not in STACK_TYPES:

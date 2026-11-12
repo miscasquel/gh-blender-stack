@@ -1,54 +1,4 @@
-"""Layer B, the live path: the depsgraph is the trigger and the read.
-
-Run with:
-
-    scripts/test-blender
-
-Facts this file locks, each one a live report:
-
-1. Editing a mesh in Edit Mode must reach Grasshopper *while the mode is still
-   open*. The datablock is stale until `update_from_editmode()`, so the engine
-   has to flush before it reads — the "editing meshes does not sync" report.
-2. An edit that is tagged but not yet evaluated must not be lost when the pass
-   starts: the timer drains the depsgraph before any prefix clone can mute the
-   handler — the "random, needs Push" report.
-3. A reconnect (or a file load) must ask Grasshopper once instead of replaying
-   the cached frame: the definition may have changed while no one was
-   listening — the "needs Pull after GH restarts" report.
-4. A head-of-stack stage reads the *evaluated* object, so shape keys — and
-   anything else the dependency graph applies before the first modifier — are
-   part of the prefix. The base-datablock read this replaced was blind to them.
-5. A raise between setting the clone guard and clearing it used to mute the
-   engine for the rest of the session (every update dropped, every edit
-   ignored). The watchdog must clear it, explain it, and process the missed
-   edits — the F2 wedge.
-6. When a pass that saw a changed scene sends nothing, the reason must be in
-   the trace (frozen, waiting on a rid, cache hit, disconnected…), once per
-   decision instead of once per tick — silence made explainable.
-7. Trigger health and per-stage timings are visible in Diagnostics, so "the
-   engine never heard Blender" is distinguishable from "the engine stayed
-   quiet", and a slow round trip names its slowest part.
-8. The clone guard is reset in a nested `finally`, so no cleanup failure can
-   leave the engine mute; the watchdog remains as belt-and-braces.
-9. One bad incoming message does not eat the rest of the batch, and a response
-   whose apply failed clears its pending entry and poisoned frame so the next
-   pass retries instead of replaying the failure.
-10. A lost answer is still nudged after the object is renamed: the stall scan
-    walks the scene, not a set of names captured at send time.
-11. A wedged guard does not survive `register()` or a file load.
-12. Every object in Edit Mode is flushed, not only the active one: a stroke on
-    a non-active stack object must reach Grasshopper while the mode is open, and
-    Push must copy the target's edit before it builds the request (F1).
-13. A slow answer must not swallow the edits behind it: after the soft retry the
-    current state supersedes the stale request, and the bookkeeping around an
-    error or an `unknown_ref` releases its gates instead of waiting out the
-    timeout (F3).
-14. A cancel, undo or reverted parameter returns the request id to a cached
-    one; the cache may answer Blender but must still tell the connected client,
-    or Grasshopper keeps the intermediate state (and the next edit starts from
-    it). Undo also rolls the saved stage record back, so the client-side
-    geometry bookkeeping is re-asserted from the session on undo/redo.
-"""
+"""Layer B: the live path — depsgraph triggers, Edit Mode, reconnect and undo."""
 
 import json
 import os
@@ -73,7 +23,7 @@ SCALE = "00000000-0000-4000-8000-0000000000aa"
 
 
 def pump(seconds=10.0, until=None):
-    """Drive the engine timer directly: bpy.app.timers is inert under -b (S2)."""
+    """Drive the engine timer directly: bpy.app.timers is inert under -b."""
     import stageloom.blender.engine as engine
 
     deadline = time.time() + seconds
@@ -219,9 +169,7 @@ class LiveSyncTestCase(unittest.TestCase):
         def settled():
             return cls.stage.state == "ok" and report_of(cls.report).get("responses", 0) >= 1
 
-        # A silent setup used to surface as an unrelated assertion in the first
-        # test (the 'waiting' != 'ok' flake); settle_stages re-arms lost
-        # requests and names the failure here instead.
+        # settle_stages re-arms lost requests and names the failure here.
         settle_stages(engine, stack_mod, [cls.obj], settled)
 
     @classmethod
@@ -277,10 +225,8 @@ class RevertedEditTests(LiveSyncTestCase):
     the saved stage record from its step; a slider returns to a value used
     before. In all three the request id goes back to one the frame cache
     already holds while the connected client still holds the intermediate
-    state. Serving that frame and returning used to leave Grasshopper showing
-    the cancelled edit — the reported "it does not snap back before the next
-    move" bug. The cache may answer without a send only while the client has
-    been told that exact rid.
+    state. The cache may answer without a send only while the client has been
+    told that exact rid.
     """
 
     def tearDown(self):
@@ -435,7 +381,7 @@ class RevertedEditTests(LiveSyncTestCase):
 
 
 class MultiObjectEditTests(unittest.TestCase):
-    """F1: every object in Edit Mode must be flushed, not only the active one.
+    """Every object in Edit Mode must be flushed, not only the active one.
 
     Blender supports multi-object editing: `bpy.context.edit_object` is only the
     *active* edit object, and every other selected object carries its own BMesh
@@ -756,14 +702,7 @@ class EvaluatedHeadTests(LiveSyncTestCase):
 
 
 class GuardWatchdogTests(LiveSyncTestCase):
-    """F2: a guard left up by a dead pass must not mute the engine.
-
-    Since the cleanup reset cannot be skipped, the watchdog's input is injected
-    directly: any future leak must still be noticed, explained, cleared, and
-    the edit dropped while it was up must still be sent. The second test drives
-    the cleanup fault that used to wedge the guard and asserts it no longer can
-    — the reset happens before any watchdog can see it.
-    """
+    """A guard left up by a dead pass must not mute the engine."""
 
     def tearDown(self):
         self.leave_edit_mode()
@@ -879,11 +818,11 @@ class GuardWatchdogTests(LiveSyncTestCase):
 
 
 class BatchIsolationTests(LiveSyncTestCase):
-    """F4: a bad frame must not eat the messages behind it.
+    """A bad frame must not eat the messages behind it.
 
-    `_handle_incoming` drains the queue into a list, so without a per-message
-    guard a raise in `_apply` aborted the pass. `_handle_response` also stores
-    the payload and forgets the pending entry *before* applying, so the old
+    `_handle_incoming` drains the queue into a list, so a raise in `_apply` must
+    not abort the pass. `_handle_response` also stores the payload and forgets
+    the pending entry *before* applying, so the old
     failure left the stage `waiting` with nothing outstanding and replayed the
     poisoned frame on every later pass. Now the failing message is reported,
     the poisoned frame is dropped, the stage is dirty, and the next message in
@@ -1227,11 +1166,7 @@ class WhyNoSendTests(LiveSyncTestCase):
 
 
 class SessionResetTests(LiveSyncTestCase):
-    """A wedged guard must not survive a new session (F2).
-
-    The guard used to outlive disable/enable and a file reload: the add-on came
-    back mute and dropped every edit until the watchdog's first tick. Both entry
-    points now clear the whole session state, including the tick flag.
+    """A wedged guard must not survive a new session.
 
     No socket work is needed here, so `start_server` is stubbed: `register()`
     would otherwise stop the class's server (it follows the port preference,
@@ -1301,7 +1236,7 @@ class SessionResetTests(LiveSyncTestCase):
 
 
 class DiagnosticsTimingTests(LiveSyncTestCase):
-    """The Diagnostics numbers Phase 0 adds: trigger health and stage timings."""
+    """Diagnostics: trigger health and stage timings."""
 
     def test_01_a_round_trip_leaves_timings_and_a_heartbeat(self):
         engine = self.engine
@@ -1330,10 +1265,8 @@ class DiagnosticsTimingTests(LiveSyncTestCase):
 
 
 class SupersedeTests(unittest.TestCase):
-    """F3: a slow answer must not swallow the edits that follow it.
+    """A slow answer must not swallow the edits that follow it.
 
-    While one request was outstanding every uncached edit waited for the answer
-    (or the 30 s timeout), so a stranded request looked like a dead add-on.
     After SOFT_RETRY_SECONDS a pass supersedes the stale request with the
     current state; the slow fake's echo proves the newest value is what gets
     answered and applied.
@@ -1406,13 +1339,7 @@ class SupersedeTests(unittest.TestCase):
 
 
 class SelfHealingTests(LiveSyncTestCase):
-    """The bookkeeping around a failed or lost request must not gate recovery.
-
-    Three one-line holes from the audit: a standalone error left the stage
-    `waiting` for the full timeout; an `unknown_ref` resend was answered by the
-    frame cache before it could be sent; and a Pull permit was spent before the
-    send it caused, so a failed send lost the Pull silently.
-    """
+    """The bookkeeping around a failed or lost request must not gate recovery."""
 
     def test_01_a_standalone_error_releases_the_pending_gate(self):
         engine = self.engine
@@ -1477,14 +1404,7 @@ class SelfHealingTests(LiveSyncTestCase):
 
 
 class HashTrustTests(LiveSyncTestCase):
-    """F4: an emptied helper with an unchanged applied hash must be re-applied.
-
-    The skip rule (`out_hash == applied_out_hash`) assumes the helpers still
-    display that output. When they are emptied out of band the rule refuses
-    every response and replay — and Push sends a new rid with the same hash, so
-    it is refused too. A frame that names geometry over empty helpers is
-    re-applied instead.
-    """
+    """An emptied helper with an unchanged applied hash must be re-applied."""
 
     def test_01_a_cleared_helper_is_reapplied_from_the_frame(self):
         import stageloom.blender.helpers as helpers

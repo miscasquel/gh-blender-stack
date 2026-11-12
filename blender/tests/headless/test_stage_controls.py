@@ -1,22 +1,4 @@
-"""Layer B, the stage controls: Freeze, Pull, Key all, orphan purge, and the
-modifier panel as the lifecycle surface (plan §9.2, §9.7, §9.8, §11).
-
-Run with:
-
-    scripts/test-blender
-
-What it proves, headless:
-
-1. Freeze stops requests and cache replay; the helper keeps its output.
-2. Pull refreshes a frozen stage once, and the stage stays frozen.
-3. Push skips frozen stages entirely (no generation bump, no request).
-4. Key all keys every parameter at the current frame, with constant
-   interpolation for int, bool and value list keys.
-5. Parameters removed in Grasshopper keep their properties and keyframes until
-   Purge orphans is pressed explicitly.
-6. Deleting only the stage's node group rebuilds it; deleting its modifier
-   removes the stage, its helpers and its parameter properties.
-"""
+"""Layer B: Freeze, Pull, Key all, orphan purge and stage removal."""
 
 import json
 import os
@@ -38,7 +20,7 @@ PORT = 9152
 
 
 def pump(seconds=8.0, until=None):
-    """Drive the engine timer directly: bpy.app.timers is inert under -b (S2)."""
+    """Drive the engine timer directly: bpy.app.timers is inert under -b."""
     import stageloom.blender.engine as engine
 
     deadline = time.time() + seconds

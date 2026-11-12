@@ -16,7 +16,7 @@ def _set(stage, field, value):
 
 def _rest_state(stage):
     """The state a stage settles into after an answer. A frozen stage stays
-    frozen through a Pull; it owns the state (plan §9.2)."""
+    frozen through a Pull; it owns the state."""
     return engine.stack_mod.STATE_FROZEN if stage.frozen else engine.stack_mod.STATE_OK
 
 
@@ -58,7 +58,7 @@ def _process_stage(obj, record, stage, force=None):
         engine._no_send(record, stage, "no stage")
         return "idle"
     active = engine.nodes.modifier_active(modifier)
-    # The modifier's own toggles are the control (plan §11): a stage is active
+    # The modifier's own toggles are the control: a stage is active
     # while visible in any context, and the record mirrors that for the state
     # row. Nothing here ever writes a modifier flag back — that was the bug
     # where a toggle in the modifiers panel was undone by the next pass.
@@ -182,7 +182,7 @@ def _process_stage(obj, record, stage, force=None):
         # A miss with Grasshopper away keeps the last good output; only cached
         # frames replay (renders use the cache). A stage no document has ever
         # answered reads unbound instead of disconnected: disconnected means a
-        # client was there and left (plan §9.2).
+        # client was there and left.
         engine._no_send(record, stage, "disconnected", rid)
         engine._set(
             stage,
@@ -315,10 +315,8 @@ def _prefix_sections(obj, record, stage):
     modifier = engine.nodes.modifier_of(obj, stage)
     index = engine._modifier_index(obj, modifier)
     revision = engine._prefix_revision(obj, record)
-    # Keyed by identity, not by name: an object renamed to a name another object
-    # used to hold would otherwise inherit what that object had evaluated.
-    # as_pointer() is stable for the session and keeps no reference to the object,
-    # so a deleted object does not live on through this dict.
+    # Keyed by identity, not by name: as_pointer() is stable for the session and
+    # keeps no reference, so a deleted object does not live on through this dict.
     memo_key = (obj.as_pointer(), stage.key)
     memo = engine._prefix_memo.get(memo_key)
     if memo is not None and memo["revision"] == revision:

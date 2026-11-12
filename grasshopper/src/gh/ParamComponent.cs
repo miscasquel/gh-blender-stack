@@ -133,15 +133,13 @@ namespace Stageloom
             object value = null;
             // One read of the published snapshot: the socket thread replaces the
             // dictionary whole, so a local keeps this solve on one request even
-            // if another lands meanwhile (P3-3).
+            // if another lands meanwhile.
             Dictionary<string, object> parameters = slot.Params;
             if (parameters != null)
                 parameters.TryGetValue(_paramId.ToString(), out value);
             if (value == null) value = ParamValues.ParseDefault(type, defaultText);
-            // Coerce once to the declared type: the value may be left over from a
-            // previous type, and the default must never be published untyped (a
-            // text default of "[0.0, 0.0, 0.0]" is how a float parameter used to
-            // blow up on the next solve).
+            // Coerce once to the declared type: the value may be left over from
+            // a previous type, and the default must never be published untyped.
             value = ParamValues.Cast(type, value);
 
             var declaration = new Dictionary<string, object>();
@@ -349,8 +347,7 @@ namespace Stageloom
             return Array.IndexOf(OptionalNames, name) >= 0;
         }
 
-        // The GUID persists with the document, so keyframes survive a rename
-        // (plan §5).
+        // The GUID persists with the document, so keyframes survive a rename.
         public override bool Write(GH_IWriter writer)
         {
             writer.SetString("param_id", _paramId.ToString());

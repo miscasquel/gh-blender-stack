@@ -95,7 +95,7 @@ def _on_client_hello(header):
     waiting on it would sit until its timeout. Reset waiting stages and mark
     every stack dirty so the current request goes out again (protocol §8.8).
     A reconnect with a *different* document resets the stages it claims: frames
-    cached against the old document must not replay (handoff reset rules).
+    cached against the old document must not replay.
 
     Every claimed stage also forgets its geometry hash: a `hello` is a new client
     session, so the geometry it holds is unknown, and protocol §8.8 wants the

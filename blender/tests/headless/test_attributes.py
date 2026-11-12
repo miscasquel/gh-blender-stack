@@ -1,16 +1,4 @@
-"""Layer B, attributes: the wire format, the helper write path, and the engine
-round trip through fake_gh.
-
-Run with:
-
-    scripts/test-blender
-
-The first class exercises geometry_io directly (every supported Blender type and
-domain, both directions, the count-mismatch guard and the native-channel
-exclusions). The second drives a real stage against fake_gh, which echoes the
-attributes it received, so one pass proves both directions: Blender sent them
-and Blender accepted them back.
-"""
+"""Layer B: the attribute wire format and the helper round trip."""
 
 import json
 import os

@@ -1,10 +1,10 @@
-// The Stageloom stage components: Stage In and Stage Out (plan §10), plus
+// The Stageloom stage components: Stage In and Stage Out, plus
 // the point-cloud helper. The Param component lives in ParamComponent.cs.
 //
 // Stage In  reads the stage's latest slot and outputs the geometry Blender sent.
 // Stage Out converts the graph's result back to sections and replies.
 //
-// Runtime messages only, never dialogs (plan §3, principle 8).
+// Runtime messages only, never dialogs.
 
 using System;
 using System.Collections.Generic;

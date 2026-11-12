@@ -393,8 +393,7 @@ namespace Stageloom.Tests.Console
                 && AttributeStore.TryGet(root, "good", out type, out domain, out values),
                 DescribeRoot(root));
 
-            // A uint length above int.MaxValue used to cast negative and make
-            // GetString throw.
+            // A uint length above int.MaxValue must be rejected, not cast negative.
             var hugeSections = new List<Section>();
             var hugeDescriptors = new List<Dictionary<string, object>>();
             AddStringDescriptor(hugeSections, hugeDescriptors, "huge",

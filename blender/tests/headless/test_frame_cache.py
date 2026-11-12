@@ -1,29 +1,4 @@
-"""Layer B, the simulation-style frame cache (handoff 2026-10-12, W2).
-
-Run with:
-
-    scripts/test-blender
-
-What it proves (handoff tests 1-8):
-1. Progressive fill: scrubbing keyframed frames requests one frame each and
-   stores them in memory and on disk.
-2. Replay: with Grasshopper gone, the same frames apply from disk, no requests.
-3. Reset on a GH-side change: a same-rid response with a different out hash
-   bumps the generation and drops the stage's frames; they are re-requested.
-4. Reset on a schema change, the same way.
-5. Quiet: a repeated identical response applies nothing and tags nothing.
-6. Quiet idle: with an event loop evaluating between passes, nothing is
-   cloned, applied or tagged once the stack has settled.
-7. Eviction: a tiny budget drops the oldest frames and playback still works.
-8. Uncached frames never block: the last good output stays until the wanted
-   frame's answer arrives; a stale answer is cached, not displayed.
-9. A time-driven prefix: a native modifier before the stage that reads scene time
-   moves the geometry every frame, so each frame gets its own request and the
-   cache keys them apart. This is the case that made the whole cache inert — the
-   prefix was memoized against a revision that did not include the frame, so the
-   same request ID came back for every frame and one frame's geometry answered
-   them all.
-"""
+"""Layer B: the frame cache — fill, replay, resets, eviction and idle quiet."""
 
 import json
 import os
@@ -47,7 +22,7 @@ SCALE = "00000000-0000-4000-8000-0000000000aa"
 
 
 def pump(seconds=8.0, until=None):
-    """Drive the engine timer directly: bpy.app.timers is inert under -b (S2)."""
+    """Drive the engine timer directly: bpy.app.timers is inert under -b."""
     import stageloom.blender.engine as engine
 
     deadline = time.time() + seconds
@@ -747,7 +722,7 @@ class PlaybackTests(FrameCacheTestCase):
 class OneRequestOutstandingTests(FrameCacheTestCase):
     """The client is never handed a second request while one is in flight.
 
-    A cached frame answered while a request was outstanding used to clear that
+    A cached frame answered while a request was outstanding must not clear that
     request's bookkeeping, so the next frame's pass saw an open gate and sent a
     second request. The client solves serially, so two requests in flight is a
     backlog the user feels; worse, a client that coalesces its solves can then
@@ -882,7 +857,7 @@ class UnknownRefResponseTests(UnknownRefTests):
 class SolveFailureTests(FrameCacheTestCase):
     """A failed solve answers immediately, and is not immediately re-asked.
 
-    P1-1's Blender half: when a Stage Out fails, the plugin answers with an
+    When a Stage Out fails, the plugin answers with an
     error response (protocol §4.4); the stage must land on `error` without
     waiting out the 30 s timeout. The engine must then wait for a change — a
     component that just failed fails again, so an instant retry is a request
@@ -958,7 +933,7 @@ class CoalescedAnswerTests(FrameCacheTestCase):
     ScheduleSolution calls and answers only the newest — must not strand the
     stage.
 
-    The class of bug this guards (P0-4): an early gate opening sent a second
+    The class of bug this guards: an early gate opening sent a second
     request while the first was outstanding; the client answered the newest and
     dropped the first; the engine waited on the dropped rid and the stage looked
     stuck until a Push. Here the burst is forced deterministically: the timeout

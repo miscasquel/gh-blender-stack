@@ -1,10 +1,4 @@
-"""Wire meshes and curve components: curves, points, and their attributes.
-
-A mesh with no faces has no mesh sections to carry. Its loose edges travel as
-one two-point polyline each (so an EDGE attribute stays one value per curve),
-its isolated vertices travel as a point cloud, and a Curves component uses the
-same per-curve/per-point attribute mapping. These tests pin that contract.
-"""
+"""Wire meshes and curve components: edges, points and their attributes."""
 
 import os
 import sys

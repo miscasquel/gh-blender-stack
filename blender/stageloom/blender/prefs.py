@@ -1,4 +1,4 @@
-"""Preferences: port, timeouts, cache location, log level (plan §11)."""
+"""Preferences: port, timeouts, cache location, log level."""
 
 import os
 
@@ -6,17 +6,11 @@ import bpy
 from bpy.props import EnumProperty, FloatProperty, IntProperty, StringProperty
 
 FALLBACK_DATA_ROOT = "~/.local/share/stageloom"
-# The default through 0.3.1. A saved preference still on it is moved once on
-# register; the old cache is disposable.
+# Legacy defaults, migrated once on register. The cache is disposable.
 OLD_DATA_ROOT = "~/.local/share/gh-stack"
 DEFAULT_CACHE_MB = 256
-# A dynamic-range port: 9130, the default through 0.2.2, is where BlenderKit
-# sits, so the two fought over the loopback. The plugin's default endpoint in
-# `GhLink.cs`, `tools/fake_gh` and the docs carry the same number.
+# 9130 is BlenderKit's; do not use it for the Stageloom endpoint.
 DEFAULT_PORT = 59130
-# The port through 0.2.2. A saved preference still on it is moved once on
-# register, with a notice, because the old value would otherwise override the
-# new default and collide exactly as before.
 OLD_DEFAULT_PORT = 9130
 
 
@@ -41,7 +35,7 @@ DEFAULT_DATA_ROOT = _default_data_root()
 
 # A plain snapshot of `log_level`, refreshed on the main thread (register and
 # every change), so any thread can call `log()` without touching bpy — the
-# socket thread prints disconnects and decode failures (plan §3, principle 7).
+# socket thread prints disconnects and decode failures.
 _log_info = True
 
 
@@ -156,12 +150,7 @@ def cache_size_bytes():
 
 
 def _migrate_old_data_root():
-    """Move a saved preference still on the 0.3.x default to the extension dir.
-
-    Only the old default is touched; any deliberate data root is left alone.
-    The old frame cache is not moved: it is disposable and the new location is
-    the one the extension system keeps across upgrades.
-    """
+    """Move a saved preference still on the legacy default to the extension dir."""
     try:
         settings = bpy.context.preferences.addons[__package__.rsplit(".", 1)[0]].preferences
     except (KeyError, AttributeError):
@@ -177,11 +166,7 @@ def _migrate_old_data_root():
 
 
 def _migrate_old_port():
-    """Move a saved preference still on the old default to the new one.
-
-    Blender saves add-on preferences, so a value stored as 9130 keeps winning
-    over the new default — and 9130 is BlenderKit's, which is why the default
-    moved. Only the old default is touched; any deliberate port is left alone."""
+    """Move a saved preference still on the legacy default to the new one."""
     try:
         settings = bpy.context.preferences.addons[__package__.rsplit(".", 1)[0]].preferences
     except (KeyError, AttributeError):

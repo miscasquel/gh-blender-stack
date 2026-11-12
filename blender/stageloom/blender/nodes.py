@@ -1,18 +1,9 @@
-"""Node groups and modifier wiring (plan §5).
+"""Node groups and modifier wiring.
 
-Each stage owns a node group: one Object Info (Original transform space, per the
-plan's evidence) per helper kind feeding a Join Geometry and the group output.
-The stack object gets a Geometry Nodes modifier built from that group, so the GH
-stage sits in the modifier stack like any other modifier and native modifiers
-still compose around it.
-
-The group is rebuilt only when its shape changes — the helper set, the block
-definitions, or the nested structure (not placement transforms, which are
-cloud data) — never per tick: node graph churn would dirty the depsgraph every
-pass.
-
-Modifier inputs are never set from Python: the wiring is through node values
-inside the group (plan §5).
+Each stage owns a node group: one Object Info per helper kind feeding a Join
+Geometry and the group output. The group is rebuilt only when its shape changes,
+never per tick. Modifier inputs are never set from Python; wiring is through
+node values inside the group.
 """
 
 import bpy
@@ -37,12 +28,7 @@ def group_name(stage_key):
 
 
 def migrate_names():
-    """Rename the 0.3.x node groups and modifiers to the Stageloom brand.
-
-    Called from ``helpers.adopt_existing()`` on register and on file load, so a
-    pre-0.4.0 file is renamed in place before the first pass. The stage records,
-    parameter properties and keyframes are untouched.
-    """
+    """Rename pre-Stageloom node groups and modifiers in place."""
     for group in bpy.data.node_groups:
         if group.name.startswith(OLD_GROUP_PREFIX):
             group.name = GROUP_PREFIX + group.name[len(OLD_GROUP_PREFIX):]
@@ -106,8 +92,7 @@ def ensure_group(stack_obj, stage_key, nested_rows=None):
         info = group.nodes.new("GeometryNodeObjectInfo")
         info.location = (-200.0, next_row())
         info.inputs["Object"].default_value = helpers_map[kind]
-        # Original space: the helper's data is already stack-local, and the
-        # plan's evidence shows Relative gives wrong coordinates.
+        # The helper data is stack-local; Relative gives wrong coordinates.
         info.transform_space = "ORIGINAL"
         group.links.new(info.outputs["Geometry"], join.inputs["Geometry"])
 
@@ -473,7 +458,7 @@ def modifier_by_name(stack_obj, stage):
 
 def modifier_active(modifier):
     """Whether a stage modifier is visible in any context: viewport, render, or
-    edit mode. All three off is what "disabled" means (plan §9.2/§11)."""
+    edit mode. All three off is what "disabled" means."""
     return bool(modifier.show_viewport or modifier.show_render or modifier.show_in_editmode)
 
 

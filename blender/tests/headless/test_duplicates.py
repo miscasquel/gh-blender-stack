@@ -1,22 +1,4 @@
-"""Layer B, duplicated stacks: object duplication must not share a stage.
-
-Run with:
-
-    scripts/test-blender
-
-Object duplication copies the stage record, the modifier and its node group
-verbatim, so both objects used to claim the same stage key and rebuilt one node
-group for whichever object ran last (acceptance A10). What this proves:
-
-1. A pass splits the copy onto its own stage key and cache namespace, with its
-   own node group and helpers; the original keeps everything it had.
-2. Parameter values, keyframes, drivers and their UI settings move to the new
-   key with the stage, so the copy does not silently lose its animation.
-3. The original's node group is rebuilt against its own helpers even when the
-   shared group had last been rebuilt for the copy.
-4. The split key is deterministic, so redoing the duplication cannot strand the
-   key the user wired into Grasshopper.
-"""
+"""Layer B: duplicated stacks get independent stage keys, groups and animation."""
 
 import os
 import sys

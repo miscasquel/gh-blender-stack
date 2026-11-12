@@ -1,4 +1,4 @@
-"""Parameter custom properties and UI ranges (plan §7).
+"""Parameter custom properties and UI ranges.
 
 Values live as custom properties named ``gh/<stage>/<param>`` so they can be
 keyframed and driven. Ranges go through ``id_properties_ui``. The schema itself
@@ -168,8 +168,7 @@ def apply_schema(obj, stage, params):
 def _fcurve_slots(obj):
     """Yield ``(channelbag, fcurve)`` for every fcurve of the object's action.
 
-    Blender 5.2 has no ``action.fcurves``; the layered API is the only path
-    (plan §7). A generator, so callers can remove while walking."""
+    Blender 5.2 has no ``action.fcurves``; the layered API is the only path. A generator, so callers can remove while walking."""
     animation = getattr(obj, "animation_data", None)
     if animation is None or animation.action is None:
         return
@@ -275,7 +274,7 @@ def _rename_animation(obj, old_name, new_name):
 
 
 # Parameters whose keys must hold, not interpolate: an interpolated int, bool or
-# choice index is not a value Grasshopper can use (plan §7).
+# choice index is not a value Grasshopper can use.
 CONSTANT_TYPES = ("int", "bool", "value_list")
 
 

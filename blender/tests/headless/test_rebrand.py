@@ -1,9 +1,4 @@
-"""The 0.4.0 rebrand: old display names migrate, persisted keys do not.
-
-A pre-0.4.0 file keeps its stage records, parameters and animation; only the
-scene, collection, helper, node-group and modifier *names* change. The internal
-keys (`gh_stack`, `gh_stack_id`, `gh/...`) deliberately keep their old names.
-"""
+"""The Stageloom rebrand: display names migrate, persisted keys do not."""
 
 import unittest
 

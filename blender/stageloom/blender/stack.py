@@ -1,4 +1,4 @@
-"""Stack records: what lives on a stack object (plan §5).
+"""Stack records: what lives on a stack object.
 
 The stack object is any object the user points the add-on at. Its stage records
 and parameter schema live in property groups so they save with the .blend;
@@ -100,7 +100,7 @@ def _value_changed(self, context):
 
 
 class StageloomParam(bpy.types.PropertyGroup):
-    """One parameter declaration, from the GH schema message (plan §7)."""
+    """One parameter declaration, from the GH schema message."""
 
     param_id: StringProperty(name="ID", default="")
     stage_key: StringProperty(name="Stage", default="")
@@ -113,7 +113,7 @@ class StageloomParam(bpy.types.PropertyGroup):
     has_range: BoolProperty(name="Has range", default=False)
     step: FloatProperty(name="Step", default=0.01)
     values: StringProperty(name="Values", default="")  # newline separated
-    # A view of the custom property, so the panel can draw a dropdown (plan §7).
+    # A view of the custom property, so the panel can draw a dropdown.
     value_index: EnumProperty(name="Value", items=_value_items, update=_value_changed)
 
 
@@ -126,10 +126,10 @@ class StageloomStage(bpy.types.PropertyGroup):
     # active while its modifier is visible in any context (viewport, render or
     # edit mode), and disabled only when all three are off. Kept as a field so
     # saved files and readers of the record stay coherent; the toggles in the
-    # modifiers panel are the control (plan §11), not a checkbox in the panel.
+    # modifiers panel are the control, not a checkbox in the panel.
     enabled: BoolProperty(name="Enabled", default=True)
     # Freeze: no requests, and no cache replay either — the helpers keep their
-    # last output. Pull still refreshes on demand (plan §9.2, §9.8).
+    # last output. Pull still refreshes on demand.
     frozen: BoolProperty(name="Frozen", default=False)
     # True while the stage's native Bake node holds render data. Baking freezes
     # the stage automatically; Clear Bake removes the data and unfreezes it.
@@ -137,7 +137,7 @@ class StageloomStage(bpy.types.PropertyGroup):
     # The modifier's persistent_uid, written when the modifier is created or
     # first seen. It is what tells "the modifier was deleted" (the stage goes
     # with it) apart from "the node group was deleted" (the group is rebuilt),
-    # which the group-name link alone cannot (plan §9.7).
+    # which the group-name link alone cannot.
     modifier_uid: IntProperty(name="Modifier", default=0)
     state: StringProperty(name="State", default=STATE_IDLE)
     # The request the stage last asked for: set when a request goes out (or when a

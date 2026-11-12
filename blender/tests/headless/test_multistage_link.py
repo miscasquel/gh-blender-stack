@@ -1,23 +1,4 @@
-"""Layer B, multi-stage link safety: what a response is allowed to do.
-
-The live 2026-11-07 session had two independent stage pairs. The first stage's
-request triggered a document-wide Grasshopper solve, so the second Stage Out
-ran before it had ever been asked for anything and sent an empty `ok` response
-with `rid=""`. Blender's cache stored it as `<stage>/.bin`, and a stage whose
-`rid` was also empty could apply it and clear its helpers.
-
-These checks pin the response gate:
-1. an empty rid is ignored: no cache entry, no pending cleared, no apply;
-2. an `ok` response without an output hash is ignored;
-3. a real error evicts a cached success for the same rid;
-4. a frozen stage stores the answer but keeps its applied output;
-5. a disabled stage ignores the answer;
-6. a stale error leaves the cached frame and a newer pending request intact;
-7. an error does not unfreeze a frozen stage;
-8. disabling a stage forgets its pending request;
-9. a file load clears every saved request id and any armed Pull before the
-   verification request can go out.
-"""
+"""Layer B: multi-stage response gating and link safety."""
 
 import os
 import sys

@@ -260,9 +260,8 @@ namespace Stageloom
             /// child's table name, its transform, and the child's own recursive
             /// content), so equal content shares a name and any real change —
             /// a rename, a moved row, a child's geometry — is a new name.
-            /// Hashing only the child's resolved name let two different nested
-            /// contents share `Stageloom &lt;hash&gt;` (2026-10-17 handoff, item
-            /// (a)).</summary>
+            /// Hashing only the child's resolved name lets different nested
+            /// contents share `Stageloom &lt;hash&gt;`.</summary>
             private string ContentHash(long index)
             {
                 string cached;
@@ -371,8 +370,7 @@ namespace Stageloom
             }
         }
 
-        /// <summary>Text-only view of Emit's warnings for callers that just
-        /// print them (the S9 spike checks).</summary>
+        /// <summary>Text-only view of Emit's warnings.</summary>
         public static void Emit(IList<GH_InstanceReference> instances, double scale,
                                 List<Section> sections,
                                 List<Dictionary<string, object>> attributes,

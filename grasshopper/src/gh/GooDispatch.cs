@@ -1,13 +1,9 @@
-// Sorts GH goo into the geometry kinds Stage Out accepts. One source of truth:
-// the component and the S6 checks both call this, so a missing goo type cannot
-// hide in the component.
+// Sorts GH goo into the geometry kinds Stage Out accepts. One source of truth
+// for the component and the live conversion checks.
 //
-// The generic path is goo.CastTo<T> (IGH_Goo.CastTo<T> under the
-// hood), which handles every goo that stands for a kind: GH_Circle, GH_Arc,
-// GH_Line, GH_Polyline, GH_Rectangle, custom goos. An earlier hand-written
-// cast list silently dropped the struct-backed ones (the live Circle bug).
-// Breps and SubDs are matched before the cast chain so their lossy mesh
-// conversion keeps its warning.
+// The generic path is goo.CastTo<T>, which handles GH_Circle, GH_Arc, GH_Line,
+// GH_Polyline, GH_Rectangle and custom goos. Breps and SubDs are matched before
+// the cast chain so their lossy mesh conversion keeps its warning.
 
 using System.Collections.Generic;
 using Grasshopper.Kernel;
