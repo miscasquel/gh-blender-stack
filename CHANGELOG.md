@@ -698,7 +698,7 @@ a hardening pass over the plugin and the decode boundary.
   object identity now (`as_pointer()`, which holds no reference). And the prefix
   memo's revision read the whole base mesh on every pass, not only on a clone, so
   a *memo hit* cost 8.7 ms at 50k triangles against 45 ms for the clone — see
-  P4-1 in `docs/polish-plan.md`.
+  P4-1 in the 0.3.x review record.
 - `register()` cleared only the disk stores, so a decoded frame, an evaluated
   prefix, a pending request and the counters all survived a disable/enable. All
   four are cleared now, so a session starts with nothing it did not evaluate.
