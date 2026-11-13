@@ -1,6 +1,7 @@
 # Stageloom — 1.0 plan
 
 **Status:** planning, 2026-11-12. Baseline: **v0.5.0**.
+**Target:** Blender 5.3. **Compatibility floor:** Blender 5.2.
 **Goal:** ship a stable 1.0 for the declared v1 scope: Grasshopper definitions as
 stackable Blender modifiers, with geometry and parameters flowing both ways,
 animation and playback, a frame cache, and renderable native bakes.
@@ -65,11 +66,11 @@ extension round trip, and the live Rhino playback/bake acceptance.
 
 - Windows 11 x64
 - Rhino 8 with Grasshopper 1
-- Blender 5.2 LTS
+- Blender 5.3
 
 **Tier 2 — supported add-on, no Rhino on the same OS**
 
-- Blender 5.2 LTS on Linux and macOS
+- Blender 5.3 on Linux and macOS
 - The `.gha` is Windows-only; Linux + wine remains the development and test
   environment, not a user-facing Rhino platform.
 
@@ -77,10 +78,12 @@ extension round trip, and the live Rhino playback/bake acceptance.
 
 - Rhino 9 / Grasshopper 2
 - Rhino 8 on macOS (revisit after Windows parity; decide and record)
-- Blender versions below 5.2 (the parameter UI uses the 5.2 layered-action API)
+- Blender versions below 5.2 (the parameter UI uses the layered-action API)
 - Remote or non-loopback connections
 
-The support matrix is a release gate, not a documentation claim.
+The support matrix is a release gate, not a documentation claim. The acceptance
+matrix runs on the target, Blender 5.3; Blender 5.2 remains the compatibility
+floor.
 
 ---
 
@@ -147,7 +150,7 @@ budget, and the 1.0 performance report is reproducible.
 
 **Work**
 
-- Run the full acceptance matrix on Windows 11 with Rhino 8 and Blender 5.2.
+- Run the full acceptance matrix on Windows 11 with Rhino 8 and Blender 5.3.
 - Build the `.gha` on Windows as well as under wine; verify the deployed copy and
   the Rhino restart path.
 - Test the Blender add-on on Windows: extension install, data root, paths,
@@ -290,7 +293,7 @@ The old A1–A10 remain the functional core. Add the release gates that the
   the instance-heavy case.
 - **A10 Duplicates.** Duplicated stacks and stages keep independent keys,
   caches, groups, helpers and animation.
-- **A11 Platform.** Windows 11 + Rhino 8 + Blender 5.2 passes the full matrix;
+- **A11 Platform.** Windows 11 + Rhino 8 + Blender 5.3 passes the full matrix;
   the Linux/wine development matrix remains green.
 - **A12 Chain playback/bake.** Multi-stage Play Every Frame works, and a
   multi-stage bake renders with Grasshopper closed and restores live behavior

@@ -35,7 +35,7 @@ Blender                                          Rhino / Grasshopper (wine)
   edge-crease tags, and Breps/surfaces (meshed on the way out, lossy). Stage In
   delivers everything through one generic `Geometry` output — mesh, SubD cage,
   curves, point cloud, in that order; Stage Out takes any of them on one generic
-  input. A Blender surface object cannot hold a stage in Blender 5.2 (it cannot
+  input. A Blender surface object cannot hold a stage (it cannot
   take a Geometry Nodes modifier), so convert it to a mesh first. A wire mesh
   (no faces, e.g. a truss line network) travels as one
   two-point curve per loose edge plus a point cloud for vertices with no edge,
@@ -90,7 +90,7 @@ Blender                                          Rhino / Grasshopper (wine)
 ## What is deliberately not here yet
 
 - Breps and surfaces arrive as meshes (lossy, warned). There is no B-rep on the
-  wire. Blender surface objects cannot hold a Stageloom stage in Blender 5.2;
+  wire. Blender surface objects cannot hold a Stageloom stage;
   convert them to a mesh first. There are some issues with the meshing, and it
   is obviously a lossy conversion. That won't be solved without a proper surface
   kernel inside blender (surface psycho may bridge this gap)
@@ -103,8 +103,9 @@ The authoritative roadmap and scope are in [docs/plan.md](docs/plan.md).
 
 ## Requirements
 
-- Blender 5.2 (Python 3.14). The add-on declares the `network` permission — it
-  listens on localhost — so Blender's **Online Access** must be on
+- Blender 5.2 or newer (Python 3.14); 1.0 targets Blender 5.3. The add-on
+  declares the `network` permission — it listens on localhost — so Blender's
+  **Online Access** must be on
   (Preferences > System); with it off the panel says so and nothing listens.
 - **Rhino 8 with Grasshopper** to run real definitions, under wine or Windows
   (mac needs testing). Development and testing happen on one Linux machine; the
@@ -184,7 +185,7 @@ python3 scripts/make-fixtures   # regenerate protocol/fixtures after a protocol 
 ```
 
 CI runs the pure-core layer only. Layers B and C run on the development
-machine, which is Linux: Blender 5.2 headless for layer B, and a wine prefix
+machine, which is Linux: Blender 5.3 headless for layer B, and a wine prefix
 with Rhino 8 installed for layer C (`scripts/test-gha`).
 
 ## Support

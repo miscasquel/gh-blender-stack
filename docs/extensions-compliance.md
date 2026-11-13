@@ -14,7 +14,7 @@ history is in [`../CHANGELOG.md`](../CHANGELOG.md) and the GitHub releases.
 | G4 `clipboard` | **Closed** | manifest |
 | G5 licence | **Closed** | `LICENSE` grant + copyright, manifest `SPDX:GPL-3.0-or-later`, README |
 | G6 `bl_info` | **Closed** | shipped `__init__.py` has none; `scripts/install-addon` generates it from the manifest |
-| S1 Blender floor | **Settled** | `blender_version_min = "5.2.0"`; the layered-action API is the reason; 4.2 is a separate compatibility project |
+| S1 Blender floor | **Settled** | `blender_version_min = "5.2.0"` (5.3 is the 1.0 target); the layered-action API is the reason; 4.2 is a separate compatibility project |
 | S2 tags | **Closed** | `tags = ["Geometry Nodes", "Pipeline", "Modeling"]` |
 | S3 `log_level` | **Closed** | `prefs.log()` gates `[stageloom]` output |
 | S5 ruff | **Closed** | `uvx ruff check --output-format=concise --ignore=E402,E741,E731 .` passes |
