@@ -240,7 +240,14 @@ class STAGELOOM_OT_bake(bpy.types.Operator):
         original = scene.frame_current
         context.view_layer.objects.active = obj
         obj.select_set(True)
+        wm = context.window_manager
+        total = int(scene.frame_end - scene.frame_start + 1)
         try:
+            if wm is not None:
+                # Blender's cursor progress number updates even while the
+                # synchronous bake blocks the event loop.
+                wm.progress_begin(0, total)
+                engine._bake_progress = (wm, int(scene.frame_start), total)
             result = bpy.ops.object.geometry_node_bake_single(
                 session_uid=getattr(obj, "session_uid", 0),
                 modifier_name=modifier.name,
@@ -250,6 +257,9 @@ class STAGELOOM_OT_bake(bpy.types.Operator):
             result = {"CANCELLED"}
             self.report({"ERROR"}, "bake failed: %r" % (exc,))
         finally:
+            engine._bake_progress = None
+            if wm is not None:
+                wm.progress_end()
             engine._bake_sync = False
             nodes.hold_group_updates(False)
             try:

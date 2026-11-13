@@ -244,12 +244,22 @@ def _on_playback_post(scene, depsgraph=None):
         engine.prefs.log("[stageloom] " + line, flush=True)
 
 
+def _update_bake_progress(scene):
+    """Move Blender's cursor progress number with the baked frame."""
+    progress = engine._bake_progress
+    if progress is None:
+        return
+    wm, start, total = progress
+    wm.progress_update(max(0, min(total, scene.frame_current - start + 1)))
+
+
 @engine.bpy.app.handlers.persistent
 def _on_frame_change_sync(scene, depsgraph=None):
     """One gated frame: block until the current frame's stages are ready."""
     if engine._bake_sync:
         # A native Bake job steps frames and fires this handler. The stage
         # outputs it caches must be the ones for *this* frame.
+        _update_bake_progress(scene)
         _sync_playback_frame(scene)
         return
     if not engine._playback_sync:

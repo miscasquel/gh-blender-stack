@@ -149,6 +149,9 @@ _playback_sync = False
 # and the Bake node caches the current Grasshopper output. The timer stays out
 # of the way for the duration.
 _bake_sync = False
+# (window_manager, start_frame, total_frames) while a bake runs, so the frame
+# handler can update Blender's cursor progress number. None otherwise.
+_bake_progress = None
 # Who set the guard, and when: written once per clone, so the watchdog at the
 # top of `_timer` can name the object and stage that left it up without
 # formatting a traceback per clone. `_ticking` tells the depsgraph handler
@@ -437,7 +440,7 @@ def _deactivate():
     only after the last stage is gone; a file with no stages has nothing a
     pending pass could still need.
     """
-    global _active, _hot_until, _playback_sync, _bake_sync
+    global _active, _hot_until, _playback_sync, _bake_sync, _bake_progress
     if bpy.app.timers.is_registered(_timer):
         bpy.app.timers.unregister(_timer)
     for handler_list, handler in _ACTIVE_HANDLERS:
@@ -447,6 +450,7 @@ def _deactivate():
     _hot_until = 0.0
     _playback_sync = False
     _bake_sync = False
+    _bake_progress = None
     _dirty.clear()
     _force_read.clear()
     return False
@@ -478,6 +482,7 @@ def register():
     global _registered, _hot_until, _index_dirty
     global _evaluating, _guard_owner, _evaluating_since, _ticking
     global _prefix_batch_built, _prefix_batching, _playback_sync, _bake_sync
+    global _bake_progress
     if _registered:
         return
     _stage_index.clear()
@@ -511,6 +516,7 @@ def register():
     _ticking = False
     _playback_sync = False
     _bake_sync = False
+    _bake_progress = None
     for field in _heartbeat:
         _heartbeat[field] = 0 if field in ("trigger_count", "trigger_updates") else None
     _hot_until = 0.0

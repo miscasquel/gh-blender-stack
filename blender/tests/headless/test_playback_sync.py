@@ -381,3 +381,25 @@ class PlaybackSyncTests(unittest.TestCase):
             group,
             "the bake guard did not return the existing stage group",
         )
+
+    def test_09_bake_progress_follows_the_baked_frames(self):
+        import stageloom.blender.engine as engine
+        from stageloom.blender.engine import playback
+
+        class Cursor:
+            def __init__(self):
+                self.values = []
+
+            def progress_update(self, value):
+                self.values.append(value)
+
+        cursor = Cursor()
+        engine._bake_progress = (cursor, 10, 5)
+        try:
+            for frame in (9, 10, 12, 14, 20):
+                playback._update_bake_progress(
+                    type("Scene", (), {"frame_current": frame})()
+                )
+        finally:
+            engine._bake_progress = None
+        self.assertEqual(cursor.values, [0, 1, 3, 5, 5])
