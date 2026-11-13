@@ -56,11 +56,12 @@ Sent once per connection, first.
 ```json
 {"type":"hello","v":2,"client":"Stageloom 0.5.0","doc":"Panels.gh",
  "doc_units":"Millimeters",
- "stages":[{"key":"panelize-3f9a","enabled":true,"has_stage_in":true}]}
+ "stages":[{"key":"panelize-3f9a","enabled":true,"has_stage_in":true,"has_stage_out":true}]}
 ```
 
 - `stages` lists every Stage In or Stage Out in the document, with its key and enabled flag.
-- `has_stage_in` (optional, additive) is `true` when at least one Stage In component claims the key. `false` means the stage has only a Stage Out: it is a **generator**, ignores inbound geometry and is driven entirely by its Params. A reader that does not know the field treats its absence as unknown and keeps whatever mode it has saved. GH republishes `hello` when the value changes.
+- `has_stage_in` (optional, additive) is `true` when at least one Stage In component claims the key. `false` means the stage has only a Stage Out: it is a **generator**, ignores inbound geometry and is driven entirely by its Params. A reader that does not know the field treats its absence as unknown and keeps whatever mode it has saved.
+- `has_stage_out` (optional, additive) is `true` when at least one Stage Out component claims the key. `false` means the stage is a **one-way consumer**: its Stage In still receives geometry, but nothing answers, so Blender must not wait for, apply or cache a response. Absence means unknown; a reader keeps its saved two-way behavior. GH republishes `hello` when either presence value changes.
 - `doc` is the document's file name. It is for display only.
 
 ### 4.2 `schema` (GH → Blender)
@@ -379,8 +380,10 @@ Twelve fixtures, covering `ping`, `hello`, `schema`, a `ref` request, a mesh req
   `NaN`/`Infinity` (Python-only JSON extensions), a header over the cap is
   `too_large` on both sides, and numeric validation is pinned by the
   `decoder-boundary` console cases.
-- 2026-11-13: `hello.stages[]` adds the optional `has_stage_in` boolean (§4.1).
-  A stage with no Stage In is a generator: it ignores geometry, is driven by its
-  Params, and its requests carry an empty geometry hash. Additive inside v2;
-  the existing `hello` fixture intentionally has no such field and remains a
+- 2026-11-13: `hello.stages[]` adds the optional `has_stage_in` and
+  `has_stage_out` booleans (§4.1). A stage with no Stage In is a generator: it
+  ignores geometry, is driven by its Params, and its requests carry an empty
+  geometry hash. A stage with no Stage Out is one-way: Blender still delivers
+  geometry to its Stage In, but no response is expected. Additive inside v2;
+  the existing `hello` fixture intentionally has no such fields and remains a
   valid old-version frame.

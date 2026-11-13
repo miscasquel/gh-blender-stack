@@ -144,6 +144,20 @@ changes are needed. `docs/protocol.md` documents the field and the generator
 semantics. The `hello` fixture remains a valid old-version frame; no golden
 fixture is regenerated for an optional additive field.
 
+### 9. Stages without a Stage Out are one-way
+
+`hello.stages[]` also publishes `has_stage_out`, derived from the live Stage Out
+claims. A key with a Stage In but no Stage Out is a **one-way consumer**:
+
+- Blender still evaluates the prefix and delivers it to the Stage In;
+- no response is ever expected, so the stage never arms a pending wait, never
+  applies or caches a response, and a late answer is dropped;
+- the playback gate treats it as ready after the delivery instead of waiting
+  for an answer that cannot come.
+
+An absent field means an older client, whose claim is unknown; the saved two-way
+path stays. A stage with neither a Stage In nor a Stage Out is not published.
+
 ## Consequences
 
 - A request for stage B recomputes only B's affected branch; A does not advance
@@ -164,6 +178,8 @@ fixture is regenerated for an optional additive field.
   replay for native solver state.
 - New stages start live, so a stateful graph is correct without a manual mode
   switch; a deterministic graph opts out of the cache with one checkbox.
+- A Stage In without a Stage Out no longer blocks timeline playback or times
+  out against a document that cannot answer; it is a one-way geometry feed.
 
 ## Out of scope
 
@@ -179,6 +195,7 @@ fixture is regenerated for an optional additive field.
 C# console tests:
 
 - hello reports `has_stage_in` for Stage In and Stage Out-only keys;
+- hello reports `has_stage_out` and republishes when either presence flips;
 - a request pins/answers only its requested key;
 - a user-driven solve can still answer an affected Stage Out;
 - queued requests coalesce into one scheduled solve and retry queues waiting
@@ -192,6 +209,8 @@ Blender headless tests:
 - a live stage sends again on a frame change even when the rid is cached, does
   not send when another stage's apply merely dirties the object, and does not
   write frame-cache entries or bump its generation on same-rid changes;
+- a Stage In-only stage delivers each frame without arming a wait or blocking
+  the playback gate, and an absent `has_stage_out` keeps the saved two-way mode;
 - a stale `ok` does not bump a generation or clear a newer pending request;
 - the existing deterministic cache/replay tests stay green.
 

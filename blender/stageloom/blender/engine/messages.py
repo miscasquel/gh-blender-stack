@@ -108,9 +108,12 @@ def _on_client_hello(header):
     is the one moment the document may have changed without Blender hearing
     about it, so the next pass must ask instead of replaying a cached frame.
 
-    A stage entry may also publish `has_stage_in`. False turns the stage into a
-    generator (no Stage In, so no prefix); absent means an older client whose
-    claim is unknown, and the saved input mode stays.
+    A stage entry may also publish `has_stage_in` and `has_stage_out`. False
+    `has_stage_in` turns the stage into a generator (no Stage In, so no prefix).
+    False `has_stage_out` makes it one-way: the prefix is still delivered to its
+    Stage In, but nothing answers, so the stage must not wait, apply or cache.
+    Absent fields mean an older client whose claims are unknown, and the saved
+    modes stay.
     """
     doc = (header or {}).get("doc") or ""
     claims = {}
@@ -136,6 +139,7 @@ def _on_client_hello(header):
             entry = claims.get(stage.key)
             if entry is not None:
                 _apply_input_mode(stage, entry)
+                _apply_output_presence(stage, entry)
             if stage.state == engine.stack_mod.STATE_WAITING:
                 engine._forget(record.stack_id, stage.key)
                 engine._set(stage, "state", engine.stack_mod.STATE_IDLE)
@@ -165,6 +169,25 @@ def _apply_input_mode(stage, entry):
     )
     if engine._set(stage, "input_mode", mode):
         engine._trace.append("%s: input mode %s" % (stage.key, mode))
+        return True
+    return False
+
+
+def _apply_output_presence(stage, entry):
+    """Adopt one hello entry's `has_stage_out` claim, if it carries one.
+
+    No Stage Out means nothing will answer this stage's requests. It stays
+    useful as a one-way consumer (a Stage In still receives the prefix), but
+    Blender must never wait on it. An absent or non-boolean field is "unknown",
+    so an old plugin keeps the saved two-way behavior.
+    """
+    has_stage_out = entry.get("has_stage_out")
+    if not isinstance(has_stage_out, bool):
+        return False
+    if engine._set(stage, "has_stage_out", has_stage_out):
+        engine._trace.append(
+            "%s: Stage Out %s" % (stage.key, "present" if has_stage_out else "missing")
+        )
         return True
     return False
 
@@ -259,6 +282,13 @@ def _handle_response(header, sections, raw=None):
         pending_key = (record.stack_id, stage.key)
         pending = engine._pending.get(pending_key) or {}
         was_pending = rid in pending
+        if not stage.has_stage_out:
+            # No Stage Out answers this stage: a response left over from when it
+            # had one is not a sync to apply or cache. Consume only its own
+            # pending entry if the mode change raced the answer.
+            if was_pending:
+                _answer_pending(record, stage, rid)
+            continue
         if header.get("status") == "error" and not was_pending:
             # An error answers a request we are waiting for. If this rid is not
             # pending, the error is stale or unsolicited — often a

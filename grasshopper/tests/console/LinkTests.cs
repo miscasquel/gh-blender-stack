@@ -77,8 +77,12 @@ namespace Stageloom.Tests.Console
                     stageRow != null && (bool)Json.Get(stageRow, "enabled"),
                     "stages=" + Json.WriteCanonical(stages));
                 object hasStageIn = stageRow == null ? null : Json.Get(stageRow, "has_stage_in");
+                object hasStageOut = stageRow == null ? null : Json.Get(stageRow, "has_stage_out");
                 Check("a stage out alone has no stage in",
                     hasStageIn is bool && !(bool)hasStageIn,
+                    "row=" + (stageRow == null ? "(none)" : Json.WriteCanonical(stageRow)));
+                Check("a stage out alone has a stage out",
+                    hasStageOut is bool && (bool)hasStageOut,
                     "row=" + (stageRow == null ? "(none)" : Json.WriteCanonical(stageRow)));
 
                 // A Stage In on the same key flips has_stage_in. The stage set
@@ -90,8 +94,10 @@ namespace Stageloom.Tests.Console
                 hello = ReadUntil(server, "hello");
                 stageRow = FindStage(hello, "k1");
                 hasStageIn = stageRow == null ? null : Json.Get(stageRow, "has_stage_in");
+                hasStageOut = stageRow == null ? null : Json.Get(stageRow, "has_stage_out");
                 Check("a stage in republishes hello",
-                    hasStageIn is bool && (bool)hasStageIn,
+                    hasStageIn is bool && (bool)hasStageIn
+                    && hasStageOut is bool && (bool)hasStageOut,
                     "row=" + (stageRow == null ? "(none)" : Json.WriteCanonical(stageRow)));
 
                 // Removing it returns the key to generator status.
@@ -117,6 +123,24 @@ namespace Stageloom.Tests.Console
                     inRow != null && (bool)Json.Get(inRow, "has_stage_in")
                     && stageRow != null && !(bool)Json.Get(stageRow, "has_stage_in"),
                     "stages=" + Json.WriteCanonical(Json.Get(hello, "stages")));
+                Check("a stage in alone is one-way",
+                    inRow != null && Json.Get(inRow, "has_stage_out") is bool
+                    && !(bool)Json.Get(inRow, "has_stage_out"),
+                    "row=" + (inRow == null ? "(none)" : Json.WriteCanonical(inRow)));
+
+                // Adding a Stage Out for the same key flips it back to a
+                // two-way stage and republishes hello on presence alone.
+                var stageOutOnly = new TestComponent();
+                GhLink.Register(stageOutOnly);
+                GhLink.PublishStageOut(stageOutOnly, "k1-in", true);
+                GhLink.Publish(null);
+                hello = ReadUntil(server, "hello");
+                inRow = FindStage(hello, "k1-in");
+                Check("a stage out republishes one-way status",
+                    inRow != null && Json.Get(inRow, "has_stage_out") is bool
+                    && (bool)Json.Get(inRow, "has_stage_out"),
+                    "row=" + (inRow == null ? "(none)" : Json.WriteCanonical(inRow)));
+                GhLink.Unregister(stageOutOnly);
                 GhLink.Unregister(stageInOnly);
 
                 // 4. a parameter declaration becomes a schema frame.

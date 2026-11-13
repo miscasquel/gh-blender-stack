@@ -126,6 +126,11 @@ class STAGELOOM_PT_panel(bpy.types.Panel):
         row.prop(stage, "live", text="Live")
         if stack_mod.is_generator(stage):
             row.label(text="Generator (no Stage In)", icon=_GENERATOR_ICON)
+        if not stage.has_stage_out:
+            box.label(
+                text="No Stage Out in Grasshopper: output sync is ignored",
+                icon="INFO",
+            )
 
         row = box.row()
         row.label(text="Key")

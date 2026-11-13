@@ -141,6 +141,11 @@ def _sync_stage(obj, record, stage, deadline):
         # cache even when Grasshopper is disconnected (cached playback).
         outcome = engine._process_stage(obj, record, stage, force=True)
         if outcome == "idle":
+            if not stage.has_stage_out:
+                # One-way stage: the pass delivered its prefix to Stage In and
+                # there is nothing to wait for. Never let it block playback.
+                _clear_report(stage)
+                return True
             if stage.state == engine.stack_mod.STATE_DISCONNECTED:
                 _report(stage, "Grasshopper disconnected; keeping the last output")
                 return False

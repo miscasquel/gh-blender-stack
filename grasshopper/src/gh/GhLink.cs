@@ -220,6 +220,10 @@ namespace Stageloom
         // Stage keys with at least one Stage In claim. Derived by
         // ReconcileOwnership, published as `has_stage_in`.
         private static readonly HashSet<string> StageHasIn = new HashSet<string>();
+        // Stage keys with at least one Stage Out claim. Derived the same way and
+        // published as `has_stage_out`: a key with only a Stage In is one-way
+        // (Blender sends geometry, but nothing answers).
+        private static readonly HashSet<string> StageHasOut = new HashSet<string>();
         private static readonly Dictionary<string, List<Dictionary<string, object>>> StageParams =
             new Dictionary<string, List<Dictionary<string, object>>>();
 
@@ -262,6 +266,7 @@ namespace Stageloom
                     Slots.Clear();
                     StageEnabled.Clear();
                     StageHasIn.Clear();
+                    StageHasOut.Clear();
                     StageParams.Clear();
                     _lastStages.Clear();
                     _lastStageIns.Clear();
@@ -306,6 +311,7 @@ namespace Stageloom
                 // A Stage In makes the stage a geometry consumer. Reconcile
                 // prunes the flag when no live Input claim names the key.
                 if (role == ClaimRole.Input) StageHasIn.Add(key);
+                else if (role == ClaimRole.Output) StageHasOut.Add(key);
             }
         }
 
@@ -1093,6 +1099,7 @@ namespace Stageloom
             {
                 var stageKeys = new HashSet<string>();
                 var stageInKeys = new HashSet<string>();
+                var stageOutKeys = new HashSet<string>();
                 var paramIds = new Dictionary<string, HashSet<string>>();
                 foreach (Claim claim in Claims)
                 {
@@ -1100,6 +1107,7 @@ namespace Stageloom
                     {
                         stageKeys.Add(claim.StageKey);
                         if (claim.Role == ClaimRole.Input) stageInKeys.Add(claim.StageKey);
+                        else if (claim.Role == ClaimRole.Output) stageOutKeys.Add(claim.StageKey);
                     }
                     if (!string.IsNullOrEmpty(claim.ParamKey) && claim.ParamId != null)
                     {
@@ -1120,6 +1128,8 @@ namespace Stageloom
                 // a key has a Stage In exactly while one Input claim names it.
                 StageHasIn.Clear();
                 foreach (string key in stageInKeys) StageHasIn.Add(key);
+                StageHasOut.Clear();
+                foreach (string key in stageOutKeys) StageHasOut.Add(key);
 
                 foreach (string key in new List<string>(StageParams.Keys))
                 {
@@ -1376,11 +1386,13 @@ namespace Stageloom
             if (!_connected) return;
             Dictionary<string, bool> stages;
             HashSet<string> stageIns;
+            HashSet<string> stageOuts;
             Dictionary<string, List<Dictionary<string, object>>> paramsByStage;
             lock (Gate)
             {
                 stages = new Dictionary<string, bool>(StageEnabled);
                 stageIns = new HashSet<string>(StageHasIn);
+                stageOuts = new HashSet<string>(StageHasOut);
                 paramsByStage = new Dictionary<string, List<Dictionary<string, object>>>();
                 foreach (var kv in StageParams) paramsByStage[kv.Key] = new List<Dictionary<string, object>>(kv.Value);
             }
@@ -1390,7 +1402,7 @@ namespace Stageloom
             bool needHello;
             lock (Gate)
             {
-                needHello = !_publishedThisConnection || StagesChangedLocked(stages, stageIns);
+                needHello = !_publishedThisConnection || StagesChangedLocked(stages, stageIns, stageOuts);
                 if (needHello) _publishedThisConnection = true;
             }
 
@@ -1402,10 +1414,12 @@ namespace Stageloom
                     var entry = new Dictionary<string, object>();
                     entry["key"] = kv.Key;
                     entry["enabled"] = kv.Value;
-                    // Optional additive field (protocol §4.1): true when a
-                    // Stage In claims the key. A stage with only a Stage Out is
-                    // a generator and ignores inbound geometry.
+                    // Optional additive fields (protocol §4.1): true when a
+                    // Stage In / Stage Out claims the key. No Stage In means a
+                    // generator; no Stage Out means a one-way consumer whose
+                    // answers Blender must not wait for.
                     entry["has_stage_in"] = stageIns.Contains(kv.Key);
+                    entry["has_stage_out"] = stageOuts.Contains(kv.Key);
                     list.Add(entry);
                 }
                 var hello = new Dictionary<string, object>();
@@ -1421,6 +1435,7 @@ namespace Stageloom
                 {
                     _lastStages = new Dictionary<string, bool>(stages);
                     _lastStageIns = new HashSet<string>(stageIns);
+                    _lastStageOuts = new HashSet<string>(stageOuts);
                 }
             }
 
@@ -1458,16 +1473,19 @@ namespace Stageloom
         }
 
         private static Dictionary<string, bool> _lastStages = new Dictionary<string, bool>();
-        // The has_stage_in half of the last hello. A Stage In appearing or
-        // disappearing must republish hello even when the key set is unchanged.
+        // The has_stage_in / has_stage_out halves of the last hello. A Stage In
+        // or Stage Out appearing or disappearing must republish hello even when
+        // the key set is unchanged.
         private static HashSet<string> _lastStageIns = new HashSet<string>();
+        private static HashSet<string> _lastStageOuts = new HashSet<string>();
         // Last schema declaration published per stage, by canonical JSON. Under
         // Gate; cleared on a new connection.
         private static readonly Dictionary<string, string> _lastSchema =
             new Dictionary<string, string>();
 
         private static bool StagesChangedLocked(Dictionary<string, bool> stages,
-                                                HashSet<string> stageIns)
+                                                HashSet<string> stageIns,
+                                                HashSet<string> stageOuts)
         {
             if (_lastStages.Count != stages.Count) return true;
             foreach (var kv in stages)
@@ -1475,6 +1493,7 @@ namespace Stageloom
                 bool other;
                 if (!_lastStages.TryGetValue(kv.Key, out other) || other != kv.Value) return true;
                 if (_lastStageIns.Contains(kv.Key) != stageIns.Contains(kv.Key)) return true;
+                if (_lastStageOuts.Contains(kv.Key) != stageOuts.Contains(kv.Key)) return true;
             }
             return false;
         }

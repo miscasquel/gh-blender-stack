@@ -170,9 +170,16 @@ def _process_stage(obj, record, stage, force=None):
 
     verify_key = (record.stack_id, stage.key)
     live = bool(stage.live)
+    one_way = not stage.has_stage_out
+    if one_way:
+        # No Stage Out answers this key. Drop any wait from when it was
+        # two-way and deliver the prefix to its Stage In without arming one.
+        engine._forget(record.stack_id, stage.key)
     # A live stage is stateful: a cached frame would replay a solver step the
-    # current state no longer holds, so it never consults the frame cache.
-    cached = None if live else engine._cached_response(record, stage, rid)
+    # current state no longer holds, so it never consults the frame cache. A
+    # one-way stage has no answer channel, so a cached response can only be
+    # stale data from when it had one.
+    cached = None if live or one_way else engine._cached_response(record, stage, rid)
     sent = engine._sent.get(verify_key)
     # Whether the client has been told *this* request. A frame in the cache is
     # Blender's answer, not the client's state: cancelling a transform (or an
@@ -334,6 +341,17 @@ def _process_stage(obj, record, stage, force=None):
 
     now = engine.time.monotonic()
     engine._heartbeat["sent_at"] = now
+    if one_way:
+        # The request delivered the prefix to the stage's Stage In. Nothing will
+        # answer it, so do not arm a pending wait: the stack continues to later
+        # stages and the playback gate never blocks on this one.
+        engine._set(stage, "rid", rid)
+        engine._set(stage, "geom_hash", geom_hash)
+        if live:
+            engine._set(stage, "live_frame", engine.bpy.context.scene.frame_float)
+        engine._set(stage, "state", engine.stack_mod.STATE_OK)
+        engine._set(stage, "error", retry_note)
+        return "idle"
     engine._pending_of(record.stack_id, stage.key)[rid] = now
     engine._waiting_objects.add(obj.name)
     engine._state_since[(record.stack_id, stage.key)] = now

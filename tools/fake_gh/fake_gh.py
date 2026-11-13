@@ -107,6 +107,9 @@ async def main():
     ap.add_argument("--fail-after", type=int, default=0,
                     help="answer response N with a gh_solve_failed error instead of "
                          "geometry (once; later requests succeed)")
+    ap.add_argument("--no-stage-out", action="store_true",
+                    help="report has_stage_out=false and never answer: models a "
+                         "Stage In-only definition (one-way stage)")
     ap.add_argument("--coalesce", action="store_true",
                     help="model the plugin's coalesced ScheduleSolution calls: while a "
                          "solve window (--delay-ms) is open, later requests supersede "
@@ -234,12 +237,17 @@ def _accept(state, header, sections):
 
 async def session(ws, args, state):
     print("[fake-gh] connected to blender", flush=True)
+    stage_row = {"key": args.stage, "enabled": True}
+    if args.no_stage_out:
+        # One-way consumer: a Stage In receives the geometry, but no Stage Out
+        # will answer it.
+        stage_row["has_stage_out"] = False
     hello = {
         "type": "hello",
         "client": "fake-gh 0.1",
         "doc": args.doc,
         "doc_units": "Meters",
-        "stages": [{"key": args.stage, "enabled": True}],
+        "stages": [stage_row],
     }
     await ws.send(codec.encode_frame(hello))
     await ws.send(codec.encode_frame(_schema_message(args.stage, args.scale_param)))
@@ -251,6 +259,12 @@ async def session(ws, args, state):
         if header.get("stage") != args.stage:
             continue
         mode = _accept(state, header, sections)
+
+        if args.no_stage_out:
+            # A Stage In consumed the request; there is no Stage Out to answer.
+            _write_report(args, state)
+            print("[fake-gh] one-way request (%s), no response" % mode, flush=True)
+            continue
 
         if args.coalesce and args.delay_ms:
             # The plugin collapses ScheduleSolution calls: a request that

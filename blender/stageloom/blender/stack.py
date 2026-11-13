@@ -204,6 +204,11 @@ class StageloomStage(bpy.types.PropertyGroup):
         default=INPUT_PREFIX,
         update=_stage_changed,
     )
+    # Whether Grasshopper has a Stage Out for this key. False is a one-way
+    # stage: Blender still delivers geometry to its Stage In, but there is no
+    # answer to wait for, apply or cache. The field is unknown on older clients,
+    # so the default keeps the two-way path.
+    has_stage_out: BoolProperty(name="Has Stage Out", default=True)
     # Live: a stateful stage whose output advances on every solve (a solver
     # step). Its answers must not replay from the frame cache, and only its own
     # inputs or the playhead may ask again. On by default: a new stage cannot

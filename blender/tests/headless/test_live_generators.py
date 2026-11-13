@@ -455,6 +455,122 @@ class SharedObjectIsolationTests(LiveTestCase):
         )
 
 
+class OneWayStageTests(LiveTestCase):
+    """A Stage In with no Stage Out: deliver geometry, never wait for an answer."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.obj, cls.stage = cls.stack_object("OneWay")
+        cls.report = cls.report_path("one_way")
+        cls.fake = start_fake(cls.stage.key, cls.report, "--no-stage-out")
+
+        def ready():
+            return (
+                not cls.stage.has_stage_out
+                and requests_of(cls.report) >= 1
+                and cls.stage.state == "ok"
+            )
+
+        if not pump(seconds=15.0, until=ready):
+            raise AssertionError(
+                "the one-way stage never settled: has_stage_out=%r state=%r requests=%r"
+                % (cls.stage.has_stage_out, cls.stage.state, report_of(cls.report))
+            )
+
+    def test_01_a_stage_in_only_stage_is_one_way_and_never_waits(self):
+        self.assertFalse(
+            self.stage.has_stage_out,
+            "hello did not report the missing Stage Out",
+        )
+        self.assertEqual(self.stage.state, "ok")
+        self.assertGreaterEqual(
+            requests_of(self.report), 1, "the Stage In never received the prefix"
+        )
+        self.assertTrue(self.stage.rid, "the delivered request was not recorded")
+        self.assertFalse(
+            self.engine._pending.get((self.obj.gh_stack.stack_id, self.stage.key)),
+            "a one-way stage armed a response wait",
+        )
+        self.assertNotIn(
+            self.obj.name,
+            self.engine._waiting_objects,
+            "a one-way stage kept the engine waiting on the object",
+        )
+
+    def test_02_a_frame_change_delivers_again_without_waiting(self):
+        before = requests_of(self.report)
+        bpy.context.scene.frame_set(2)
+        self.engine._on_frame_change(bpy.context.scene)
+        self.assertTrue(
+            pump(seconds=5.0, until=lambda: requests_of(self.report) > before),
+            "a live one-way stage did not deliver the next frame",
+        )
+        self.assertTrue(
+            pump(seconds=2.0, until=lambda: self.stage.state == "ok"),
+            "the one-way stage did not settle after delivering",
+        )
+        self.assertEqual(self.stage.live_frame, 2.0)
+        self.assertFalse(
+            self.engine._pending.get((self.obj.gh_stack.stack_id, self.stage.key)),
+            "the frame delivery armed a response wait",
+        )
+
+    def test_03_playback_does_not_block_on_a_one_way_stage(self):
+        prefs = bpy.context.preferences.addons["stageloom"].preferences
+        original = prefs.playback_timeout
+        bpy.context.scene.frame_set(3)
+        try:
+            prefs.playback_timeout = 0.5
+            started = time.monotonic()
+            ready = self.engine._sync_playback_frame(bpy.context.scene)
+            elapsed = time.monotonic() - started
+        finally:
+            prefs.playback_timeout = original
+        self.assertTrue(ready, "a one-way stage failed the playback gate")
+        self.assertLess(
+            elapsed,
+            0.5,
+            "the playback gate waited for a stage that has no Stage Out",
+        )
+
+    def test_04_hello_claims_update_the_mode_and_absence_keeps_it(self):
+        engine = self.engine
+        record = self.obj.gh_stack
+        engine._on_client_hello(
+            {"stages": [{"key": self.stage.key, "has_stage_in": True}]}
+        )
+        self.assertFalse(
+            self.stage.has_stage_out,
+            "an old hello without has_stage_out overwrote the saved mode",
+        )
+        try:
+            engine._on_client_hello(
+                {
+                    "stages": [
+                        {
+                            "key": self.stage.key,
+                            "has_stage_in": True,
+                            "has_stage_out": True,
+                        }
+                    ]
+                }
+            )
+            self.assertTrue(
+                self.stage.has_stage_out,
+                "hello did not restore the two-way path",
+            )
+            outcome = engine._process_stage(self.obj, record, self.stage, force=True)
+            self.assertEqual(
+                outcome,
+                "waiting",
+                "a two-way stage did not wait again for its Stage Out",
+            )
+        finally:
+            engine._forget(record.stack_id, self.stage.key)
+            engine._set(self.stage, "state", "idle")
+
+
 class LiveToggleTests(LiveTestCase):
     """Switching Live semantics retires the frames from the other mode."""
 
