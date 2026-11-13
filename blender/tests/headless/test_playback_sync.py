@@ -354,3 +354,30 @@ class PlaybackSyncTests(unittest.TestCase):
             self.assertGreater(len(mesh.vertices), 0, "the Bake node swallowed the live output")
         finally:
             evaluated.to_mesh_clear()
+
+    def test_08_the_node_graph_is_frozen_during_a_bake(self):
+        """A native bake holds the evaluated graph; touching it per frame
+        crashes Blender 5.3 with nested instances (2026-11-13). The bake
+        operator holds updates, so ensure_group must be lookup-only then."""
+        import stageloom.blender.nodes as nodes
+
+        group = bpy.data.node_groups[nodes.group_name(self.stage.key)]
+        original = nodes._group_matches
+
+        def inspect_forbidden(*args, **kwargs):
+            raise AssertionError("ensure_group inspected the graph during a bake")
+
+        nodes._group_matches = inspect_forbidden
+        try:
+            nodes.hold_group_updates(True)
+            try:
+                returned = nodes.ensure_group(self.obj, self.stage.key)
+            finally:
+                nodes.hold_group_updates(False)
+        finally:
+            nodes._group_matches = original
+        self.assertIs(
+            returned,
+            group,
+            "the bake guard did not return the existing stage group",
+        )

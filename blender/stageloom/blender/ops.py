@@ -186,7 +186,14 @@ class STAGELOOM_OT_bake(bpy.types.Operator):
         if scene.frame_start > scene.frame_end:
             self.report({"ERROR"}, "the scene frame range is reversed")
             return {"CANCELLED"}
-        group = nodes.ensure_group(obj, stage.key)
+        group = bpy.data.node_groups.get(nodes.group_name(stage.key))
+        if group is None:
+            self.report(
+                {"ERROR"},
+                "the stage's node group is missing; let the stage evaluate once "
+                "before baking",
+            )
+            return {"CANCELLED"}
         modifier = nodes.modifier_of(obj, stage)
         if modifier is None:
             self.report({"ERROR"}, "this stage has no modifier")
@@ -223,7 +230,10 @@ class STAGELOOM_OT_bake(bpy.types.Operator):
 
         # The native bake steps frames and fires frame_change_post. Arm the same
         # synchronous stage pass Play Every Frame uses; the Bake node then
-        # caches the output of each frame, in order.
+        # caches the output of each frame, in order. While that job owns the
+        # graph, do not build or inspect node groups from the per-frame apply:
+        # nested Instance-on-Points chains crash Blender 5.3 if we do.
+        nodes.hold_group_updates(True)
         engine._bake_sync = True
         for counter in ("playback_frames", "playback_synced", "playback_failures"):
             engine.stats[counter] = 0
@@ -241,6 +251,7 @@ class STAGELOOM_OT_bake(bpy.types.Operator):
             self.report({"ERROR"}, "bake failed: %r" % (exc,))
         finally:
             engine._bake_sync = False
+            nodes.hold_group_updates(False)
             try:
                 scene.frame_set(original)
             except Exception:

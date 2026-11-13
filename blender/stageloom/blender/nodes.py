@@ -22,6 +22,20 @@ OLD_MODIFIER_PREFIX = "GH · "
 # the modifier carries a bake cache that renders without Grasshopper.
 GROUP_FORMAT = 4
 
+# While Blender's native bake job steps frames it holds the evaluated node
+# graph. Building, or even inspecting, that graph from `frame_change_post`
+# crashes Blender 5.3 when the stage has a nested Instance-on-Points chain.
+# A name lookup is safe, so the bake operator holds updates and `ensure_group`
+# becomes a lookup-only path for the duration of the job. The graph is built
+# before the bake starts.
+_group_updates_held = False
+
+
+def hold_group_updates(hold):
+    """Freeze node-group wiring while a native bake job owns the graph."""
+    global _group_updates_held
+    _group_updates_held = bool(hold)
+
 
 def group_name(stage_key):
     return "%s%s" % (GROUP_PREFIX, stage_key)
@@ -50,6 +64,10 @@ def ensure_group(stack_obj, stage_key, nested_rows=None):
     are shared, so a nested placement is one instance per row and the graph
     grows with definitions and distinct placements, never with depth.
     """
+    if _group_updates_held:
+        # A native bake is running. The group already exists and is wired for
+        # the topology the bake started with; touching it here is the crash.
+        return bpy.data.node_groups.get(group_name(stage_key))
     helpers_map = helpers.ensure_helpers(stack_obj, stage_key)
     nested_rows = nested_rows or {}
     definitions = _definitions(stack_obj, stage_key, nested_rows)

@@ -4,9 +4,10 @@
 **Status:** committed 2026-11-13. The Blender 5.3 UI blocker is fixed and
 covered by `blender/tests/headless/test_ui_panel.py`; the stage loop is
 resilient. Live now defaults on for new stages, with a hover description.
-Stage In-only stages are one-way and no longer block playback. Live Rhino/GH
-acceptance of the solver scheduling is still in progress. The GH-side Stage In
-geometry-loss report is unconfirmed and tracked below.
+Stage In-only stages are one-way and no longer block playback. 0.5.2 fixes the
+nested-instance bake crash. Live Rhino/GH acceptance of the solver scheduling
+is still in progress. The GH-side Stage In geometry-loss report is unconfirmed
+and tracked below.
 **Authoritative design:** [0010-selective-stage-solves-and-live-generators.md](decisions/0010-selective-stage-solves-and-live-generators.md)
 
 ---
@@ -278,6 +279,12 @@ It does not need to be reset manually.
   but never arms a wait, applies or caches a response, and the playback gate
   treats it as ready. A later Stage Out republishes hello and restores the
   two-way path.
+- **Nested-instance bake crash.** Fixed in 0.5.2. The native bake job owns the
+  evaluated node graph; the add-on called `nodes.ensure_group()` from every
+  `frame_change_post` during the job, which segfaults Blender 5.3 when the
+  stage has a nested Instance-on-Points chain. The bake operator now builds the
+  group once and `ensure_group` is lookup-only until the job ends. The minimal
+  reproduction is in `/tmp/opencode/bake-tests/` (not committed).
 - **Unconfirmed GH-side Stage In geometry loss.** The user reported that
   changes which should not update the Stage In seemed to clear its staged
   geometry, then questioned that diagnosis. The only known path that clears a

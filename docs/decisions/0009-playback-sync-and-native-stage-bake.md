@@ -45,6 +45,12 @@ last output while the playhead kept moving. Two gaps remained.
   Blender's bake job steps frames, then freezes the stage so no further
   Grasshopper requests are made. Renders read the baked data directly; there is
   no Grasshopper code in the render path.
+- **The native bake owns the node graph.** The group is built once before the
+  job starts and `ensure_group` becomes lookup-only while the job runs.
+  Inspecting or rebuilding a nested Instance-on-Points graph from
+  `frame_change_post` segfaults Blender 5.3 (fixed 2026-11-13). A Grasshopper
+  response that introduces a new definition or nested topology during a bake is
+  not rewired; rebake after a topology change.
 - **Clear Bake returns to live.** It deletes the native bake data, clears the
   baked flag, unfreezes the stage and resumes live Grasshopper. The bake uses
   Blender's own bake target, so a packed bake is only written when the `.blend`
