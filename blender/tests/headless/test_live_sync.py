@@ -159,6 +159,9 @@ class LiveSyncTestCase(unittest.TestCase):
         cls.obj.name = "Live"
         bpy.ops.stageloom.add_stage(label="Live")
         cls.stage = cls.obj.gh_stack.stages[0]
+        # This suite pins the deterministic cache/replay path; the stage
+        # default (live) deliberately bypasses it.
+        cls.stage.live = False
         cls.obj[stack_mod.param_prop_name(cls.stage.key, SCALE)] = 1.0
 
         cls.report = os.path.join(tempfile.gettempdir(), "fake_gh_live_%s.json" % cls.__name__)

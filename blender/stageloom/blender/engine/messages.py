@@ -79,6 +79,11 @@ def _clear_failed_response(stage_key, rid):
         engine._forget(record.stack_id, stage.key)
         if rid:
             engine._forget_frame(record, stage, rid)
+        if stage.live:
+            # A live stage has no frame-cache miss to drive its retry, and the
+            # failed answer consumed its pending entry: arm the same permit a
+            # reconnect uses so the next pass asks again.
+            engine._verify.add((record.stack_id, stage.key))
         engine._set(
             stage,
             "state",
@@ -102,13 +107,20 @@ def _on_client_hello(header):
     next request in full. The stage is also put on `_verify`: a fresh connection
     is the one moment the document may have changed without Blender hearing
     about it, so the next pass must ask instead of replaying a cached frame.
+
+    A stage entry may also publish `has_stage_in`. False turns the stage into a
+    generator (no Stage In, so no prefix); absent means an older client whose
+    claim is unknown, and the saved input mode stays.
     """
     doc = (header or {}).get("doc") or ""
-    claimed = set()
+    claims = {}
     for entry in (header or {}).get("stages") or []:
-        key = entry.get("key") if isinstance(entry, dict) else None
+        if not isinstance(entry, dict):
+            continue
+        key = entry.get("key")
         if key:
-            claimed.add(key)
+            claims[key] = entry
+    claimed = set(claims)
     for obj in engine._all_stack_objects():
         record = engine.stack_mod.stack_of(obj)
         if not record.stack_id:
@@ -121,6 +133,9 @@ def _on_client_hello(header):
             if record.connected_doc != doc:
                 record.connected_doc = doc
         for stage in record.stages:
+            entry = claims.get(stage.key)
+            if entry is not None:
+                _apply_input_mode(stage, entry)
             if stage.state == engine.stack_mod.STATE_WAITING:
                 engine._forget(record.stack_id, stage.key)
                 engine._set(stage, "state", engine.stack_mod.STATE_IDLE)
@@ -130,6 +145,28 @@ def _on_client_hello(header):
         engine._dirty.add(obj.name)
     engine._trace.append("client hello: %s" % (doc or "unnamed"))
     engine._mark_hot()
+
+
+def _apply_input_mode(stage, entry):
+    """Adopt one hello entry's `has_stage_in` claim, if it carries one.
+
+    A stage whose GH definition has no Stage In is a generator: the Blender
+    prefix is not part of its request, so its request id depends only on its
+    params and nonce. An absent or non-boolean field is "unknown" and must not
+    overwrite the mode saved with the file (old clients keep working).
+    """
+    has_stage_in = entry.get("has_stage_in")
+    if not isinstance(has_stage_in, bool):
+        return False
+    mode = (
+        engine.stack_mod.INPUT_PREFIX
+        if has_stage_in
+        else engine.stack_mod.INPUT_GENERATOR
+    )
+    if engine._set(stage, "input_mode", mode):
+        engine._trace.append("%s: input mode %s" % (stage.key, mode))
+        return True
+    return False
 
 
 def _handle_schema(header):
@@ -162,6 +199,22 @@ def _handle_schema(header):
         # A schema for a stage no object has: usually a key pasted into GH that
         # does not belong to any stack, or a stage removed in Blender.
         engine.prefs.log("[stageloom] schema for unknown stage %r ignored" % (key,), flush=True)
+
+
+def _answer_pending(record, stage, rid):
+    """Consume the pending entry one answer names, if it is still the one held.
+
+    Returns the monotonic send time, or None. Only the named rid is removed: a
+    stale answer for an older request must not clear a newer pending request
+    (the error path has always had this rule; the ok path now matches it).
+    """
+    pending = engine._pending.get((record.stack_id, stage.key))
+    if not pending:
+        return None
+    sent_at = pending.pop(rid, None)
+    if not pending:
+        engine._pending.pop((record.stack_id, stage.key), None)
+    return sent_at
 
 
 def _handle_response(header, sections, raw=None):
@@ -205,8 +258,8 @@ def _handle_response(header, sections, raw=None):
 
         pending_key = (record.stack_id, stage.key)
         pending = engine._pending.get(pending_key) or {}
-        pending_here = rid in pending
-        if header.get("status") == "error" and not pending_here:
+        was_pending = rid in pending
+        if header.get("status") == "error" and not was_pending:
             # An error answers a request we are waiting for. If this rid is not
             # pending, the error is stale or unsolicited — often a
             # document-wide solve answering with the stage's last rid. Acting
@@ -223,12 +276,10 @@ def _handle_response(header, sections, raw=None):
                 # not a result and must not be cached.
                 engine._resend_in_full(obj, record, stage, "unknown_ref response")
                 continue
-            if pending_here:
+            if was_pending:
                 # Remove only this request. A different pending entry belongs
                 # to a newer request and must survive a late error.
-                pending.pop(rid, None)
-                if not pending:
-                    engine._pending.pop(pending_key, None)
+                _answer_pending(record, stage, rid)
             engine._forget_frame(record, stage, rid)
             if not stage.frozen:
                 engine._set(stage, "state", engine.stack_mod.STATE_ERROR)
@@ -242,29 +293,42 @@ def _handle_response(header, sections, raw=None):
             continue
 
         out_hash = header.get("out_hash") or ""
-        stored_out = None
-        memory = engine._cache.get((record.stack_id, key))
-        if memory is not None and rid in memory:
-            stored_out = memory[rid][1] or ""
+        current = rid == stage.rid
+        if stage.live:
+            # A live stage is stateful: its answer is the solver's new state,
+            # not a frame that can be replayed. A stale answer belongs to a
+            # state the solver has already left; it is neither applied nor
+            # cached, and it may only consume the pending entry it names.
+            if not current:
+                if was_pending:
+                    _answer_pending(record, stage, rid)
+                continue
         else:
-            try:
-                entry = engine._store_for(record, stage).entry(rid)
-            except OSError:
-                entry = None
-            if entry is not None:
-                stored_out = entry.out_hash or ""
-        if stored_out is not None and stored_out != out_hash:
-            # The same request was answered differently: Grasshopper's
-            # definition changed (a slider upstream of Stage Out, a graph edit
-            # that does not touch Blender's inputs). Everything cached for this
-            # stage is suspect.
-            engine._bump_generation(obj, record, stage, "Grasshopper's answer changed")
-        engine._remember(record, stage, rid, header, sections, raw)
-        engine._store_frame(record, stage, rid, header, sections, raw)
+            stored_out = None
+            memory = engine._cache.get((record.stack_id, key))
+            if memory is not None and rid in memory:
+                stored_out = memory[rid][1] or ""
+            else:
+                try:
+                    entry = engine._store_for(record, stage).entry(rid)
+                except OSError:
+                    entry = None
+                if entry is not None:
+                    stored_out = entry.out_hash or ""
+            if (current or was_pending) and stored_out is not None and stored_out != out_hash:
+                # The same request was answered differently: Grasshopper's
+                # definition changed (a slider upstream of Stage Out, a graph
+                # edit that does not touch Blender's inputs). Everything cached
+                # for this stage is suspect. A stale answer, however, describes
+                # a state the playhead has left; it must not prune the frames
+                # the current state uses.
+                engine._bump_generation(obj, record, stage, "Grasshopper's answer changed")
+            engine._remember(record, stage, rid, header, sections, raw)
+            engine._store_frame(record, stage, rid, header, sections, raw)
 
-        was_pending = rid in engine._pending_of(record.stack_id, key)
-        sent_at = engine._pending_of(record.stack_id, key).get(rid) if was_pending else None
-        engine._forget(record.stack_id, stage.key)
+        # Consume only the request this answer names: a stale ok must not clear
+        # a newer pending request (the rule the error path has always had).
+        sent_at = _answer_pending(record, stage, rid) if was_pending else None
         if sent_at is not None:
             engine._record_timing(record, stage, "rtt_ms", engine._timed_since(sent_at))
         applied = False
@@ -301,11 +365,13 @@ def _handle_response(header, sections, raw=None):
                 engine._dirty.add(obj.name)
             continue
         engine._set(stage, "warnings", engine._warnings_text(header))
-        if was_pending and not applied:
+        if was_pending and not applied and not stage.live:
             # The active frame's answer arrived, but the playhead moved on while
             # it was in flight: keep the last good output and let the next pass
             # evaluate the frame the scene is actually on. A frozen stage stays
             # frozen — Pull asked for the answer, freeze still owns the state.
+            # A live stage is not a frame: an unchanged output is still the
+            # solver's current state, so it settles normally.
             engine._set(
                 stage,
                 "state",

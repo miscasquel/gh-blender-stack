@@ -5,8 +5,11 @@
 //
 // Threading: GH objects only on the UI thread. The socket thread decodes frames
 // and stores them in slots; it asks the UI thread to solve through
-// GH_Document.ScheduleSolution(10, ...). Replies are queued and sent by a
-// dedicated sender thread.
+// GH_Document.ScheduleSolution(10, ...). Requests are queued by stage key: at
+// most one scheduled solve owns the queue, expires only the requested stages
+// and expires them with ExpireSolution(false) so the already-scheduled solution
+// is the one recompute. Replies are queued and sent by a dedicated sender
+// thread.
 
 using System;
 using System.Collections.Generic;
@@ -56,11 +59,11 @@ namespace Stageloom
     public class StageSlot
     {
         public volatile string Rid = "";
-        /// <summary>The rid the current solve is answering. Pinned when a solve
-        /// is scheduled, because a request can overwrite `Rid` while the
-        /// solve's inputs have already been read: answering the newer rid would
-        /// label old geometry as the new request's answer. Empty outside a
-        /// solve, when the slot's own `Rid` is the answer.</summary>
+        /// <summary>The rid the current solve is answering. Pinned only for the
+        /// stages a request solve names, because a request can overwrite `Rid`
+        /// while the solve's inputs have already been read: answering the newer
+        /// rid would label old geometry as the new request's answer. Empty
+        /// outside a request solve, when the slot's own `Rid` is the answer.</summary>
         public volatile string SolveRid = "";
         private volatile Dictionary<string, object> _params = new Dictionary<string, object>();
         /// <summary>The request's parameter values. The socket thread publishes
@@ -97,9 +100,9 @@ namespace Stageloom
         public volatile string OutMessage = "";
         public DateTime RequestedAt = DateTime.UtcNow;
         public int ResolveAttempts = 0;
-        /// <summary>True while the solve scheduled for this slot is running.
-        /// RetryStaleSolves must not schedule a second one for a solve that is
-        /// merely slow (the instance-latency double-solve).</summary>
+        /// <summary>True while the request solve that names this slot is
+        /// running. RetryStaleSolves must not queue a second one for a solve
+        /// that is merely slow (the instance-latency double-solve).</summary>
         internal bool SolveInFlight = false;
         internal DateTime SolveStartedAt = DateTime.MinValue;
         /// <summary>True while the request was accepted for a key no component
@@ -108,6 +111,29 @@ namespace Stageloom
         /// that follows either claims the key or the slot is refused as
         /// `unknown_stage` and pruned.</summary>
         internal bool Provisional = false;
+        /// <summary>The rid and output hash of the last `ok` response this
+        /// slot sent. A user-driven solve that recomputes the same answer is
+        /// not re-sent; a request-driven one always is.</summary>
+        internal volatile string LastSentRid = "";
+        internal volatile string LastSentHash = "";
+
+        /// <summary>Whether an answer with this rid and output hash must be
+        /// queued. <paramref name="requestDriven"/> is true when Blender asked
+        /// for this stage: the answer is expected even when unchanged.</summary>
+        internal bool ShouldSend(string rid, string outHash, bool requestDriven)
+        {
+            if (requestDriven) return true;
+            return LastSentRid != (rid ?? "") || LastSentHash != (outHash ?? "");
+        }
+
+        /// <summary>Records an enqueued `ok` answer for the unchanged-answer
+        /// skip. Empty strings clear it: after an error answer the next solve
+        /// must send again even when its output matches the old hash.</summary>
+        internal void MarkSent(string rid, string outHash)
+        {
+            LastSentRid = rid ?? "";
+            LastSentHash = outHash ?? "";
+        }
     }
 
     public static class GhLink
@@ -158,6 +184,15 @@ namespace Stageloom
         // a stage that waits forever. The normal path clears the flag in
         // OnSolutionEnd; this only covers a missed event or a wedged document.
         private const double SolveWatchdogSeconds = 30.0;
+        // Request solves are serialized. PendingRequests holds the latest rid
+        // per stage key; at most one scheduled delegate owns the queue.
+        // _activeRequests is non-null only between that delegate and
+        // SolutionEnd, and names exactly the stages this solve answers.
+        private static readonly Dictionary<string, string> PendingRequests =
+            new Dictionary<string, string>();
+        private static Dictionary<string, string> _activeRequests;  // under Gate
+        private static bool _solveQueued;                            // under Gate
+        private static DateTime _solveQueuedAt = DateTime.MinValue;  // under Gate
         // Published once per connection; read and reserved under Gate.
         private static bool _publishedThisConnection = false;
         private static MiniWsClient _client;  // under Gate; Stop disposes it
@@ -167,9 +202,12 @@ namespace Stageloom
         // ReconcileOwnership can prune everything else. Ownership is
         // reference identity, not Equals: two components of one class must not
         // collapse.
+        private enum ClaimRole { Input, Output, Param }
+
         private class Claim
         {
             public GH_Component Owner;
+            public ClaimRole Role;
             public string StageKey;
             public string ParamKey;
             public string ParamId;
@@ -179,6 +217,9 @@ namespace Stageloom
 
         // The published document state: stages present and parameter declarations.
         private static readonly Dictionary<string, bool> StageEnabled = new Dictionary<string, bool>();
+        // Stage keys with at least one Stage In claim. Derived by
+        // ReconcileOwnership, published as `has_stage_in`.
+        private static readonly HashSet<string> StageHasIn = new HashSet<string>();
         private static readonly Dictionary<string, List<Dictionary<string, object>>> StageParams =
             new Dictionary<string, List<Dictionary<string, object>>>();
 
@@ -220,26 +261,51 @@ namespace Stageloom
                 {
                     Slots.Clear();
                     StageEnabled.Clear();
+                    StageHasIn.Clear();
                     StageParams.Clear();
                     _lastStages.Clear();
+                    _lastStageIns.Clear();
                     _lastSchema.Clear();
                     _publishedThisConnection = false;
                 }
             }
         }
 
-        /// <summary>Publishes one stage key, owned by <paramref name="owner"/>.
+        /// <summary>Publishes one stage key claimed by a Stage In component.
         /// Called from the owner's SolveInstance on the UI thread.</summary>
+        public static void PublishStageIn(GH_Component owner, string key, bool enabled)
+        {
+            PublishStageClaim(owner, key, enabled, ClaimRole.Input);
+        }
+
+        /// <summary>Publishes one stage key claimed by a Stage Out component.
+        /// Called from the owner's SolveInstance on the UI thread.</summary>
+        public static void PublishStageOut(GH_Component owner, string key, bool enabled)
+        {
+            PublishStageClaim(owner, key, enabled, ClaimRole.Output);
+        }
+
+        /// <summary>Compatibility alias for older scripted components. New
+        /// code should use <see cref="PublishStageOut"/>.</summary>
         public static void PublishStage(GH_Component owner, string key, bool enabled)
+        {
+            PublishStageOut(owner, key, enabled);
+        }
+
+        private static void PublishStageClaim(GH_Component owner, string key, bool enabled, ClaimRole role)
         {
             if (string.IsNullOrEmpty(key)) return;
             lock (Gate)
             {
                 Claim claim = ClaimForLocked(owner);
+                claim.Role = role;
                 claim.StageKey = key;
                 claim.ParamKey = null;
                 claim.ParamId = null;
                 StageEnabled[key] = enabled;
+                // A Stage In makes the stage a geometry consumer. Reconcile
+                // prunes the flag when no live Input claim names the key.
+                if (role == ClaimRole.Input) StageHasIn.Add(key);
             }
         }
 
@@ -253,6 +319,7 @@ namespace Stageloom
             {
                 Claim claim = ClaimForLocked(owner);
                 string id = Json.GetString(declaration, "id");
+                claim.Role = ClaimRole.Param;
                 claim.StageKey = null;
                 claim.ParamKey = key;
                 claim.ParamId = id;
@@ -331,6 +398,28 @@ namespace Stageloom
         {
             if (slot == null) return "";
             return string.IsNullOrEmpty(slot.SolveRid) ? slot.Rid : slot.SolveRid;
+        }
+
+        /// <summary>True when this solve may answer <paramref name="key"/>.
+        /// A document/user solve answers every stage that has a request; a
+        /// request solve answers only the stages in its active context.</summary>
+        public static bool ShouldAnswer(string key)
+        {
+            lock (Gate)
+            {
+                return _activeRequests == null || _activeRequests.ContainsKey(key ?? "");
+            }
+        }
+
+        /// <summary>True when the current solve was scheduled for a request
+        /// naming <paramref name="key"/>. Such an answer is always sent: the
+        /// peer is waiting for it even when the output did not change.</summary>
+        public static bool IsRequestDriven(string key)
+        {
+            lock (Gate)
+            {
+                return _activeRequests != null && _activeRequests.ContainsKey(key ?? "");
+            }
         }
 
         /// <summary>The slot for a key, or null. Never creates one: used by paths
@@ -453,6 +542,12 @@ namespace Stageloom
                 Outbox.Clear();
                 OutboxBytes = 0;
                 _lastSchema.Clear();
+                // No request from the old session may be answered by the next
+                // one, and no solve queued for it may suppress the next.
+                PendingRequests.Clear();
+                _activeRequests = null;
+                _solveQueued = false;
+                _solveQueuedAt = DateTime.MinValue;
                 // No solve scheduled for the old session may suppress the next
                 // session's retry.
                 foreach (StageSlot slot in Slots.Values)
@@ -483,6 +578,12 @@ namespace Stageloom
                         // previous connection's signatures describe a peer that
                         // no longer exists.
                         _lastSchema.Clear();
+                        // The unchanged-answer skip is a fact about the socket
+                        // that carried the frame, not about the document. A new
+                        // peer has not received the last answer, so a user-driven
+                        // solve must send it again even when the bytes match.
+                        foreach (StageSlot slot in Slots.Values)
+                            slot.MarkSent("", "");
                     }
                     backoffMs = 500;
                     Note("connected to " + Endpoint);
@@ -715,12 +816,15 @@ namespace Stageloom
                     slot.OutStatus = "unknown_ref";
                     slot.OutMessage = message;
                     slot.StatusEpoch++;
+                    // The refused rid cannot be answered: do not let a solve
+                    // queued for it answer with the geometry we still hold.
+                    PendingRequests.Remove(key);
                 }
                 Enqueue(ErrorFrame("unknown_ref", "no geometry for hash " + (hash ?? "(none)"), key, rid));
                 return;
             }
 
-            RequestSolve();
+            RequestStage(key, rid);
         }
 
         /// <summary>The request's attribute descriptors as a list, tolerating a
@@ -756,12 +860,43 @@ namespace Stageloom
             return raw == null ? new List<object>() : new List<object>(raw);
         }
 
-        private static void RequestSolve()
+        /// <summary>Queues one requested stage for the next request solve.
+        /// Called from the receive thread. A request arriving while a batch is
+        /// queued or in flight joins the next batch instead of scheduling a
+        /// second solve. A retry whose rid the slot has already replaced is
+        /// dropped: queueing it would answer the newer request with inputs it
+        /// never sent.</summary>
+        internal static void RequestStage(string key, string rid)
+        {
+            if (string.IsNullOrEmpty(key)) return;
+            lock (Gate)
+            {
+                StageSlot slot;
+                if (Slots.TryGetValue(key, out slot)
+                    && !string.IsNullOrEmpty(slot.Rid) && slot.Rid != (rid ?? ""))
+                    return;
+                PendingRequests[key] = rid ?? "";
+            }
+            SchedulePendingSolve();
+        }
+
+        /// <summary>Schedules the one request solve that owns the pending map.
+        /// The delegate runs on the GH UI thread; when there is no document or
+        /// component the queue is released and the pending requests stay for
+        /// the retry path.</summary>
+        private static void SchedulePendingSolve()
         {
             GH_Component origin;
-            lock (Gate) { origin = Components.Count > 0 ? Components[0] : null; }
+            lock (Gate)
+            {
+                if (_solveQueued || PendingRequests.Count == 0) return;
+                _solveQueued = true;
+                _solveQueuedAt = DateTime.UtcNow;
+                origin = Components.Count > 0 ? Components[0] : null;
+            }
             if (origin == null)
             {
+                ReleaseQueuedSolve();
                 Note("request received, but no Stageloom component is on the canvas");
                 return;
             }
@@ -770,62 +905,180 @@ namespace Stageloom
             catch (Exception ex) { Note("OnPingDocument failed: " + FirstLine(ex)); }
             if (doc == null)
             {
+                ReleaseQueuedSolve();
                 Note("request received, but no active document; held in the slot");
                 return;
             }
             try
             {
-                doc.ScheduleSolution(10, delegate(GH_Document d)
-                {
-                    // Reconcile when the solve has finished: every component has
-                    // published by then, so an unclaimed provisional slot is
-                    // genuinely foreign. Subscribing here and
-                    // unsubscribing in the handler keeps one subscription per
-                    // scheduled solve.
-                    d.SolutionEnd += OnSolutionEnd;
-                    lock (Gate)
-                    {
-                        // Pin the rid each solve is answering before the inputs
-                        // are read: a request arriving mid-solve overwrites
-                        // slot.Rid, and answering that newer rid would label the
-                        // old-geometry answer as the new request's.
-                        DateTime started = DateTime.UtcNow;
-                        foreach (KeyValuePair<string, StageSlot> pair in Slots)
-                        {
-                            pair.Value.SolveRid = pair.Value.Rid;
-                            // The solve is now in flight. RetryStaleSolves must
-                            // not schedule a second one merely because this one
-                            // takes longer than its 250 ms retry interval.
-                            pair.Value.SolveInFlight = true;
-                            pair.Value.SolveStartedAt = started;
-                        }
-                        foreach (GH_Component c in Components) c.ExpireSolution(true);
-                    }
-                });
+                doc.ScheduleSolution(10, delegate(GH_Document d) { RunRequestSolve(d); });
             }
             catch (Exception ex)
             {
+                ReleaseQueuedSolve();
                 Note("ScheduleSolution failed: " + FirstLine(ex));
             }
+        }
+
+        private static void ReleaseQueuedSolve()
+        {
+            lock (Gate)
+            {
+                _solveQueued = false;
+                _solveQueuedAt = DateTime.MinValue;
+            }
+        }
+
+        /// <summary>The scheduled solution's work. The pending map becomes the
+        /// active context first, so requests arriving during the solve queue
+        /// for the next one. Then only the requested stages are expired: Stage
+        /// In and Params are sources, Stage Out is the explicit sink, so a
+        /// branch that is not connected still answers. recompute=false expires
+        /// those objects and their dependents without asking the document for
+        /// another solution; this scheduled solution is the one that
+        /// recomputes.</summary>
+        private static void RunRequestSolve(GH_Document document)
+        {
+            List<GH_Component> expire = BeginRequestSolve();
+            if (expire == null)
+            {
+                // A duplicate delegate can arrive when a queued callback was
+                // recovered and the original then runs. If no other batch owns
+                // the queue, release it; otherwise the owner will finish it.
+                lock (Gate)
+                {
+                    if (_activeRequests == null)
+                    {
+                        _solveQueued = false;
+                        _solveQueuedAt = DateTime.MinValue;
+                    }
+                }
+                return;
+            }
+            if (document != null) document.SolutionEnd += OnSolutionEnd;
+            foreach (GH_Component component in expire)
+            {
+                try { component.ExpireSolution(false); }
+                catch (Exception ex) { Note("ExpireSolution failed: " + FirstLine(ex)); }
+            }
+        }
+
+        /// <summary>Moves the pending requests into the active solve context.
+        /// Returns the components to expire, or null when another delegate has
+        /// already taken the batch. The caller must not hold Gate while
+        /// expiring: ExpireSolution is a GH API call on the UI thread.</summary>
+        private static List<GH_Component> BeginRequestSolve()
+        {
+            lock (Gate)
+            {
+                if (PendingRequests.Count == 0) return null;
+                var active = new Dictionary<string, string>(PendingRequests);
+                PendingRequests.Clear();
+                _activeRequests = active;
+                // The batch owns the queue from the delegate until
+                // SolutionEnd; a request arriving meanwhile must not schedule a
+                // second solve. Restored here as well because the retry path
+                // may have released the timer just before this delegate ran.
+                _solveQueued = true;
+                // A solve that reached its delegate is alive: the watchdog
+                // measures this batch from here, not from the schedule call.
+                _solveQueuedAt = DateTime.UtcNow;
+                DateTime started = DateTime.UtcNow;
+                foreach (KeyValuePair<string, string> pair in active)
+                {
+                    StageSlot slot;
+                    if (!Slots.TryGetValue(pair.Key, out slot)) continue;
+                    // Pin the answer rid per requested key before its inputs
+                    // are read: a request arriving mid-solve overwrites Rid,
+                    // and answering the newer rid would relabel this answer.
+                    slot.SolveRid = pair.Value;
+                    // Only this batch's stages are in flight. RetryStaleSolves
+                    // must not schedule a second solve for a merely slow one.
+                    slot.SolveInFlight = true;
+                    slot.SolveStartedAt = started;
+                }
+                return StageComponentsLocked(active.Keys);
+            }
+        }
+
+        /// <summary>Every component owning one of <paramref name="keys"/>:
+        /// Stage In and Stage Out with that stage key, Params declaring it.
+        /// Deduplicated by owner reference; the Stage Out is included whether
+        /// or not its input is connected. Under Gate.</summary>
+        private static List<GH_Component> StageComponentsLocked(IEnumerable<string> keys)
+        {
+            var wanted = new HashSet<string>(keys);
+            var owners = new List<GH_Component>();
+            foreach (Claim claim in Claims)
+            {
+                bool owns;
+                if (claim.Role == ClaimRole.Param)
+                    owns = !string.IsNullOrEmpty(claim.ParamKey) && wanted.Contains(claim.ParamKey);
+                else
+                    owns = !string.IsNullOrEmpty(claim.StageKey) && wanted.Contains(claim.StageKey);
+                if (!owns) continue;
+                bool seen = false;
+                foreach (GH_Component owner in owners)
+                    if (object.ReferenceEquals(owner, claim.Owner)) { seen = true; break; }
+                if (!seen) owners.Add(claim.Owner);
+            }
+            return owners;
+        }
+
+        /// <summary>Test hook: starts the scheduled delegate's request
+        /// context without a GH document. Pair with
+        /// <see cref="EndRequestSolveForTest"/>. Not public API.</summary>
+        internal static bool BeginRequestSolveForTest()
+        {
+            return BeginRequestSolve() != null;
+        }
+
+        /// <summary>Test hook: finishes the active request context exactly as
+        /// OnSolutionEnd does, without a document solve.</summary>
+        internal static void EndRequestSolveForTest()
+        {
+            lock (Gate) { FinishRequestSolveLocked(); }
         }
 
         private static void OnSolutionEnd(object sender, GH_SolutionEventArgs e)
         {
             GH_Document document = sender as GH_Document;
             if (document != null) document.SolutionEnd -= OnSolutionEnd;
+            bool scheduleNext;
             lock (Gate)
             {
-                // The solve is over: the pins and the in-flight marker must not
-                // leak into the next (unsolicited) solve, whose answer is the
-                // slot's latest rid.
-                foreach (KeyValuePair<string, StageSlot> pair in Slots)
-                {
-                    pair.Value.SolveRid = "";
-                    pair.Value.SolveInFlight = false;
-                    pair.Value.SolveStartedAt = DateTime.MinValue;
-                }
+                // Reconcile when the solve has finished: every component has
+                // published by then, so an unclaimed provisional slot is
+                // genuinely foreign.
+                scheduleNext = FinishRequestSolveLocked();
             }
             ReconcileOwnership();
+            // Requests that arrived during the solve are the next batch. They
+            // were kept out of this context so their inputs are read fresh.
+            if (scheduleNext) SchedulePendingSolve();
+        }
+
+        /// <summary>Clears the active request context. Only the requested keys
+        /// are unpinned: an unrelated slot was never part of this solve and a
+        /// user-driven answer may own its own state. Returns true when requests
+        /// arrived during the solve and a next batch is waiting. Under Gate.</summary>
+        private static bool FinishRequestSolveLocked()
+        {
+            if (_activeRequests != null)
+            {
+                foreach (string key in _activeRequests.Keys)
+                {
+                    StageSlot slot;
+                    if (!Slots.TryGetValue(key, out slot)) continue;
+                    slot.SolveRid = "";
+                    slot.SolveInFlight = false;
+                    slot.SolveStartedAt = DateTime.MinValue;
+                }
+                _activeRequests = null;
+            }
+            _solveQueued = false;
+            _solveQueuedAt = DateTime.MinValue;
+            return PendingRequests.Count > 0;
         }
 
         /// <summary>Drops every registry entry no live component claims: stage
@@ -839,10 +1092,15 @@ namespace Stageloom
             lock (Gate)
             {
                 var stageKeys = new HashSet<string>();
+                var stageInKeys = new HashSet<string>();
                 var paramIds = new Dictionary<string, HashSet<string>>();
                 foreach (Claim claim in Claims)
                 {
-                    if (!string.IsNullOrEmpty(claim.StageKey)) stageKeys.Add(claim.StageKey);
+                    if (!string.IsNullOrEmpty(claim.StageKey))
+                    {
+                        stageKeys.Add(claim.StageKey);
+                        if (claim.Role == ClaimRole.Input) stageInKeys.Add(claim.StageKey);
+                    }
                     if (!string.IsNullOrEmpty(claim.ParamKey) && claim.ParamId != null)
                     {
                         HashSet<string> ids;
@@ -857,6 +1115,11 @@ namespace Stageloom
 
                 foreach (string key in new List<string>(StageEnabled.Keys))
                     if (!stageKeys.Contains(key)) StageEnabled.Remove(key);
+
+                // has_stage_in is derived from live claims, not published:
+                // a key has a Stage In exactly while one Input claim names it.
+                StageHasIn.Clear();
+                foreach (string key in stageInKeys) StageHasIn.Add(key);
 
                 foreach (string key in new List<string>(StageParams.Keys))
                 {
@@ -946,16 +1209,38 @@ namespace Stageloom
             }
         }
 
-        /// <summary>Re-asks for a solve when a request has been waiting a while.
-        /// ScheduleSolution calls coalesce: rapid edits can leave a request with no
-        /// solve, and without this the stage would sit `waiting` until a Push.</summary>
+        /// <summary>Re-queues a request that has been waiting a while.
+        /// ScheduleSolution calls coalesce, and a request can arrive while the
+        /// document is busy; without this the stage would sit `waiting` until a
+        /// Push. A slot whose solve is younger than the watchdog is not
+        /// retried: it is slow, not lost.</summary>
         internal static void RetryStaleSolves()
         {
-            bool retry = false;
+            var waiting = new List<KeyValuePair<string, string>>();
             bool watchdog = false;
+            bool rescheduled = false;
             DateTime now = DateTime.UtcNow;
             lock (Gate)
             {
+                // ScheduleSolution erases a pending callback when another
+                // solution (a canvas edit) runs first. The request is still
+                // queued: put it back on the timer instead of waiting for the
+                // watchdog. An active solve is not touched here.
+                if (_solveQueued && _activeRequests == null
+                    && (now - _solveQueuedAt).TotalMilliseconds >= 250)
+                {
+                    _solveQueued = false;
+                    _solveQueuedAt = DateTime.MinValue;
+                    rescheduled = true;
+                }
+                // A batch that never reported SolutionEnd still owns the
+                // queue. Release it once the watchdog covers it; otherwise the
+                // requests queued below could never be scheduled.
+                if (_solveQueued && (now - _solveQueuedAt).TotalSeconds >= SolveWatchdogSeconds)
+                {
+                    FinishRequestSolveLocked();
+                    watchdog = true;
+                }
                 foreach (var kv in Slots)
                 {
                     StageSlot slot = kv.Value;
@@ -970,22 +1255,32 @@ namespace Stageloom
                         // The solve never reached SolutionEnd. Let the retry
                         // path take over rather than leaving the stage silent.
                         slot.SolveInFlight = false;
+                        slot.SolveStartedAt = DateTime.MinValue;
+                        slot.SolveRid = "";
                         watchdog = true;
                     }
                     if ((now - slot.RequestedAt).TotalMilliseconds < 250) continue;
                     if (slot.ResolveAttempts >= 8) continue;
                     slot.ResolveAttempts++;
                     slot.RequestedAt = now;
-                    retry = true;
+                    waiting.Add(new KeyValuePair<string, string>(kv.Key, slot.Rid));
                 }
             }
             if (watchdog)
                 Note("a solve did not report SolutionEnd; retrying the waiting stage");
-            if (retry)
+            if (waiting.Count == 0)
             {
-                Interlocked.Increment(ref _retryRequests);
-                RequestSolve();
+                // A recovered timer still owns any requests that arrived while
+                // it was pending, even when every stage was already answered
+                // (a user solve replaced ours).
+                if (rescheduled || watchdog) SchedulePendingSolve();
+                return;
             }
+            // One retry batch, one diagnostic: RequestStage below coalesces the
+            // keys into the next solve.
+            Interlocked.Increment(ref _retryRequests);
+            foreach (KeyValuePair<string, string> pair in waiting)
+                RequestStage(pair.Key, pair.Value);
         }
 
         private static void SendFrames(MiniWsClient client)
@@ -1080,10 +1375,12 @@ namespace Stageloom
             MarkPublished();
             if (!_connected) return;
             Dictionary<string, bool> stages;
+            HashSet<string> stageIns;
             Dictionary<string, List<Dictionary<string, object>>> paramsByStage;
             lock (Gate)
             {
                 stages = new Dictionary<string, bool>(StageEnabled);
+                stageIns = new HashSet<string>(StageHasIn);
                 paramsByStage = new Dictionary<string, List<Dictionary<string, object>>>();
                 foreach (var kv in StageParams) paramsByStage[kv.Key] = new List<Dictionary<string, object>>(kv.Value);
             }
@@ -1093,7 +1390,7 @@ namespace Stageloom
             bool needHello;
             lock (Gate)
             {
-                needHello = !_publishedThisConnection || StagesChangedLocked(stages);
+                needHello = !_publishedThisConnection || StagesChangedLocked(stages, stageIns);
                 if (needHello) _publishedThisConnection = true;
             }
 
@@ -1105,6 +1402,10 @@ namespace Stageloom
                     var entry = new Dictionary<string, object>();
                     entry["key"] = kv.Key;
                     entry["enabled"] = kv.Value;
+                    // Optional additive field (protocol §4.1): true when a
+                    // Stage In claims the key. A stage with only a Stage Out is
+                    // a generator and ignores inbound geometry.
+                    entry["has_stage_in"] = stageIns.Contains(kv.Key);
                     list.Add(entry);
                 }
                 var hello = new Dictionary<string, object>();
@@ -1116,7 +1417,11 @@ namespace Stageloom
                 hello["doc_units"] = UnitsName();
                 hello["stages"] = list;
                 Enqueue(FrameCodec.Encode(hello, null));
-                lock (Gate) { _lastStages = new Dictionary<string, bool>(stages); }
+                lock (Gate)
+                {
+                    _lastStages = new Dictionary<string, bool>(stages);
+                    _lastStageIns = new HashSet<string>(stageIns);
+                }
             }
 
             lock (Gate)
@@ -1153,18 +1458,23 @@ namespace Stageloom
         }
 
         private static Dictionary<string, bool> _lastStages = new Dictionary<string, bool>();
+        // The has_stage_in half of the last hello. A Stage In appearing or
+        // disappearing must republish hello even when the key set is unchanged.
+        private static HashSet<string> _lastStageIns = new HashSet<string>();
         // Last schema declaration published per stage, by canonical JSON. Under
         // Gate; cleared on a new connection.
         private static readonly Dictionary<string, string> _lastSchema =
             new Dictionary<string, string>();
 
-        private static bool StagesChangedLocked(Dictionary<string, bool> stages)
+        private static bool StagesChangedLocked(Dictionary<string, bool> stages,
+                                                HashSet<string> stageIns)
         {
             if (_lastStages.Count != stages.Count) return true;
             foreach (var kv in stages)
             {
                 bool other;
                 if (!_lastStages.TryGetValue(kv.Key, out other) || other != kv.Value) return true;
+                if (_lastStageIns.Contains(kv.Key) != stageIns.Contains(kv.Key)) return true;
             }
             return false;
         }

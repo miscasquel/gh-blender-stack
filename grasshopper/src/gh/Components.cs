@@ -103,7 +103,7 @@ namespace Stageloom
                     da.SetDataList("Attributes", new List<string>());
                 return;
             }
-            GhLink.PublishStage(this, key, enabled);
+            GhLink.PublishStageIn(this, key, enabled);
 
             StageSlot slot = GhLink.Slot(key);
             // Read the frame once: a request arriving during this solve must
@@ -264,18 +264,27 @@ namespace Stageloom
                 da.SetData("Status", "No key");
                 return;
             }
-            GhLink.PublishStage(this, key, enabled);
+            GhLink.PublishStageOut(this, key, enabled);
 
             StageSlot slot = GhLink.Slot(key);
             bool sent = false;
             string outHash = "";
             string status = slot.OutStatus;
-            // A document-wide solve can run this component for another
-            // stage's request. If this stage has never been asked for
-            // anything, answering with rid="" would create an empty ok
-            // response that Blender could cache or apply to a stage with no
-            // current request.
             string answerRid = GhLink.AnswerRid(slot);
+
+            // A request solve expires only the requested stages, but a source
+            // shared with another Stage Out can still run this component
+            // through its branch. Do not convert, answer, or write this
+            // solve's status onto another stage's slot.
+            if (!GhLink.ShouldAnswer(key))
+            {
+                da.SetData("Sent", false);
+                da.SetData("Output hash", "");
+                da.SetData("Status", status);
+                Message = GhLink.Connected ? status : "disconnected";
+                GhLink.Publish(OnPingDocument());
+                return;
+            }
 
             if (enabled && GhLink.Connected && !string.IsNullOrEmpty(answerRid))
             {
@@ -335,20 +344,27 @@ namespace Stageloom
                         sections,
                         attributes.Count > 0 ? Json.WriteCanonical(attributes) : null,
                         definitions.Count > 0 ? Json.WriteCanonical(definitions) : null);
-                    var header = new Dictionary<string, object>();
-                    header["type"] = "response";
-                    header["stage"] = key;
-                    header["rid"] = answerRid;
-                    header["out_hash"] = outHash;
-                    header["status"] = "ok";
-                    header["warnings"] = warningList;
-                    header["counts"] = counts;
-                    if (attributes.Count > 0)
-                        header["attributes"] = attributes;
-                    if (definitions.Count > 0)
-                        header["definitions"] = definitions;
-                    GhLink.Enqueue(FrameCodec.Encode(header, sections));
-                    sent = true;
+                    // A request-driven stage always answers: Blender is waiting
+                    // for this rid. A user-driven solve whose answer is
+                    // byte-identical to the last send is quiet.
+                    if (slot.ShouldSend(answerRid, outHash, GhLink.IsRequestDriven(key)))
+                    {
+                        var header = new Dictionary<string, object>();
+                        header["type"] = "response";
+                        header["stage"] = key;
+                        header["rid"] = answerRid;
+                        header["out_hash"] = outHash;
+                        header["status"] = "ok";
+                        header["warnings"] = warningList;
+                        header["counts"] = counts;
+                        if (attributes.Count > 0)
+                            header["attributes"] = attributes;
+                        if (definitions.Count > 0)
+                            header["definitions"] = definitions;
+                        GhLink.Enqueue(FrameCodec.Encode(header, sections));
+                        slot.MarkSent(answerRid, outHash);
+                        sent = true;
+                    }
                     status = "ok";
                     GhLink.SetOutStatus(slot, "ok", "");
                     foreach (WireWarning warning in warnings)
@@ -386,6 +402,10 @@ namespace Stageloom
                         errorHeader["warnings"] = new List<object>();
                         errorHeader["counts"] = errorCounts;
                         GhLink.SetOutStatus(slot, "error", ex.Message);
+                        // The error answer supersedes the last good one: the
+                        // next user solve must be free to send the recovered
+                        // output even when it matches the old hash.
+                        slot.MarkSent("", "");
                         GhLink.Enqueue(FrameCodec.Encode(errorHeader, null));
                     }
                     AddRuntimeMessage(GH_RuntimeMessageLevel.Error, "Stage Out: " + ex.Message);
@@ -393,10 +413,9 @@ namespace Stageloom
             }
             else if (enabled && GhLink.Connected)
             {
-                // The document solved for another stage: this stage has no
-                // request to answer yet. Stay idle instead of sending an
-                // unsolicited empty ok frame or looking like a stalled request
-                // to RetryStaleSolves.
+                // A user-driven solve with no request to answer yet. Stay idle
+                // instead of sending an unsolicited empty ok frame or looking
+                // like a stalled request to RetryStaleSolves.
                 status = "idle";
                 GhLink.SetOutStatus(slot, "idle", "");
             }

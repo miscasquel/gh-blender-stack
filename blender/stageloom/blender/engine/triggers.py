@@ -137,6 +137,11 @@ def _after_history_step():
         for stage in record.stages:
             sent = engine._sent.get((record.stack_id, stage.key))
             engine._set(stage, "geom_hash", sent[1] if sent is not None else "")
+            if stage.live:
+                # The solver state is not part of Blender's undo history: a
+                # restored live stage must ask for the current state instead of
+                # comparing the restored frame with the solver's post-undo path.
+                engine._set(stage, "live_frame", engine.stack_mod.LIVE_FRAME_UNSET)
     engine._prefix_memo.clear()
     # A restored step may name a frame the cache already holds, with or without
     # a client: the prefix read is what finds that rid.

@@ -443,3 +443,22 @@ def _mark_object_dirty(obj):
     engine._force_read.add(obj.name)
     engine._mark_hot()
 
+
+def _reset_stage_cache(obj, stage):
+    """Drop one stage's frames after its Live mode changed.
+
+    The frame cache assumes a deterministic stage: a frame is a function of its
+    request id. A live stage is a solver history, not a function. Switching
+    either way makes the stored frames describe the wrong semantics, so retire
+    the generation (hot and disk) instead of letting a later pass replay them.
+    """
+    record = engine.stack_mod.stack_of(obj)
+    if record is None or stage is None:
+        return
+    if not record.stack_id:
+        record.stack_id = engine.stack_mod.ensure_stack(obj).stack_id
+    engine._bump_generation(obj, record, stage, "live mode changed")
+    engine._set(stage, "live_frame", engine.stack_mod.LIVE_FRAME_UNSET)
+    engine._dirty.add(obj.name)
+    engine._mark_hot()
+

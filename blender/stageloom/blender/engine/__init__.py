@@ -518,6 +518,8 @@ def register():
         stats[counter] = 0
     # A UI-driven parameter write (the choice dropdown) must reach the engine.
     stack_mod.set_param_changed_hook(_mark_object_dirty)
+    # Live is a cache-semantics switch, not just another parameter.
+    stack_mod.set_stage_cache_reset_hook(_reset_stage_cache)
     # Lifecycle handlers are persistent and always present: Blender clears
     # non-persistent handlers and timers on every file load, and a dormant
     # engine still has to notice a loaded file that contains stages. The
@@ -551,6 +553,7 @@ def unregister():
     if not _registered:
         return
     stack_mod.set_param_changed_hook(None)
+    stack_mod.set_stage_cache_reset_hook(None)
     _deactivate()
     if bpy.app.timers.is_registered(_settle):
         bpy.app.timers.unregister(_settle)
@@ -633,6 +636,7 @@ from .lifecycle import (
     _mark_dirty_all,
     _mark_object_dirty,
     _ordered_stages,
+    _reset_stage_cache,
     _process_object,
     _rebuild_index,
     _reindex_object,
@@ -779,6 +783,7 @@ __all__ = [
     "_mark_dirty_all",
     "_mark_object_dirty",
     "_ordered_stages",
+    "_reset_stage_cache",
     "_process_object",
     "_rebuild_index",
     "_reindex_object",

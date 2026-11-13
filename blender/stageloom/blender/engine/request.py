@@ -20,6 +20,40 @@ def _rest_state(stage):
     return engine.stack_mod.STATE_FROZEN if stage.frozen else engine.stack_mod.STATE_OK
 
 
+_EMPTY_GEOMETRY_HASH = None
+
+
+def _empty_geometry_hash():
+    """The geometry hash of a generator stage: the hash of no sections.
+
+    Cached because every generator request names it, and it can never change:
+    a generator has no Stage In, so the object's geometry must not move its
+    request id.
+    """
+    global _EMPTY_GEOMETRY_HASH
+    if _EMPTY_GEOMETRY_HASH is None:
+        _EMPTY_GEOMETRY_HASH = engine.hashing.geometry_hash({})
+    return _EMPTY_GEOMETRY_HASH
+
+
+def _live_send_due(stage, rid, verify_key, retry_note):
+    """Whether a live stage has a reason to ask again.
+
+    A live stage is stateful: its output advances once per solve, so a pass that
+    only saw the object dirtied (another stage's apply) must not advance it.
+    The triggers are its own request moving, the playhead moving, an armed
+    verification (reconnect/load/unknown_ref) or the hard-timeout retry. The
+    object-level `_force_read` is deliberately not one of them: on a shared
+    object a parameter edit on stage B must not advance live stage A.
+    """
+    return (
+        rid != stage.rid
+        or engine.bpy.context.scene.frame_float != stage.live_frame
+        or verify_key in engine._verify
+        or bool(retry_note)
+    )
+
+
 def _no_send(record, stage, reason, rid=None):
     """Explain why a pass that saw the scene move sent nothing.
 
@@ -135,7 +169,10 @@ def _process_stage(obj, record, stage, force=None):
     # from the frame cache when it is warm.
 
     verify_key = (record.stack_id, stage.key)
-    cached = engine._cached_response(record, stage, rid)
+    live = bool(stage.live)
+    # A live stage is stateful: a cached frame would replay a solver step the
+    # current state no longer holds, so it never consults the frame cache.
+    cached = None if live else engine._cached_response(record, stage, rid)
     sent = engine._sent.get(verify_key)
     # Whether the client has been told *this* request. A frame in the cache is
     # Blender's answer, not the client's state: cancelling a transform (or an
@@ -233,6 +270,15 @@ def _process_stage(obj, record, stage, force=None):
             engine.stats["timeouts"] += 1
             retry_note = "timed out after %.0f s; requesting the geometry again" % engine._timeout()
 
+    # A live stage advances its solver once per delivered request. A pass that
+    # was only dirtied by another stage's apply sees the same request id and the
+    # same frame, and must stay idle: sending there would step the solver twice
+    # per frame. Verification (reconnect/load/unknown_ref) and the timeout retry
+    # are the explicit permits that bypass this gate.
+    if live and not _live_send_due(stage, rid, verify_key, retry_note):
+        engine._no_send(record, stage, "live unchanged")
+        return "idle"
+
     # Use the session truth, not the saved stage record: undo/redo restores
     # `stage.geom_hash` from its step, while the client keeps the geometry it
     # was last sent. No session entry means no client has been told anything
@@ -293,6 +339,11 @@ def _process_stage(obj, record, stage, force=None):
     engine._state_since[(record.stack_id, stage.key)] = now
     engine._set(stage, "rid", rid)
     engine._set(stage, "geom_hash", geom_hash)
+    if live:
+        # A delivered request is the solver step: the same state does not ask
+        # again until the playhead or the stage's own inputs move on. An
+        # undelivered send returns above and leaves the frame for the retry.
+        engine._set(stage, "live_frame", engine.bpy.context.scene.frame_float)
     engine._set(stage, "state", engine.stack_mod.STATE_WAITING)
     engine._set(stage, "error", retry_note)
     return "waiting"
@@ -306,7 +357,14 @@ def _prefix_sections(obj, record, stage):
     prefix the depsgraph evaluates. Surfaces stay on the meshing path (no
     geometry set). The memo is keyed by the depsgraph generation, so a hit is
     only possible while nothing has been tagged since the read.
+
+    A generator stage has no Stage In: it consumes only Params, so the read is
+    skipped entirely and the request names the empty geometry hash. Base
+    geometry edits therefore cannot move its request id.
     """
+    if engine.stack_mod.is_generator(stage):
+        return [], _empty_geometry_hash(), [], []
+
     if obj.type == "SURFACE":
         subd = bool(record.subd)
         sections, attributes = engine.geometry_io.object_to_sections(obj, as_subd=subd)
@@ -436,12 +494,21 @@ def _build_prefix_batch(obj, record, stage=None):
     rebuild_one = stage is not None and engine._prefix_batch_built
     stages = []
     for candidate in record.stages:
+        # A generator has no Stage In: there is no prefix to evaluate, and its
+        # request never reads one. Cloning it would only cost a depsgraph update.
+        if engine.stack_mod.is_generator(candidate):
+            continue
         if rebuild_one and candidate.key != stage.key:
             continue
         modifier = engine.nodes.modifier_of(obj, candidate)
         if modifier is None and not candidate.modifier_uid:
             modifier = engine.nodes.modifier_by_name(obj, candidate)
         stages.append((candidate, engine._modifier_index(obj, modifier)))
+    if not stages:
+        # Every stage in this rebuild is a generator: the pass has nothing to
+        # evaluate, and the empty batch stays empty.
+        engine._prefix_batch_built = True
+        return
     results = engine._clone_prefixes(obj, stages, bool(record.subd))
     pointer = obj.as_pointer()
     engine._prefix_batch.update(

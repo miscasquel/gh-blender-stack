@@ -188,6 +188,9 @@ class CachedPrefixBatchTests(unittest.TestCase):
             bpy.ops.stageloom.add_stage(label=label)
         cls.record = stack_mod.stack_of(cls.obj)
         cls.stages = list(cls.record.stages)
+        # The batch replay under test is deterministic; live stages skip the cache.
+        for stage in cls.stages:
+            stage.live = False
         cls.position = {stage.key: index for index, stage in enumerate(cls.stages)}
 
     @classmethod

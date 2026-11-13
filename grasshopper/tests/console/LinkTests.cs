@@ -3,13 +3,15 @@
 //     StageloomLinkTests.exe
 //
 // Drives the product GhLink over a scripted fake WebSocket server: hello and
-// schema content, slot bookkeeping, the unknown_ref refusal, the error path,
-// a same-rid re-send, and the frames the receive path answers for a version
-// mismatch and an oversized frame. GhLink only needs Grasshopper types
-// for its solve trigger; a component that is not on a GH_Document makes
-// OnPingDocument() return null, so no GH solve machinery (and no Rhino) is
-// exercised here. The connection, decoder, slots, notes and outbox are all the
-// product's.
+// schema content (including has_stage_in), slot bookkeeping, the unknown_ref
+// refusal, the error path, a same-rid re-send, the queued request context and
+// retry path, and the frames the receive path answers for a version mismatch
+// and an oversized frame. GhLink only needs Grasshopper types for its solve
+// trigger; a component that is not on a GH_Document makes OnPingDocument()
+// return null, so no GH solve machinery (and no Rhino) is exercised here. The
+// pending-to-active handoff is driven through the internal test hooks, which
+// run the product context code without faking a document solve. The
+// connection, decoder, slots, notes and outbox are all the product's.
 //
 // Exit code 0 all pass, 1 any failure.
 
@@ -64,18 +66,58 @@ namespace Stageloom.Tests.Console
                 // 3. components register and publish; hello follows.
                 var stage = new TestComponent();
                 GhLink.Register(stage);
+                // PublishStage is the compatibility alias; it claims a Stage
+                // Out, so this key has no Stage In yet.
                 GhLink.PublishStage(stage, "k1", true);
                 GhLink.Publish(null);
                 hello = ReadUntil(server, "hello");
                 var stages = (List<object>)Json.Get(hello, "stages");
-                bool claimed = false;
-                foreach (object entry in stages)
-                {
-                    var row = (Dictionary<string, object>)entry;
-                    if ((string)Json.Get(row, "key") == "k1" && (bool)Json.Get(row, "enabled"))
-                        claimed = true;
-                }
-                Check("hello carries the published stage", claimed, "stages=" + Json.WriteCanonical(stages));
+                Dictionary<string, object> stageRow = FindStage(hello, "k1");
+                Check("hello carries the published stage",
+                    stageRow != null && (bool)Json.Get(stageRow, "enabled"),
+                    "stages=" + Json.WriteCanonical(stages));
+                object hasStageIn = stageRow == null ? null : Json.Get(stageRow, "has_stage_in");
+                Check("a stage out alone has no stage in",
+                    hasStageIn is bool && !(bool)hasStageIn,
+                    "row=" + (stageRow == null ? "(none)" : Json.WriteCanonical(stageRow)));
+
+                // A Stage In on the same key flips has_stage_in. The stage set
+                // does not change, so this is the republish-on-presence case.
+                var stageIn = new TestComponent();
+                GhLink.Register(stageIn);
+                GhLink.PublishStageIn(stageIn, "k1", true);
+                GhLink.Publish(null);
+                hello = ReadUntil(server, "hello");
+                stageRow = FindStage(hello, "k1");
+                hasStageIn = stageRow == null ? null : Json.Get(stageRow, "has_stage_in");
+                Check("a stage in republishes hello",
+                    hasStageIn is bool && (bool)hasStageIn,
+                    "row=" + (stageRow == null ? "(none)" : Json.WriteCanonical(stageRow)));
+
+                // Removing it returns the key to generator status.
+                GhLink.Unregister(stageIn);
+                GhLink.Publish(null);
+                hello = ReadUntil(server, "hello");
+                stageRow = FindStage(hello, "k1");
+                hasStageIn = stageRow == null ? null : Json.Get(stageRow, "has_stage_in");
+                Check("removing a stage in republishes hello",
+                    hasStageIn is bool && !(bool)hasStageIn,
+                    "row=" + (stageRow == null ? "(none)" : Json.WriteCanonical(stageRow)));
+
+                // A different key with a Stage In reports true in the same
+                // hello that still reports k1 false.
+                var stageInOnly = new TestComponent();
+                GhLink.Register(stageInOnly);
+                GhLink.PublishStageIn(stageInOnly, "k1-in", true);
+                GhLink.Publish(null);
+                hello = ReadUntil(server, "hello");
+                Dictionary<string, object> inRow = FindStage(hello, "k1-in");
+                stageRow = FindStage(hello, "k1");
+                Check("hello reports has_stage_in per key",
+                    inRow != null && (bool)Json.Get(inRow, "has_stage_in")
+                    && stageRow != null && !(bool)Json.Get(stageRow, "has_stage_in"),
+                    "stages=" + Json.WriteCanonical(Json.Get(hello, "stages")));
+                GhLink.Unregister(stageInOnly);
 
                 // 4. a parameter declaration becomes a schema frame.
                 var declaration = new Dictionary<string, object>();
@@ -207,6 +249,12 @@ namespace Stageloom.Tests.Console
                 Check("answer rid falls back to the slot", GhLink.AnswerRid(pin) == "sha256:latest", "");
                 pin.SolveRid = "sha256:solving";
                 Check("answer rid uses the pinned rid", GhLink.AnswerRid(pin) == "sha256:solving", "");
+                // No request context is active here: this is the user-driven
+                // solve path, which still answers any stage with a current rid.
+                pin.SolveRid = "";
+                Check("a user solve answers any stage", GhLink.ShouldAnswer("k1"), "");
+                Check("a user solve keeps the slot rid",
+                    GhLink.AnswerRid(pin) == "sha256:latest", "rid=" + GhLink.AnswerRid(pin));
 
                 // 8. a standalone error from Blender lands on the stage, and a
                 //    later request with a new rid recovers it.
@@ -304,6 +352,7 @@ namespace Stageloom.Tests.Console
 
             RunSenderLifecycle();
             RunSolveRetry();
+            RunRequestContext();
             RunSlotStatus();
             RunDefinitionContentGuard();
 
@@ -524,6 +573,102 @@ namespace Stageloom.Tests.Console
             Check("a slot without a request is not retried",
                 idle.ResolveAttempts == 0 && GhLink.RetryRequests == retries,
                 "attempts=" + idle.ResolveAttempts + " retries=" + GhLink.RetryRequests);
+
+            // The retry path queues the waiting (key, rid) pair; the next
+            // scheduled delegate consumes it as the active request context.
+            Check("a retried request is queued",
+                GhLink.BeginRequestSolveForTest(), "no request context started");
+            Check("the retried rid is pinned",
+                slot.SolveRid == "sha256:retry-test", "solve rid=" + slot.SolveRid);
+            Check("the retried stage is request-driven",
+                GhLink.ShouldAnswer("retry-test"), "");
+            GhLink.EndRequestSolveForTest();
+        }
+
+        /// <summary>The scheduled delegate's pending-to-active handoff without
+        /// a GH document: requests coalesce, only named keys are pinned and
+        /// answer, and finishing the batch clears only those keys.</summary>
+        private static void RunRequestContext()
+        {
+            System.Console.WriteLine("link request context");
+            StageSlot first = GhLink.Slot("context-a");
+            first.Rid = "sha256:context-a1";
+            first.Status = "waiting";
+            StageSlot second = GhLink.Slot("context-b");
+            second.Rid = "sha256:context-b1";
+            second.Status = "waiting";
+            StageSlot bystander = GhLink.Slot("context-idle");
+            bystander.Rid = "sha256:context-idle";
+            bystander.Status = "waiting";
+
+            // Two requests for one key collapse to the latest rid before the
+            // delegate starts; the other key joins the same batch. Each
+            // RequestStage follows the slot update the receive path makes.
+            GhLink.RequestStage("context-a", "sha256:context-a1");
+            first.Rid = "sha256:context-a2";
+            GhLink.RequestStage("context-a", "sha256:context-a2");
+            GhLink.RequestStage("context-b", "sha256:context-b1");
+
+            // A retry captured before the slot moved on must not overwrite the
+            // newer rid in the pending map.
+            first.Rid = "sha256:context-a3";
+            GhLink.RequestStage("context-a", "sha256:context-a2");
+            first.Rid = "sha256:context-a2";
+
+            Check("a request batch starts", GhLink.BeginRequestSolveForTest(), "");
+            Check("a second delegate finds no batch",
+                !GhLink.BeginRequestSolveForTest(), "");
+            Check("the requested key is pinned", first.SolveRid == "sha256:context-a2",
+                "solve rid=" + first.SolveRid);
+            Check("the other requested key is pinned", second.SolveRid == "sha256:context-b1",
+                "solve rid=" + second.SolveRid);
+            Check("an unrelated key is not pinned",
+                string.IsNullOrEmpty(bystander.SolveRid), "solve rid=" + bystander.SolveRid);
+            Check("only a requested key answers",
+                GhLink.ShouldAnswer("context-a") && GhLink.ShouldAnswer("context-b")
+                && !GhLink.ShouldAnswer("context-idle"), "");
+            Check("only a requested key is request-driven",
+                GhLink.IsRequestDriven("context-a") && !GhLink.IsRequestDriven("context-idle"), "");
+            Check("the answer rid is the pinned request",
+                GhLink.AnswerRid(first) == "sha256:context-a2", "rid=" + GhLink.AnswerRid(first));
+
+            // A user-driven Stage Out whose answer is unchanged is quiet; a
+            // request-driven one always answers.
+            first.MarkSent("sha256:context-a2", "sha256:out");
+            Check("an unchanged user answer is not re-sent",
+                !first.ShouldSend("sha256:context-a2", "sha256:out", false), "");
+            Check("a changed user answer is sent",
+                first.ShouldSend("sha256:context-a2", "sha256:out2", false), "");
+            Check("a request-driven answer is always sent",
+                first.ShouldSend("sha256:context-a2", "sha256:out", true), "");
+
+            bystander.SolveInFlight = true;
+            bystander.SolveStartedAt = DateTime.UtcNow;
+            GhLink.EndRequestSolveForTest();
+            Check("finishing clears the first requested key",
+                string.IsNullOrEmpty(first.SolveRid) && !first.SolveInFlight, "");
+            Check("finishing clears the second requested key",
+                string.IsNullOrEmpty(second.SolveRid) && !second.SolveInFlight, "");
+            Check("finishing leaves an unrelated key alone",
+                bystander.SolveInFlight, "");
+            Check("after the batch a user solve answers any stage",
+                GhLink.ShouldAnswer("context-idle")
+                && GhLink.AnswerRid(bystander) == "sha256:context-idle",
+                "rid=" + GhLink.AnswerRid(bystander));
+            bystander.SolveInFlight = false;
+            bystander.SolveStartedAt = DateTime.MinValue;
+        }
+
+        private static Dictionary<string, object> FindStage(Dictionary<string, object> hello, string key)
+        {
+            var stages = Json.Get(hello, "stages") as List<object>;
+            if (stages == null) return null;
+            foreach (object entry in stages)
+            {
+                var row = entry as Dictionary<string, object>;
+                if (row != null && (string)Json.Get(row, "key") == key) return row;
+            }
+            return null;
         }
 
         private static Dictionary<string, object> Header(string type, string stage, string rid)

@@ -249,7 +249,11 @@ class FrameCacheTestCase(unittest.TestCase):
         obj = bpy.context.object
         obj.name = label
         bpy.ops.stageloom.add_stage(label=label)
-        return obj, obj.gh_stack.stages[0]
+        stage = obj.gh_stack.stages[0]
+        # These tests pin the deterministic frame cache and its replay path; the
+        # stage default (live) deliberately bypasses both.
+        stage.live = False
+        return obj, stage
 
     @classmethod
     def report_path(cls, name):
@@ -559,6 +563,7 @@ class EvictionTests(FrameCacheTestCase):
         bpy.ops.stageloom.add_stage(label="Evict")
         cls.obj = obj
         cls.stage = obj.gh_stack.stages[0]
+        cls.stage.live = False  # this class pins the deterministic frame cache
         keyframe_scale(cls.obj, cls.stage, [1.0, 2.0, 3.0, 4.0])
         cls.report = cls.report_path("evict")
         cls.fake = start_fake(cls.stage.key, cls.report)
@@ -1014,6 +1019,7 @@ class TimeDrivenPrefixTests(FrameCacheTestCase):
         cls.obj.name = "Clock"
         bpy.ops.stageloom.add_stage(label="Clock")
         cls.stage = cls.obj.gh_stack.stages[0]
+        cls.stage.live = False  # this class pins the deterministic frame cache
         # A constant parameter: the prefix is the only thing that can differ
         # between frames, so no keyframes are involved anywhere.
         cls.obj[stack_mod.param_prop_name(cls.stage.key, SCALE)] = 1.0

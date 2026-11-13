@@ -145,6 +145,7 @@ class PlaybackSyncTests(unittest.TestCase):
         cls.obj.name = "Playback"
         bpy.ops.stageloom.add_stage(label="Playback")
         cls.stage = cls.obj.gh_stack.stages[0]
+        cls.stage.live = False  # playback replays deterministic frames from the cache
         cls.record = cls.obj.gh_stack
         keyframe_scale(cls.obj, cls.stage, [1.0, 2.0, 3.0])
 

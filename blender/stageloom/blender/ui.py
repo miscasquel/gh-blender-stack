@@ -20,6 +20,21 @@ _ICON_NAMES = {
 }
 _STAGE_ICON = "IMPORT_EXPORT" if "IMPORT_EXPORT" in _ICON_NAMES else "ARROW_LEFTRIGHT"
 _BAKE_ICON = "FILE_CACHE" if "FILE_CACHE" in _ICON_NAMES else "RECORD_ON"
+# A generator stage has no Stage In. "NODES" is not an icon in every Blender
+# build (5.3 dropped it), so use the geometry-nodes glyph with a floor.
+_GENERATOR_ICON = "GEOMETRY_NODES" if "GEOMETRY_NODES" in _ICON_NAMES else "NODE"
+
+# One glyph per stage state; kept as data so the headless icon check can cover
+# every one of them without drawing the panel.
+_STATE_ICONS = {
+    stack_mod.STATE_OK: "CHECKMARK",
+    stack_mod.STATE_WAITING: "TIME",
+    stack_mod.STATE_ERROR: "ERROR",
+    stack_mod.STATE_DISCONNECTED: "UNLINKED",
+    stack_mod.STATE_DISABLED: "CHECKBOX_DEHLT",
+    stack_mod.STATE_FROZEN: "FREEZE",
+    stack_mod.STATE_UNBOUND: "GHOST_ENABLED",
+}
 
 
 class STAGELOOM_PT_panel(bpy.types.Panel):
@@ -71,7 +86,23 @@ class STAGELOOM_PT_panel(bpy.types.Panel):
             row.prop(record, "subd", text="Base is a SubD cage")
 
         for index, stage in enumerate(engine._ordered_stages(obj, record)):
-            self.draw_stage(layout, obj, record, stage, index)
+            try:
+                self.draw_stage(layout, obj, record, stage, index)
+            except Exception as exc:
+                # One malformed stage must not hide the panels after it: a
+                # single bad icon used to abort the whole N-panel draw. Show
+                # the failure in place and keep going; the details still go
+                # to the console for a bug report.
+                prefs.log(
+                    "[stageloom] stage %s panel draw failed: %r" % (stage.key, exc),
+                    flush=True,
+                )
+                box = layout.box()
+                box.label(
+                    text="%s: panel failed to draw" % (stage.label or stage.key),
+                    icon="ERROR",
+                )
+                box.label(text=str(exc), icon="INFO")
 
     def draw_stage(self, layout, obj, record, stage, index):
         box = layout.box()
@@ -90,6 +121,11 @@ class STAGELOOM_PT_panel(bpy.types.Panel):
             row.operator("stageloom.clear_bake", text="Clear Bake", icon=_BAKE_ICON).index = index
         else:
             row.operator("stageloom.bake", text="Bake stage", icon=_BAKE_ICON).index = index
+
+        row = box.row()
+        row.prop(stage, "live", text="Live")
+        if stack_mod.is_generator(stage):
+            row.label(text="Generator (no Stage In)", icon=_GENERATOR_ICON)
 
         row = box.row()
         row.label(text="Key")
@@ -262,15 +298,7 @@ def _timing_text(timings):
 
 
 def _state_icon(stage):
-    return {
-        stack_mod.STATE_OK: "CHECKMARK",
-        stack_mod.STATE_WAITING: "TIME",
-        stack_mod.STATE_ERROR: "ERROR",
-        stack_mod.STATE_DISCONNECTED: "UNLINKED",
-        stack_mod.STATE_DISABLED: "CHECKBOX_DEHLT",
-        stack_mod.STATE_FROZEN: "FREEZE",
-        stack_mod.STATE_UNBOUND: "GHOST_ENABLED",
-    }.get(stage.state, "DOT")
+    return _STATE_ICONS.get(stage.state, "DOT")
 
 
 def _port():

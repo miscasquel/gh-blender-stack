@@ -58,6 +58,9 @@ class StageControlTests(unittest.TestCase):
 
         bpy.ops.stageloom.add_stage(label="Controls")
         cls.stage = cls.obj.gh_stack.stages[0]
+        # The control tests pin deterministic sends and replays; live has its
+        # own suite.
+        cls.stage.live = False
         cls.param_name = "gh/%s/%s" % (cls.stage.key, "00000000-0000-4000-8000-0000000000aa")
         cls.choice_name = "gh/%s/%s" % (cls.stage.key, "00000000-0000-4000-8000-0000000000cc")
 
