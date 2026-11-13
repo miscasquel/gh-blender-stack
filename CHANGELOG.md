@@ -10,6 +10,26 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] — 2026-11-13
+
+Baking a stage whose output contains nested instances no longer crashes
+Blender. The native bake owns the node graph while it steps frames, and the
+add-on no longer rebuilds or inspects that graph from the per-frame stage pass.
+
+**Upgrade:** rebuild and redeploy `Stageloom.gha`, then restart Rhino. The
+Blender add-on upgrades in place; existing `.blend` stages, parameters and
+animation are preserved. No protocol change.
+
+### Fixed
+
+- **Baking nested instances no longer crashes Blender 5.3.** A stage output
+  with a nested Instance-on-Points chain — an instance whose definition itself
+  places instances — could segfault the native bake job because the add-on
+  inspected and rebuilt the node graph from `frame_change_post` on every frame.
+  The group is now built once before the bake and held read-only for the job.
+  Instance rendering and playback are unchanged. Rebake after a Grasshopper
+  definition-topology change; a bake keeps the graph it started with.
+
 ## [0.5.1] — 2026-11-13
 
 Grasshopper now recomputes only the stage Blender asked for. A definition can

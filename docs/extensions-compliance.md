@@ -1,6 +1,6 @@
 # Stageloom compliance record
 
-**Status:** v0.5.1 is the compliance baseline; **1.0 planning** continues in
+**Status:** v0.5.2 is the compliance baseline; **1.0 planning** continues in
 [`plan.md`](plan.md). The extensions.blender.org upload is deferred. Release
 history is in [`../CHANGELOG.md`](../CHANGELOG.md) and the GitHub releases.
 
@@ -23,7 +23,7 @@ history is in [`../CHANGELOG.md`](../CHANGELOG.md) and the GitHub releases.
 | S9 data root | **Closed** | `bpy.utils.extension_path_user(...)`; dev fallback; override retained |
 | Packaging truthfulness | **Closed** | build/install/test fail on validator/build/install error; version-specific zip |
 | Listing assets/support | **Deferred** | icon in `docs/listing/`; screenshots pending for a later upload; support URL is listing metadata |
-| Platform upload | **Deferred** | v0.5.1 ships on GitHub first; the 1.0 plan owns the platform decision |
+| Platform upload | **Deferred** | v0.5.2 ships on GitHub first; the 1.0 plan owns the platform decision |
 | Windows-native acceptance | **Open for 1.0** | tracked in [`plan.md`](plan.md) §5B |
 | CI release gate | **Open for 1.0** | tracked in [`plan.md`](plan.md) §5F |
 
@@ -31,16 +31,16 @@ history is in [`../CHANGELOG.md`](../CHANGELOG.md) and the GitHub releases.
 in the listing and README. S9 is the extension-user data directory, not the old
 Linux path.
 
-**0.5.1 release verification (2026-11-13).**
+**0.5.2 release verification (2026-11-13).**
 
 ```text
 scripts/test-core        57 tests pass
-scripts/test-blender     259 tests pass (including the offline gate)
+scripts/test-blender     260 tests pass (including the offline gate)
 scripts/test-gha         fixtures + attribute store + link + component status + stage guard pass
 scripts/test-extension   installed extension round trip: pass
 uvx ruff check ...       All checks passed
 blender --command extension validate blender/stageloom
-blender --command extension validate dist/stageloom-0.5.1.zip
+blender --command extension validate dist/stageloom-0.5.2.zip
 ```
 
 The 1.0 workstreams, platform matrix and release gates are in

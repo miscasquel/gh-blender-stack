@@ -1,6 +1,6 @@
 # Stageloom — 1.0 plan
 
-**Status:** planning, 2026-11-13. Baseline: **v0.5.1**.
+**Status:** planning, 2026-11-13. Baseline: **v0.5.2**.
 **Target:** Blender 5.3. **Compatibility floor:** Blender 5.2.
 **Goal:** ship a stable 1.0 for the declared v1 scope: Grasshopper definitions as
 stackable Blender modifiers, with geometry and parameters flowing both ways,
@@ -35,16 +35,17 @@ of the gaps below.
 
 ---
 
-## 2. Baseline: v0.5.1
+## 2. Baseline: v0.5.2
 
 **Shipped:** meshes, curves, point clouds, SubD cages, Breps (meshed, warned),
 attributes, Grasshopper blocks/instances, parameters with keyframes and drivers,
 mid-stack `GH → GN → GH` chains, stage lifecycle (Pull, Freeze, Bake stage,
 Clear Bake, Key all, Purge orphans), Play Every Frame sync, Frame Drop caching,
 a bounded disk frame cache, multi-stage duplication handling, selective stage
-solves, generator and live stages, and one-way Stage In-only feeds.
+solves, generator and live stages, one-way Stage In-only feeds, and nested
+instance baking.
 
-**Verified at release:** 57 core tests, 259 Blender headless tests plus the
+**Verified at release:** 57 core tests, 260 Blender headless tests plus the
 offline gate, the C# fixture/attribute/link/component/stage suites, and the
 installed extension round trip.
 
@@ -92,7 +93,7 @@ floor.
 
 ### In 1.0
 
-- Everything already shipped in v0.5.1.
+- Everything already shipped in v0.5.2.
 - The hardening work in §5.
 - Migrations and compatibility guarantees in §5C.
 - Platform and distribution work in §5B and §5F.
