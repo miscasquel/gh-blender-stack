@@ -35,7 +35,7 @@ def fixture_ping():
 def fixture_hello():
     header = {
         "type": "hello",
-        # Historical fixture sample; the live hello uses Stageloom 0.5.0.
+        # Historical fixture sample; the live hello uses Stageloom 0.5.1.
         "client": "GhStack 0.1.0",
         "doc": "Panels.gh",
         "doc_units": "Millimeters",

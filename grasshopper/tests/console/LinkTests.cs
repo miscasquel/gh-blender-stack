@@ -45,7 +45,7 @@ namespace Stageloom.Tests.Console
                 // 1. hello on connect: no components, so no stages; the client
                 //    string is the one release version bump to keep in sync.
                 Dictionary<string, object> hello = ReadUntil(server, "hello");
-                Check("hello client", (string)Json.Get(hello, "client") == "Stageloom 0.5.0",
+                Check("hello client", (string)Json.Get(hello, "client") == "Stageloom 0.5.1",
                     "client=" + Json.Get(hello, "client"));
                 Check("hello doc", (string)Json.Get(hello, "doc") == "(unsaved)",
                     "doc=" + Json.Get(hello, "doc"));

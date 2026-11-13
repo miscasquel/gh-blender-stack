@@ -1,6 +1,6 @@
 # Stageloom — 1.0 plan
 
-**Status:** planning, 2026-11-12. Baseline: **v0.5.0**.
+**Status:** planning, 2026-11-13. Baseline: **v0.5.1**.
 **Target:** Blender 5.3. **Compatibility floor:** Blender 5.2.
 **Goal:** ship a stable 1.0 for the declared v1 scope: Grasshopper definitions as
 stackable Blender modifiers, with geometry and parameters flowing both ways,
@@ -35,17 +35,18 @@ of the gaps below.
 
 ---
 
-## 2. Baseline: v0.5.0
+## 2. Baseline: v0.5.1
 
 **Shipped:** meshes, curves, point clouds, SubD cages, Breps (meshed, warned),
 attributes, Grasshopper blocks/instances, parameters with keyframes and drivers,
 mid-stack `GH → GN → GH` chains, stage lifecycle (Pull, Freeze, Bake stage,
 Clear Bake, Key all, Purge orphans), Play Every Frame sync, Frame Drop caching,
-a bounded disk frame cache, and multi-stage duplication handling.
+a bounded disk frame cache, multi-stage duplication handling, selective stage
+solves, generator and live stages, and one-way Stage In-only feeds.
 
-**Verified at release:** 57 core tests, 238 Blender headless tests plus the
-offline gate, the C# fixture/attribute/link/component/stage suites, the installed
-extension round trip, and the live Rhino playback/bake acceptance.
+**Verified at release:** 57 core tests, 259 Blender headless tests plus the
+offline gate, the C# fixture/attribute/link/component/stage suites, and the
+installed extension round trip.
 
 **Known gaps carried forward:**
 
@@ -91,7 +92,7 @@ floor.
 
 ### In 1.0
 
-- Everything already shipped in v0.5.0.
+- Everything already shipped in v0.5.1.
 - The hardening work in §5.
 - Migrations and compatibility guarantees in §5C.
 - Platform and distribution work in §5B and §5F.
@@ -273,7 +274,7 @@ after 0.8 except fixes required by a gate.
 ## 7. 1.0 acceptance gates
 
 The old A1–A10 remain the functional core. Add the release gates that the
-0.5.0 line did not cover.
+0.5.x line did not cover.
 
 - **A1 Keyframes.** Keyframed parameters drive the GH output per frame; warm
   frames replay from the cache.

@@ -10,6 +10,55 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] — 2026-11-13
+
+Grasshopper now recomputes only the stage Blender asked for. A definition can
+have a generator stage with no Stage In, a stateful output can run live outside
+the frame cache, and a Stage In with no Stage Out no longer blocks playback.
+The N-panel also draws correctly on Blender 5.3 with several stages.
+
+**Upgrade:** rebuild and redeploy `Stageloom.gha`, then restart Rhino. The
+Blender add-on upgrades in place; existing `.blend` stages, parameters and
+animation are preserved. Protocol v2 gains two optional `hello` fields
+(`has_stage_in`, `has_stage_out`); older peers keep their saved behavior. A
+stage saved before this release keeps its Live checkbox value; Live is the
+default for new stages.
+
+### Added
+
+- **Selective stage solves.** A request queues one stage key; Grasshopper
+  expires only that stage's Stage In, Stage Out and Params, and only that Stage
+  Out answers. Unrelated branches keep their cached outputs, one request
+  produces one answer, and a stateful solver advances once per frame instead of
+  once per solve pass.
+- **Generator stages.** `hello` publishes `has_stage_in`; a definition with no
+  Stage In is driven only by Params, and its request id no longer depends on
+  the object's geometry.
+- **Live stages.** A stateful output (a solver step) can bypass the frame
+  cache: it sends only when its own inputs or the playhead move, and a
+  same-request output change no longer resets its generation. Live is on for
+  new stages and has a hover description; untick it for a deterministic stage
+  that should replay from the cache.
+- **One-way stages.** `hello` publishes `has_stage_out`; a Stage In with no
+  Stage Out still receives geometry, but Blender does not wait for, apply or
+  cache a response, and timeline playback no longer blocks on it.
+- **N-panel.** The generator label uses Blender 5.3's icon set, and one failing
+  stage draws an error row instead of hiding every stage after it.
+
+### Changed
+
+- **Blender 5.3 is the 1.0 target**, with Blender 5.2 remaining the
+  compatibility floor.
+
+### Fixed
+
+- **Playback no longer stalls on a definition without a Stage Out.** A
+  Stage In-only stage is treated as a one-way feed instead of waiting for an
+  answer that cannot come.
+- **A stale answer cannot reset a stage.** It no longer clears a newer pending
+  request or bumps the generation; for a live stage it is dropped rather than
+  cached.
+
 ## [0.5.0] — 2026-11-12
 
 Play Every Frame now waits for each stage, a stage can bake natively for
