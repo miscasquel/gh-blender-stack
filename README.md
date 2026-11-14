@@ -30,6 +30,9 @@ Blender                                          Rhino / Grasshopper (wine)
   evaluate as a prefix, and a waiting stage pauses the ones after it. Duplicating
   a stack object gives the copy its own stage key, cache, node group and
   helpers, with its parameter values and animation, so the two cannot cross-talk.
+  Two stages never share a key: a file or undo that restores such a state shows
+  the conflict on every affected stage and is resolved per stage from the panel
+  with **Resolve duplicate key**.
 - **Geometry kinds.** Meshes (n-gons and vertex colours), curves (poly, Bezier,
   NURBS, circles, ellipses, arcs), point clouds, SubD control cages with
   edge-crease tags, and Breps/surfaces (meshed on the way out, lossy). Stage In

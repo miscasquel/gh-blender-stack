@@ -128,7 +128,11 @@ def _after_history_step():
     Marking every stack dirty also gives the step a pass even when its
     depsgraph delivery is missed; the memo is cleared for the same reason — an
     undo restores datablocks the memo may name.
+
+    The step cannot prove which of two claimants was the original: a restored
+    shared key is a strict conflict, never a name-based split.
     """
+    engine._stage_owners.clear()
     engine._rebuild_index()
     for obj in list(engine._stack_objects):
         record = engine.stack_mod.stack_of(obj)
@@ -197,14 +201,17 @@ def _on_load(scene=None):
     engine._ticking = False
     engine._playback_sync = False
     engine._bake_sync = False
-    for obj in engine.bpy.data.objects:
+    # A load cannot prove which of two objects sharing a key was the original.
+    # Build the index without trusting the previous session's owners: a shared
+    # key becomes a visible conflict rather than a name-based silent split.
+    engine._stage_owners.clear()
+    engine._stage_conflicts.clear()
+    engine._stage_claims.clear()
+    engine._rebuild_index()
+    for obj in list(engine._stack_objects):
         record = engine.stack_mod.stack_of(obj)
         if record is None:
             continue
-        # A file saved after a duplication but before a pass still carries the
-        # copy's shared key: split it before the repair loop rebuilds anything
-        # under that key.
-        engine._split_duplicate_stages(obj, record)
         for stage in record.stages:
             if stage.state == engine.stack_mod.STATE_WAITING:
                 engine._set(stage, "state", engine.stack_mod.STATE_IDLE)
@@ -218,10 +225,14 @@ def _on_load(scene=None):
             if stage.geom_hash:
                 # We cannot know that GH kept the geometry: ask again in full.
                 stage.geom_hash = ""
-            # A saved file may meet a document that changed in between: the
-            # cache must not answer without asking once (see _verify).
             if not record.stack_id:
                 record.stack_id = engine.stack_mod.ensure_stack(obj).stack_id
+            if engine._stage_key_conflicted(stage.key):
+                # The conflict state names the claimants and blocks both the
+                # request and the answer path; do not repair or verify it.
+                continue
+            # A saved file may meet a document that changed in between: the
+            # cache must not answer without asking once (see _verify).
             engine._verify.add((record.stack_id, stage.key))
             # Plumbing lost with the file (helpers or the node group deleted
             # before the save) is rebuilt here and the stage marked unbound

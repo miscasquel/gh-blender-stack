@@ -49,13 +49,14 @@ def new_stage_key(label="stage"):
 
 
 def duplicate_stage_key(stage_key, object_name):
-    """A stable key for a stage split out of a duplicated object.
+    """A deterministic key for a stage split out of a runtime duplicate.
 
     Duplication copies the stage key verbatim, so both objects claim the same
-    node group and Grasshopper wiring. The split gives one object a new key.
-    Deriving it from the source key and the object name keeps the split stable
-    across undo/redo and save/reload: redoing the duplication cannot strand a
-    key the user has just wired into Grasshopper.
+    node group and Grasshopper wiring. A runtime split gives the new claimant a
+    fresh key; deriving it from the source key and the object name keeps that
+    split stable for the same duplication. Ownership is never inferred from
+    this name: a load or undo that cannot prove the original is a strict
+    conflict, and the user's resolution uses a random key instead.
     """
     slug = stage_key.rsplit("-", 1)[0] if "-" in stage_key else stage_key
     slug = (slug or "stage")[:12].strip("-") or "stage"

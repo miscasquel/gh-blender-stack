@@ -1,5 +1,5 @@
-"""Operators: Add Stage, Push, Pull, Freeze, Key all, Purge orphans, server
-control.
+"""Operators: Add Stage, Push, Pull, Resolve duplicate key, Freeze, Key all,
+Purge orphans, server control.
 
 Stage removal and enable/disable are native: deleting the stage's modifier
 removes the stage, and the modifier's own visibility toggles are the switch. The add-on never writes those toggles after creation.
@@ -94,6 +94,30 @@ class STAGELOOM_OT_pull(bpy.types.Operator):
         # this is also how a frozen stage is refreshed once, on demand.
         engine.request_again(obj, stage)
         self.report({"INFO"}, "Pulling %s" % stage.key)
+        return {"FINISHED"}
+
+
+class STAGELOOM_OT_resolve_duplicate_key(bpy.types.Operator):
+    bl_idname = "stageloom.resolve_duplicate_key"
+    bl_label = "Resolve duplicate key"
+    bl_description = (
+        "Give this stage a new key, leaving the other claimant on the old one. "
+        "Parameters and their animation move with the stage"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    index: IntProperty(name="Index", default=-1)
+
+    def execute(self, context):
+        obj, record, stage = _stage(context, self.index)
+        if stage is None:
+            return {"CANCELLED"}
+        old_key = stage.key
+        new_key = engine.resolve_duplicate_key(obj, record, stage)
+        if new_key is None:
+            self.report({"WARNING"}, "this stage key is not in conflict")
+            return {"CANCELLED"}
+        self.report({"INFO"}, "Resolved %s as %s" % (old_key, new_key))
         return {"FINISHED"}
 
 
@@ -466,6 +490,7 @@ def register():
         STAGELOOM_OT_add_stage,
         STAGELOOM_OT_push,
         STAGELOOM_OT_pull,
+        STAGELOOM_OT_resolve_duplicate_key,
         STAGELOOM_OT_freeze,
         STAGELOOM_OT_bake,
         STAGELOOM_OT_clear_bake,
@@ -486,6 +511,7 @@ def unregister():
         STAGELOOM_OT_bake,
         STAGELOOM_OT_clear_bake,
         STAGELOOM_OT_freeze,
+        STAGELOOM_OT_resolve_duplicate_key,
         STAGELOOM_OT_pull,
         STAGELOOM_OT_push,
         STAGELOOM_OT_add_stage,

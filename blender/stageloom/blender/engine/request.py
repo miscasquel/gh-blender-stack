@@ -80,6 +80,17 @@ def _process_stage(obj, record, stage, force=None):
     ordinary edit cannot, and returns before the expensive clone. When omitted,
     the object's mark in `_force_read` decides; the playback gate passes True.
     """
+    if engine._stage_key_conflicted(stage.key):
+        # A shared key has no proven owner: sending would make one claimant
+        # speak for both. The pass leaves it visibly errored until resolved.
+        engine._no_send(record, stage, "duplicate stage key")
+        return "idle"
+    owner = engine._stage_owners.get(stage.key)
+    if owner is not None and owner is not obj:
+        # A runtime duplicate that has not been split yet must not send under
+        # its old key; its own pass splits it first.
+        engine._no_send(record, stage, "stage key owned by %s" % owner.name)
+        return "idle"
     if force is None:
         force = obj.name in engine._force_read
     modifier = engine.nodes.modifier_of(obj, stage)

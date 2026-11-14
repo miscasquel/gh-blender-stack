@@ -23,6 +23,8 @@ _BAKE_ICON = "FILE_CACHE" if "FILE_CACHE" in _ICON_NAMES else "RECORD_ON"
 # A generator stage has no Stage In. "NODES" is not an icon in every Blender
 # build (5.3 dropped it), so use the geometry-nodes glyph with a floor.
 _GENERATOR_ICON = "GEOMETRY_NODES" if "GEOMETRY_NODES" in _ICON_NAMES else "NODE"
+# The resolve action gets its own glyph when this build has it.
+_DUPLICATE_ICON = "DUPLICATE" if "DUPLICATE" in _ICON_NAMES else "ERROR"
 
 # One glyph per stage state; kept as data so the headless icon check can cover
 # every one of them without drawing the panel.
@@ -136,6 +138,13 @@ class STAGELOOM_PT_panel(bpy.types.Panel):
         row = box.row()
         row.label(text="Key")
         row.label(text=stage.key)
+        if engine._stage_key_conflicted(stage.key):
+            row = box.row()
+            row.operator(
+                "stageloom.resolve_duplicate_key",
+                text="Resolve duplicate key",
+                icon=_DUPLICATE_ICON,
+            ).index = index
         if stage.error:
             box.label(text=stage.error, icon="ERROR")
         for line in (stage.warnings or "").split("\n"):

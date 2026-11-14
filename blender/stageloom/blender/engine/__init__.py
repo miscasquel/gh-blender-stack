@@ -113,6 +113,17 @@ _force_read = set()
 # The handlers run on the main thread, so direct object references are safe;
 # a rename follows the reference, unlike a name-keyed index.
 _stage_index = {}  # stage_key -> [object]
+# Real claim counts, including two stages with the same key on one object:
+# `_stage_index` names each object once, which is not enough to decide whether
+# a key is ambiguous. Kept alongside the index, not as a second registry.
+_stage_claims = {}  # stage_key -> number of live stage records claiming it
+# Owned by exactly one object per key when proven. This is the pointer snapshot
+# a later pass uses: a new claimant of an owned key is a duplication, a key with
+# no proven owner is ambiguous. Object names take no part in ownership.
+_stage_owners = {}  # stage_key -> object that owned the key in the last index
+# Keys whose ownership is ambiguous. Their stages are errored and nothing is
+# sent or applied until the user resolves one from the panel.
+_stage_conflicts = set()
 _stack_objects = []  # every object with at least one stage
 _index_dirty = True
 _index_object_count = -1
@@ -486,6 +497,9 @@ def register():
     if _registered:
         return
     _stage_index.clear()
+    _stage_claims.clear()
+    _stage_owners.clear()
+    _stage_conflicts.clear()
     del _stack_objects[:]
     _index_dirty = True
     # Everything the last registration learned belongs to the session that just
@@ -636,7 +650,6 @@ from .request import (
 from .lifecycle import (
     _all_stack_objects,
     _drop_removed_stages,
-    _duplicate_owner,
     _ensure_index,
     _forget_prefix,
     _mark_dirty_all,
@@ -649,10 +662,12 @@ from .lifecycle import (
     _repair_plumbing,
     _split_duplicate_stages,
     _split_stage,
+    _stage_key_conflicted,
     _stage_views,
     freeze,
     push,
     request_again,
+    resolve_duplicate_key,
     start_server,
     unfreeze,
 )
@@ -783,7 +798,6 @@ __all__ = [
     "_timeout",
     "_all_stack_objects",
     "_drop_removed_stages",
-    "_duplicate_owner",
     "_ensure_index",
     "_forget_prefix",
     "_mark_dirty_all",
@@ -796,10 +810,12 @@ __all__ = [
     "_repair_plumbing",
     "_split_duplicate_stages",
     "_split_stage",
+    "_stage_key_conflicted",
     "_stage_views",
     "freeze",
     "push",
     "request_again",
+    "resolve_duplicate_key",
     "start_server",
     "unfreeze",
     "_activate",

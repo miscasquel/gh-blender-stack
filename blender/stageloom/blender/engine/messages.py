@@ -136,6 +136,10 @@ def _on_client_hello(header):
             if record.connected_doc != doc:
                 record.connected_doc = doc
         for stage in record.stages:
+            if stage.key in engine._stage_conflicts:
+                # An ambiguous key has no owner to adopt a claim for, and no
+                # request may be verified or sent until the user resolves it.
+                continue
             entry = claims.get(stage.key)
             if entry is not None:
                 _apply_input_mode(stage, entry)
@@ -194,6 +198,12 @@ def _apply_output_presence(stage, entry):
 
 def _handle_schema(header):
     key = header.get("stage")
+    if engine._stage_key_conflicted(key):
+        engine.prefs.log(
+            "[stageloom] schema for duplicate stage key %r ignored" % (key,),
+            flush=True,
+        )
+        return
     params = header.get("params") or []
     matched = False
     for obj, record, stage in engine._stage_views(key):
@@ -246,6 +256,12 @@ def _handle_response(header, sections, raw=None):
     status = header.get("status")
     if not isinstance(key, str) or not key:
         engine.prefs.log("[stageloom] response without a stage key ignored", flush=True)
+        return
+    if engine._stage_key_conflicted(key):
+        engine.prefs.log(
+            "[stageloom] response for duplicate stage key %r ignored" % (key,),
+            flush=True,
+        )
         return
     if not isinstance(rid, str) or not rid:
         # A Stage Out solve that was triggered by another stage has no request
@@ -427,6 +443,13 @@ def _handle_error(header):
     """
     code = header.get("code")
     message = header.get("message") or code or "protocol error"
+    if engine._stage_key_conflicted(header.get("stage")):
+        engine.prefs.log(
+            "[stageloom] error for duplicate stage key %r ignored"
+            % (header.get("stage"),),
+            flush=True,
+        )
+        return
     if code == "unknown_ref":
         matched = False
         for obj, record, stage in engine._stage_views(header.get("stage")):

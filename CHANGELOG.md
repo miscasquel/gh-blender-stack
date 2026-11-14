@@ -10,6 +10,30 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Stage keys are now strictly unique. Duplicating a stack still gives the copy its
+own key automatically, but a saved or undone shared key is reported as a
+conflict instead of being rewritten by name.
+
+### Added
+
+- **Resolve duplicate key.** A stage whose key is claimed by another object or
+  stage shows the conflict in the N-panel and offers **Resolve duplicate key**.
+  The action gives that stage a fresh random key, moves its parameters and
+  animation, and leaves the other claimant on the old key.
+
+### Changed
+
+- **Runtime duplicates keep the original's identity.** Shift+D, Alt+D,
+  copy/paste, scripted copies and append/link split the new claimant from the
+  key its original already owned, even when either object was renamed. If the
+  original is gone, the remaining claimant keeps the key.
+- **A loaded or undone shared key is a conflict, not a silent split.** Both
+  stages show an error naming the key and the claimants, and no request or
+  answer is processed for that key until one stage is resolved. Same-object
+  duplicate keys are detected too.
+
 ## [0.6.0] — 2026-11-14
 
 Grasshopper's endpoint is now configurable and saved for the whole
