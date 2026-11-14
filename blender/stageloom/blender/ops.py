@@ -294,36 +294,108 @@ class STAGELOOM_OT_bake(bpy.types.Operator):
         return {"FINISHED"}
 
 
+# Clear Bake deletes data Blender's undo does not restore. Keep the warning in
+# one place so the panel and the operator tooltip cannot drift from the action.
+CLEAR_BAKE_WARNING = "Bake data cannot be undone"
+CLEAR_BAKE_CONFIRM_TITLE = "Clear Bake"
+CLEAR_BAKE_CONFIRM_MESSAGE = (
+    "Delete this stage's native bake data? It cannot be recovered; the stage "
+    "will resume live Grasshopper output"
+)
+CLEAR_BAKE_CONFIRM_TEXT = "Delete Bake"
+
+
+def _native_bake_entry(modifier):
+    """The modifier's native bake record for its Bake node, if it has one.
+
+    Blender creates this entry for every Bake node as soon as the depsgraph sees
+    the group, so finding one is not proof that it holds baked data. The
+    add-on's own bakes are recorded on ``stage.baked``; this entry is also what
+    the delete operator addresses.
+    """
+    group = modifier.node_group if modifier is not None else None
+    if group is None:
+        return None
+    bake_node = next(
+        (node for node in group.nodes if node.bl_idname == "GeometryNodeBake"),
+        None,
+    )
+    if bake_node is None:
+        return None
+    return next((item for item in modifier.bakes if item.node == bake_node), None)
+
+
+def _native_bake_has_data(entry):
+    """Whether a native bake entry points at data the add-on did not write.
+
+    A disk bake records its directory on the entry; a packed bake exposes no
+    "is baked" flag. The add-on's own packed bakes are covered by
+    ``stage.baked``, which the Bake operator sets.
+    """
+    if entry is None:
+        return False
+    if getattr(entry, "directory", ""):
+        return True
+    return len(getattr(entry, "data_blocks", ())) > 0
+
+
+def clear_bake_needs_confirmation(stage, entry):
+    """Whether Clear Bake has bake data to delete, and so must confirm first.
+
+    A bare native entry is metadata, not data: every stage with a Bake node has
+    one, baked or not. Prompting on its presence alone would put a dialog in
+    front of every no-op clear, which is why the add-on's ``baked`` flag (and a
+    native disk bake) decide instead.
+    """
+    if stage is not None and stage.baked:
+        return True
+    return _native_bake_has_data(entry)
+
+
 class STAGELOOM_OT_clear_bake(bpy.types.Operator):
     bl_idname = "stageloom.clear_bake"
     bl_label = "Clear Bake"
     bl_description = (
         "Delete this stage's native Bake data and resume live Grasshopper. "
-        "The Bake node then passes the live stage output through again"
+        "The Bake node then passes the live stage output through again. "
+        + CLEAR_BAKE_WARNING + "."
     )
     bl_options = {"REGISTER"}
 
     index: IntProperty(name="Index", default=-1)
+
+    def invoke(self, context, event):
+        obj, _record, stage = _stage(context, self.index)
+        entry = None
+        if stage is not None and not stage.baked:
+            modifier = nodes.modifier_of(obj, stage)
+            if modifier is not None:
+                # The depsgraph creates the modifier's bake entry when it sees
+                # the Bake node; force that before deciding.
+                context.view_layer.update()
+                entry = _native_bake_entry(modifier)
+        if not clear_bake_needs_confirmation(stage, entry):
+            # No bake to lose: a no-op clear must not ask a question.
+            return self.execute(context)
+        return context.window_manager.invoke_confirm(
+            self,
+            event,
+            title=CLEAR_BAKE_CONFIRM_TITLE,
+            message=CLEAR_BAKE_CONFIRM_MESSAGE,
+            confirm_text=CLEAR_BAKE_CONFIRM_TEXT,
+        )
 
     def execute(self, context):
         obj, _record, stage = _stage(context, self.index)
         if stage is None:
             return {"CANCELLED"}
         modifier = nodes.modifier_of(obj, stage)
-        group = modifier.node_group if modifier is not None else None
-        bake_node = None
         entry = None
-        if group is not None:
-            bake_node = next(
-                (node for node in group.nodes if node.bl_idname == "GeometryNodeBake"),
-                None,
-            )
-            if bake_node is not None:
-                context.view_layer.update()
-                entry = next(
-                    (item for item in modifier.bakes if item.node == bake_node),
-                    None,
-                )
+        if modifier is not None:
+            # The depsgraph creates the modifier's bake entry when it sees the
+            # Bake node; force that before looking it up.
+            context.view_layer.update()
+            entry = _native_bake_entry(modifier)
         if modifier is not None and entry is not None:
             context.view_layer.objects.active = obj
             obj.select_set(True)

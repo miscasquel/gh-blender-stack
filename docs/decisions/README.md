@@ -15,3 +15,4 @@ Short records of decisions that shape the project. Format: context, decision, co
 | [0009](0009-playback-sync-and-native-stage-bake.md) | Play Every Frame sync; opt-in native stage bake | Accepted |
 | [0010](0010-selective-stage-solves-and-live-generators.md) | Selective stage solves; generator and live stages | Proposed; live acceptance pending |
 | [0011](0011-plugin-endpoint-configuration.md) | Persisted loopback endpoint for the Grasshopper plugin | Accepted |
+| [0012](0012-bake-data-irreversible.md) | Bake data is irreversible; Clear Bake confirms | Accepted |

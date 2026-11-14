@@ -26,6 +26,10 @@ Notable changes to this project, following
 
 ### Fixed
 
+- **Clear Bake asks before deleting a bake.** Deleting a stage's native Geometry
+  Nodes bake is not covered by Blender's undo, so the panel now says the action
+  is permanent and asks for confirmation when a bake exists. Clearing a stage
+  with no bake stays a no-op without a prompt.
 - **Block instances place correctly in non-metre Rhino documents.** Instance
   definition geometry was converted between document units and the wire's
   metres, but the placement translation was not: in a millimetre document a

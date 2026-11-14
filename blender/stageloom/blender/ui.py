@@ -119,6 +119,7 @@ class STAGELOOM_PT_panel(bpy.types.Panel):
         row = box.row()
         if stage.baked:
             row.operator("stageloom.clear_bake", text="Clear Bake", icon=_BAKE_ICON).index = index
+            box.label(text=ops.CLEAR_BAKE_WARNING, icon="ERROR")
         else:
             row.operator("stageloom.bake", text="Bake stage", icon=_BAKE_ICON).index = index
 

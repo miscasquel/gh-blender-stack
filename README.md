@@ -95,6 +95,9 @@ Blender                                          Rhino / Grasshopper (wine)
   is obviously a lossy conversion. That won't be solved without a proper surface
   kernel inside blender (surface psycho may bridge this gap)
 - The frame cache's disk format is per machine and has no persistent promise.
+- **Clear Bake cannot be undone.** It deletes the stage's native Geometry Nodes
+  bake immediately; recreating it means baking the scene range again. The panel
+  asks for confirmation before deleting a bake.
 - There is no separate Preview operator: a stage's output is its modifier, so
   the viewport and render toggles are the preview switch. Freeze, Pull, Bake
   stage, Clear Bake, Key all and Purge orphans are in the Stageloom panel.

@@ -205,6 +205,20 @@ class PanelDrawTests(unittest.TestCase):
         )
         self.assertIn(self.prefix.key, layout.labels)
 
+    def test_03_clear_bake_draws_the_irreversible_warning(self):
+        from stageloom.blender import ops
+
+        self.generator.baked = True
+        try:
+            layout = self._draw()
+        finally:
+            self.generator.baked = False
+        self.assertIn(
+            ops.CLEAR_BAKE_WARNING,
+            layout.labels,
+            "the panel does not warn that Clear Bake is permanent",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
