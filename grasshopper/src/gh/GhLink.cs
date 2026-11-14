@@ -448,13 +448,21 @@ namespace Stageloom
         }
 
         /// <summary>True when this solve may answer <paramref name="key"/>.
-        /// A document/user solve answers every stage that has a request; a
-        /// request solve answers only the stages in its active context.</summary>
+        /// A document/user solve answers every stage that has a request. A
+        /// request solve answers its active stages, and also a dependent Stage
+        /// Out that a shared source ran through its branch: a changed output
+        /// there is the only way Blender learns about it, since no request for
+        /// that key changed its inputs. The answer uses the slot's own rid and
+        /// is gated by <see cref="StageSlot.ShouldSend"/> like a user-driven
+        /// solve. A stage with a newer request queued is excluded: this solve
+        /// would read the old inputs and label them with that newer rid.</summary>
         public static bool ShouldAnswer(string key)
         {
             lock (Gate)
             {
-                return _activeRequests == null || _activeRequests.ContainsKey(key ?? "");
+                string name = key ?? "";
+                if (_activeRequests == null || _activeRequests.ContainsKey(name)) return true;
+                return !PendingRequests.ContainsKey(name);
             }
         }
 

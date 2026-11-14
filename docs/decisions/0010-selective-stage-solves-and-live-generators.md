@@ -76,19 +76,24 @@ that recomputes. This is the native GH model and removes the second solve pass.
 Components belonging to other stage keys are not expired and keep their cached
 outputs.
 
-### 4. Only requested stages answer request-driven solves
+### 4. Request-driven solves answer the requested stages and changed dependents
 
 The active solve context exposes `ShouldAnswer(key)`:
 
-- **request-driven solve:** true only for keys in the active context;
+- **request-driven solve:** true for keys in the active context, and for a
+  dependent Stage Out that a shared source ran through its branch when it has no
+  newer request queued;
 - **document/user solve:** true for any stage with a non-empty rid, preserving
   the existing GH-side push when the user edits the canvas.
 
-`AnswerRid`/`SolveRid` are pinned only for the requested keys. A Stage Out that
-is not requested skips conversion and sending; it does not clear another
-stage's status. A user-driven answer that is byte-identical to the last send for
-the same rid and output hash is skipped (the slot remembers `LastSentRid` and
-`LastSentHash`).
+`AnswerRid`/`SolveRid` are pinned only for the requested keys. A dependent Stage
+Out answers with its own slot rid, so a changed output still reaches the Blender
+object whose inputs did not change. An unchanged dependent stays quiet
+(`LastSentRid`/`LastSentHash`), and a stage with a newer request queued does not
+answer: that solve reads its inputs and answers the newer id. A Stage Out that
+is not part of the solve does not clear another stage's status. A user-driven
+answer that is byte-identical to the last send for the same rid and output hash
+is skipped (the slot remembers `LastSentRid` and `LastSentHash`).
 
 ### 5. Generator stages skip the Blender prefix
 
@@ -160,11 +165,16 @@ path stays. A stage with neither a Stage In nor a Stage Out is not published.
 
 ## Consequences
 
-- A request for stage B recomputes only B's affected branch; A does not advance
-  and does not answer.
+- A request for stage B recomputes only B's affected branch; an independent A
+  does not advance and does not answer. A dependent A that a shared source
+  recomputed answers only when its output changed.
 - A request for stage A recomputes only A; B waits for A's applied output and is
-  requested by the next pass, as the stack requires.
-- One request produces one solve and one Stage Out answer per requested stage.
+  requested by the next pass, as the stack requires. If a shared source also
+  changes B during A's solve, B answers with its own rid so its object follows;
+  an independent B stays quiet.
+- One request produces one solve and one Stage Out answer per requested stage,
+  plus one answer for a dependent stage whose output changed with no newer
+  request queued.
 - The generator advances exactly once per Blender frame. The frame-0 reset is
   Grasshopper's, not the plugin's.
 - A full frame where both stages change still costs two serial solves, because
@@ -197,6 +207,9 @@ C# console tests:
 - hello reports `has_stage_in` for Stage In and Stage Out-only keys;
 - hello reports `has_stage_out` and republishes when either presence flips;
 - a request pins/answers only its requested key;
+- a dependent Stage Out with no queued request answers its own rid when a
+  shared source changed its output, and stays quiet when it has a newer request
+  queued;
 - a user-driven solve can still answer an affected Stage Out;
 - queued requests coalesce into one scheduled solve and retry queues waiting
   keys;

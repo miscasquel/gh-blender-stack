@@ -53,6 +53,7 @@ namespace Stageloom.Tests.Console
                 RunStageInProtocolError(stageIn);
                 RunStageInLateWrite(server);
                 RunStageOutNoRequest(server, stageOut);
+                RunStageOutDependentAnswer(server, stageOut);
                 RunUnitTransforms();
                 RunParamVisibilityTests();
                 RunConnectionComponent();
@@ -242,6 +243,92 @@ namespace Stageloom.Tests.Console
             Check("an idle stage out is not retried",
                 slot.ResolveAttempts == attempts,
                 "attempts=" + slot.ResolveAttempts);
+        }
+
+        /// <summary>A parameter shared by two Stage Out branches recomputes both
+        /// during a request solve aimed at one stage. The other stage's answer
+        /// must still reach Blender when its output changed: otherwise
+        /// Grasshopper shows both results while only one Blender object updates.
+        /// A stage with a newer request queued must stay quiet, because this
+        /// solve would label older inputs with that request's rid.</summary>
+        private static void RunStageOutDependentAnswer(FakeServer server, StageOutHarness component)
+        {
+            const string requested = "component-out-requested";
+            const string requestedRid = "sha256:component-out-requested";
+            const string dependent = "component-out-dependent";
+            const string dependentRid = "sha256:component-out-dependent";
+            const string queued = "component-out-queued";
+            const string queuedRid = "sha256:component-out-queued";
+
+            StageSlot requestedSlot = GhLink.Slot(requested);
+            requestedSlot.Rid = requestedRid;
+            requestedSlot.Status = "ok";
+            Quiet(requestedSlot);
+            StageSlot dependentSlot = GhLink.Slot(dependent);
+            dependentSlot.Rid = dependentRid;
+            dependentSlot.Status = "ok";
+            Quiet(dependentSlot);
+
+            // A request solve owns one key; the other branch is a dependent
+            // that this solve happens to recompute.
+            GhLink.RequestStage(requested, requestedRid);
+            Check("a dependent answer test starts a request context",
+                GhLink.BeginRequestSolveForTest(), "");
+            Check("the requested key answers", GhLink.ShouldAnswer(requested), "");
+            Check("a dependent stage with no queued request may answer",
+                GhLink.ShouldAnswer(dependent), "");
+            Check("a dependent stage is not request-driven",
+                !GhLink.IsRequestDriven(dependent), "");
+            Check("a dependent stage answers its own rid",
+                GhLink.AnswerRid(dependentSlot) == dependentRid,
+                "rid=" + GhLink.AnswerRid(dependentSlot));
+
+            // Its changed output is a real response for Blender, with its own
+            // rid (never the requested stage's pinned rid).
+            var da = new FakeDa(component);
+            da.Inputs["Key"] = dependent;
+            da.Inputs["Enabled"] = true;
+            da.Inputs["Geometry"] = new List<IGH_Goo> { new GH_Point(new Point3d(0, 0, 0)) };
+            component.Run(da);
+            Check("the dependent stage out sends its changed answer",
+                (bool)OutputValue(da, "Sent"),
+                "sent=" + OutputValue(da, "Sent") + " status=" + Output(da, "Status"));
+            Dictionary<string, object> response = ReadUntil(server, "response");
+            Check("the dependent answer names its stage",
+                (string)Json.Get(response, "stage") == dependent,
+                "stage=" + Json.Get(response, "stage"));
+            Check("the dependent answer carries its own rid",
+                (string)Json.Get(response, "rid") == dependentRid,
+                "rid=" + Json.Get(response, "rid"));
+
+            // A stage whose newer request is queued for the next solve must not
+            // answer this one: its inputs for that rid have not been read yet.
+            StageSlot queuedSlot = GhLink.Slot(queued);
+            queuedSlot.Rid = queuedRid;
+            queuedSlot.Status = "ok";
+            Quiet(queuedSlot);
+            GhLink.RequestStage(queued, queuedRid);
+            Check("a stage with a queued request does not answer this solve",
+                !GhLink.ShouldAnswer(queued), "");
+            var queuedDa = new FakeDa(component);
+            queuedDa.Inputs["Key"] = queued;
+            queuedDa.Inputs["Enabled"] = true;
+            queuedDa.Inputs["Geometry"] = new List<IGH_Goo> { new GH_Point(new Point3d(0, 0, 0)) };
+            component.Run(queuedDa);
+            Check("the queued stage out stays quiet",
+                !(bool)OutputValue(queuedDa, "Sent"),
+                "sent=" + OutputValue(queuedDa, "Sent"));
+            Check("the queued stage out emits no response",
+                NoFrameOfType(server, "response", 400), "");
+
+            // The queued request is the next batch, where it is requested and
+            // may answer normally.
+            GhLink.EndRequestSolveForTest();
+            Check("the queued request starts the next batch",
+                GhLink.BeginRequestSolveForTest(), "");
+            Check("the queued key answers in its own batch",
+                GhLink.ShouldAnswer(queued), "");
+            GhLink.EndRequestSolveForTest();
         }
 
         // --------------------------------------------------------- unit rows

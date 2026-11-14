@@ -37,6 +37,13 @@ Notable changes to this project, following
   it landed near the origin. Stage In and Stage Out now convert the translation
   and leave the rotation/scale part of the matrix unchanged. Metres documents
   are unaffected.
+- **A dependent Grasshopper stage now pushes a changed output to Blender.** When
+  one Blender parameter feeds a source shared by two Stage Out branches, a
+  request-driven solve recomputes both branches, but only the requested stage
+  answered. Grasshopper showed both results while the second Blender object kept
+  its old output. A Stage Out outside the request context now answers with its
+  own last request id when its output changed, unless it has a newer request
+  queued (that solve reads its inputs and answers the newer id).
 
 ## [0.5.2] — 2026-11-13
 

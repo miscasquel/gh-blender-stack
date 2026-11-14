@@ -725,6 +725,9 @@ namespace Stageloom.Tests.Console
             StageSlot bystander = GhLink.Slot("context-idle");
             bystander.Rid = "sha256:context-idle";
             bystander.Status = "waiting";
+            StageSlot queued = GhLink.Slot("context-queued");
+            queued.Rid = "sha256:context-queued";
+            queued.Status = "waiting";
 
             // Two requests for one key collapse to the latest rid before the
             // delegate starts; the other key joins the same batch. Each
@@ -749,9 +752,17 @@ namespace Stageloom.Tests.Console
                 "solve rid=" + second.SolveRid);
             Check("an unrelated key is not pinned",
                 string.IsNullOrEmpty(bystander.SolveRid), "solve rid=" + bystander.SolveRid);
-            Check("only a requested key answers",
-                GhLink.ShouldAnswer("context-a") && GhLink.ShouldAnswer("context-b")
-                && !GhLink.ShouldAnswer("context-idle"), "");
+            Check("a requested key answers",
+                GhLink.ShouldAnswer("context-a") && GhLink.ShouldAnswer("context-b"), "");
+            // A source shared with a requested stage can recompute another
+            // Stage Out in this solve. It may answer (with its own rid) when it
+            // has no newer request queued, so Blender sees a changed dependent
+            // output instead of Grasshopper updating alone.
+            Check("a dependent key with no queued request may answer",
+                GhLink.ShouldAnswer("context-idle"), "");
+            GhLink.RequestStage("context-queued", "sha256:context-queued");
+            Check("a key with a newer request queued does not answer",
+                !GhLink.ShouldAnswer("context-queued"), "");
             Check("only a requested key is request-driven",
                 GhLink.IsRequestDriven("context-a") && !GhLink.IsRequestDriven("context-idle"), "");
             Check("the answer rid is the pinned request",
@@ -782,6 +793,16 @@ namespace Stageloom.Tests.Console
                 "rid=" + GhLink.AnswerRid(bystander));
             bystander.SolveInFlight = false;
             bystander.SolveStartedAt = DateTime.MinValue;
+
+            // The queued request is the next batch: there it is requested and
+            // pins its own rid, so its answer is not mislabeled.
+            Check("the queued request starts the next batch",
+                GhLink.BeginRequestSolveForTest(), "");
+            Check("the queued key answers in its own batch",
+                GhLink.ShouldAnswer("context-queued")
+                && GhLink.AnswerRid(queued) == "sha256:context-queued",
+                "rid=" + GhLink.AnswerRid(queued));
+            GhLink.EndRequestSolveForTest();
         }
 
         private static Dictionary<string, object> FindStage(Dictionary<string, object> hello, string key)

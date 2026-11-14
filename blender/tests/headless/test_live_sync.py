@@ -599,6 +599,126 @@ class MultiObjectEditTests(unittest.TestCase):
         self.assertFalse(self.engine._dirty, "an idle pass left objects dirty")
 
 
+class MultiObjectGhEditTests(unittest.TestCase):
+    """A Grasshopper-side edit that changes two stages reaches both objects.
+
+    The reported failure is the Grasshopper half of this path: a request-driven
+    solve recomputes a dependent Stage Out through a shared source but only the
+    requested stage answers, so Blender keeps the second object's old output.
+    This suite is the receiving contract the plugin fix relies on: two stack
+    objects with distinct keys, two fake clients, and an unsolicited answer for
+    each stage carrying that stage's own current rid. Blender must apply both.
+    """
+
+    PORT = 9159
+
+    @classmethod
+    def setUpClass(cls):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        bpy.ops.preferences.addon_enable(module="stageloom")
+        isolate_data_root()
+        import stageloom.blender.engine as engine
+        import stageloom.blender.stack as stack_mod
+
+        cls.engine = engine
+        cls.stack_mod = stack_mod
+        engine.start_server(cls.PORT)
+        time.sleep(0.5)
+
+        cls.obj_a = cls._stack_object("GhEditA", "A")
+        cls.stage_a = cls.obj_a.gh_stack.stages[0]
+        cls.obj_b = cls._stack_object("GhEditB", "B")
+        cls.stage_b = cls.obj_b.gh_stack.stages[0]
+
+        cls.report_a = os.path.join(tempfile.gettempdir(), "fake_gh_edit_a.json")
+        cls.report_b = os.path.join(tempfile.gettempdir(), "fake_gh_edit_b.json")
+        for path in (cls.report_a, cls.report_b):
+            if os.path.exists(path):
+                os.remove(path)
+        cls.fake_a = start_fake(cls.stage_a.key, cls.report_a, port=cls.PORT)
+        cls.fake_b = start_fake(cls.stage_b.key, cls.report_b, port=cls.PORT)
+
+        def settled():
+            return (
+                cls.stage_a.state == "ok"
+                and cls.stage_b.state == "ok"
+                and report_of(cls.report_a).get("responses", 0) >= 1
+                and report_of(cls.report_b).get("responses", 0) >= 1
+            )
+
+        settle_stages(engine, stack_mod, [cls.obj_a, cls.obj_b], settled)
+
+    @classmethod
+    def _stack_object(cls, name, label):
+        bpy.ops.mesh.primitive_cube_add(size=2.0)
+        obj = bpy.context.object
+        obj.name = name
+        bpy.context.view_layer.objects.active = obj
+        obj.select_set(True)
+        bpy.ops.stageloom.add_stage(label=label)
+        stage = obj.gh_stack.stages[0]
+        stage.live = True
+        obj[cls.stack_mod.param_prop_name(stage.key, SCALE)] = 1.0
+        return obj
+
+    @classmethod
+    def tearDownClass(cls):
+        stop_fake(cls.fake_a)
+        stop_fake(cls.fake_b)
+        bpy.ops.preferences.addon_disable(module="stageloom")
+
+    def _send_changed_answer(self, obj, stage, scale):
+        """One Stage Out answer for its current rid, as a GH-side edit sends:
+        no request is in flight, and the output differs from the applied one."""
+        import stageloom.blender.bridge as bridge
+
+        verts = np.array(
+            [[-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1]], dtype=np.float32
+        ) * scale
+        sections = {
+            "mesh.verts": verts,
+            "mesh.face_counts": np.array([4], dtype=np.uint32),
+            "mesh.face_indices": np.array([0, 1, 2, 3], dtype=np.uint32),
+        }
+        header = {
+            "type": "response",
+            "stage": stage.key,
+            "rid": stage.rid,
+            "out_hash": "sha256:gh-edit-%s-%s" % (stage.key, scale),
+            "status": "ok",
+            "warnings": [],
+        }
+        raw = self.engine.codec.encode_frame(
+            header,
+            [
+                ("mesh.verts", "f32", sections["mesh.verts"]),
+                ("mesh.face_counts", "u32", sections["mesh.face_counts"]),
+                ("mesh.face_indices", "u32", sections["mesh.face_indices"]),
+            ],
+        )
+        bridge.post_incoming(header, sections, raw)
+
+    def test_01_one_gh_edit_applies_to_every_affected_stage(self):
+        self.assertEqual(self.stage_a.state, "ok", self.stage_a.error)
+        self.assertEqual(self.stage_b.state, "ok", self.stage_b.error)
+        self.assertAlmostEqual(helper_max(self.obj_a, self.stage_a.key), 1.0, places=3)
+        self.assertAlmostEqual(helper_max(self.obj_b, self.stage_b.key), 1.0, places=3)
+
+        # The fixed Stage Out sends the dependent stage's changed answer too.
+        self._send_changed_answer(self.obj_a, self.stage_a, 2.0)
+        self._send_changed_answer(self.obj_b, self.stage_b, 3.0)
+        self.engine._handle_incoming()
+
+        self.assertAlmostEqual(
+            helper_max(self.obj_a, self.stage_a.key), 2.0, places=3,
+            msg="the requested stage's changed answer did not apply",
+        )
+        self.assertAlmostEqual(
+            helper_max(self.obj_b, self.stage_b.key), 3.0, places=3,
+            msg="the dependent stage's changed answer did not apply to its object",
+        )
+
+
 class PendingUpdateTests(LiveSyncTestCase):
     def test_01_a_tagged_edit_is_drained_before_the_pass(self):
         # The write tags the depsgraph; nothing has evaluated yet (no
