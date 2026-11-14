@@ -448,10 +448,12 @@ def scenario_pipeline(args, report):
                 row["frame_mb"],
             )
         )
-        # The arrays are large at 1M; drop them before the next size.
-        del sections, frame, by_name, verts_array, moved
+        # The arrays are large at 1M; drop them before the next size. Assigning
+        # None releases them without pyflakes treating the names as unbound
+        # for the closures that used them above.
+        sections = frame = by_name = verts_array = moved = None
         bpy.data.objects.remove(obj, do_unlink=True)
-        del verts, quads
+        verts = quads = None
     report["pipeline"] = rows
 
 
