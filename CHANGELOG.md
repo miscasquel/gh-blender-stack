@@ -10,7 +10,20 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] — 2026-11-14
+
+Grasshopper's endpoint is now configurable and saved for the whole
+installation, bakes show their progress, block instances land correctly in
+non-metre Rhino documents, and a dependent stage's changed output reaches
+Blender. This milestone also brings the reference performance matrix and the
+non-metre units matrix.
+
+**Upgrade:** rebuild and redeploy `Stageloom.gha`, then restart Rhino. The
+Blender add-on upgrades in place; existing `.blend` stages, parameters and
+animation are preserved. No protocol change. A saved endpoint is global to the
+Rhino/Grasshopper installation, and documents that only contain Stage In and
+Stage Out still connect to it; the new **Stageloom Connection** component is
+optional.
 
 ### Added
 
@@ -23,6 +36,15 @@ Notable changes to this project, following
   setting wins over it, which wins over 59130. The link stays loopback-only
   (`127.0.0.1`; `localhost` is normalized) and the wire protocol is unchanged.
   The Blender panel now shows the full endpoint instead of only the port.
+- **Bakes show their progress.** While the native bake steps the scene range,
+  Blender's cursor progress number follows the baked frame, so a long bake no
+  longer looks stalled. The counter clears when the bake finishes or fails.
+- **The reference performance matrix is in the repository.** `scripts/bench`
+  builds the plan's reference scenes — 10k/100k/1M triangles, a 13× instance
+  definition, a three-stage chain and live playback — and fails when a budget
+  regresses. The 2026-11-14 Linux baseline is recorded in `benchmarks/results/`:
+  the 100k round trip is 13.5 ms against a 50 ms budget and a 13× instance
+  prefix plus encode is 10.5 ms against 100 ms.
 
 ### Fixed
 

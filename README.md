@@ -5,7 +5,7 @@ native Geometry Nodes modifiers, in one visible object per stack. Geometry and
 parameters can flow through the stack, so parameters can be keyframed, driven,
 and played back.
 
-That is the v1 goal. **v0.5.2 is a working demo**: geometry (meshes, curves,
+That is the v1 goal. **v0.6.0 is a working demo**: geometry (meshes, curves,
 points, SubD cages) driven by a real Grasshopper definition, with named
 attributes and Grasshopper blocks (instances) travelling both ways, parameters
 you can edit and keyframe in Blender, packaged as a Blender extension.
@@ -79,9 +79,10 @@ Blender                                          Rhino / Grasshopper (wine)
   per stage), replays with Grasshopper closed, and leaves an idle scene alone so
   Cycles keeps accumulating samples.
 - **Bake.** Each stage group carries a native Geometry Nodes Bake node. **Bake
-  stage** steps the scene frame range through the same gate, freezes the stage
-  and renders from the bake with no Grasshopper request; **Clear Bake** removes
-  it and resumes live output. A packed bake is kept when the `.blend` is saved.
+  stage** steps the scene frame range through the same gate, shows cursor
+  progress, freezes the stage and renders from the bake with no Grasshopper
+  request; **Clear Bake** removes it and resumes live output. A packed bake is
+  kept when the `.blend` is saved.
 - **Tests.** `scripts/test-core` (standard library only), `scripts/test-blender`
   (Blender headless against `tools/fake_gh`), `scripts/test-gha` (the C# codec
   against the golden fixtures, under wine), `scripts/test-extension` (installed
@@ -150,7 +151,7 @@ by default; the **Data root** preference in the add-on settings overrides it.
 ## Install
 
 Download the add-on zip and the Grasshopper `.gha` from the
-[v0.5.2 release](https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.5.2).
+[v0.6.0 release](https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.6.0).
 The commands below are the build path.
 
 Release path: the add-on ships as a Blender extension with the official

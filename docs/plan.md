@@ -1,6 +1,6 @@
 # Stageloom — 1.0 plan
 
-**Status:** planning, 2026-11-13. Baseline: **v0.5.2**.
+**Status:** planning, 2026-11-14. Baseline: **v0.6.0**.
 **Target:** Blender 5.3. **Compatibility floor:** Blender 5.2.
 **Goal:** ship a stable 1.0 for the declared v1 scope: Grasshopper definitions as
 stackable Blender modifiers, with geometry and parameters flowing both ways,
@@ -35,29 +35,30 @@ of the gaps below.
 
 ---
 
-## 2. Baseline: v0.5.2
+## 2. Baseline: v0.6.0
 
 **Shipped:** meshes, curves, point clouds, SubD cages, Breps (meshed, warned),
 attributes, Grasshopper blocks/instances, parameters with keyframes and drivers,
 mid-stack `GH → GN → GH` chains, stage lifecycle (Pull, Freeze, Bake stage,
 Clear Bake, Key all, Purge orphans), Play Every Frame sync, Frame Drop caching,
 a bounded disk frame cache, multi-stage duplication handling, selective stage
-solves, generator and live stages, one-way Stage In-only feeds, and nested
-instance baking.
+solves, generator and live stages, one-way Stage In-only feeds, nested instance
+baking, the persisted loopback endpoint component, the non-metre units matrix,
+and the reference performance matrix with its recorded Linux baseline.
 
-**Verified at release:** 57 core tests, 260 Blender headless tests plus the
-offline gate, the C# fixture/attribute/link/component/stage suites, and the
-installed extension round trip.
+**Verified at release:** 57 core tests, 268 Blender headless tests plus the
+offline gate, the C# fixture/attribute/link/component/stage suites, the
+installed extension round trip, and the reference benchmark matrix (all budgets
+met on 2026-11-14).
 
 **Known gaps carried forward:**
 
 | Gap | Why it blocks 1.0 |
 |---|---|
-| Instance-heavy Stage In latency (300–800 ms reported; cause not measured) | Violates the responsiveness goal on a normal Grasshopper workflow. |
+| Instance-heavy Stage In latency (Blender's half measured at 10.5 ms; the live Rhino Stage In/solve split is still unmeasured) | The remaining latency is not located; 1.0 needs the live split. |
 | No native Windows Rhino acceptance run | Wine is a development environment, not the target user platform. |
 | No GH component migration | Old documents keep old parameter/output lists and never gain newer capabilities. |
 | No chain-level playback/bake proof | `Bake stage` freezes one stage; a multi-stage render is not proved Grasshopper-free. |
-| Units path untested | The plugin converts document units ↔ metres, but no test or live run covers non-metre documents. |
 | Release verification is manual and single-machine | A 1.0 needs a reproducible, multi-platform gate. |
 
 ---
@@ -93,7 +94,7 @@ floor.
 
 ### In 1.0
 
-- Everything already shipped in v0.5.2.
+- Everything already shipped in v0.6.0.
 - The hardening work in §5.
 - Migrations and compatibility guarantees in §5C.
 - Platform and distribution work in §5B and §5F.
@@ -119,34 +120,36 @@ changes first.
 
 ### A. Performance and responsiveness
 
-**Problem.** The reported 300–800 ms Stage In update with one geometry instanced
-13× has not been re-measured since the duplicate-solve fix and the current
-`.gha`. Preview-off is the mitigation, not a solution.
+**Problem.** The Blender half is measured: a 13× 100k-triangle definition costs
+10.5 ms to read and encode and 2.4 ms to re-apply, and the reference matrix
+passes its budgets. The live Rhino Stage In/solve split is still unmeasured, so
+the remaining 300–800 ms report has not been located.
 
 **Work**
 
-- Build a repeatable benchmark harness with reference scenes: 10k/100k/1M
-  triangles, a 13× instance definition, a multi-stage chain, and a stateful
-  playback definition.
-- Re-measure with the current `.gha`; record Stage In, engine pass, transport,
-  solve and apply times separately.
+- The benchmark harness is in place: `scripts/bench` builds the reference scenes
+  and enforces the budgets; its 2026-11-14 Linux baseline is in
+  `benchmarks/results/`.
+- Re-measure with the current `.gha` against a live Rhino; record Stage In,
+  engine pass, transport, solve and apply times separately.
 - Fix the dominant cause. The existing hypotheses are, in order: duplicate
-  solves (fixed, needs re-measurement), definition rebuilding on every solve,
-  and the Grasshopper definition itself.
-- Add regression budgets so future changes cannot silently reintroduce the
-  cliff.
+  solves (fixed), definition rebuilding on every solve, and the Grasshopper
+  definition itself.
+- Keep the regression budgets current so future changes cannot silently
+  reintroduce the cliff.
 
 **Proposed targets** (confirm against the measured baseline):
 
 - 100k-triangle round trip remains ≤ 50 ms.
-- Instance-heavy Stage In update < 100 ms on the reference scene with preview on.
+- Instance-heavy Stage In update < 100 ms on the reference scene with preview on
+  (live Rhino).
 - Idle engine pass < 2 ms; multi-stage dirty pass < 100 ms.
 - 1M-triangle scene evaluates without a crash or an unbounded memory increase;
   record the budget rather than promising 60 fps.
 - Bake time and memory are measured on the reference scene range.
 
-**Exit:** the reference matrix is in the repository, the instance case is inside
-budget, and the 1.0 performance report is reproducible.
+**Exit:** the reference matrix is in the repository, the Blender-side instance
+case is inside budget, and the 1.0 performance report is reproducible.
 
 ### B. Platform support
 
@@ -157,9 +160,9 @@ budget, and the 1.0 performance report is reproducible.
   the Rhino restart path.
 - Test the Blender add-on on Windows: extension install, data root, paths,
   permissions, port binding and restart.
-- Make the Grasshopper endpoint configurable in the plugin (host/port), instead
-  of the undocumented `STAGELOOM_PORT` environment variable. The add-on's port is
-  already a preference.
+- **Endpoint:** done in 0.6.0 (ADR 0011): the **Stageloom Connection**
+  component persists a validated loopback port for the installation;
+  `STAGELOOM_PORT` remains a development fallback only.
 - Decide and record the macOS position. If it is supported, run the Blender
   add-on acceptance there; if not, say so explicitly.
 - Keep loopback-only as a hard rule. Do not add remote networking in 1.0.
@@ -218,13 +221,13 @@ state, and Clear Bake restores live behavior without restarting Blender.
 
 **Work**
 
-- **Units:** round-trip geometry in millimetre, centimetre, metre, inch and foot
-  Rhino documents. The transport is metres; the conversion is silent. Cover
-  meshes, curves, points, blocks and attributes.
+- **Units:** covered for millimetre, centimetre, metre, inch and foot documents
+  by `grasshopper/tests/live/UnitsCheck.cs` and `ComponentTests`; keep meshes,
+  curves, points, blocks and attributes in the matrix as they change.
 - **Brep/surface meshing:** add automated coverage for the lossy Brep path and
   resolve or bound the known meshing issues. Keep the warning path explicit.
-- **Bake undo:** make `Bake stage` and `Clear Bake` undo-safe or document them as
-  irreversible and require confirmation before deleting bake data.
+- **Bake undo:** settled as irreversible with confirmation (ADR 0012); keep the
+  warning and prompt covered by `test_bake_safety.py`.
 - **Scale:** test large geometry, many stacks, many parameters and cache
   eviction under sustained playback.
 - **Failure injection:** malformed frames, dropped connections, stale responses,

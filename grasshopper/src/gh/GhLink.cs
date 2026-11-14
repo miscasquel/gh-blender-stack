@@ -1529,7 +1529,7 @@ namespace Stageloom
                 hello["type"] = "hello";
                 // Keep in sync with blender_manifest.toml (the release path
                 // enforces that one) and the example in docs/protocol.md.
-                hello["client"] = "Stageloom 0.5.2";
+                hello["client"] = "Stageloom 0.6.0";
                 hello["doc"] = _lastDocName;
                 hello["doc_units"] = UnitsName();
                 hello["stages"] = list;
