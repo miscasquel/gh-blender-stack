@@ -35,11 +35,11 @@ Linux path.
 
 ```text
 scripts/test-core        57 tests pass
-scripts/test-blender     268 tests pass (including the offline gate)
+scripts/test-blender     279 tests pass (including the offline gate)
 scripts/test-gha         fixtures + attribute store + link + component status + stage guard pass
 scripts/test-extension   installed extension round trip: pass
-scripts/bench            all budgets pass (100k round trip 14.9 ms / 50 ms,
-                         13x instance prefix+encode 10.3 ms / 100 ms)
+scripts/bench            all budgets pass (100k round trip 14.1 ms / 50 ms,
+                         13x instance prefix+encode 10.7 ms / 100 ms)
 uvx ruff check ...       All checks passed
 blender --command extension validate blender/stageloom
 blender --command extension validate dist/stageloom-0.6.0.zip

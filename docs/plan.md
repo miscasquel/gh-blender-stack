@@ -43,10 +43,11 @@ mid-stack `GH → GN → GH` chains, stage lifecycle (Pull, Freeze, Bake stage,
 Clear Bake, Key all, Purge orphans), Play Every Frame sync, Frame Drop caching,
 a bounded disk frame cache, multi-stage duplication handling, selective stage
 solves, generator and live stages, one-way Stage In-only feeds, nested instance
-baking, the persisted loopback endpoint component, the non-metre units matrix,
-and the reference performance matrix with its recorded Linux baseline.
+baking, strictly unique stage keys with per-stage conflict resolution, the
+persisted loopback endpoint component, the non-metre units matrix, and the
+reference performance matrix with its recorded Linux baseline.
 
-**Verified at release:** 57 core tests, 268 Blender headless tests plus the
+**Verified at release:** 57 core tests, 279 Blender headless tests plus the
 offline gate, the C# fixture/attribute/link/component/stage suites, the
 installed extension round trip, and the reference benchmark matrix (all budgets
 met on 2026-11-14).
@@ -297,7 +298,8 @@ The old A1–A10 remain the functional core. Add the release gates that the
 - **A9 Performance.** The reference matrix meets the budgets in §5A, including
   the instance-heavy case.
 - **A10 Duplicates.** Duplicated stacks and stages keep independent keys,
-  caches, groups, helpers and animation.
+  caches, groups, helpers and animation; a saved or undone shared key is a
+  visible, resolvable conflict instead of a silent split.
 - **A11 Platform.** Windows 11 + Rhino 8 + Blender 5.3 passes the full matrix;
   the Linux/wine development matrix remains green.
 - **A12 Chain playback/bake.** Multi-stage Play Every Frame works, and a

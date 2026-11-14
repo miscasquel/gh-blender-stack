@@ -10,44 +10,24 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-Stage keys are now strictly unique. Duplicating a stack still gives the copy its
-own key automatically, but a saved or undone shared key is reported as a
-conflict instead of being rewritten by name.
-
-### Added
-
-- **Resolve duplicate key.** A stage whose key is claimed by another object or
-  stage shows the conflict in the N-panel and offers **Resolve duplicate key**.
-  The action gives that stage a fresh random key, moves its parameters and
-  animation, and leaves the other claimant on the old key.
-
-### Changed
-
-- **Runtime duplicates keep the original's identity.** Shift+D, Alt+D,
-  copy/paste, scripted copies and append/link split the new claimant from the
-  key its original already owned, even when either object was renamed. If the
-  original is gone, the remaining claimant keeps the key.
-- **A loaded or undone shared key is a conflict, not a silent split.** Both
-  stages show an error naming the key and the claimants, and no request or
-  answer is processed for that key until one stage is resolved. Same-object
-  duplicate keys are detected too.
-
 ## [0.6.0] — 2026-11-14
 
 Grasshopper's endpoint is now configurable and saved for the whole
 installation, bakes show their progress, block instances land correctly in
 non-metre Rhino documents, and a dependent stage's changed output reaches
-Blender. This milestone also brings the reference performance matrix and the
-non-metre units matrix.
+Blender. Stage keys are now strictly unique: a duplicate is split at runtime,
+and a key restored by a file or undo is a visible conflict resolved per stage.
+This milestone also brings the reference performance matrix and the non-metre
+units matrix.
 
 **Upgrade:** rebuild and redeploy `Stageloom.gha`, then restart Rhino. The
 Blender add-on upgrades in place; existing `.blend` stages, parameters and
 animation are preserved. No protocol change. A saved endpoint is global to the
 Rhino/Grasshopper installation, and documents that only contain Stage In and
 Stage Out still connect to it; the new **Stageloom Connection** component is
-optional.
+optional. A `.blend` that already contains a shared stage key opens with the
+conflict shown on every affected stage; use **Resolve duplicate key** once per
+duplicated stage.
 
 ### Added
 
@@ -60,6 +40,10 @@ optional.
   setting wins over it, which wins over 59130. The link stays loopback-only
   (`127.0.0.1`; `localhost` is normalized) and the wire protocol is unchanged.
   The Blender panel now shows the full endpoint instead of only the port.
+- **Resolve duplicate key.** A stage whose key is claimed by another object or
+  stage shows the conflict in the N-panel and offers **Resolve duplicate key**.
+  The action gives that stage a fresh random key, moves its parameters and
+  animation, and leaves the other claimant on the old key.
 - **Bakes show their progress.** While the native bake steps the scene range,
   Blender's cursor progress number follows the baked frame, so a long bake no
   longer looks stalled. The counter clears when the bake finishes or fails.
@@ -69,6 +53,17 @@ optional.
   regresses. The 2026-11-14 Linux baseline is recorded in `benchmarks/results/`:
   the 100k round trip is 13.5 ms against a 50 ms budget and a 13× instance
   prefix plus encode is 10.5 ms against 100 ms.
+
+### Changed
+
+- **Runtime duplicates keep the original's identity.** Shift+D, Alt+D,
+  copy/paste, scripted copies and append/link split the new claimant from the
+  key its original already owned, even when either object was renamed. If the
+  original is gone, the remaining claimant keeps the key.
+- **A loaded or undone shared key is a conflict, not a silent split.** Both
+  stages show an error naming the key and the claimants, and no request or
+  answer is processed for that key until one stage is resolved. Same-object
+  duplicate keys are detected too.
 
 ### Fixed
 
