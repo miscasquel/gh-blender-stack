@@ -53,8 +53,8 @@ class STAGELOOM_PT_panel(bpy.types.Panel):
         if state["connected"]:
             row.label(text="Connected: %s" % (state["doc"] or "unnamed"), icon="LINKED")
         elif state["listening"]:
-            row.label(text="Listening on port", icon="PLUGIN")
-            row.label(text=str(_port()))
+            row.label(text="Listening on", icon="PLUGIN")
+            row.label(text="ws://127.0.0.1:%d/" % _port())
         else:
             row.label(text="Server not running", icon="UNLINKED")
         if state.get("error"):

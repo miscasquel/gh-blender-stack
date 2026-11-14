@@ -12,6 +12,18 @@ Notable changes to this project, following
 
 ## [Unreleased]
 
+### Added
+
+- **The Grasshopper endpoint is configurable in the plugin.** A new
+  **Stageloom Connection** component (Stageloom tab, Settings) validates the
+  loopback port, applies it immediately and saves it for the whole
+  Rhino/Grasshopper installation, so a document with only Stage In/Stage Out
+  reconnects to the saved port after a restart without a settings component on
+  the canvas. `STAGELOOM_PORT` remains a development fallback; a valid saved
+  setting wins over it, which wins over 59130. The link stays loopback-only
+  (`127.0.0.1`; `localhost` is normalized) and the wire protocol is unchanged.
+  The Blender panel now shows the full endpoint instead of only the port.
+
 ### Fixed
 
 - **Block instances place correctly in non-metre Rhino documents.** Instance

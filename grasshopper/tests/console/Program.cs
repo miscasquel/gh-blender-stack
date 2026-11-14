@@ -59,6 +59,8 @@ namespace Stageloom.Tests.Console
 
             CheckJsonWriter();
 
+            CheckEndpoint();
+
             System.Console.WriteLine();
             if (_failures == 0)
             {
@@ -494,6 +496,137 @@ namespace Stageloom.Tests.Console
             _failures += problems.Count;
             System.Console.WriteLine("FAIL json-writer");
             foreach (string p in problems) System.Console.WriteLine("     " + p);
+        }
+
+        /// <summary>The endpoint helper's pure half: defaults, loopback-only
+        /// hosts, the port range, canonical text and the persisted > env >
+        /// default precedence. No Grasshopper or socket is involved.</summary>
+        private static void CheckEndpoint()
+        {
+            var problems = new List<string>();
+
+            int defaultPort = Endpoint.DefaultPort;
+            if (defaultPort != 59130)
+                problems.Add("default port is " + defaultPort + ", not 59130");
+            if (!Endpoint.IsValidPort(1024) || !Endpoint.IsValidPort(65535))
+                problems.Add("the inclusive port range was rejected");
+            if (Endpoint.IsValidPort(1023) || Endpoint.IsValidPort(65536)
+                || Endpoint.IsValidPort(0) || Endpoint.IsValidPort(-1))
+                problems.Add("an out-of-range port was accepted");
+            if (Endpoint.Canonical(59130) != "ws://127.0.0.1:59130/")
+                problems.Add("canonical endpoint: " + Endpoint.Canonical(59130));
+            CheckThrows<ArgumentOutOfRangeException>(problems,
+                "canonical endpoint for port 80",
+                delegate { Endpoint.Canonical(80); });
+
+            string normalized;
+            string error;
+            CheckHostAccepted(problems, "127.0.0.1");
+            CheckHostAccepted(problems, "localhost");
+            CheckHostAccepted(problems, " LOCALHOST ");
+            CheckHostRejected(problems, "0.0.0.0");
+            CheckHostRejected(problems, "::1");
+            CheckHostRejected(problems, "example.com");
+            CheckHostRejected(problems, "");
+            CheckHostRejected(problems, null);
+            if (Endpoint.TryNormalizeHost("localhost", out normalized, out error)
+                && normalized != "127.0.0.1")
+                problems.Add("localhost normalized to " + normalized);
+
+            string endpoint;
+            if (!Endpoint.TryCreate("localhost", 59130, out endpoint, out error)
+                || endpoint != "ws://127.0.0.1:59130/")
+                problems.Add("TryCreate(localhost): " + (endpoint ?? "(none)") + " / " + error);
+            if (Endpoint.TryCreate("0.0.0.0", 59130, out endpoint, out error))
+                problems.Add("TryCreate accepted 0.0.0.0");
+            if (Endpoint.TryCreate("127.0.0.1", 80, out endpoint, out error))
+                problems.Add("TryCreate accepted port 80");
+
+            int port;
+            if (!Endpoint.TryParsePort(" 59130 ", out port, out error) || port != 59130)
+                problems.Add("TryParsePort accepted text did not parse");
+            if (!Endpoint.TryParsePort("1024", out port, out error) || port != 1024)
+                problems.Add("TryParsePort rejected the low boundary");
+            if (!Endpoint.TryParsePort("65535", out port, out error) || port != 65535)
+                problems.Add("TryParsePort rejected the high boundary");
+            if (Endpoint.TryParsePort("80", out port, out error))
+                problems.Add("TryParsePort accepted 80");
+            if (Endpoint.TryParsePort("65536", out port, out error))
+                problems.Add("TryParsePort accepted 65536");
+            if (Endpoint.TryParsePort("+59130", out port, out error))
+                problems.Add("TryParsePort accepted a plus sign");
+            if (Endpoint.TryParsePort("59,130", out port, out error))
+                problems.Add("TryParsePort accepted a grouping separator");
+            if (Endpoint.TryParsePort("abc", out port, out error))
+                problems.Add("TryParsePort accepted text");
+            if (Endpoint.TryParsePort("", out port, out error))
+                problems.Add("TryParsePort accepted an empty value");
+
+            EndpointSource source;
+            string warning;
+            int resolved = Endpoint.ResolvePort(60000, "62000", out source, out warning);
+            if (resolved != 60000 || source != EndpointSource.Persisted || warning != null)
+                problems.Add("persisted did not win: " + resolved + "/" + source + "/" + warning);
+
+            // An invalid saved value is ignored, but a valid environment value
+            // still applies as the documented development override.
+            resolved = Endpoint.ResolvePort(80, "62000", out source, out warning);
+            if (resolved != 62000 || source != EndpointSource.Environment
+                || string.IsNullOrEmpty(warning))
+                problems.Add("invalid persisted did not fall to env: " + resolved + "/" + source);
+
+            resolved = Endpoint.ResolvePort(0, "62000", out source, out warning);
+            if (resolved != 62000 || source != EndpointSource.Environment || warning != null)
+                problems.Add("env did not apply: " + resolved + "/" + source + "/" + warning);
+
+            // A malformed environment value must not stop the plugin loading.
+            resolved = Endpoint.ResolvePort(0, "not-a-port", out source, out warning);
+            if (resolved != Endpoint.DefaultPort || source != EndpointSource.Default
+                || string.IsNullOrEmpty(warning))
+                problems.Add("bad env did not fall to default: " + resolved + "/" + source);
+
+            resolved = Endpoint.ResolvePort(80, null, out source, out warning);
+            if (resolved != Endpoint.DefaultPort || source != EndpointSource.Default
+                || string.IsNullOrEmpty(warning))
+                problems.Add("bad persisted did not fall to default: " + resolved + "/" + source);
+
+            resolved = Endpoint.ResolvePort(0, "  ", out source, out warning);
+            if (resolved != Endpoint.DefaultPort || source != EndpointSource.Default || warning != null)
+                problems.Add("blank env was not treated as unset: " + resolved + "/" + source);
+
+            // A valid persisted value wins even when the environment is invalid.
+            resolved = Endpoint.ResolvePort(60000, "not-a-port", out source, out warning);
+            if (resolved != 60000 || source != EndpointSource.Persisted || warning != null)
+                problems.Add("persisted lost to a bad env value: " + resolved + "/" + source);
+
+            if (problems.Count == 0)
+            {
+                System.Console.WriteLine("PASS endpoint");
+                return;
+            }
+            _failures += problems.Count;
+            System.Console.WriteLine("FAIL endpoint");
+            foreach (string p in problems) System.Console.WriteLine("     " + p);
+        }
+
+        private static void CheckHostAccepted(List<string> problems, string host)
+        {
+            string normalized;
+            string error;
+            if (!Endpoint.TryNormalizeHost(host, out normalized, out error)
+                || normalized != Endpoint.LoopbackHost)
+                problems.Add("host not accepted: " + (host ?? "(null)") + " -> "
+                    + (normalized ?? "(none)") + " / " + error);
+        }
+
+        private static void CheckHostRejected(List<string> problems, string host)
+        {
+            string normalized;
+            string error;
+            if (Endpoint.TryNormalizeHost(host, out normalized, out error))
+                problems.Add("host accepted: " + (host ?? "(null)") + " -> " + normalized);
+            else if (string.IsNullOrEmpty(error))
+                problems.Add("host rejected without a reason: " + (host ?? "(null)"));
         }
 
         private static Dictionary<string, object> PingHeader()

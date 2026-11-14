@@ -17,6 +17,7 @@ using System.Threading;
 using Grasshopper.Kernel;
 using Rhino;
 using Stageloom.Core;
+using EndpointConfig = Stageloom.Core.Endpoint;
 
 namespace Stageloom
 {
@@ -138,12 +139,44 @@ namespace Stageloom
 
     public static class GhLink
     {
-        /// <summary>The WebSocket endpoint to connect to. Set it before the
-        /// first component registers; a running link keeps the endpoint its
-        /// worker connected with.</summary>
-        public static string Endpoint = "ws://127.0.0.1:" + DefaultPort() + "/";
+        // The endpoint is resolved at type load, before any Stage In/Stage Out
+        // can register: the persisted Grasshopper setting wins over the
+        // STAGELOOM_PORT development override, which wins over the default.
+        // A document containing only stages therefore connects to the saved
+        // port without a settings component on the canvas.
+        private static volatile string _endpoint;
+        private static volatile int _endpointPort;
+
+        /// <summary>The canonical WebSocket endpoint the worker dials.</summary>
+        public static string Endpoint { get { return _endpoint; } }
+        public static int Port { get { return _endpointPort; } }
+
+        static GhLink()
+        {
+            int persisted = 0;
+            string warning;
+            if (!EndpointSettings.TryLoadPort(out persisted, out warning)
+                && !string.IsNullOrEmpty(warning))
+                Notes.Add("[Stageloom] " + warning);
+
+            EndpointSource source;
+            _endpointPort = EndpointConfig.ResolvePort(
+                persisted,
+                Environment.GetEnvironmentVariable(EndpointConfig.EnvironmentVariable),
+                out source, out warning);
+            _endpoint = EndpointConfig.Canonical(_endpointPort);
+            if (!string.IsNullOrEmpty(warning))
+                Notes.Add("[Stageloom] " + warning);
+            // Keep the startup choice in the diagnostics: "which port did the
+            // plugin actually read?" is the first question a mismatch raises.
+            Note("endpoint " + _endpoint + " (" + source + ")");
+        }
 
         private static readonly object Gate = new object();
+        // Serializes Start/Stop/Configure. It is separate from Gate so a
+        // reconfigure can join the old worker without holding the lock the
+        // worker needs in its exit path.
+        private static readonly object LifecycleGate = new object();
         private static readonly Dictionary<string, StageSlot> Slots = new Dictionary<string, StageSlot>();
         private static readonly List<GH_Component> Components = new List<GH_Component>();
         private static readonly List<string> Notes = new List<string>();
@@ -229,10 +262,18 @@ namespace Stageloom
 
         public static bool Connected { get { return _connected; } }
 
-        private static string DefaultPort()
+        /// <summary>True while the socket worker exists. A component can show
+        /// "connecting" instead of "disconnected" between Configure and the
+        /// first successful dial.</summary>
+        public static bool Running
         {
-            string port = Environment.GetEnvironmentVariable("STAGELOOM_PORT");
-            return string.IsNullOrEmpty(port) ? "59130" : port;
+            get
+            {
+                lock (Gate)
+                {
+                    return _thread != null && _thread.IsAlive;
+                }
+            }
         }
 
         // ------------------------------------------------------------- registry
@@ -503,6 +544,11 @@ namespace Stageloom
 
         public static void Start()
         {
+            lock (LifecycleGate) { StartLocked(); }
+        }
+
+        private static void StartLocked()
+        {
             lock (Gate)
             {
                 if (_thread != null && _thread.IsAlive) return;
@@ -522,6 +568,11 @@ namespace Stageloom
         /// unbounded time. Called when the last component leaves the document,
         /// so a canvas with no Stageloom components holds no socket.</summary>
         public static void Stop()
+        {
+            lock (LifecycleGate) { StopLocked(); }
+        }
+
+        private static void StopLocked()
         {
             Worker worker;
             Thread thread;
@@ -563,6 +614,50 @@ namespace Stageloom
                     slot.SolveRid = "";
                 }
             }
+        }
+
+        /// <summary>Points the link at a loopback endpoint. A change stops the
+        /// old worker (closing its socket) and starts a fresh one, whose first
+        /// connection publishes hello and every schema again. The port is saved
+        /// globally first; a settings failure leaves the running endpoint
+        /// untouched and is returned to the caller.</summary>
+        public static bool Configure(string host, int port, out string error)
+        {
+            return Configure(host, port, true, out error);
+        }
+
+        /// <summary>The console tests' form: validate and restart without
+        /// touching the user's persisted setting.</summary>
+        internal static bool Configure(string host, int port, bool persist, out string error)
+        {
+            string canonical;
+            if (!EndpointConfig.TryCreate(host, port, out canonical, out error)) return false;
+            if (persist && !EndpointSettings.SavePort(port, out error)) return false;
+
+            bool changed;
+            bool wasRunning;
+            bool hasComponents;
+            lock (LifecycleGate)
+            {
+                wasRunning = _thread != null && _thread.IsAlive;
+                lock (Gate) { hasComponents = Components.Count > 0; }
+                changed = !string.Equals(_endpoint, canonical, StringComparison.Ordinal);
+                if (!changed) return true;
+                StopLocked();
+                _endpoint = canonical;
+                _endpointPort = port;
+                // A live document keeps its link; a settings component may be
+                // configured before its first Stage In/Out registers.
+                if (wasRunning || hasComponents) StartLocked();
+            }
+            Note("endpoint set to " + canonical);
+            return true;
+        }
+
+        internal static void Configure(string host, int port, bool persist)
+        {
+            string error;
+            if (!Configure(host, port, persist, out error)) Note(error);
         }
 
         private static void Loop(Worker worker)

@@ -173,6 +173,33 @@ Both installs appear as **Stageloom** in Preferences > Add-ons.
 Then follow [DEMO.md](DEMO.md). The server listens on port 59130 (configurable in
 the add-on preferences).
 
+## Endpoint
+
+The two halves talk over one loopback WebSocket; the port must match on both
+sides. Nothing outside the machine can connect.
+
+- **Blender.** Preferences > Add-ons > **Stageloom** > **Server port** (default
+  59130). The server binds `127.0.0.1` only, and the N-panel shows the full
+  `ws://127.0.0.1:<port>/` endpoint it is listening on.
+- **Grasshopper.** Add **Stageloom Connection** (Stageloom tab, Settings) to any
+  document and set **Port**. It applies immediately and the saved setting is
+  global to the whole Rhino/Grasshopper installation, in Grasshopper's app-data
+  settings (`%APPDATA%\Grasshopper\Stageloom.xml`, key `endpoint.port`; under
+  wine, `<prefix>/drive_c/users/<user>/AppData/Roaming/Grasshopper/Stageloom.xml`),
+  not stored as the authoritative endpoint in the `.gh` file. On load the
+  component's input is reseeded from that global value. The component does not
+  have to stay on the canvas: Stage In and Stage Out read the saved port when
+  the plugin loads, so a document containing only those components connects
+  after a restart.
+- **Development override.** `STAGELOOM_PORT` sets the plugin's port when no
+  valid saved port exists. The precedence is saved setting > `STAGELOOM_PORT` >
+  59130. This is a convenience for scripts and tests; the Connection component
+  is the supported way to configure a normal install.
+
+The add-on itself always reads its port from the **Server port** preference.
+Hosts other than `127.0.0.1`/`localhost` are rejected, so neither half can be
+pointed at a remote machine.
+
 ## Working on it
 
 ```

@@ -30,11 +30,15 @@ namespace Stageloom.Tests.Console
 
         public static int Main(string[] args)
         {
+            // Keep the suite out of the user's persisted endpoint. This must
+            // happen before the first GhLink access, which resolves settings.
+            EndpointSettings.DatabaseName = "StageloomComponentTests";
+
             System.Console.WriteLine("stage component status");
             var server = new FakeServer();
             try
             {
-                GhLink.Endpoint = "ws://127.0.0.1:" + server.Port + "/";
+                GhLink.Configure("127.0.0.1", server.Port, false);
                 GhLink.Start();
                 server.Accept();
                 ReadUntil(server, "hello");
@@ -51,6 +55,7 @@ namespace Stageloom.Tests.Console
                 RunStageOutNoRequest(server, stageOut);
                 RunUnitTransforms();
                 RunParamVisibilityTests();
+                RunConnectionComponent();
             }
             catch (Exception ex)
             {
@@ -352,6 +357,92 @@ namespace Stageloom.Tests.Console
                 loaded.Params.Input.Count == 9, InputNames(loaded));
         }
 
+        // ------------------------------------------------------ connection node
+
+        /// <summary>The Stageloom Connection component: bad input is a runtime
+        /// message (never a dialog), a valid port moves the link and is saved
+        /// globally, and the outputs show the canonical endpoint and state.</summary>
+        private static void RunConnectionComponent()
+        {
+            System.Console.WriteLine();
+            System.Console.WriteLine("connection component");
+            var server = new FakeServer();
+            var component = new ConnectionHarness();
+            try
+            {
+                string error;
+                Check("connection settings save", EndpointSettings.SavePort(61234, out error),
+                    error ?? "");
+                int stored;
+                Check("connection settings reload",
+                    EndpointSettings.TryLoadPort(out stored, out error) && stored == 61234,
+                    "stored=" + stored + " " + (error ?? ""));
+                Check("connection settings clear", EndpointSettings.ClearPort(out error),
+                    error ?? "");
+
+                var da = new FakeDa(component);
+                da.Inputs["Port"] = 80;
+                component.ClearRuntimeMessages();
+                component.Run(da);
+                Check("connection rejects a port below the range",
+                    Output(da, "Status") == "invalid port",
+                    "status=" + Output(da, "Status"));
+                Check("connection reports the validation failure",
+                    RuntimeText(component, GH_RuntimeMessageLevel.Error).Contains("1024"),
+                    RuntimeText(component, GH_RuntimeMessageLevel.Error));
+                Check("connection keeps the current endpoint on bad input",
+                    Output(da, "Endpoint") == GhLink.Endpoint,
+                    "endpoint=" + Output(da, "Endpoint"));
+                Check("connection host output is loopback",
+                    Output(da, "Host") == "127.0.0.1", "host=" + Output(da, "Host"));
+
+                da = new FakeDa(component);
+                da.Inputs["Port"] = server.Port;
+                component.ClearRuntimeMessages();
+                component.Run(da);
+                string expected = "ws://127.0.0.1:" + server.Port + "/";
+                Check("connection accepts a valid port",
+                    Output(da, "Endpoint") == expected, "endpoint=" + Output(da, "Endpoint"));
+                Check("connection reports connecting",
+                    Output(da, "Status") == "connecting", "status=" + Output(da, "Status"));
+                Check("connection has no runtime error on success",
+                    RuntimeText(component, GH_RuntimeMessageLevel.Error) == "",
+                    RuntimeText(component, GH_RuntimeMessageLevel.Error));
+
+                server.Accept();
+                ReadUntil(server, "hello");
+                da = new FakeDa(component);
+                da.Inputs["Port"] = server.Port;
+                component.ClearRuntimeMessages();
+                component.Run(da);
+                Check("connection reports connected",
+                    Output(da, "Status") == "connected", "status=" + Output(da, "Status"));
+                Check("connection endpoint matches the link",
+                    Output(da, "Endpoint") == GhLink.Endpoint,
+                    "endpoint=" + Output(da, "Endpoint"));
+                Check("connection port is saved globally",
+                    EndpointSettings.TryLoadPort(out stored, out error) && stored == server.Port,
+                    "stored=" + stored + " " + (error ?? ""));
+            }
+            catch (Exception ex)
+            {
+                _failures++;
+                System.Console.WriteLine("FAIL connection component: " + ex);
+            }
+            finally
+            {
+                GhLink.Unregister(component);
+                server.Dispose();
+            }
+        }
+
+        private static string RuntimeText(GH_Component component, GH_RuntimeMessageLevel level)
+        {
+            var parts = new List<string>();
+            foreach (string message in component.RuntimeMessages(level)) parts.Add(message);
+            return string.Join(" | ", parts.ToArray());
+        }
+
         private static IGH_Param FindInput(IGH_Component component, string name)
         {
             int index = component.Params.IndexOfInputParam(name);
@@ -500,6 +591,11 @@ namespace Stageloom.Tests.Console
         }
 
         private sealed class StageOutHarness : StageOutComponent
+        {
+            public void Run(IGH_DataAccess da) { SolveInstance(da); }
+        }
+
+        private sealed class ConnectionHarness : ConnectionComponent
         {
             public void Run(IGH_DataAccess da) { SolveInstance(da); }
         }

@@ -71,7 +71,10 @@ class StageloomPreferences(bpy.types.AddonPreferences):
 
     port: IntProperty(
         name="Server port",
-        description="Loopback port the add-on listens on; Grasshopper connects to it",
+        description=(
+            "Loopback port the add-on listens on; the endpoint is "
+            "ws://127.0.0.1:<port>/ and Grasshopper must use the same port"
+        ),
         default=DEFAULT_PORT,
         min=1024,
         max=65535,

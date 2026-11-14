@@ -33,11 +33,34 @@ namespace Stageloom.Tests.Console
 
         public static int Main(string[] args)
         {
+            // Keep the suite out of the user's persisted endpoint. This must
+            // happen before the first GhLink access, which resolves settings.
+            EndpointSettings.DatabaseName = "StageloomLinkTests";
+
             System.Console.WriteLine("link round-trip");
+
+            // A saved port must be in effect on the first GhLink access, before
+            // any component registers. This is the document-with-only-stages
+            // case, without a settings component on the canvas.
+            string settingsError;
+            if (!EndpointSettings.SavePort(61234, out settingsError))
+            {
+                _failures++;
+                System.Console.WriteLine("FAIL persisted endpoint seed: " + settingsError);
+            }
+            else
+            {
+                Check("persisted endpoint is read before the first register",
+                    GhLink.Port == 61234
+                    && GhLink.Endpoint == "ws://127.0.0.1:61234/",
+                    "port=" + GhLink.Port + " endpoint=" + (GhLink.Endpoint ?? ""));
+                EndpointSettings.ClearPort(out settingsError);
+            }
+
             var server = new FakeServer();
             try
             {
-                GhLink.Endpoint = "ws://127.0.0.1:" + server.Port + "/";
+                GhLink.Configure("127.0.0.1", server.Port, false);
                 GhLink.Start();
                 server.Accept();
                 Check("connect accepted", true, "");
@@ -375,6 +398,7 @@ namespace Stageloom.Tests.Console
             }
 
             RunSenderLifecycle();
+            RunReconfigure();
             RunSolveRetry();
             RunRequestContext();
             RunSlotStatus();
@@ -513,7 +537,7 @@ namespace Stageloom.Tests.Console
             var server = new FakeServer();
             try
             {
-                GhLink.Endpoint = "ws://127.0.0.1:" + server.Port + "/";
+                GhLink.Configure("127.0.0.1", server.Port, false);
                 GhLink.Start();
                 server.Accept();
                 ReadUntil(server, "hello");
@@ -548,6 +572,83 @@ namespace Stageloom.Tests.Console
             {
                 GhLink.Stop();
                 server.Dispose();
+            }
+        }
+
+        /// <summary>Configure must move a live link: the old socket closes, the
+        /// new one connects, and the first publication on it carries the same
+        /// hello and schemas again. A settings component is not required for
+        /// this path.</summary>
+        private static void RunReconfigure()
+        {
+            System.Console.WriteLine("link reconfigure");
+            var first = new FakeServer();
+            var second = new FakeServer();
+            var component = new TestComponent();
+            try
+            {
+                GhLink.Configure("127.0.0.1", first.Port, false);
+                GhLink.Start();
+                first.Accept();
+                ReadUntil(first, "hello");
+
+                GhLink.Register(component);
+                GhLink.PublishStageOut(component, "reconfigure", true);
+                var declaration = new Dictionary<string, object>();
+                declaration["id"] = "p1";
+                declaration["label"] = "Port";
+                declaration["type"] = "int";
+                declaration["default"] = 1L;
+                declaration["step"] = 1L;
+                declaration["values"] = new List<object>();
+                declaration["group"] = "";
+                GhLink.PublishParam(component, "reconfigure", declaration);
+                GhLink.Publish(null);
+                ReadUntil(first, "hello");
+                ReadUntil(first, "schema");
+
+                string error;
+                Check("configure accepts the new loopback port",
+                    GhLink.Configure("127.0.0.1", second.Port, false, out error), error ?? "");
+                Check("the old link closes", first.DrainClosed(3000), "");
+                Check("configure updates the endpoint",
+                    GhLink.Endpoint == "ws://127.0.0.1:" + second.Port + "/",
+                    "endpoint=" + GhLink.Endpoint);
+                Check("configure updates the port", GhLink.Port == second.Port,
+                    "port=" + GhLink.Port);
+
+                second.Accept();
+                Dictionary<string, object> hello = ReadUntil(second, "hello");
+                Check("the new link connects",
+                    WaitFor(delegate { return GhLink.Connected; }),
+                    "connected=" + GhLink.Connected);
+                Check("hello is republished on the new link",
+                    FindStage(hello, "reconfigure") != null,
+                    "stages=" + Json.WriteCanonical(Json.Get(hello, "stages")));
+                Dictionary<string, object> schema = ReadUntil(second, "schema");
+                Check("schema is republished on the new link",
+                    (string)Json.Get(schema, "stage") == "reconfigure",
+                    "stage=" + Json.Get(schema, "stage"));
+
+                // An invalid host must not move the link off loopback.
+                Check("configure rejects a remote host",
+                    !GhLink.Configure("example.com", second.Port, false, out error),
+                    "remote host was accepted");
+                Check("a rejected configure keeps the endpoint",
+                    GhLink.Endpoint == "ws://127.0.0.1:" + second.Port + "/",
+                    "endpoint=" + GhLink.Endpoint);
+            }
+            catch (Exception ex)
+            {
+                _failures++;
+                System.Console.WriteLine("FAIL link reconfigure: " + ex);
+            }
+            finally
+            {
+                GhLink.Unregister(component);
+                GhLink.Stop();
+                first.Dispose();
+                second.Dispose();
             }
         }
 

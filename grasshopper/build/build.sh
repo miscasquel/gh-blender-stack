@@ -27,6 +27,7 @@ run_csc \
   "$(win_path "$REPO/grasshopper/src/core/Json.cs")" \
   "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
   "$(win_path "$REPO/grasshopper/src/core/ParamValues.cs")" \
+  "$(win_path "$REPO/grasshopper/src/core/Endpoint.cs")" \
   "$(win_path "$REPO/grasshopper/tests/console/Program.cs")"
 
 [ -f "$OUT" ] || { echo "build failed: $OUT not produced" >&2; exit 1; }
@@ -72,7 +73,9 @@ if [ -f "$GH_DLL" ] && [ -f "$GHIO_DLL" ] && [ -f "$RC_DLL" ]; then
     "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Conversion.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Attributes.cs")" \
+    "$(win_path "$REPO/grasshopper/src/core/Endpoint.cs")" \
     "$(win_path "$REPO/grasshopper/src/gh/GhLink.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/EndpointSettings.cs")" \
     "$(win_path "$REPO/grasshopper/src/gh/MiniWsClient.cs")" \
     "$(win_path "$REPO/grasshopper/src/gh/Instances.cs")" \
     "$(win_path "$REPO/grasshopper/tests/console/FakeServer.cs")" \
