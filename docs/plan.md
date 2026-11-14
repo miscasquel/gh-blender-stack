@@ -52,11 +52,15 @@ offline gate, the C# fixture/attribute/link/component/stage suites, the
 installed extension round trip, and the reference benchmark matrix (all budgets
 met on 2026-11-14).
 
+**Post-release live check (2026-11-14):** the 13× 99,458-triangle reference
+scene updates in 60.6 ms median (64.5 ms p95) with preview on, inside the
+100 ms target; preview off is within noise. See
+[`../benchmarks/results/2026-11-14-live-rhino.md`](../benchmarks/results/2026-11-14-live-rhino.md).
+
 **Known gaps carried forward:**
 
 | Gap | Why it blocks 1.0 |
 |---|---|
-| Instance-heavy Stage In latency (Blender's half measured at 10.5 ms; the live Rhino Stage In/solve split is still unmeasured) | The remaining latency is not located; 1.0 needs the live split. |
 | No native Windows Rhino acceptance run | Wine is a development environment, not the target user platform. |
 | No GH component migration | Old documents keep old parameter/output lists and never gain newer capabilities. |
 | No chain-level playback/bake proof | `Bake stage` freezes one stage; a multi-stage render is not proved Grasshopper-free. |
@@ -121,21 +125,24 @@ changes first.
 
 ### A. Performance and responsiveness
 
-**Problem.** The Blender half is measured: a 13× 100k-triangle definition costs
-10.5 ms to read and encode and 2.4 ms to re-apply, and the reference matrix
-passes its budgets. The live Rhino Stage In/solve split is still unmeasured, so
-the remaining 300–800 ms report has not been located.
+**Problem.** The 300–800 ms instance report did not reproduce on the reference
+scene. The 13× 99,458-triangle case updates in 60.6 ms median (64.5 ms p95)
+with preview on, inside the 100 ms target; preview off is within run-to-run
+noise. The original FiraTower file is not in the repository, so that specific
+report remains unexplained until it is re-run.
 
 **Work**
 
 - The benchmark harness is in place: `scripts/bench` builds the reference scenes
   and enforces the budgets; its 2026-11-14 Linux baseline is in
   `benchmarks/results/`.
-- Re-measure with the current `.gha` against a live Rhino; record Stage In,
-  engine pass, transport, solve and apply times separately.
-- Fix the dominant cause. The existing hypotheses are, in order: duplicate
-  solves (fixed), definition rebuilding on every solve, and the Grasshopper
-  definition itself.
+- The live half is scripted too: `benchmarks/live_scene.py` saves the cube and
+  13× scenes, and `benchmarks/live_client.py` measures one scene against a live
+  Rhino. The first result is
+  `benchmarks/results/2026-11-14-live-rhino.md`: ~13 ms of Blender-side work,
+  ~47 ms of Grasshopper round trip, ~60 ms total.
+- Re-run the original FiraTower file if it becomes available; otherwise the
+  reference scene is the performance budget.
 - Keep the regression budgets current so future changes cannot silently
   reintroduce the cliff.
 
@@ -149,8 +156,9 @@ the remaining 300–800 ms report has not been located.
   record the budget rather than promising 60 fps.
 - Bake time and memory are measured on the reference scene range.
 
-**Exit:** the reference matrix is in the repository, the Blender-side instance
-case is inside budget, and the 1.0 performance report is reproducible.
+**Exit:** the reference matrix is in the repository, both the Blender-side and
+live instance cases are inside budget, and the 1.0 performance report is
+reproducible from the scripted harness.
 
 ### B. Platform support
 

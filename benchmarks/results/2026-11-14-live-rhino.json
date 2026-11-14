@@ -1,0 +1,928 @@
+{
+  "meta": {
+    "date": "2026-11-14",
+    "blender": "5.3.0",
+    "addon": "Stageloom 0.6.0 (bl_ext.user_default.stageloom)",
+    "plugin": "Stageloom.gha 0.6.0",
+    "rhino": "8 under wine",
+    "platform": "Linux 7.3.4 (CachyOS), AMD Ryzen 7 7700X",
+    "definition": "Stage In.Geometry -> Stage Out.Geometry, no Param",
+    "scene": "one 100k-triangle definition placed 13x through Instance-on-Points; cube baseline",
+    "method": "full request per sample; total_ms is request_again() -> applied answer; rtt_ms is send -> answer",
+    "note": "prefix_ms is the timed prefix_sections() call only; the clone cleanup/view-layer update happens after the read, so the benchmark cold-prefix number (10.5 ms) remains the Blender-side reference."
+  },
+  "runs": [
+    {
+      "label": "cube preview-on",
+      "scene": "cube.blend",
+      "stage_key": "livecube-a9e9ff",
+      "preview": true,
+      "samples": [
+        {
+          "sample": 1,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 55.3216539992718,
+          "timings": {
+            "prefix_ms": 0.010100004146806896,
+            "encode_ms": 0.053661002311855555,
+            "rtt_ms": 30.955026995798107
+          },
+          "passes": 1086,
+          "stats": {
+            "passes": 27,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 2,
+            "applies": 0,
+            "tags": 0,
+            "sends": 2,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 2,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 22.134098995593376,
+          "timings": {
+            "prefix_ms": 0.013489996490534395,
+            "encode_ms": 0.038869999116286635,
+            "rtt_ms": 20.751935997395776
+          },
+          "passes": 1097,
+          "stats": {
+            "passes": 11,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 3,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 28.390539999236353,
+          "timings": {
+            "prefix_ms": 0.010509997082408518,
+            "encode_ms": 0.042319996282458305,
+            "rtt_ms": 26.86737500334857
+          },
+          "passes": 1111,
+          "stats": {
+            "passes": 14,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 4,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 17.9612259962596,
+          "timings": {
+            "prefix_ms": 0.013129996659699827,
+            "encode_ms": 0.03899000148521736,
+            "rtt_ms": 16.603543001110666
+          },
+          "passes": 1120,
+          "stats": {
+            "passes": 9,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 5,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 30.619887002103496,
+          "timings": {
+            "prefix_ms": 0.009759998647496104,
+            "encode_ms": 0.039419996028300375,
+            "rtt_ms": 28.974081003980245
+          },
+          "passes": 1135,
+          "stats": {
+            "passes": 15,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 6,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 32.313042000168934,
+          "timings": {
+            "prefix_ms": 0.010660005500540137,
+            "encode_ms": 0.041600003896746784,
+            "rtt_ms": 30.98821800085716
+          },
+          "passes": 1151,
+          "stats": {
+            "passes": 16,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 7,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 32.26319100213004,
+          "timings": {
+            "prefix_ms": 0.01198000245494768,
+            "encode_ms": 0.0390900022466667,
+            "rtt_ms": 30.950877000577748
+          },
+          "passes": 1167,
+          "stats": {
+            "passes": 16,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 8,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 17.931467002199497,
+          "timings": {
+            "prefix_ms": 0.01224000152433291,
+            "encode_ms": 0.040009996155276895,
+            "rtt_ms": 16.58513300208142
+          },
+          "passes": 1176,
+          "stats": {
+            "passes": 9,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 9,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 34.36748799867928,
+          "timings": {
+            "prefix_ms": 0.0109999964479357,
+            "encode_ms": 0.039880003896541893,
+            "rtt_ms": 33.0102740044822
+          },
+          "passes": 1193,
+          "stats": {
+            "passes": 17,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 10,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 32.35867199691711,
+          "timings": {
+            "prefix_ms": 0.010539995855651796,
+            "encode_ms": 0.03826100146397948,
+            "rtt_ms": 30.981507006799802
+          },
+          "passes": 1209,
+          "stats": {
+            "passes": 16,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        }
+      ],
+      "summary": {
+        "total_ms": {
+          "min": 17.93,
+          "median": 31.44,
+          "p95": 34.37,
+          "max": 55.32
+        },
+        "rtt_ms": {
+          "min": 16.59,
+          "median": 29.96,
+          "p95": 30.99,
+          "max": 33.01
+        },
+        "prefix_ms": {
+          "min": 0.01,
+          "median": 0.01,
+          "p95": 0.01,
+          "max": 0.01
+        },
+        "encode_ms": {
+          "min": 0.04,
+          "median": 0.04,
+          "p95": 0.04,
+          "max": 0.05
+        }
+      }
+    },
+    {
+      "label": "instances-13 preview-on",
+      "scene": "instances-13.blend",
+      "stage_key": "liveinstance-7d9a71",
+      "preview": true,
+      "samples": [
+        {
+          "sample": 1,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 63.203013996826485,
+          "timings": {
+            "prefix_ms": 0.01141000393545255,
+            "encode_ms": 0.3639310016296804,
+            "rtt_ms": 49.72140300378669
+          },
+          "passes": 1377,
+          "stats": {
+            "passes": 21,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 2,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 64.54248799855122,
+          "timings": {
+            "prefix_ms": 0.011190000805072486,
+            "encode_ms": 0.31743099680170417,
+            "rtt_ms": 50.93206599849509
+          },
+          "passes": 1398,
+          "stats": {
+            "passes": 21,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 3,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 68.59786100540077,
+          "timings": {
+            "prefix_ms": 0.013570002920459956,
+            "encode_ms": 0.33343100221827626,
+            "rtt_ms": 54.34439600503538
+          },
+          "passes": 1421,
+          "stats": {
+            "passes": 23,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 4,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 55.10942899854854,
+          "timings": {
+            "prefix_ms": 0.011470001481939107,
+            "encode_ms": 0.3138109968858771,
+            "rtt_ms": 40.944626001873985
+          },
+          "passes": 1438,
+          "stats": {
+            "passes": 17,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 5,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 55.75851100002183,
+          "timings": {
+            "prefix_ms": 0.013090000720694661,
+            "encode_ms": 0.3197900005034171,
+            "rtt_ms": 42.29762899922207
+          },
+          "passes": 1456,
+          "stats": {
+            "passes": 18,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 6,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 61.68808000074932,
+          "timings": {
+            "prefix_ms": 0.012360003893263638,
+            "encode_ms": 0.34868100192397833,
+            "rtt_ms": 48.10655800247332
+          },
+          "passes": 1477,
+          "stats": {
+            "passes": 21,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 7,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 59.580323002592195,
+          "timings": {
+            "prefix_ms": 0.01365999924018979,
+            "encode_ms": 0.32417100010206923,
+            "rtt_ms": 46.73766400082968
+          },
+          "passes": 1497,
+          "stats": {
+            "passes": 20,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 8,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 53.39381399971899,
+          "timings": {
+            "prefix_ms": 0.011379997886251658,
+            "encode_ms": 0.34136100293835625,
+            "rtt_ms": 39.7774320008466
+          },
+          "passes": 1514,
+          "stats": {
+            "passes": 17,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 9,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 63.204473997757304,
+          "timings": {
+            "prefix_ms": 0.011769996490329504,
+            "encode_ms": 0.32909099536482245,
+            "rtt_ms": 49.5907719960087
+          },
+          "passes": 1536,
+          "stats": {
+            "passes": 22,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 10,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 58.434200000192504,
+          "timings": {
+            "prefix_ms": 0.01221999991685152,
+            "encode_ms": 0.5406410055002198,
+            "rtt_ms": 43.022492005547974
+          },
+          "passes": 1554,
+          "stats": {
+            "passes": 18,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        }
+      ],
+      "summary": {
+        "total_ms": {
+          "min": 53.39,
+          "median": 60.63,
+          "p95": 64.54,
+          "max": 68.6
+        },
+        "rtt_ms": {
+          "min": 39.78,
+          "median": 47.42,
+          "p95": 50.93,
+          "max": 54.34
+        },
+        "prefix_ms": {
+          "min": 0.01,
+          "median": 0.01,
+          "p95": 0.01,
+          "max": 0.01
+        },
+        "encode_ms": {
+          "min": 0.31,
+          "median": 0.33,
+          "p95": 0.36,
+          "max": 0.54
+        }
+      }
+    },
+    {
+      "label": "instances-13 preview-off",
+      "scene": "instances-13.blend",
+      "stage_key": "liveinstance-7d9a71",
+      "preview": false,
+      "samples": [
+        {
+          "sample": 1,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 65.26603200472891,
+          "timings": {
+            "prefix_ms": 0.011520001862663776,
+            "encode_ms": 0.3706209972733632,
+            "rtt_ms": 52.05238100461429
+          },
+          "passes": 1148,
+          "stats": {
+            "passes": 22,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 2,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 74.71950199396815,
+          "timings": {
+            "prefix_ms": 0.01160999818239361,
+            "encode_ms": 0.3020410003955476,
+            "rtt_ms": 60.37713700061431
+          },
+          "passes": 1174,
+          "stats": {
+            "passes": 26,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 3,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 60.01390599703882,
+          "timings": {
+            "prefix_ms": 0.011229996744077653,
+            "encode_ms": 0.31465099891647696,
+            "rtt_ms": 46.359763997315895
+          },
+          "passes": 1193,
+          "stats": {
+            "passes": 19,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 4,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 63.09300599968992,
+          "timings": {
+            "prefix_ms": 0.0105600047390908,
+            "encode_ms": 0.3077410001424141,
+            "rtt_ms": 49.242542998399585
+          },
+          "passes": 1214,
+          "stats": {
+            "passes": 21,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 5,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 72.17282299825456,
+          "timings": {
+            "prefix_ms": 0.010269999620504677,
+            "encode_ms": 0.29327099764486775,
+            "rtt_ms": 57.91992000013124
+          },
+          "passes": 1239,
+          "stats": {
+            "passes": 25,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 6,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 58.87187299958896,
+          "timings": {
+            "prefix_ms": 0.012309996236581355,
+            "encode_ms": 0.30847099696984515,
+            "rtt_ms": 45.947232996695675
+          },
+          "passes": 1259,
+          "stats": {
+            "passes": 20,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 7,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 62.999595000292175,
+          "timings": {
+            "prefix_ms": 0.013689998013433069,
+            "encode_ms": 0.32880099752219394,
+            "rtt_ms": 50.50180700345663
+          },
+          "passes": 1281,
+          "stats": {
+            "passes": 22,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 8,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 58.073200001672376,
+          "timings": {
+            "prefix_ms": 0.016400001186411828,
+            "encode_ms": 0.3567219973774627,
+            "rtt_ms": 44.340036998619325
+          },
+          "passes": 1300,
+          "stats": {
+            "passes": 19,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 9,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 62.67219500296051,
+          "timings": {
+            "prefix_ms": 0.010360003216192126,
+            "encode_ms": 0.31469099485548213,
+            "rtt_ms": 49.63569399842527
+          },
+          "passes": 1322,
+          "stats": {
+            "passes": 22,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        },
+        {
+          "sample": 10,
+          "ok": true,
+          "state": "ok",
+          "error": "",
+          "total_ms": 57.92188899795292,
+          "timings": {
+            "prefix_ms": 0.012700002116616815,
+            "encode_ms": 0.3145910013699904,
+            "rtt_ms": 44.97997900034534
+          },
+          "passes": 1342,
+          "stats": {
+            "passes": 20,
+            "prefix_clones": 1,
+            "prefix_memo_hits": 1,
+            "applies": 0,
+            "tags": 0,
+            "sends": 1,
+            "timeouts": 0,
+            "undelivered": 0,
+            "index_rebuilds": 0,
+            "playback_frames": 0,
+            "playback_synced": 0,
+            "playback_failures": 0
+          }
+        }
+      ],
+      "summary": {
+        "total_ms": {
+          "min": 57.92,
+          "median": 62.84,
+          "p95": 72.17,
+          "max": 74.72
+        },
+        "rtt_ms": {
+          "min": 44.34,
+          "median": 49.44,
+          "p95": 57.92,
+          "max": 60.38
+        },
+        "prefix_ms": {
+          "min": 0.01,
+          "median": 0.01,
+          "p95": 0.01,
+          "max": 0.02
+        },
+        "encode_ms": {
+          "min": 0.29,
+          "median": 0.31,
+          "p95": 0.36,
+          "max": 0.37
+        }
+      }
+    }
+  ]
+}

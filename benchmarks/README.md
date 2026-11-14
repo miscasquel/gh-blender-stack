@@ -53,11 +53,34 @@ and RSS before/after; compare those across runs.
 ## Live Rhino measurement
 
 A headless fake cannot measure Stage In conversion, the Grasshopper solve or
-the definition's own work. For the instance-latency investigation, run the same
-reference scene against a live Rhino, with the panel's Diagnostics timing rows
-(`prefix · encode · answer · apply`) and one stage at a time:
+the definition's own work. The live half has two scripted entry points:
 
-1. Open the reference `.blend`, confirm both stages are unfrozen and the
+```bash
+# Build the reference scenes and print their stage keys.
+blender -b --factory-startup --online-mode \
+  --python benchmarks/live_scene.py -- \
+  --out /tmp/opencode/stageloom-live --kind both
+
+# Measure one scene through a live Grasshopper connection. Run it with the
+# installed 0.6.0 extension and an enabled Online Access preference.
+blender -b /tmp/opencode/stageloom-live/instances-13.blend --online-mode \
+  --python benchmarks/live_client.py -- \
+  --out /tmp/opencode/stageloom-live/instances-preview-on.json \
+  --label "instances-13 preview-on" --samples 10
+```
+
+Build a minimal `Stage In.Geometry -> Stage Out.Geometry` definition in Rhino
+with the scene's stage key, then run the client. `total_ms` is the stage update
+from the forced request to the applied answer; `rtt_ms` is send-to-answer, the
+panel's "answer" field. Add a real definition's components only when measuring
+the solve itself.
+
+The first live reference run is in
+[`results/2026-11-14-live-rhino.md`](results/2026-11-14-live-rhino.md): 13 ×
+99,458 triangles cost 60.6 ms median end to end with preview on, inside the
+100 ms target. The manual panel path is still useful for a GUI session:
+
+1. Open a generated `.blend`, confirm both stages are unfrozen and the
    `Stageloom` panel shows the stage keys.
 2. Grasshopper must report connected. Use **Push** once to fill the cache.
 3. Set **Play Every Frame**, or scrub, and read the panel after each event.
