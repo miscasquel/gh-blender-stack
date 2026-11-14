@@ -20,6 +20,7 @@ using Grasshopper.Kernel.Data;
 using Grasshopper.Kernel.Parameters;
 using Grasshopper.Kernel.Types;
 using Stageloom.Core;
+using Rhino.Geometry;
 
 namespace Stageloom.Tests.Console
 {
@@ -48,6 +49,7 @@ namespace Stageloom.Tests.Console
                 RunStageInProtocolError(stageIn);
                 RunStageInLateWrite(server);
                 RunStageOutNoRequest(server, stageOut);
+                RunUnitTransforms();
                 RunParamVisibilityTests();
             }
             catch (Exception ex)
@@ -235,6 +237,60 @@ namespace Stageloom.Tests.Console
             Check("an idle stage out is not retried",
                 slot.ResolveAttempts == attempts,
                 "attempts=" + slot.ResolveAttempts);
+        }
+
+        // --------------------------------------------------------- unit rows
+
+        /// <summary>A placement transform's translation is a length. The wire
+        /// is metres; a millimetre document's rows must come out 1000× larger,
+        /// and Stage Out must divide them back. Instance geometry was already
+        /// scaled in both directions, which is why a metres document hid this.</summary>
+        private static void RunUnitTransforms()
+        {
+            System.Console.WriteLine();
+            System.Console.WriteLine("unit transforms");
+
+            var header = new Dictionary<string, object>();
+            var frame = DecodedFrame.FromSections(header, new List<Section>
+            {
+                Section.U32("inst.ref_def", new uint[] { 0 }),
+                Section.Floats("inst.transforms", new float[]
+                {
+                    1, 0, 0, 5,
+                    0, 1, 0, 4,
+                    0, 0, 1, 3,
+                    0, 0, 0, 1,
+                }),
+            });
+
+            long[] refs;
+            List<Transform> transforms;
+            bool read = Instances.ReadRows(frame, "", 1000.0, out refs, out transforms);
+            bool oneRow = read && refs.Length == 1 && transforms != null && transforms.Count == 1;
+            Check("unit rows: a mm document scales the placement",
+                oneRow
+                && Near(transforms[0][0, 3], 5000) && Near(transforms[0][1, 3], 4000)
+                && Near(transforms[0][2, 3], 3000),
+                oneRow ? transforms[0].ToString() : "no rows");
+
+            Transform millimetres = oneRow ? transforms[0] : new Transform(1.0);
+            float[] wire = Conversion.TransformToWire(millimetres, 1000.0);
+            Check("unit rows: Stage Out divides the placement back to metres",
+                Near(wire[3], 5) && Near(wire[7], 4) && Near(wire[11], 3),
+                wire.Length == 16 ? wire[3] + "," + wire[7] + "," + wire[11] : "bad wire");
+
+            Instances.ReadRows(frame, "", 1.0, out refs, out transforms);
+            bool metres = transforms != null && transforms.Count == 1;
+            Check("unit rows: a metre document keeps the placement",
+                metres && Near(transforms[0][0, 3], 5)
+                && Near(transforms[0][1, 3], 4) && Near(transforms[0][2, 3], 3),
+                metres ? transforms[0].ToString() : "no rows");
+        }
+
+        private static bool Near(double value, double expected)
+        {
+            double tolerance = Math.Max(1e-5, Math.Abs(expected) * 1e-5);
+            return Math.Abs(value - expected) <= tolerance;
         }
 
         // ------------------------------------------------------ param visibility

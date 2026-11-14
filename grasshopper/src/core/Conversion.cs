@@ -1094,7 +1094,16 @@ namespace Stageloom.Core
 
         /// <summary>A Transform from the wire's 16 floats: row-major
         /// (``m[row*4+col]``), translation in the fourth column — elements 3, 7,
-        /// 11 (protocol §5.2).</summary>
+        /// 11 (protocol §5.2). The wire is metres; <paramref name="scale"/> is
+        /// the document-units-per-metre factor, so the translation becomes
+        /// document units. The linear part is dimensionless and is not scaled.</summary>
+        public static Transform TransformFromWire(float[] m, double scale)
+        {
+            Transform t = TransformFromWire(m);
+            return scale == 1.0 ? t : ScaleTransformTranslation(t, scale);
+        }
+
+        /// <summary>A Transform from the wire with no unit conversion.</summary>
         public static Transform TransformFromWire(float[] m)
         {
             if (m == null || m.Length < 16)
@@ -1107,7 +1116,16 @@ namespace Stageloom.Core
         }
 
         /// <summary>The wire form of a Transform (the inverse of
-        /// <see cref="TransformFromWire"/>).</summary>
+        /// <see cref="TransformFromWire"/>, translation divided back to metres).</summary>
+        public static float[] TransformToWire(Transform t, double scale)
+        {
+            // Transform is a value type: scaling this copy leaves the caller's
+            // matrix alone.
+            if (scale != 0.0 && scale != 1.0) t = ScaleTransformTranslation(t, 1.0 / scale);
+            return TransformToWire(t);
+        }
+
+        /// <summary>The wire form of a Transform with no unit conversion.</summary>
         public static float[] TransformToWire(Transform t)
         {
             var m = new float[16];
@@ -1115,6 +1133,17 @@ namespace Stageloom.Core
                 for (int col = 0; col < 4; col++)
                     m[row * 4 + col] = (float)t[row, col];
             return m;
+        }
+
+        /// <summary>Multiply a transform's translation by a unit factor. The
+        /// fourth-column entries (elements 3, 7, 11) are lengths; the rest of
+        /// the affine matrix is dimensionless.</summary>
+        private static Transform ScaleTransformTranslation(Transform t, double factor)
+        {
+            t[0, 3] = t[0, 3] * factor;
+            t[1, 3] = t[1, 3] * factor;
+            t[2, 3] = t[2, 3] * factor;
+            return t;
         }
 
         /// <summary>The same sections under a definition prefix

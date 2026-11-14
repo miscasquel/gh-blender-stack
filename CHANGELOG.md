@@ -10,6 +10,18 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Block instances place correctly in non-metre Rhino documents.** Instance
+  definition geometry was converted between document units and the wire's
+  metres, but the placement translation was not: in a millimetre document a
+  block whose definition was 1000× larger stayed at its metre coordinates, so
+  it landed near the origin. Stage In and Stage Out now convert the translation
+  and leave the rotation/scale part of the matrix unchanged. Metres documents
+  are unaffected.
+
 ## [0.5.2] — 2026-11-13
 
 Baking a stage whose output contains nested instances no longer crashes

@@ -33,3 +33,27 @@ it.
 
 The check must be run after rebuilding and redeploying `Stageloom.gha`; Rhino
 loads plugins only at startup.
+
+## `UnitsCheck.cs`
+
+The non-metre half of the units matrix. It exercises `Conversion` with explicit
+document scales (millimetres, centimetres, metres, inches, feet): a mesh, a
+polyline and a point list must return to the same document coordinates, and the
+same sections read at scale 1 must be metres.
+
+It also exercises the block row path (`Instances.ReadRows`): a wire placement
+of 5 metres in a millimetre document must become a translation of 5000. This is
+the part Blender cannot test, because Blender has no document unit system.
+
+**Result, 2026-11-14:** the first run found `ReadRows` returning 5 for a
+millimetre scale — the placement translation had never been converted. The row
+reader and writer now scale the translation only (the linear part is
+dimensionless), and the full matrix passes. The shared `TransformFromWire` /
+`TransformToWire` helpers are covered headlessly in `ComponentTests`; `Emit`
+uses the writer helper with the same document scale.
+
+Expected on a correct build:
+
+```text
+PASS: units matrix (mm/cm/m/in/ft, mesh/curve/points, block placements)
+```

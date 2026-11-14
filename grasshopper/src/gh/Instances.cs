@@ -44,8 +44,10 @@ namespace Stageloom
         public const string DefinitionPrefix = "Stageloom ";
 
         /// <summary>Definition rows and transforms, decoded (protocol §5.2).
-        /// Returns false when the pair is absent; both halves are all-or-nothing.</summary>
-        public static bool ReadRows(DecodedFrame frame, string prefix,
+        /// Returns false when the pair is absent; both halves are all-or-nothing.
+        /// The wire is metres, so every placement translation is converted to
+        /// document units with <paramref name="scale"/>.</summary>
+        public static bool ReadRows(DecodedFrame frame, string prefix, double scale,
                                     out long[] refDef, out List<Transform> transforms)
         {
             refDef = null;
@@ -63,7 +65,7 @@ namespace Stageloom
                 refDef[i] = defs[i];
                 var m = new float[16];
                 Array.Copy(raw, i * 16, m, 0, 16);
-                transforms.Add(Conversion.TransformFromWire(m));
+                transforms.Add(Conversion.TransformFromWire(m, scale));
             }
             return rows > 0;
         }
@@ -104,7 +106,7 @@ namespace Stageloom
             var builder = new DefinitionBuilder(frame, scale, attributes, note);
             long[] refDef;
             List<Transform> transforms;
-            if (!ReadRows(frame, "", out refDef, out transforms))
+            if (!ReadRows(frame, "", scale, out refDef, out transforms))
             {
                 if (note != null) note("definitions arrived without instance rows");
                 return;
@@ -202,7 +204,7 @@ namespace Stageloom
 
                     long[] nested;
                     List<Transform> nestedTransforms;
-                    if (ReadRows(_frame, prefix, out nested, out nestedTransforms))
+                    if (ReadRows(_frame, prefix, _scale, out nested, out nestedTransforms))
                     {
                         for (int row = 0; row < nested.Length; row++)
                         {
@@ -280,7 +282,7 @@ namespace Stageloom
 
                     long[] nested;
                     List<Transform> nestedTransforms;
-                    ReadRows(_frame, prefix, out nested, out nestedTransforms);
+                    ReadRows(_frame, prefix, _scale, out nested, out nestedTransforms);
 
                     string hash;
                     using (var sha = SHA256.Create())
@@ -292,7 +294,7 @@ namespace Stageloom
                             for (int i = 0; i < nested.Length; i++)
                             {
                                 Update(sha, "inst.ref_def", BitConverter.GetBytes((uint)nested[i]));
-                                var m = Conversion.TransformToWire(nestedTransforms[i]);
+                                var m = Conversion.TransformToWire(nestedTransforms[i], _scale);
                                 var raw = new byte[m.Length * 4];
                                 Buffer.BlockCopy(m, 0, raw, 0, raw.Length);
                                 Update(sha, "inst.transforms", raw);
@@ -358,7 +360,7 @@ namespace Stageloom
                 int index = writer.Definition(instance.InstanceDefinition, instance.Value.ParentIdefId);
                 if (index < 0) continue;
                 refDef.Add((uint)index);
-                transforms.AddRange(Conversion.TransformToWire(instance.Value.Xform));
+                transforms.AddRange(Conversion.TransformToWire(instance.Value.Xform, scale));
             }
             if (refDef.Count == 0) return;
             sections.Add(Section.U32("inst.ref_def", refDef.ToArray()));
@@ -597,7 +599,7 @@ namespace Stageloom
                         int child = Definition(goo.InstanceDefinition, goo.Value.ParentIdefId);
                         if (child < 0) continue;
                         refDef.Add((uint)child);
-                        transforms.AddRange(Conversion.TransformToWire(goo.Value.Xform));
+                        transforms.AddRange(Conversion.TransformToWire(goo.Value.Xform, _scale));
                     }
                     if (refDef.Count > 0)
                     {
