@@ -114,6 +114,9 @@ async def main():
                     help="model the plugin's coalesced ScheduleSolution calls: while a "
                          "solve window (--delay-ms) is open, later requests supersede "
                          "the pending one and only the newest is answered")
+    ap.add_argument("--stateful", action="store_true",
+                    help="make each answer different even for the same request id, "
+                         "like a solver step (a live stage's output)")
     args = ap.parse_args()
 
     state = StageState()
@@ -328,6 +331,10 @@ async def session(ws, args, state):
         if args.delay_ms and not args.coalesce:
             await asyncio.sleep(args.delay_ms / 1000.0)
         state.responses += 1
+        if args.stateful:
+            # A solver step: the same request legitimately answers differently.
+            # The increment is small enough to keep the geometry recognisable.
+            scale += 0.01 * state.responses
         if args.fail_after and state.responses == args.fail_after:
             # One solve fails: the error response a broken plugin stage has to
             # send (protocol 4.4). Blender must land on `error` immediately,

@@ -180,6 +180,7 @@ scripts/test-core        # layer A: pure Python core, no Blender needed
 scripts/test-blender     # layer B: Blender headless, against tools/fake_gh
 scripts/test-gha         # layer C: the C# codec under wine, the same golden fixtures
 scripts/test-extension   # layer D-lite: builds, installs into a throwaway config, round trip
+scripts/bench            # reference performance matrix and its budgets (not a test layer)
 
 python3 scripts/make-fixtures   # regenerate protocol/fixtures after a protocol change
 ```
@@ -205,8 +206,9 @@ grasshopper/        Grasshopper plugin (C#, built with wine csc.exe)
   src/gh/           Stage In, Stage Out, Param components
 protocol/fixtures/  golden frames shared by both codecs
 tools/fake_gh/      Python stand-in for the GH side, used in Blender tests
+benchmarks/         reference performance matrix and recorded baselines
 spikes/             feasibility scripts and their results behind the plan
-scripts/            test and build entry points
+scripts/            test, benchmark and build entry points
 docs/
   plan.md           the project plan (authoritative, roadmap)
   protocol.md       protocol v2 specification

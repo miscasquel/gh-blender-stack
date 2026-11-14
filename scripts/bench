@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Reference benchmark matrix: Blender-side timing and budget gate.
+#
+#     scripts/bench                      # all scenarios, budget gate on
+#     scripts/bench --quick              # skip the 1M-triangle case
+#     scripts/bench --scenario instances # one scenario (repeatable)
+#     scripts/bench --out /tmp/bench.json
+#
+# This is not the unit suite: it drives the real engine and, where a scenario
+# needs the wire, the real WebSocket transport against tools/fake_gh. It takes
+# minutes, so it is not part of scripts/test-blender.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+LOG="$(mktemp)"
+set +e
+# --online-mode: the add-on gates its server on bpy.app.online_access, which a
+# factory startup reports as off. The benchmark is the consent here.
+blender -b --factory-startup --online-mode --python-exit-code 1 \
+  --python benchmarks/bench.py -- "$@" >"$LOG" 2>&1
+CODE=$?
+set -e
+
+grep -vE '^Blender [0-9]|^Read prefs|^$' "$LOG" || true
+rm -f "$LOG"
+exit "$CODE"
