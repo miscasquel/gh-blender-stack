@@ -5,12 +5,26 @@ Stage removal and enable/disable are native: deleting the stage's modifier
 removes the stage, and the modifier's own visibility toggles are the switch. The add-on never writes those toggles after creation.
 """
 
+import secrets
+
 import bpy
 from bpy.props import IntProperty, StringProperty
 
 from . import bridge, engine, helpers, nodes, props, stack as stack_mod
+from .engine.dependencies import stage_dependencies
 
 STACK_TYPES = {"MESH", "CURVE", "POINTCLOUD"}
+# States a bake may start from for the selected stage and its upstream chain.
+# Idle settles during the bake gate and frozen/disabled stages are static by
+# design; anything else cannot give the native bake a stable input.
+BAKE_READY_STATES = frozenset(
+    (
+        stack_mod.STATE_IDLE,
+        stack_mod.STATE_OK,
+        stack_mod.STATE_FROZEN,
+        stack_mod.STATE_DISABLED,
+    )
+)
 SURFACE_MESSAGE = (
     "surface objects cannot hold a Stageloom stage in Blender 5.2 "
     "(a surface object cannot take a Geometry Nodes modifier); "
@@ -184,13 +198,76 @@ class STAGELOOM_OT_purge_orphans(bpy.types.Operator):
         return {"FINISHED"}
 
 
+def _stage_pending(obj, stage):
+    """Whether the stage is waiting for an answer to its current request."""
+    record = stack_mod.stack_of(obj)
+    if record is None:
+        return False
+    return bool(engine._pending.get((record.stack_id, stage.key)))
+
+
+def _bake_blocker(obj, stage):
+    """Why a bake cannot start from this stage, or None when it is ready."""
+    if stage.state not in BAKE_READY_STATES:
+        return stage.state
+    if _stage_pending(obj, stage):
+        return "request pending"
+    return None
+
+
+def _unfreeze_bake_token(token):
+    """Unfreeze exactly the stages this bake token froze; return the count.
+
+    The marker is the only proof that the bake froze a stage: a stage the user
+    had frozen before the bake carries no marker and is left alone. A missing
+    stage or object simply has no marker to match, so it is skipped.
+    """
+    if not token:
+        return 0
+    count = 0
+    for candidate in bpy.data.objects:
+        record = stack_mod.stack_of(candidate)
+        if record is None:
+            continue
+        for stage in record.stages:
+            if stage.frozen_by_bake != token:
+                continue
+            stage.frozen_by_bake = ""
+            if stage.frozen:
+                stage.frozen = False
+                engine.unfreeze(candidate, stage)
+                count += 1
+    return count
+
+
+def _delete_native_bake(context, obj, modifier, entry):
+    """Delete a modifier's native bake; return an error string, or None."""
+    if modifier is None or entry is None:
+        return None
+    context.view_layer.objects.active = obj
+    obj.select_set(True)
+    try:
+        result = bpy.ops.object.geometry_node_bake_delete_single(
+            session_uid=getattr(obj, "session_uid", 0),
+            modifier_name=modifier.name,
+            bake_id=entry.bake_id,
+        )
+    except Exception as exc:
+        return repr(exc)
+    if "FINISHED" not in result:
+        return "Blender did not delete it"
+    return None
+
+
 class STAGELOOM_OT_bake(bpy.types.Operator):
     bl_idname = "stageloom.bake"
     bl_label = "Bake Stage"
     bl_description = (
         "Bake this stage's output into its native Geometry Nodes Bake node over "
-        "the scene frame range. The per-frame gate waits for Grasshopper, so a "
-        "stateful definition is stepped in order; renders then read the bake"
+        "the scene frame range, then freeze the stage and every upstream stage "
+        "it depends on so the baked inputs cannot change. The per-frame gate "
+        "waits for Grasshopper during the bake, so a stateful definition is "
+        "stepped in order; downstream stages stay live and renders read the bake"
     )
     bl_options = {"REGISTER"}
 
@@ -240,14 +317,40 @@ class STAGELOOM_OT_bake(bpy.types.Operator):
             self.report({"ERROR"}, "the stage's Bake node is missing; rebuild the stage group")
             return {"CANCELLED"}
 
+        # Compute the freeze set before the bake, and refuse to start unless
+        # every upstream stage can give it a stable input. An idle stage is
+        # settled by the bake gate itself; waiting/errored/unbound stages cannot
+        # be.
+        upstream = stage_dependencies(obj, stage)
+        blocked = []
+        for candidate_obj, candidate_stage in [(obj, stage)] + upstream:
+            reason = _bake_blocker(candidate_obj, candidate_stage)
+            if reason is not None:
+                blocked.append(
+                    "%s/%s (%s)"
+                    % (candidate_obj.name, candidate_stage.key, reason)
+                )
+        if blocked:
+            self.report(
+                {"ERROR"},
+                "bake needs settled stages; not ready: %s" % ", ".join(blocked),
+            )
+            return {"CANCELLED"}
+
         entry.bake_mode = "ANIMATION"
         entry.use_custom_simulation_frame_range = True
         entry.frame_start = int(scene.frame_start)
         entry.frame_end = int(scene.frame_end)
 
+        # A rebake replaces this stage's freeze set. Release the old set first:
+        # those upstream stages must be live again for this bake, and must not
+        # stay frozen under a token nothing owns.
+        was_frozen = bool(stage.frozen)
+        if stage.bake_token:
+            _unfreeze_bake_token(stage.bake_token)
+            stage.bake_token = ""
         # A frozen stage would skip the per-frame gate, so a rebake has to thaw
         # it for the duration and freeze it again on success.
-        was_frozen = bool(stage.frozen)
         if was_frozen:
             stage.frozen = False
             engine.unfreeze(obj, stage)
@@ -266,6 +369,7 @@ class STAGELOOM_OT_bake(bpy.types.Operator):
         obj.select_set(True)
         wm = context.window_manager
         total = int(scene.frame_end - scene.frame_start + 1)
+        failure = None
         try:
             if wm is not None:
                 # Blender's cursor progress number updates even while the
@@ -279,7 +383,7 @@ class STAGELOOM_OT_bake(bpy.types.Operator):
             )
         except Exception as exc:
             result = {"CANCELLED"}
-            self.report({"ERROR"}, "bake failed: %r" % (exc,))
+            failure = repr(exc)
         finally:
             engine._bake_progress = None
             if wm is not None:
@@ -290,28 +394,66 @@ class STAGELOOM_OT_bake(bpy.types.Operator):
                 scene.frame_set(original)
             except Exception:
                 pass
-        if "FINISHED" not in result:
+        stats = engine.stats
+        if failure is None and "FINISHED" not in result:
+            failure = "Blender did not finish the native bake"
+        if failure is None and stats["playback_failures"]:
+            # The operator can return FINISHED after a frame the gate could not
+            # make ready; that bake is incomplete, not a success.
+            failure = "%d frame(s) did not settle" % stats["playback_failures"]
+        if failure is not None:
+            # Leave neither a baked stage nor a frozen chain behind. The native
+            # bake may have written some frames before it failed; the old bake
+            # is not recoverable either way, so delete what is there.
+            stage.baked = False
+            stage.bake_token = ""
+            stage.frozen = False
             if was_frozen:
                 stage.frozen = True
                 engine.freeze(obj, stage)
+            deleted = _delete_native_bake(context, obj, modifier, entry)
+            if deleted is not None:
+                self.report(
+                    {"ERROR"},
+                    "bake failed: %s; no upstream stage was frozen; the partial "
+                    "native bake could not be deleted: %s" % (failure, deleted),
+                )
+            else:
+                self.report(
+                    {"ERROR"},
+                    "bake failed: %s; no upstream stage was frozen" % failure,
+                )
             return {"CANCELLED"}
         # The native cache is now the render source: stop asking Grasshopper
-        # for every frame until the user clears the bake.
+        # for every frame until the user clears the bake. Upstream stages join
+        # the freeze only now, after a complete bake; a stage the user had
+        # already frozen keeps its own freeze and gets no marker.
+        token = secrets.token_hex(8)
         stage.baked = True
         stage.frozen = True
+        stage.bake_token = token
         engine.freeze(obj, stage)
-        stats = engine.stats
+        frozen_upstream = 0
+        for upstream_obj, upstream_stage in upstream:
+            if upstream_stage.frozen:
+                continue
+            upstream_stage.frozen = True
+            upstream_stage.frozen_by_bake = token
+            engine.freeze(upstream_obj, upstream_stage)
+            frozen_upstream += 1
         target = entry.bake_target
         if target == "INHERIT":
             target = modifier.bake_target
         keep = "; save the .blend to keep the packed bake" if target == "PACKED" else ""
         self.report(
             {"INFO"},
-            "Baked %d frame(s): %d ready, %d failure(s); stage frozen%s"
+            "Baked %d frame(s): %d ready, %d failure(s); stage and %d upstream "
+            "stage(s) frozen%s"
             % (
                 stats["playback_frames"],
                 stats["playback_synced"],
                 stats["playback_failures"],
+                frozen_upstream,
                 keep,
             ),
         )
@@ -420,29 +562,22 @@ class STAGELOOM_OT_clear_bake(bpy.types.Operator):
             # Bake node; force that before looking it up.
             context.view_layer.update()
             entry = _native_bake_entry(modifier)
-        if modifier is not None and entry is not None:
-            context.view_layer.objects.active = obj
-            obj.select_set(True)
-            try:
-                result = bpy.ops.object.geometry_node_bake_delete_single(
-                    session_uid=getattr(obj, "session_uid", 0),
-                    modifier_name=modifier.name,
-                    bake_id=entry.bake_id,
-                )
-            except Exception as exc:
-                self.report({"ERROR"}, "could not delete the native bake: %r" % (exc,))
-                return {"CANCELLED"}
-            if "FINISHED" not in result:
-                self.report({"ERROR"}, "Blender did not delete the native bake")
-                return {"CANCELLED"}
+        token = stage.bake_token
+        error = _delete_native_bake(context, obj, modifier, entry)
+        if error is not None:
+            self.report({"ERROR"}, "could not delete the native bake: %s" % error)
+            return {"CANCELLED"}
 
         stage.baked = False
         stage.frozen = False
+        stage.bake_token = ""
         engine.unfreeze(obj, stage)
+        unfrozen = _unfreeze_bake_token(token)
         self.report(
             {"INFO"},
-            "Cleared the stage bake; live Grasshopper resumed; save the .blend "
-            "to keep the cleared state",
+            "Cleared the stage bake; stage and %d upstream stage(s) unfrozen; "
+            "live Grasshopper resumed; save the .blend to keep the cleared state"
+            % unfrozen,
         )
         return {"FINISHED"}
 

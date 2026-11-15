@@ -394,6 +394,10 @@ def _split_stage(obj, stage, new_key=None):
     engine._set(stage, "warnings", "")
     engine._set(stage, "nonce", 0)
     engine._set(stage, "generation", 0)
+    # The duplicate is a new claimant: the original's Clear Bake must not
+    # unfreeze it, and its own stale token owns no upstream stages.
+    engine._set(stage, "bake_token", "")
+    engine._set(stage, "frozen_by_bake", "")
     return new_key
 
 
