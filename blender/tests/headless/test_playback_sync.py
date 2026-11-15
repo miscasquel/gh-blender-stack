@@ -53,12 +53,12 @@ def pump(seconds=10.0, until=None):
     return until is None
 
 
-def start_fake(stage_key, report, *extra):
+def start_fake(stage_key, report, *extra, port=PORT):
     return subprocess.Popen(
         [
             sys.executable,
             os.path.join(REPO, "tools", "fake_gh", "fake_gh.py"),
-            "--port", str(PORT),
+            "--port", str(port),
             "--stage", stage_key,
             "--report", report,
             *extra,
