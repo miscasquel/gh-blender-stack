@@ -10,6 +10,7 @@ consumer is not an upstream dependency, even when it reads the selected stage.
 The bake tests (W2.1) and the offline render acceptance (W2.3) extend this file.
 """
 
+import hashlib
 import os
 import sys
 import tempfile
@@ -17,6 +18,7 @@ import time
 import unittest
 
 import bpy
+import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
@@ -27,6 +29,8 @@ for path in (BLENDER_PKG, HERE):
 
 from test_duplicates import enable, make_stack  # noqa: E402
 from test_playback_sync import (  # noqa: E402
+    SCALE,
+    keyframe_scale,
     pump,
     requests_of,
     start_fake,
@@ -52,12 +56,20 @@ def _add_stage(obj, label):
     return obj.gh_stack.stages[-1]
 
 
-def _reading_group(name, reference):
-    """A Geometry Nodes group that reads an Object or a Collection."""
+def _reading_group(name, reference, join=False):
+    """A Geometry Nodes group that reads an Object or a Collection.
+
+    With ``join`` the read geometry is added to the prefix the modifier
+    receives, instead of replacing it, so a stage after it sees both.
+    """
     group = bpy.data.node_groups.new(name, "GeometryNodeTree")
     group.interface.new_socket(
         "Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry"
     )
+    if join:
+        group.interface.new_socket(
+            "Geometry", in_out="INPUT", socket_type="NodeSocketGeometry"
+        )
     if isinstance(reference, bpy.types.Collection):
         node = group.nodes.new("GeometryNodeCollectionInfo")
         node.inputs["Collection"].default_value = reference
@@ -67,17 +79,60 @@ def _reading_group(name, reference):
         node.inputs["Object"].default_value = reference
         node.transform_space = "ORIGINAL"
         output = node.outputs["Geometry"]
+    if join:
+        group_in = group.nodes.new("NodeGroupInput")
+        join_node = group.nodes.new("GeometryNodeJoinGeometry")
+        group.links.new(group_in.outputs["Geometry"], join_node.inputs["Geometry"])
+        group.links.new(output, join_node.inputs["Geometry"])
+        output = join_node.outputs["Geometry"]
     group_out = group.nodes.new("NodeGroupOutput")
     group.links.new(output, group_out.inputs["Geometry"])
     return group
 
 
-def _read_before(obj, name, reference):
+def _read_before(obj, name, reference, join=False):
     """Insert a reading modifier so a stage added next sits after it."""
     modifier = obj.modifiers.new(name, "NODES")
-    modifier.node_group = _reading_group(name + "Group", reference)
+    modifier.node_group = _reading_group(name + "Group", reference, join=join)
     obj.modifiers.active = modifier
     return modifier
+
+
+def _mesh_geometry(mesh):
+    """A stable (vertex count, coordinate hash, max coordinate) for a mesh."""
+    count = len(mesh.vertices)
+    if not count:
+        return (0, hashlib.sha256(b"").hexdigest(), 0.0)
+    co = np.empty(count * 3, dtype=np.float32)
+    mesh.vertices.foreach_get("co", co)
+    return (
+        count,
+        hashlib.sha256(co.tobytes()).hexdigest(),
+        float(np.abs(co).max()),
+    )
+
+
+def _evaluated_geometry(obj):
+    """The object's evaluated output, through every modifier in the stack."""
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    evaluated = obj.evaluated_get(depsgraph)
+    mesh = evaluated.to_mesh()
+    if mesh is None:
+        return (0, "", 0.0)
+    try:
+        return _mesh_geometry(mesh)
+    finally:
+        evaluated.to_mesh_clear()
+
+
+def _helper_mesh_geometry(obj, stage_key):
+    """The mesh a stage's helper holds: its last applied Grasshopper output."""
+    from stageloom.blender import helpers
+
+    helper = helpers.helper_for(obj, stage_key, "mesh")
+    if helper is None:
+        raise AssertionError("the stage has no mesh helper")
+    return _mesh_geometry(helper.data)
 
 
 class DependencyTests(unittest.TestCase):
@@ -322,14 +377,12 @@ class DependencyTests(unittest.TestCase):
         )
 
 
-class BakeFreezeTests(unittest.TestCase):
-    """W2.1: Bake stage freezes its upstream closure; Clear Bake undoes it.
+class _BakeFixture(unittest.TestCase):
+    """The real operator, native Bake node and add-on server, one fake client
+    per stage. The native bake steps the scene frames headlessly, so the gate
+    is exercised for real rather than through a bookkeeping seam."""
 
-    These drive the real operator, the real native Bake node and the real
-    add-on server with one fake Grasshopper client per stage. The native bake
-    steps the scene frames headlessly, so the gate is exercised for real rather
-    than through a bookkeeping seam.
-    """
+    port = PORT
 
     @classmethod
     def setUpClass(cls):
@@ -337,13 +390,15 @@ class BakeFreezeTests(unittest.TestCase):
         bpy.ops.preferences.addon_enable(module="stageloom")
         import stageloom.blender.bridge as bridge
         import stageloom.blender.engine as engine
+        import stageloom.blender.nodes as nodes
 
         cls.bridge = bridge
         cls.engine = engine
+        cls.nodes = nodes
         bpy.context.preferences.addons["stageloom"].preferences.data_root = tempfile.mkdtemp(
             prefix="stageloom-bake-freeze-"
         )
-        if not engine.start_server(PORT):
+        if not engine.start_server(cls.port):
             raise AssertionError("the add-on server did not start")
         time.sleep(0.5)
 
@@ -372,14 +427,17 @@ class BakeFreezeTests(unittest.TestCase):
         self.blend_dir = tempfile.mkdtemp(prefix="stageloom-bake-freeze-blend-")
 
     def tearDown(self):
+        self._stop_fakes()
+        self.engine._playback_sync = False
+        self.engine._bake_sync = False
+        self.engine._bake_progress = None
+
+    def _stop_fakes(self):
         for fake in self.fakes:
             stop_fake(fake)
         self.fakes = []
         if not pump(seconds=5.0, until=lambda: not self.bridge.state["clients"]):
             raise AssertionError("the bake fakes never disconnected")
-        self.engine._playback_sync = False
-        self.engine._bake_sync = False
-        self.engine._bake_progress = None
 
     def _start_fake(self, stage, *extra):
         report = os.path.join(
@@ -388,7 +446,7 @@ class BakeFreezeTests(unittest.TestCase):
         if os.path.exists(report):
             os.remove(report)
         self.fakes.append(
-            start_fake(stage.key, report, "--delay-ms", "10", *extra, port=PORT)
+            start_fake(stage.key, report, "--delay-ms", "10", *extra, port=self.port)
         )
         self.reports[stage.key] = report
 
@@ -431,6 +489,19 @@ class BakeFreezeTests(unittest.TestCase):
         bpy.context.view_layer.objects.active = obj
         obj.select_set(True)
         return bpy.ops.stageloom.clear_bake(index=index)
+
+    def _frame_geometry(self, obj, frame):
+        """Evaluate ``obj`` at ``frame`` through the depsgraph, no client pass."""
+        bpy.context.scene.frame_set(frame)
+        bpy.context.view_layer.update()
+        return _evaluated_geometry(obj)
+
+    def _helper_geometry(self, obj, stage):
+        return _helper_mesh_geometry(obj, stage.key)
+
+
+class BakeFreezeTests(_BakeFixture):
+    """W2.1: Bake stage freezes its upstream closure; Clear Bake undoes it."""
 
     def test_01_same_object_bake_freezes_upstream_and_clear_undoes_it(self):
         obj, stage_a, stage_b = self._same_object_chain()
@@ -640,3 +711,233 @@ class BakeFreezeTests(unittest.TestCase):
         self.assertEqual(
             stage_a.frozen_by_bake, "", "a split kept the old freeze marker"
         )
+
+
+class OfflineBakeAcceptanceTests(_BakeFixture):
+    """W2.3: the baked chain renders offline and survives save/reload.
+
+    The selected stage has both kinds of upstream: A is earlier on the same
+    object, C is another object read through Object Info. B's own parameter is
+    keyframed 1/2/3, so the bake covers its range; A and C stay at one value.
+    That is the honest static-upstream shape: the baked stage has per-frame
+    data, the frozen upstream objects do not animate.
+    """
+
+    port = 9160
+
+    def _stage(self, obj, key):
+        stage = next((item for item in obj.gh_stack.stages if item.key == key), None)
+        self.assertIsNotNone(stage, "stage %s is missing after the reload" % key)
+        return stage
+
+    def _native_entry(self, modifier):
+        return next(
+            (
+                item
+                for item in modifier.bakes
+                if item.node is not None
+                and item.node.bl_idname == "GeometryNodeBake"
+            ),
+            None,
+        )
+
+    def test_01_offline_chain_bake_survives_save_reload_and_clear(self):
+        source, source_stage = make_stack("Source", "Source", params=None)
+        holder = _cube("Holder", calc_uvs=False)
+        holder_stage_a = _add_stage(holder, "A")
+        bevel = holder.modifiers.new("BakeBevel", "BEVEL")
+        bevel.width = 0.1
+        holder.modifiers.active = bevel
+        _read_before(holder, "ReadsSource", source, join=True)
+        selected = _add_stage(holder, "B")
+
+        self.assertEqual(
+            [
+                (owner.name, stage.key)
+                for owner, stage in stage_dependencies(holder, selected)
+            ],
+            [(holder.name, holder_stage_a.key), (source.name, source_stage.key)],
+            "the chain lacks its same-object or cross-object upstream stage",
+        )
+
+        for stage in (source_stage, holder_stage_a, selected):
+            self._start_fake(stage)
+        self._wait_clients(3)
+        self._settle(source_stage, holder_stage_a, selected)
+        self.assertTrue(
+            pump(until=lambda: any(param.param_id == SCALE for param in selected.params)),
+            "the fake never published the selected stage's parameter",
+        )
+
+        scene = bpy.context.scene
+        scene.frame_set(1)
+        keyframe_scale(holder, selected, [1.0, 2.0, 3.0])
+        scene.frame_set(1)
+
+        upstream_before = {
+            "A": self._helper_geometry(holder, holder_stage_a),
+            "C": self._helper_geometry(source, source_stage),
+        }
+        for name, geometry in upstream_before.items():
+            self.assertGreater(geometry[0], 0, "the %s helper is empty" % name)
+            self.assertAlmostEqual(
+                geometry[2], 1.0, places=3, msg="the %s helper has the wrong scale" % name
+            )
+
+        modifier = self.nodes.modifier_of(holder, selected)
+        self.assertIsNotNone(modifier)
+        group = bpy.data.node_groups[self.nodes.group_name(selected.key)]
+        self.assertTrue(
+            any(node.bl_idname == "GeometryNodeBake" for node in group.nodes),
+            "the selected stage has no native Bake node",
+        )
+        modifier.bake_target = "PACKED"
+        self.assertEqual(modifier.bake_target, "PACKED")
+        self._save()
+        blend = os.path.join(self.blend_dir, "bake.blend")
+
+        self.assertEqual(self._bake(holder, 1), {"FINISHED"})
+        self.assertTrue(selected.baked, "the selected stage is not baked")
+        self.assertTrue(selected.frozen, "the selected stage is not frozen")
+        token = selected.bake_token
+        self.assertEqual(len(token), 16, "the bake did not mint a token")
+        for stage in (holder_stage_a, source_stage):
+            self.assertTrue(stage.frozen, "an upstream stage was not frozen")
+            self.assertEqual(
+                stage.frozen_by_bake, token, "an upstream stage carries another token"
+            )
+            self.assertFalse(stage.baked, "an upstream stage is marked baked")
+
+        # Save again: the packed native bake and the freeze bookkeeping are only
+        # durable once the file is written after the bake.
+        self._save()
+        self.assertTrue(os.path.exists(blend))
+
+        sends = self.engine.stats["sends"]
+        self._stop_fakes()
+        baked = {}
+        for frame in (1, 2, 3):
+            baked[frame] = self._frame_geometry(holder, frame)
+            self.engine._timer()  # the offline engine pass must not ask anyone
+            self.assertEqual(
+                self.engine.stats["sends"], sends, "evaluation sent a request"
+            )
+        self.assertEqual(
+            len({geometry[1] for geometry in baked.values()}),
+            3,
+            "the baked stage did not hold per-frame output: %r" % (baked,),
+        )
+        self.assertEqual(
+            [round(baked[frame][2], 3) for frame in (1, 2, 3)],
+            [1.0, 2.0, 3.0],
+            "the baked stage did not cover its keyed range",
+        )
+
+        for frame in (1, 2, 3):
+            self.assertEqual(
+                self._frame_geometry(holder, frame),
+                baked[frame],
+                "the baked stage changed on a second evaluation",
+            )
+            # The upstream objects are static: no per-frame assertion here.
+            self.assertEqual(
+                self._helper_geometry(holder, holder_stage_a),
+                upstream_before["A"],
+                "the frozen same-object upstream changed",
+            )
+            self.assertEqual(
+                self._helper_geometry(source, source_stage),
+                upstream_before["C"],
+                "the frozen cross-object upstream changed",
+            )
+            self.assertEqual(self.engine.stats["sends"], sends)
+
+        keys = (source_stage.key, holder_stage_a.key, selected.key)
+        bpy.ops.wm.open_mainfile(filepath=blend)
+
+        holder = bpy.data.objects["Holder"]
+        source = bpy.data.objects["Source"]
+        source_stage = self._stage(source, keys[0])
+        holder_stage_a = self._stage(holder, keys[1])
+        selected = self._stage(holder, keys[2])
+        self.assertTrue(selected.baked, "the reload lost the baked marker")
+        self.assertTrue(selected.frozen, "the reload lost the selected freeze")
+        self.assertEqual(selected.bake_token, token, "the reload lost the bake token")
+        for stage in (holder_stage_a, source_stage):
+            self.assertTrue(stage.frozen, "the reload lost an upstream freeze")
+            self.assertEqual(
+                stage.frozen_by_bake, token, "the reload lost an upstream marker"
+            )
+            self.assertFalse(stage.baked)
+        self.assertFalse(
+            self.bridge.state["connected"], "a client survived the offline check"
+        )
+
+        modifier = self.nodes.modifier_of(holder, selected)
+        self.assertIsNotNone(modifier)
+        self.assertEqual(
+            modifier.bake_target,
+            "PACKED",
+            "the reloaded modifier lost its packed bake target",
+        )
+        entry = self._native_entry(modifier)
+        self.assertIsNotNone(entry, "the native bake entry is missing after the reload")
+        self.assertEqual(
+            getattr(entry, "directory", ""),
+            "",
+            "the bake is a disk bake, not the packed bake the test asked for",
+        )
+
+        sends = self.engine.stats["sends"]
+        for frame in (1, 2, 3):
+            self.assertEqual(
+                self._frame_geometry(holder, frame),
+                baked[frame],
+                "the packed bake did not survive save/reload at frame %d" % frame,
+            )
+            self.engine._timer()
+            self.assertEqual(
+                self._helper_geometry(holder, holder_stage_a),
+                upstream_before["A"],
+                "the reloaded same-object upstream changed",
+            )
+            self.assertEqual(
+                self._helper_geometry(source, source_stage),
+                upstream_before["C"],
+                "the reloaded cross-object upstream changed",
+            )
+            self.assertEqual(
+                self.engine.stats["sends"], sends, "a reloaded evaluation sent a request"
+            )
+
+        self.assertEqual(self._clear(holder, 1), {"FINISHED"})
+        self.assertFalse(selected.baked, "Clear Bake left the stage baked")
+        self.assertFalse(selected.frozen, "Clear Bake left the stage frozen")
+        self.assertFalse(
+            holder_stage_a.frozen, "Clear Bake left the same-object upstream frozen"
+        )
+        self.assertFalse(
+            source_stage.frozen, "Clear Bake left the cross-object upstream frozen"
+        )
+        self.assertEqual(selected.bake_token, "")
+        self.assertEqual(selected.frozen_by_bake, "")
+        for stage in (holder_stage_a, source_stage):
+            self.assertEqual(stage.frozen_by_bake, "", "a freeze marker survived Clear Bake")
+
+        sends = self.engine.stats["sends"]
+        self._start_fake(source_stage)
+        self._start_fake(holder_stage_a)
+        self._start_fake(selected)
+        self._wait_clients(3)
+        self._settle(source_stage, holder_stage_a, selected)
+        self.assertGreater(
+            self.engine.stats["sends"],
+            sends,
+            "the live chain did not request again after Clear Bake",
+        )
+        for key in keys:
+            self.assertGreater(
+                requests_of(self.reports[key]),
+                0,
+                "stage %s never asked Grasshopper again" % key,
+            )
