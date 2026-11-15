@@ -4,19 +4,40 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Backstop for a hung Blender process: the runner's per-test deadline reports
+# the test, this bounds the whole invocation even if Blender stops responding.
+CAP="${STAGELOOM_TEST_BLENDER_TIMEOUT:-900}"
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT=(timeout --signal=TERM --kill-after=30 "$CAP")
+else
+  TIMEOUT=()
+  echo "test-blender: timeout(1) not found; relying on the per-test watchdog" >&2
+fi
+
+run_blender() {
+  "${TIMEOUT[@]}" blender "$@"
+}
+
 LOG="$(mktemp)"
 set +e
 # --online-mode: the add-on's `network` permission contract gates the server on
 # bpy.app.online_access, which a factory startup reports as off (no user
 # preference to read). The suite is the consent here.
-blender -b --factory-startup --online-mode --python-exit-code 1 \
+run_blender -b --factory-startup --online-mode --python-exit-code 1 \
   --python blender/tests/headless/run.py >"$LOG" 2>&1
 CODE=$?
+if [ "$CODE" -eq 124 ] || [ "$CODE" -eq 137 ]; then
+  echo "test-blender: the headless suite exceeded ${CAP}s" >>"$LOG"
+fi
 # The offline gate needs a process that starts with online access off, so it
 # cannot live in the suite above (which runs with --online-mode).
-blender -b --factory-startup --python-exit-code 1 \
+run_blender -b --factory-startup --python-exit-code 1 \
   --python blender/tests/offline/run.py >>"$LOG" 2>&1
-CODE=$(( CODE | $? ))
+OFFLINE=$?
+if [ "$OFFLINE" -eq 124 ] || [ "$OFFLINE" -eq 137 ]; then
+  echo "test-blender: the offline gate exceeded ${CAP}s" >>"$LOG"
+fi
+CODE=$(( CODE | OFFLINE ))
 set -e
 
 grep -vE '^Blender [0-9]|^Read prefs|^$' "$LOG" || true
