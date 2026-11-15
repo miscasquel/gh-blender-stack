@@ -1,16 +1,9 @@
 """Wire meshes and curve components: edges, points and their attributes."""
 
-import os
-import sys
 import unittest
 
 import bpy
 import numpy as np
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-if REPO not in sys.path:
-    sys.path.insert(0, REPO)
 
 from blender.stageloom.blender import geometry_io  # noqa: E402
 

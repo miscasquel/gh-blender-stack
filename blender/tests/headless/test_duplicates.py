@@ -1,17 +1,13 @@
 """Layer B: duplicated stacks get independent stage keys, or a strict conflict."""
 
 import os
-import sys
+import shutil
 import tempfile
 import unittest
 
 import bpy
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-BLENDER_PKG = os.path.join(REPO, "blender")
-if BLENDER_PKG not in sys.path:
-    sys.path.insert(0, BLENDER_PKG)
+from harness import isolate_data_root
 
 PARAMS = [
     {
@@ -35,16 +31,20 @@ PARAMS = [
 ]
 
 
-def enable():
+def enable(case):
     """A clean scene with the add-on enabled and no socket connection."""
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.preferences.addon_enable(module="stageloom")
     from stageloom.blender import bridge, engine, helpers, nodes, props
     from stageloom.blender import stack as stack_mod
 
-    bpy.context.preferences.addons["stageloom"].preferences.data_root = tempfile.mkdtemp(
-        prefix="stageloom-duplicates-"
-    )
+    # A class owns one root for all its tests; a per-test setUp returns to the
+    # default root after each test method.
+    root = isolate_data_root("stageloom-duplicates-")
+    if isinstance(case, type):
+        case.enterClassContext(root)
+    else:
+        case.enterContext(root)
     # Direct passes only; no socket, no timer.
     bridge.state.update(connected=False, clients=0, listening=False)
     engine._dirty.clear()
@@ -88,7 +88,7 @@ def _group_objects(group):
 class DuplicateStageTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.engine, cls.helpers, cls.nodes, cls.props, cls.stack_mod, cls.bridge = enable()
+        cls.engine, cls.helpers, cls.nodes, cls.props, cls.stack_mod, cls.bridge = enable(cls)
 
         bpy.ops.mesh.primitive_cube_add(size=2.0)
         cls.obj = bpy.context.object
@@ -258,7 +258,7 @@ class RuntimeDuplicateIdentityTests(unittest.TestCase):
     """Ownership comes from the previous index's object pointers, not names."""
 
     def setUp(self):
-        self.engine, self.helpers, self.nodes, self.props, self.stack_mod, self.bridge = enable()
+        self.engine, self.helpers, self.nodes, self.props, self.stack_mod, self.bridge = enable(self)
 
     def tearDown(self):
         bpy.ops.preferences.addon_disable(module="stageloom")
@@ -344,7 +344,7 @@ class StrictConflictTests(unittest.TestCase):
     """A load cannot prove an owner: a shared key is a conflict, not a split."""
 
     def setUp(self):
-        self.engine, self.helpers, self.nodes, self.props, self.stack_mod, self.bridge = enable()
+        self.engine, self.helpers, self.nodes, self.props, self.stack_mod, self.bridge = enable(self)
         self.chair, self.chair_stage = make_stack("Chair", "Chair")
         self.scale = self.stack_mod.param_prop_name(
             self.chair_stage.key, PARAMS[0]["id"]
@@ -487,7 +487,7 @@ class SameObjectConflictTests(unittest.TestCase):
     """Two stage records on one object sharing a key are ambiguous too."""
 
     def setUp(self):
-        self.engine, self.helpers, self.nodes, self.props, self.stack_mod, self.bridge = enable()
+        self.engine, self.helpers, self.nodes, self.props, self.stack_mod, self.bridge = enable(self)
         self.obj, self.stage_a = make_stack("Stacked", "A")
         bpy.context.view_layer.objects.active = self.obj
         self.obj.select_set(True)
@@ -539,13 +539,13 @@ class NormalReloadTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.engine, cls.helpers, cls.nodes, cls.props, cls.stack_mod, cls.bridge = enable()
+        cls.engine, cls.helpers, cls.nodes, cls.props, cls.stack_mod, cls.bridge = enable(cls)
         _obj_a, stage_a = make_stack("NormalA", "NormalA", params=None)
         _obj_b, stage_b = make_stack("NormalB", "NormalB", params=None)
         cls.keys = (stage_a.key, stage_b.key)
-        cls.blend = os.path.join(
-            tempfile.mkdtemp(prefix="stageloom-normal-reload-"), "normal.blend"
-        )
+        blend_dir = tempfile.mkdtemp(prefix="stageloom-normal-reload-")
+        cls.addClassCleanup(shutil.rmtree, blend_dir, ignore_errors=True)
+        cls.blend = os.path.join(blend_dir, "normal.blend")
         bpy.ops.wm.save_as_mainfile(filepath=cls.blend)
         bpy.ops.wm.open_mainfile(filepath=cls.blend)
 

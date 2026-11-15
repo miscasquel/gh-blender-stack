@@ -23,82 +23,20 @@ that", because each one cost a release:
 """
 
 import os
-import subprocess
-import sys
 import tempfile
 import time
-import json
 import unittest
 
 import bpy
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-BLENDER_PKG = os.path.join(REPO, "blender")
-if BLENDER_PKG not in sys.path:
-    sys.path.insert(0, BLENDER_PKG)
-
-PORT = 9147
-SCALE_PARAM = "00000000-0000-4000-8000-0000000000aa"
-
-
-def pump(seconds=10.0, until=None):
-    """Drive the engine timer directly: bpy.app.timers is inert under -b."""
-    import stageloom.blender.engine as engine
-
-    deadline = time.time() + seconds
-    while time.time() < deadline:
-        engine._timer()
-        if until is not None and until():
-            return True
-        time.sleep(0.005)
-    return until is None
-
-
-def start_fake(stage_key, report):
-    return subprocess.Popen(
-        [
-            sys.executable,
-            os.path.join(REPO, "tools", "fake_gh", "fake_gh.py"),
-            "--port",
-            str(PORT),
-            "--stage",
-            stage_key,
-            "--report",
-            report,
-        ],
-        env=dict(
-            os.environ,
-            PYTHONPATH=os.pathsep.join([os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]),
-        ),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-
-
-def stop_fake(process):
-    if process is None or process.poll() is not None:
-        return
-    process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-
-
-def report_of(path):
-    if not os.path.exists(path):
-        return {}
-    try:
-        return json.load(open(path))
-    except ValueError:
-        return {}
-
-
-
-def isolate_data_root():
-    prefs = bpy.context.preferences.addons["stageloom"].preferences
-    prefs.data_root = tempfile.mkdtemp(prefix="stageloom-memo-")
+from harness import (
+    free_port,
+    isolate_data_root,
+    pump,
+    report_of,
+    start_fake,
+    stop_fake,
+)
 
 
 def gn_shift_group(name="MemoShift", shift=0.0, min_value=-20.0, max_value=20.0):
@@ -171,11 +109,12 @@ class ModifierInputMemoTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        isolate_data_root()
+        cls.enterClassContext(isolate_data_root("stageloom-memo-"))
         import stageloom.blender.engine as engine
 
         cls.engine = engine
-        engine.start_server(PORT)
+        cls.port = free_port()
+        engine.start_server(cls.port)
         time.sleep(0.5)
 
         bpy.ops.mesh.primitive_cube_add(size=2.0)
@@ -192,7 +131,7 @@ class ModifierInputMemoTests(unittest.TestCase):
         cls.report = os.path.join(tempfile.gettempdir(), "fake_gh_memo.json")
         if os.path.exists(cls.report):
             os.remove(cls.report)
-        cls.fake = start_fake(cls.stage.key, cls.report)
+        cls.fake = start_fake(cls.stage.key, cls.report, port=cls.port)
 
         # Settle: the fake echoes the prefix scaled by the stage's Scale
         # parameter (default 1.0), so a prefix shifted by 10 comes back with a
@@ -200,7 +139,7 @@ class ModifierInputMemoTests(unittest.TestCase):
         def settled():
             return cls.stage.state == "ok" and report_of(cls.report).get("responses", 0) >= 1
 
-        pump(seconds=15.0, until=settled)
+        pump(seconds=15.0, until=settled, step=0.005)
 
     @classmethod
     def tearDownClass(cls):
@@ -232,7 +171,7 @@ class ModifierInputMemoTests(unittest.TestCase):
             )
 
         self.assertTrue(
-            pump(seconds=10.0, until=followed),
+            pump(seconds=10.0, until=followed, step=0.005),
             "moving a Geometry Nodes modifier input never reached Grasshopper: "
             "the prefix memo did not see it",
         )
@@ -276,11 +215,12 @@ class ResetRetiresMemoTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        isolate_data_root()
+        cls.enterClassContext(isolate_data_root("stageloom-memo-"))
         import stageloom.blender.engine as engine
 
         cls.engine = engine
-        engine.start_server(PORT)
+        cls.port = free_port()
+        engine.start_server(cls.port)
         time.sleep(0.5)
 
         bpy.ops.mesh.primitive_cube_add(size=2.0)
@@ -294,10 +234,12 @@ class ResetRetiresMemoTests(unittest.TestCase):
         cls.report = os.path.join(tempfile.gettempdir(), "fake_gh_reset.json")
         if os.path.exists(cls.report):
             os.remove(cls.report)
-        cls.fake = start_fake(cls.stage.key, cls.report)
+        cls.fake = start_fake(cls.stage.key, cls.report, port=cls.port)
         pump(
             seconds=15.0,
-            until=lambda: cls.stage.state == "ok" and report_of(cls.report).get("responses", 0) >= 1,
+            until=lambda: cls.stage.state == "ok"
+            and report_of(cls.report).get("responses", 0) >= 1,
+            step=0.005,
         )
 
     @classmethod
@@ -323,7 +265,7 @@ class ResetRetiresMemoTests(unittest.TestCase):
             return self._seen(9.0) and self.stage.state == "ok"
 
         self.assertTrue(
-            pump(seconds=10.0, until=delivered),
+            pump(seconds=10.0, until=delivered, step=0.005),
             "Push did not carry the geometry the scene is showing (state=%s, report=%s)"
             % (self.stage.state, report_of(self.report)),
         )
@@ -344,11 +286,12 @@ class ReferencedObjectTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        isolate_data_root()
+        cls.enterClassContext(isolate_data_root("stageloom-memo-"))
         import stageloom.blender.engine as engine
 
         cls.engine = engine
-        engine.start_server(PORT)
+        cls.port = free_port()
+        engine.start_server(cls.port)
         time.sleep(0.5)
 
         # Target: what the prefix reads. Holder: the stack object.
@@ -375,10 +318,12 @@ class ReferencedObjectTests(unittest.TestCase):
         cls.report = os.path.join(tempfile.gettempdir(), "fake_gh_referenced.json")
         if os.path.exists(cls.report):
             os.remove(cls.report)
-        cls.fake = start_fake(cls.stage.key, cls.report)
+        cls.fake = start_fake(cls.stage.key, cls.report, port=cls.port)
         pump(
             seconds=15.0,
-            until=lambda: cls.stage.state == "ok" and report_of(cls.report).get("responses", 0) >= 1,
+            until=lambda: cls.stage.state == "ok"
+            and report_of(cls.report).get("responses", 0) >= 1,
+            step=0.005,
         )
 
     @classmethod
@@ -430,7 +375,7 @@ class ReferencedObjectTests(unittest.TestCase):
             )
 
         self.assertTrue(
-            pump(seconds=10.0, until=followed),
+            pump(seconds=10.0, until=followed, step=0.005),
             "the prefix kept reading the referenced object's old position: "
             "an Object reference must follow the object",
         )
@@ -459,11 +404,12 @@ class UpstreamOutputTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        isolate_data_root()
+        cls.enterClassContext(isolate_data_root("stageloom-memo-"))
         import stageloom.blender.engine as engine
 
         cls.engine = engine
-        engine.start_server(PORT)
+        cls.port = free_port()
+        engine.start_server(cls.port)
         time.sleep(0.5)
         bpy.ops.mesh.primitive_cube_add(size=2.0)
         cls.obj = bpy.context.object
@@ -564,7 +510,7 @@ class WaitingAgeTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        isolate_data_root()
+        cls.enterClassContext(isolate_data_root("stageloom-memo-"))
 
     @classmethod
     def tearDownClass(cls):

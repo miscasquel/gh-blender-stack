@@ -1,75 +1,20 @@
 """Layer B: file-load lifecycle and plumbing repair."""
 
-import json
 import os
-import subprocess
-import sys
 import tempfile
 import time
 import unittest
 
 import bpy
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-BLENDER_PKG = os.path.join(REPO, "blender")
-if BLENDER_PKG not in sys.path:
-    sys.path.insert(0, BLENDER_PKG)
-
-PORT = 9147
-
-
-def pump(seconds=8.0, until=None):
-    """Drive the engine timer directly: bpy.app.timers is inert under -b."""
-    import stageloom.blender.engine as engine
-
-    deadline = time.time() + seconds
-    while time.time() < deadline:
-        engine._timer()
-        if until is not None and until():
-            return True
-        time.sleep(0.01)
-    return until is None
-
-
-def start_fake(stage_key, report, port=PORT):
-    return subprocess.Popen(
-        [
-            sys.executable,
-            os.path.join(REPO, "tools", "fake_gh", "fake_gh.py"),
-            "--port", str(port),
-            "--stage", stage_key,
-            "--report", report,
-        ],
-        env=dict(
-            os.environ,
-            PYTHONPATH=os.pathsep.join(
-                [os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]
-            ),
-        ),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-
-
-def stop_fake(process):
-    if process is None:
-        return
-    if process.poll() is None:
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-
-
-def report_of(path):
-    if not os.path.exists(path):
-        return {}
-    try:
-        return json.load(open(path))
-    except ValueError:
-        return {}
+from harness import (
+    free_port,
+    isolate_data_root,
+    pump,
+    report_of,
+    start_fake,
+    stop_fake,
+)
 
 
 class ReopenTests(unittest.TestCase):
@@ -83,9 +28,9 @@ class ReopenTests(unittest.TestCase):
         cls.engine = engine
         cls.bridge = bridge
 
-        prefs = bpy.context.preferences.addons["stageloom"].preferences
-        prefs.data_root = tempfile.mkdtemp(prefix="stageloom-reload-test-")
-        engine.start_server(PORT)
+        cls.enterClassContext(isolate_data_root("stageloom-reload-test-"))
+        cls.port = free_port()
+        engine.start_server(cls.port)
         time.sleep(0.5)
 
         bpy.ops.mesh.primitive_cube_add(size=2.0)
@@ -104,7 +49,7 @@ class ReopenTests(unittest.TestCase):
         cls.report = os.path.join(tempfile.gettempdir(), "fake_gh_reload_report.json")
         if os.path.exists(cls.report):
             os.remove(cls.report)
-        cls.fake = start_fake(cls.stage_key, cls.report)
+        cls.fake = start_fake(cls.stage_key, cls.report, port=cls.port)
         deadline = time.time() + 5.0
         while time.time() < deadline and not bridge.state["connected"]:
             time.sleep(0.05)
@@ -165,9 +110,9 @@ class RepairTests(unittest.TestCase):
         cls.helpers = helpers
         cls.nodes = nodes
 
-        prefs = bpy.context.preferences.addons["stageloom"].preferences
-        prefs.data_root = tempfile.mkdtemp(prefix="stageloom-repair-test-")
-        engine.start_server(9148)
+        cls.enterClassContext(isolate_data_root("stageloom-repair-test-"))
+        cls.port = free_port()
+        engine.start_server(cls.port)
         time.sleep(0.5)
 
         bpy.ops.mesh.primitive_cube_add(size=2.0)
@@ -192,7 +137,7 @@ class RepairTests(unittest.TestCase):
         cls.report = os.path.join(tempfile.gettempdir(), "fake_gh_repair_report.json")
         if os.path.exists(cls.report):
             os.remove(cls.report)
-        cls.fake = start_fake(cls.stage_key, cls.report, port=9148)
+        cls.fake = start_fake(cls.stage_key, cls.report, port=cls.port)
         deadline = time.time() + 5.0
         while time.time() < deadline and not bridge.state["connected"]:
             time.sleep(0.05)

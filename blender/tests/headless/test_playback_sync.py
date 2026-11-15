@@ -19,109 +19,25 @@ What it proves:
 6. The wait limit defaults to "no timeout", with a preference to cap it.
 """
 
-import json
 import os
-import subprocess
-import sys
 import tempfile
 import time
 import unittest
 
 import bpy
-import numpy as np
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-BLENDER_PKG = os.path.join(REPO, "blender")
-if BLENDER_PKG not in sys.path:
-    sys.path.insert(0, BLENDER_PKG)
-
-PORT = 9155
-SCALE = "00000000-0000-4000-8000-0000000000aa"
-
-
-def pump(seconds=10.0, until=None):
-    """Drive the engine timer directly: bpy.app.timers is inert under -b."""
-    import stageloom.blender.engine as engine
-
-    deadline = time.time() + seconds
-    while time.time() < deadline:
-        engine._timer()
-        if until is not None and until():
-            return True
-        time.sleep(0.01)
-    return until is None
-
-
-def start_fake(stage_key, report, *extra, port=PORT):
-    return subprocess.Popen(
-        [
-            sys.executable,
-            os.path.join(REPO, "tools", "fake_gh", "fake_gh.py"),
-            "--port", str(port),
-            "--stage", stage_key,
-            "--report", report,
-            *extra,
-        ],
-        env=dict(
-            os.environ,
-            PYTHONPATH=os.pathsep.join(
-                [os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]
-            ),
-        ),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-
-
-def stop_fake(process):
-    if process is None:
-        return
-    if process.poll() is None:
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-
-
-def report_of(path):
-    if not os.path.exists(path):
-        return {}
-    try:
-        return json.load(open(path))
-    except ValueError:
-        return {}
-
-
-def requests_of(path):
-    report = report_of(path)
-    return report.get("full", 0) + report.get("ref", 0)
-
-
-def helper_max(obj, stage_key):
-    """The largest coordinate in the stage's mesh helper: the fake scales the
-    whole mesh by the parameter, so this is the parameter value."""
-    import stageloom.blender.helpers as helpers
-
-    helper = helpers.helper_for(obj, stage_key, "mesh")
-    if helper is None or not len(helper.data.vertices):
-        return 0.0
-    count = len(helper.data.vertices)
-    co = np.empty(count * 3, dtype=np.float32)
-    helper.data.vertices.foreach_get("co", co)
-    return float(np.abs(co.reshape(-1, 3)).max())
-
-
-def keyframe_scale(obj, stage, values):
-    import stageloom.blender.stack as stack_mod
-
-    name = stack_mod.param_prop_name(stage.key, SCALE)
-    if name not in obj:
-        obj[name] = 1.0
-    for frame, value in enumerate(values, start=1):
-        obj[name] = float(value)
-        obj.keyframe_insert(data_path='["%s"]' % name, frame=frame)
+from harness import (
+    SCALE,
+    free_port,
+    helper_max,
+    isolate_data_root,
+    keyframe_scale,
+    pump,
+    report_of,
+    requests_of,
+    start_fake,
+    stop_fake,
+)
 
 
 class PlaybackSyncTests(unittest.TestCase):
@@ -134,10 +50,11 @@ class PlaybackSyncTests(unittest.TestCase):
 
         cls.engine = engine
         cls.playback = playback
-        prefs = bpy.context.preferences.addons["stageloom"].preferences
-        cls.data_root = tempfile.mkdtemp(prefix="stageloom-playback-test-")
-        prefs.data_root = cls.data_root
-        engine.start_server(PORT)
+        cls.data_root = cls.enterClassContext(
+            isolate_data_root("stageloom-playback-test-")
+        )
+        cls.port = free_port()
+        engine.start_server(cls.port)
         time.sleep(0.5)
 
         bpy.ops.mesh.primitive_cube_add(size=2.0)
@@ -154,7 +71,9 @@ class PlaybackSyncTests(unittest.TestCase):
             os.remove(cls.report)
         # Slow enough that a frame pass must actually wait, the condition the
         # old playback lost every frame to.
-        cls.fake = start_fake(cls.stage.key, cls.report, "--delay-ms", "120")
+        cls.fake = start_fake(
+            cls.stage.key, cls.report, "--delay-ms", "120", port=cls.port
+        )
         cls.await_client()
         if not pump(
             seconds=10.0,

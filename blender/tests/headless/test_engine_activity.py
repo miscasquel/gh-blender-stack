@@ -9,18 +9,11 @@ edit with no client skips the prefix read while a forced read still takes it;
 and an all-dirty pass does not force a second depsgraph evaluation.
 """
 
-import os
-import sys
-import tempfile
 import unittest
 
 import bpy
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-BLENDER_PKG = os.path.join(REPO, "blender")
-if BLENDER_PKG not in sys.path:
-    sys.path.insert(0, BLENDER_PKG)
+from harness import isolate_data_root
 
 
 class DisconnectedFastPathTests(unittest.TestCase):
@@ -30,12 +23,10 @@ class DisconnectedFastPathTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
+        cls.enterClassContext(isolate_data_root("stageloom-activity-"))
         import stageloom.blender.engine as engine
 
         cls.engine = engine
-        bpy.context.preferences.addons["stageloom"].preferences.data_root = tempfile.mkdtemp(
-            prefix="stageloom-activity-"
-        )
         # Headless has no event loop, so call the post-register settle directly.
         engine._settle()
         bpy.ops.mesh.primitive_cube_add(size=2.0)

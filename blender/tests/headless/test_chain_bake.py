@@ -12,7 +12,7 @@ The bake tests (W2.1) and the offline render acceptance (W2.3) extend this file.
 
 import hashlib
 import os
-import sys
+import shutil
 import tempfile
 import time
 import unittest
@@ -20,26 +20,18 @@ import unittest
 import bpy
 import numpy as np
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-BLENDER_PKG = os.path.join(REPO, "blender")
-for path in (BLENDER_PKG, HERE):
-    if path not in sys.path:
-        sys.path.insert(0, path)
-
-from test_duplicates import enable, make_stack  # noqa: E402
-from test_playback_sync import (  # noqa: E402
+from harness import (
     SCALE,
+    free_port,
+    isolate_data_root,
     keyframe_scale,
     pump,
     requests_of,
     start_fake,
     stop_fake,
 )
-
+from test_duplicates import enable, make_stack  # noqa: E402
 from stageloom.blender.engine.dependencies import stage_dependencies  # noqa: E402
-
-PORT = 9159
 
 
 def _cube(name, calc_uvs=True):
@@ -138,7 +130,7 @@ def _helper_mesh_geometry(obj, stage_key):
 class DependencyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.engine, cls.helpers, cls.nodes, cls.props, cls.stack_mod, cls.bridge = enable()
+        cls.engine, cls.helpers, cls.nodes, cls.props, cls.stack_mod, cls.bridge = enable(cls)
 
     @classmethod
     def tearDownClass(cls):
@@ -382,12 +374,11 @@ class _BakeFixture(unittest.TestCase):
     per stage. The native bake steps the scene frames headlessly, so the gate
     is exercised for real rather than through a bookkeeping seam."""
 
-    port = PORT
-
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
+        cls.enterClassContext(isolate_data_root("stageloom-bake-freeze-"))
         import stageloom.blender.bridge as bridge
         import stageloom.blender.engine as engine
         import stageloom.blender.nodes as nodes
@@ -395,9 +386,7 @@ class _BakeFixture(unittest.TestCase):
         cls.bridge = bridge
         cls.engine = engine
         cls.nodes = nodes
-        bpy.context.preferences.addons["stageloom"].preferences.data_root = tempfile.mkdtemp(
-            prefix="stageloom-bake-freeze-"
-        )
+        cls.port = free_port()
         if not engine.start_server(cls.port):
             raise AssertionError("the add-on server did not start")
         time.sleep(0.5)
@@ -425,6 +414,7 @@ class _BakeFixture(unittest.TestCase):
         scene.frame_set(1)
         scene.sync_mode = "NONE"
         self.blend_dir = tempfile.mkdtemp(prefix="stageloom-bake-freeze-blend-")
+        self.addCleanup(shutil.rmtree, self.blend_dir, ignore_errors=True)
 
     def tearDown(self):
         self._stop_fakes()
@@ -723,8 +713,6 @@ class OfflineBakeAcceptanceTests(_BakeFixture):
     data, the frozen upstream objects do not animate.
     """
 
-    port = 9160
-
     def _stage(self, obj, key):
         stage = next((item for item in obj.gh_stack.stages if item.key == key), None)
         self.assertIsNotNone(stage, "stage %s is missing after the reload" % key)
@@ -765,7 +753,12 @@ class OfflineBakeAcceptanceTests(_BakeFixture):
         self._wait_clients(3)
         self._settle(source_stage, holder_stage_a, selected)
         self.assertTrue(
-            pump(until=lambda: any(param.param_id == SCALE for param in selected.params)),
+            pump(
+                seconds=10.0,
+                until=lambda: any(
+                    param.param_id == SCALE for param in selected.params
+                ),
+            ),
             "the fake never published the selected stage's parameter",
         )
 

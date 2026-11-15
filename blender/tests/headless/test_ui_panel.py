@@ -8,17 +8,10 @@ layout, including the failure path of one broken stage.
 """
 
 import ast
-import os
-import sys
 import types
 import unittest
 
 import bpy
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-if os.path.join(REPO, "blender") not in sys.path:
-    sys.path.insert(0, os.path.join(REPO, "blender"))
 
 
 class FakeLayout:

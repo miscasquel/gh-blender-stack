@@ -3,8 +3,6 @@
 import json
 import math
 import os
-import subprocess
-import sys
 import tempfile
 import time
 import unittest
@@ -12,15 +10,9 @@ import unittest
 import bpy
 import numpy as np
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-BLENDER_PKG = os.path.join(REPO, "blender")
-if BLENDER_PKG not in sys.path:
-    sys.path.insert(0, BLENDER_PKG)
+from harness import free_port, isolate_data_root, pump, start_fake, stop_fake
 
 from blender.stageloom.blender import geometry_io  # noqa: E402
-
-PORT = 9143
 
 
 def new_curve_object(name="curve"):
@@ -448,14 +440,13 @@ class MixedEngineTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        bpy.context.preferences.addons["stageloom"].preferences.data_root = tempfile.mkdtemp(
-            prefix="stageloom-test-"
-        )
+        cls.enterClassContext(isolate_data_root("stageloom-test-"))
         import stageloom.blender.engine as engine
         import stageloom.blender.stack as stack_mod
 
         cls.engine = engine
         cls.stack_mod = stack_mod
+        cls.port = free_port()
         cls.report_path = os.path.join(tempfile.gettempdir(), "fake_gh_mixed_report.json")
         if os.path.exists(cls.report_path):
             os.remove(cls.report_path)
@@ -464,56 +455,26 @@ class MixedEngineTests(unittest.TestCase):
         cls.obj = bpy.context.object
         cls.obj.name = "Mixed"
 
-        engine.start_server(PORT)
+        engine.start_server(cls.port)
         time.sleep(0.5)
 
         bpy.ops.stageloom.add_stage(label="Mixed")
         cls.stage = cls.obj.gh_stack.stages[0]
 
-        cls.fake = subprocess.Popen(
-            [
-                sys.executable,
-                os.path.join(REPO, "tools", "fake_gh", "fake_gh.py"),
-                "--port", str(PORT),
-                "--stage", cls.stage.key,
-                "--report", cls.report_path,
-                "--extras",
-            ],
-            env=dict(
-                os.environ,
-                PYTHONPATH=os.pathsep.join(
-                    [os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]
-                ),
-            ),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+        cls.fake = start_fake(
+            cls.stage.key, cls.report_path, "--extras", port=cls.port
         )
 
         def ready():
             return cls.stage.state in ("ok", "error")
 
-        cls._pump(until=ready)
+        pump(until=ready)
         cls.engine.push(cls.obj)
-        cls._pump(until=ready)
-
-    @classmethod
-    def _pump(cls, seconds=8.0, until=None):
-        deadline = time.time() + seconds
-        while time.time() < deadline:
-            cls.engine._timer()
-            if until is not None and until():
-                return True
-            time.sleep(0.01)
-        return until is None
+        pump(until=ready)
 
     @classmethod
     def tearDownClass(cls):
-        if cls.fake.poll() is None:
-            cls.fake.terminate()
-            try:
-                cls.fake.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                cls.fake.kill()
+        stop_fake(cls.fake)
         bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_01_response_reaches_all_three_helpers(self):
@@ -560,11 +521,11 @@ class MixedEngineTests(unittest.TestCase):
                 return "subd.verts" in report.get("sections", [])
             return False
 
-        self.assertTrue(self._pump(until=updated), "fake never saw subd sections")
+        self.assertTrue(pump(until=updated), "fake never saw subd sections")
         # Wait for the response to be applied too: the next test reads the
         # evaluated components, which the subd response repopulates.
         self.assertTrue(
-            self._pump(until=lambda: self.stage.state == "ok"), "subd response never applied"
+            pump(until=lambda: self.stage.state == "ok"), "subd response never applied"
         )
         self.obj.gh_stack.subd = False
 

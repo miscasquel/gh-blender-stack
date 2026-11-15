@@ -1,9 +1,6 @@
 """Layer B: prefix evaluation — a stage sees everything before its modifier."""
 
-import json
 import os
-import subprocess
-import sys
 import tempfile
 import time
 import unittest
@@ -11,73 +8,15 @@ import unittest
 import bpy
 import numpy as np
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-BLENDER_PKG = os.path.join(REPO, "blender")
-if BLENDER_PKG not in sys.path:
-    sys.path.insert(0, BLENDER_PKG)
-
-PORT = 9145
-SCALE_PARAM = "00000000-0000-4000-8000-0000000000aa"
-
-
-def pump(seconds=8.0, until=None):
-    """Drive the engine timer directly: bpy.app.timers is inert under -b."""
-    import stageloom.blender.engine as engine
-
-    deadline = time.time() + seconds
-    while time.time() < deadline:
-        engine._timer()
-        if until is not None and until():
-            return True
-        time.sleep(0.01)
-    return until is None
-
-
-def start_fake(stage_key, report, delay_ms=0):
-    return subprocess.Popen(
-        [
-            sys.executable,
-            os.path.join(REPO, "tools", "fake_gh", "fake_gh.py"),
-            "--port", str(PORT),
-            "--stage", stage_key,
-            "--report", report,
-            "--delay-ms", str(delay_ms),
-        ],
-        env=dict(
-            os.environ,
-            PYTHONPATH=os.pathsep.join(
-                [os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]
-            ),
-        ),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-
-
-def stop_fake(process):
-    if process.poll() is None:
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-
-
-def report_of(path):
-    if not os.path.exists(path):
-        return {}
-    try:
-        return json.load(open(path))
-    except ValueError:
-        return {}
-
-
-def isolate_data_root():
-    """Point the frame cache at a temp dir so tests never write into the real
-    extension user data directory (or the dev fallback)."""
-    prefs = bpy.context.preferences.addons["stageloom"].preferences
-    prefs.data_root = tempfile.mkdtemp(prefix="stageloom-test-")
+from harness import (
+    SCALE,
+    free_port,
+    isolate_data_root,
+    pump,
+    report_of,
+    start_fake,
+    stop_fake,
+)
 
 
 class PrefixChainTests(unittest.TestCase):
@@ -87,7 +26,7 @@ class PrefixChainTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        isolate_data_root()
+        cls.enterClassContext(isolate_data_root("stageloom-test-"))
         import stageloom.blender.engine as engine
 
         cls.engine = engine
@@ -96,7 +35,8 @@ class PrefixChainTests(unittest.TestCase):
         cls.obj = bpy.context.object
         cls.obj.name = "Chain"
 
-        engine.start_server(PORT)
+        cls.port = free_port()
+        engine.start_server(cls.port)
         time.sleep(0.5)
 
         pre = cls.obj.modifiers.new("PreBevel", "BEVEL")
@@ -117,8 +57,8 @@ class PrefixChainTests(unittest.TestCase):
             if os.path.exists(path):
                 os.remove(path)
 
-        cls.fake_a = start_fake(cls.stage_a.key, cls.report_a)
-        cls.fake_b = start_fake(cls.stage_b.key, cls.report_b)
+        cls.fake_a = start_fake(cls.stage_a.key, cls.report_a, port=cls.port)
+        cls.fake_b = start_fake(cls.stage_b.key, cls.report_b, port=cls.port)
 
         def ready():
             return cls.stage_a.state in ("ok", "error") and cls.stage_b.state in ("ok", "error")
@@ -140,7 +80,7 @@ class PrefixChainTests(unittest.TestCase):
 
     def test_02_second_stage_sees_the_first_stages_output(self):
         # Scale A by 2: B's prefix must show the doubled extent, not the base.
-        self.obj["gh/%s/%s" % (self.stage_a.key, SCALE_PARAM)] = 2.0
+        self.obj["gh/%s/%s" % (self.stage_a.key, SCALE)] = 2.0
         self.engine.push(self.obj)
 
         def b_updated():
@@ -221,7 +161,7 @@ class WaitingPrefixTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        isolate_data_root()
+        cls.enterClassContext(isolate_data_root("stageloom-test-"))
         import stageloom.blender.engine as engine
 
         cls.engine = engine
@@ -230,7 +170,8 @@ class WaitingPrefixTests(unittest.TestCase):
         cls.obj = bpy.context.object
         cls.obj.name = "Waits"
 
-        engine.start_server(PORT)
+        cls.port = free_port()
+        engine.start_server(cls.port)
         time.sleep(0.5)
 
         bpy.ops.stageloom.add_stage(label="Slow")
@@ -244,8 +185,8 @@ class WaitingPrefixTests(unittest.TestCase):
             if os.path.exists(path):
                 os.remove(path)
 
-        cls.fake_a = start_fake(cls.stage_a.key, cls.report_a, delay_ms=1000)
-        cls.fake_b = start_fake(cls.stage_b.key, cls.report_b)
+        cls.fake_a = start_fake(cls.stage_a.key, cls.report_a, "--delay-ms", "1000", port=cls.port)
+        cls.fake_b = start_fake(cls.stage_b.key, cls.report_b, port=cls.port)
 
         def settled():
             return cls.stage_a.state == "ok" and cls.stage_b.state == "ok"
@@ -264,7 +205,7 @@ class WaitingPrefixTests(unittest.TestCase):
         self.assertEqual(self.stage_b.state, "ok", self.stage_b.error)
 
         # Change A's output and push: A goes waiting, B must not run yet.
-        self.obj["gh/%s/%s" % (self.stage_a.key, SCALE_PARAM)] = 2.0
+        self.obj["gh/%s/%s" % (self.stage_a.key, SCALE)] = 2.0
         self.engine.push(self.obj)
         self.assertTrue(
             pump(seconds=5.0, until=lambda: self.stage_a.state == "waiting"),
@@ -295,11 +236,12 @@ class ComponentPrefixTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        isolate_data_root()
+        cls.enterClassContext(isolate_data_root("stageloom-test-"))
         import stageloom.blender.engine as engine
 
         cls.engine = engine
-        engine.start_server(PORT)
+        cls.port = free_port()
+        engine.start_server(cls.port)
         time.sleep(0.5)
 
         cls.curve = cls._build_curve_chain()
@@ -359,8 +301,8 @@ class ComponentPrefixTests(unittest.TestCase):
             "b": stage_b,
             "report_a": report_a,
             "report_b": report_b,
-            "fake_a": start_fake(stage_a.key, report_a),
-            "fake_b": start_fake(stage_b.key, report_b),
+            "fake_a": start_fake(stage_a.key, report_a, port=cls.port),
+            "fake_b": start_fake(stage_b.key, report_b, port=cls.port),
         }
 
     @classmethod
@@ -442,7 +384,7 @@ class NestedGroupPrefixTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        isolate_data_root()
+        cls.enterClassContext(isolate_data_root("stageloom-test-"))
         import stageloom.blender.engine as engine
 
         cls.engine = engine
@@ -451,7 +393,8 @@ class NestedGroupPrefixTests(unittest.TestCase):
         cls.obj = bpy.context.object
         cls.obj.name = "Nested"
 
-        engine.start_server(PORT)
+        cls.port = free_port()
+        engine.start_server(cls.port)
         time.sleep(0.5)
 
         cls.inner = cls._transform_group("Inner", 5.0)
@@ -466,7 +409,7 @@ class NestedGroupPrefixTests(unittest.TestCase):
         cls.report = os.path.join(tempfile.gettempdir(), "fake_gh_nested.json")
         if os.path.exists(cls.report):
             os.remove(cls.report)
-        cls.fake = start_fake(cls.stage.key, cls.report)
+        cls.fake = start_fake(cls.stage.key, cls.report, port=cls.port)
 
         def ready():
             return cls.stage.state == "ok" and report_of(cls.report).get("responses", 0) >= 1
@@ -566,7 +509,7 @@ class LateClientTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        isolate_data_root()
+        cls.enterClassContext(isolate_data_root("stageloom-test-"))
         import stageloom.blender.engine as engine
 
         cls.engine = engine
@@ -575,7 +518,8 @@ class LateClientTests(unittest.TestCase):
         cls.obj = bpy.context.object
         cls.obj.name = "Late"
 
-        engine.start_server(PORT)
+        cls.port = free_port()
+        engine.start_server(cls.port)
         time.sleep(0.5)
 
         bpy.ops.stageloom.add_stage(label="Late")
@@ -591,7 +535,7 @@ class LateClientTests(unittest.TestCase):
 
         # Only the second stage's client exists; the first stage's request has
         # nobody to receive it.
-        cls.fake_b = start_fake(cls.stage_b.key, cls.report_b)
+        cls.fake_b = start_fake(cls.stage_b.key, cls.report_b, port=cls.port)
         pump(seconds=5.0, until=lambda: cls.stage_a.state == "waiting")
         cls.fake_a = None
 
@@ -607,7 +551,7 @@ class LateClientTests(unittest.TestCase):
         self.assertEqual(report_of(self.report_a).get("responses", 0), 0)
 
     def test_02_late_client_is_answered_without_a_timeout(self):
-        self.fake_a = start_fake(self.stage_a.key, self.report_a)
+        self.fake_a = start_fake(self.stage_a.key, self.report_a, port=self.port)
         type(self).fake_a = self.fake_a
 
         def answered():
@@ -623,7 +567,7 @@ class PrefixCostTests(unittest.TestCase):
     def setUp(self):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        isolate_data_root()
+        self.enterContext(isolate_data_root("stageloom-test-"))
 
     def _grid(self, nx, ny):
         mesh = bpy.data.meshes.new("grid")

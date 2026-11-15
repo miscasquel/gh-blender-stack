@@ -1,19 +1,13 @@
 """Layer B: multi-stage response gating and link safety."""
 
 import os
-import sys
-import tempfile
 import time
 import unittest
 
 import bpy
 import numpy as np
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-BLENDER_PKG = os.path.join(REPO, "blender")
-if BLENDER_PKG not in sys.path:
-    sys.path.insert(0, BLENDER_PKG)
+from harness import isolate_data_root
 
 
 class ResponseValidationTests(unittest.TestCase):
@@ -21,9 +15,7 @@ class ResponseValidationTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        bpy.context.preferences.addons["stageloom"].preferences.data_root = (
-            tempfile.mkdtemp(prefix="stageloom-multistage-")
-        )
+        cls.enterClassContext(isolate_data_root("stageloom-multistage-"))
         import stageloom.blender.engine as engine
         import stageloom.blender.stack as stack_mod
 

@@ -6,10 +6,7 @@ per delivered request, ignores the frame cache, and never resets its generation
 for a same-rid answer.
 """
 
-import json
 import os
-import subprocess
-import sys
 import tempfile
 import time
 import unittest
@@ -17,120 +14,18 @@ import unittest
 import bpy
 import numpy as np
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-BLENDER_PKG = os.path.join(REPO, "blender")
-if BLENDER_PKG not in sys.path:
-    sys.path.insert(0, BLENDER_PKG)
-
-PORT = 9156
-SCALE = "00000000-0000-4000-8000-0000000000aa"
-
-
-def pump(seconds=10.0, until=None):
-    """Drive the engine timer directly: bpy.app.timers is inert under -b."""
-    import stageloom.blender.engine as engine
-
-    deadline = time.time() + seconds
-    while time.time() < deadline:
-        engine._timer()
-        if until is not None and until():
-            return True
-        time.sleep(0.01)
-    return until is None
-
-
-def start_fake(stage_key, report, *extra, port=PORT):
-    return subprocess.Popen(
-        [
-            sys.executable,
-            os.path.join(REPO, "tools", "fake_gh", "fake_gh.py"),
-            "--port",
-            str(port),
-            "--stage",
-            stage_key,
-            "--report",
-            report,
-            *extra,
-        ],
-        env=dict(
-            os.environ,
-            PYTHONPATH=os.pathsep.join(
-                [os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]
-            ),
-        ),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-
-
-def stop_fake(process):
-    if process is None or process.poll() is not None:
-        return
-    process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-
-
-def report_of(path):
-    if not os.path.exists(path):
-        return {}
-    try:
-        return json.load(open(path))
-    except ValueError:
-        return {}
-
-
-def requests_of(path):
-    report = report_of(path)
-    return report.get("full", 0) + report.get("ref", 0)
-
-
-def helper_max(obj, stage_key):
-    """The largest absolute coordinate in a stage's mesh helper."""
-    import stageloom.blender.helpers as helpers
-
-    helper = helpers.helper_for(obj, stage_key, "mesh")
-    if helper is None or not len(helper.data.vertices):
-        return 0.0
-    count = len(helper.data.vertices)
-    co = np.empty(count * 3, dtype=np.float32)
-    helper.data.vertices.foreach_get("co", co)
-    return float(np.abs(co.reshape(-1, 3)).max())
-
-
-def settle(engine, stack_mod, objects, settled, total=25.0):
-    """Pump until settled, re-arming only requests that have gone quiet.
-
-    A lost first request during the socket transition is normal; a re-arm while
-    an answer is young would starve it, so the re-arm waits for the wait to age.
-    """
-    deadline = time.time() + total
-    while time.time() < deadline and not settled():
-        quiet = True
-        for obj in objects:
-            record = stack_mod.stack_of(obj)
-            if record is None:
-                continue
-            for stage in record.stages:
-                age = engine.waiting_seconds(record.stack_id, stage.key)
-                if age and age < 6.0:
-                    quiet = False
-        if quiet:
-            for obj in objects:
-                engine.request_again(obj)
-        pump(seconds=2.0, until=settled)
-    if not settled():
-        states = []
-        for obj in objects:
-            record = stack_mod.stack_of(obj)
-            if record is None:
-                continue
-            for stage in record.stages:
-                states.append((obj.name, stage.key, stage.state, stage.error))
-        raise AssertionError("the fake never settled: %s" % (states,))
+from harness import (
+    SCALE,
+    free_port,
+    helper_max,
+    isolate_data_root,
+    pump,
+    report_of,
+    requests_of,
+    settle,
+    start_fake,
+    stop_fake,
+)
 
 
 class LiveTestCase(unittest.TestCase):
@@ -140,14 +35,14 @@ class LiveTestCase(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        prefs = bpy.context.preferences.addons["stageloom"].preferences
-        prefs.data_root = tempfile.mkdtemp(prefix="stageloom-live-generator-")
+        cls.enterClassContext(isolate_data_root("stageloom-live-generator-"))
         import stageloom.blender.engine as engine
         import stageloom.blender.stack as stack_mod
 
         cls.engine = engine
         cls.stack_mod = stack_mod
-        engine.start_server(PORT)
+        cls.port = free_port()
+        engine.start_server(cls.port)
         time.sleep(0.5)
 
     @classmethod
@@ -188,12 +83,19 @@ class GeneratorStageTests(LiveTestCase):
         cls.obj, cls.stage = cls.stack_object("Generator")
         cls.stage.input_mode = "generator"
         cls.report = cls.report_path("generator")
-        cls.fake = start_fake(cls.stage.key, cls.report)
+        cls.fake = start_fake(cls.stage.key, cls.report, port=cls.port)
 
         def settled():
             return cls.stage.state == "ok" and report_of(cls.report).get("responses", 0) >= 1
 
-        settle(cls.engine, cls.stack_mod, [cls.obj], settled)
+        settle(
+            cls.engine,
+            cls.stack_mod,
+            [cls.obj],
+            settled,
+            total=25.0,
+            include_error=True,
+        )
 
     def test_01_a_generator_skips_the_prefix_and_sends_empty_geometry(self):
         engine = self.engine
@@ -292,7 +194,7 @@ class LiveFrameTests(LiveTestCase):
         # The fake answers its first request twice: the second answer has the
         # same rid and a changed output, the GH-side-edit shape a live stage
         # must apply without resetting its generation.
-        cls.fake = start_fake(cls.stage.key, cls.report, "--gh-edit-after", "1")
+        cls.fake = start_fake(cls.stage.key, cls.report, "--gh-edit-after", "1", port=cls.port)
 
         def settled():
             report = report_of(cls.report)
@@ -303,7 +205,14 @@ class LiveFrameTests(LiveTestCase):
                 and abs(helper_max(cls.obj, cls.stage.key) - 42.0) < 0.01
             )
 
-        settle(cls.engine, cls.stack_mod, [cls.obj], settled)
+        settle(
+            cls.engine,
+            cls.stack_mod,
+            [cls.obj],
+            settled,
+            total=25.0,
+            include_error=True,
+        )
 
     def test_01_a_same_rid_change_applies_without_a_generation_bump(self):
         generation = self.stage.generation
@@ -392,8 +301,8 @@ class SharedObjectIsolationTests(LiveTestCase):
         cls.stage_a.live = True
         cls.report_a = cls.report_path("shared_a")
         cls.report_b = cls.report_path("shared_b")
-        cls.fake_a = start_fake(cls.stage_a.key, cls.report_a)
-        cls.fake_b = start_fake(cls.stage_b.key, cls.report_b)
+        cls.fake_a = start_fake(cls.stage_a.key, cls.report_a, port=cls.port)
+        cls.fake_b = start_fake(cls.stage_b.key, cls.report_b, port=cls.port)
 
         def settled():
             return (
@@ -403,7 +312,14 @@ class SharedObjectIsolationTests(LiveTestCase):
                 and report_of(cls.report_b).get("responses", 0) >= 1
             )
 
-        settle(cls.engine, cls.stack_mod, [cls.obj], settled)
+        settle(
+            cls.engine,
+            cls.stack_mod,
+            [cls.obj],
+            settled,
+            total=25.0,
+            include_error=True,
+        )
 
     def test_01_another_stages_parameter_does_not_advance_the_live_stage(self):
         engine = self.engine
@@ -463,7 +379,7 @@ class OneWayStageTests(LiveTestCase):
         super().setUpClass()
         cls.obj, cls.stage = cls.stack_object("OneWay")
         cls.report = cls.report_path("one_way")
-        cls.fake = start_fake(cls.stage.key, cls.report, "--no-stage-out")
+        cls.fake = start_fake(cls.stage.key, cls.report, "--no-stage-out", port=cls.port)
 
         def ready():
             return (
@@ -647,8 +563,7 @@ class StaleAnswerTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        prefs = bpy.context.preferences.addons["stageloom"].preferences
-        prefs.data_root = tempfile.mkdtemp(prefix="stageloom-stale-")
+        cls.enterClassContext(isolate_data_root("stageloom-stale-"))
         import stageloom.blender.engine as engine
         import stageloom.blender.stack as stack_mod
 

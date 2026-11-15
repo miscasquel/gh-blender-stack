@@ -9,13 +9,21 @@ cd "$(dirname "$0")/.."
 CAP="${STAGELOOM_TEST_BLENDER_TIMEOUT:-900}"
 if command -v timeout >/dev/null 2>&1; then
   TIMEOUT=(timeout --signal=TERM --kill-after=30 "$CAP")
+  HAVE_TIMEOUT=1
 else
   TIMEOUT=()
+  HAVE_TIMEOUT=0
   echo "test-blender: timeout(1) not found; relying on the per-test watchdog" >&2
 fi
 
 run_blender() {
-  "${TIMEOUT[@]}" blender "$@"
+  # Bash 3.2 (macOS) treats an empty "${TIMEOUT[@]}" as an unbound variable
+  # under `set -u`, so the scalar flag chooses the expansion.
+  if [ "$HAVE_TIMEOUT" -eq 1 ]; then
+    "${TIMEOUT[@]}" blender "$@"
+  else
+    blender "$@"
+  fi
 }
 
 LOG="$(mktemp)"

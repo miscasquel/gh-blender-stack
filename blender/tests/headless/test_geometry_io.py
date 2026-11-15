@@ -8,18 +8,11 @@ which is ``blender -b --factory-startup --python-exit-code 1 --python
 blender/tests/headless/run.py``. Asserts are real: a failure sets the exit code.
 """
 
-import os
-import sys
 import time
 import unittest
 
 import bpy
 import numpy as np
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-if REPO not in sys.path:
-    sys.path.insert(0, REPO)
 
 from blender.stageloom.blender import geometry_io  # noqa: E402
 from blender.stageloom.core import codec  # noqa: E402

@@ -1,18 +1,11 @@
 """Layer B: Blender instances <-> Grasshopper blocks (protocol §5.2)."""
 
 import os
-import sys
 import time
 import unittest
 
 import bpy
 import numpy as np
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-BLENDER_PKG = os.path.join(REPO, "blender")
-if BLENDER_PKG not in sys.path:
-    sys.path.insert(0, BLENDER_PKG)
 
 from blender.stageloom.blender import geometry_io  # noqa: E402
 from blender.stageloom.core import codec  # noqa: E402

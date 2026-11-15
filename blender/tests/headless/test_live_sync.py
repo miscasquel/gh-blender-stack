@@ -1,9 +1,6 @@
 """Layer B: the live path — depsgraph triggers, Edit Mode, reconnect and undo."""
 
-import json
 import os
-import subprocess
-import sys
 import tempfile
 import time
 import unittest
@@ -12,130 +9,22 @@ import bpy
 import bmesh
 import numpy as np
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-BLENDER_PKG = os.path.join(REPO, "blender")
-if BLENDER_PKG not in sys.path:
-    sys.path.insert(0, BLENDER_PKG)
-
-PORT = 9148
-SCALE = "00000000-0000-4000-8000-0000000000aa"
-
-
-def pump(seconds=10.0, until=None):
-    """Drive the engine timer directly: bpy.app.timers is inert under -b."""
-    import stageloom.blender.engine as engine
-
-    deadline = time.time() + seconds
-    while time.time() < deadline:
-        engine._timer()
-        if until is not None and until():
-            return True
-        time.sleep(0.01)
-    return until is None
-
-
-def start_fake(stage_key, report, port=PORT, *extra):
-    return subprocess.Popen(
-        [
-            sys.executable,
-            os.path.join(REPO, "tools", "fake_gh", "fake_gh.py"),
-            "--port",
-            str(port),
-            "--stage",
-            stage_key,
-            "--report",
-            report,
-            *extra,
-        ],
-        env=dict(
-            os.environ,
-            PYTHONPATH=os.pathsep.join(
-                [os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]
-            ),
-        ),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-
-
-def stop_fake(process):
-    if process is None or process.poll() is not None:
-        return
-    process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-
-
-def report_of(path):
-    if not os.path.exists(path):
-        return {}
-    try:
-        return json.load(open(path))
-    except ValueError:
-        return {}
-
-
-def isolate_data_root():
-    prefs = bpy.context.preferences.addons["stageloom"].preferences
-    prefs.data_root = tempfile.mkdtemp(prefix="stageloom-live-")
+from harness import (
+    SCALE,
+    free_port,
+    helper_max,
+    isolate_data_root,
+    pump,
+    report_of,
+    settle,
+    start_fake,
+    stop_fake,
+)
 
 
 def first_x(report):
     first = report.get("received_first") or [None]
     return first[0]
-
-
-def helper_max(obj, stage_key):
-    """The largest absolute coordinate in a stage's mesh helper: what actually
-    landed on screen (the fake scales the stored geometry by the parameter)."""
-    import stageloom.blender.helpers as helpers
-
-    helper = helpers.helper_for(obj, stage_key, "mesh")
-    if helper is None or not len(helper.data.vertices):
-        return 0.0
-    count = len(helper.data.vertices)
-    co = np.empty(count * 3, dtype=np.float32)
-    helper.data.vertices.foreach_get("co", co)
-    return float(np.abs(co.reshape(-1, 3)).max())
-
-
-def settle_stages(engine, stack_mod, objects, settled, total=40.0):
-    """Pump until settled, re-arming requests only when they have gone quiet.
-
-    A class transition can leave the server holding a dead socket (the window
-    the frame-cache suite's `await_client` documents), so a lost first request
-    is normal. Re-arming a *young* request is not the fix: under a slow fake it
-    starves the answer that was about to land. A request is therefore replaced
-    only after `REARM_QUIET` seconds of waiting with nothing else in flight.
-    """
-    REARM_QUIET = 6.0
-    deadline = time.time() + total
-    while time.time() < deadline and not settled():
-        quiet = True
-        for obj in objects:
-            record = stack_mod.stack_of(obj)
-            if record is None:
-                continue
-            for stage in record.stages:
-                age = engine.waiting_seconds(record.stack_id, stage.key)
-                if age and age < REARM_QUIET:
-                    quiet = False
-        if quiet:
-            for obj in objects:
-                engine.request_again(obj)
-        pump(seconds=2.0, until=settled)
-    if not settled():
-        states = []
-        for obj in objects:
-            record = stack_mod.stack_of(obj)
-            if record is None:
-                continue
-            for stage in record.stages:
-                states.append((obj.name, stage.state))
-        raise AssertionError("the fake never settled: %s" % (states,))
 
 
 class LiveSyncTestCase(unittest.TestCase):
@@ -145,13 +34,14 @@ class LiveSyncTestCase(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        isolate_data_root()
+        cls.enterClassContext(isolate_data_root("stageloom-live-"))
         import stageloom.blender.engine as engine
         import stageloom.blender.stack as stack_mod
 
         cls.engine = engine
         cls.stack_mod = stack_mod
-        engine.start_server(PORT)
+        cls.port = free_port()
+        engine.start_server(cls.port)
         time.sleep(0.5)
 
         bpy.ops.mesh.primitive_cube_add(size=2.0)
@@ -167,13 +57,13 @@ class LiveSyncTestCase(unittest.TestCase):
         cls.report = os.path.join(tempfile.gettempdir(), "fake_gh_live_%s.json" % cls.__name__)
         if os.path.exists(cls.report):
             os.remove(cls.report)
-        cls.fake = start_fake(cls.stage.key, cls.report)
+        cls.fake = start_fake(cls.stage.key, cls.report, port=cls.port)
 
         def settled():
             return cls.stage.state == "ok" and report_of(cls.report).get("responses", 0) >= 1
 
-        # settle_stages re-arms lost requests and names the failure here.
-        settle_stages(engine, stack_mod, [cls.obj], settled)
+        # settle re-arms lost requests and names the failure here.
+        settle(engine, stack_mod, [cls.obj], settled)
 
     @classmethod
     def tearDownClass(cls):
@@ -207,14 +97,19 @@ class EditModeTests(LiveSyncTestCase):
         bmesh.update_edit_mesh(self.obj.data)
 
         # No mode exit, no manual tag: the timer drains, flushes and sends.
-        reached = pump(
-            seconds=15.0,
-            until=lambda: first_x(report_of(self.report)) is not None
-            and abs(first_x(report_of(self.report)) - (before + 5.0)) < 0.05,
-        )
+        def reached():
+            report = report_of(self.report)
+            x = first_x(report)
+            return (
+                self.stage.state == "ok"
+                and x is not None
+                and abs(x - (before + 5.0)) < 0.05
+            )
+
         self.assertTrue(
-            reached,
-            "an Edit Mode stroke never reached Grasshopper (report=%s)" % report_of(self.report),
+            pump(seconds=15.0, until=reached),
+            "an Edit Mode stroke never reached Grasshopper (state=%s, error=%r, report=%s)"
+            % (self.stage.state, self.stage.error, report_of(self.report)),
         )
         self.assertEqual(self.obj.mode, "EDIT", "the test left Edit Mode; the point was to stay in it")
         self.assertEqual(self.stage.state, "ok", self.stage.error)
@@ -404,13 +299,14 @@ class MultiObjectEditTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        isolate_data_root()
+        cls.enterClassContext(isolate_data_root("stageloom-live-"))
         import stageloom.blender.engine as engine
         import stageloom.blender.stack as stack_mod
 
         cls.engine = engine
         cls.stack_mod = stack_mod
-        engine.start_server(PORT)
+        cls.port = free_port()
+        engine.start_server(cls.port)
         time.sleep(0.5)
 
         cls.obj_a = cls._stack_object("MultiA", "A")
@@ -428,8 +324,8 @@ class MultiObjectEditTests(unittest.TestCase):
             if os.path.exists(path):
                 os.remove(path)
         # Both stages share the port: each fake answers only its own stage.
-        cls.fake_a = start_fake(cls.stage_a.key, cls.report_a)
-        cls.fake_b = start_fake(cls.stage_b.key, cls.report_b)
+        cls.fake_a = start_fake(cls.stage_a.key, cls.report_a, port=cls.port)
+        cls.fake_b = start_fake(cls.stage_b.key, cls.report_b, port=cls.port)
 
         def settled():
             return (
@@ -441,7 +337,7 @@ class MultiObjectEditTests(unittest.TestCase):
 
         # The same transition window the single-object suite documents: settle,
         # re-arming quiet requests, and fail here if the fakes never answer.
-        settle_stages(engine, stack_mod, [cls.obj_a, cls.obj_b], settled)
+        settle(engine, stack_mod, [cls.obj_a, cls.obj_b], settled)
 
     @classmethod
     def _stack_object(cls, name, label):
@@ -610,19 +506,18 @@ class MultiObjectGhEditTests(unittest.TestCase):
     each stage carrying that stage's own current rid. Blender must apply both.
     """
 
-    PORT = 9159
-
     @classmethod
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        isolate_data_root()
+        cls.enterClassContext(isolate_data_root("stageloom-live-"))
         import stageloom.blender.engine as engine
         import stageloom.blender.stack as stack_mod
 
         cls.engine = engine
         cls.stack_mod = stack_mod
-        engine.start_server(cls.PORT)
+        cls.port = free_port()
+        engine.start_server(cls.port)
         time.sleep(0.5)
 
         cls.obj_a = cls._stack_object("GhEditA", "A")
@@ -635,8 +530,8 @@ class MultiObjectGhEditTests(unittest.TestCase):
         for path in (cls.report_a, cls.report_b):
             if os.path.exists(path):
                 os.remove(path)
-        cls.fake_a = start_fake(cls.stage_a.key, cls.report_a, port=cls.PORT)
-        cls.fake_b = start_fake(cls.stage_b.key, cls.report_b, port=cls.PORT)
+        cls.fake_a = start_fake(cls.stage_a.key, cls.report_a, port=cls.port)
+        cls.fake_b = start_fake(cls.stage_b.key, cls.report_b, port=cls.port)
 
         def settled():
             return (
@@ -646,7 +541,7 @@ class MultiObjectGhEditTests(unittest.TestCase):
                 and report_of(cls.report_b).get("responses", 0) >= 1
             )
 
-        settle_stages(engine, stack_mod, [cls.obj_a, cls.obj_b], settled)
+        settle(engine, stack_mod, [cls.obj_a, cls.obj_b], settled)
 
     @classmethod
     def _stack_object(cls, name, label):
@@ -777,7 +672,7 @@ class PendingUpdateTests(LiveSyncTestCase):
 class ReconnectVerifyTests(LiveSyncTestCase):
     def test_01_a_reconnect_asks_instead_of_replaying(self):
         # Settle so the current rid is cached in memory and on disk.
-        pump(until=lambda: self.stage.state == "ok")
+        pump(seconds=10.0, until=lambda: self.stage.state == "ok")
         record = self.stack_mod.stack_of(self.obj)
         cached_frame = self.engine._cached_response(record, self.stage, self.stage.rid)
         self.assertIsNotNone(cached_frame, "the frame was not cached; the test proves nothing")
@@ -1399,13 +1294,14 @@ class SupersedeTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        isolate_data_root()
+        cls.enterClassContext(isolate_data_root("stageloom-live-"))
         import stageloom.blender.engine as engine
         import stageloom.blender.stack as stack_mod
 
         cls.engine = engine
         cls.stack_mod = stack_mod
-        engine.start_server(PORT)
+        cls.port = free_port()
+        engine.start_server(cls.port)
         time.sleep(0.5)
 
         bpy.ops.mesh.primitive_cube_add(size=2.0)
@@ -1418,12 +1314,14 @@ class SupersedeTests(unittest.TestCase):
         cls.report = os.path.join(tempfile.gettempdir(), "fake_gh_live_supersede.json")
         if os.path.exists(cls.report):
             os.remove(cls.report)
-        cls.fake = start_fake(cls.stage.key, cls.report, PORT, "--delay-ms", "3000")
+        cls.fake = start_fake(
+            cls.stage.key, cls.report, "--delay-ms", "3000", port=cls.port
+        )
 
         def settled():
             return cls.stage.state == "ok" and report_of(cls.report).get("responses", 0) >= 1
 
-        settle_stages(engine, stack_mod, [cls.obj], settled)
+        settle(engine, stack_mod, [cls.obj], settled)
 
     @classmethod
     def tearDownClass(cls):

@@ -7,19 +7,12 @@ the decision helper and the non-modal parts of the operator; showing the actual
 popup is Blender's job and is not exercised headless.
 """
 
-import os
-import sys
-import tempfile
 import types
 import unittest
 
 import bpy
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-BLENDER_PKG = os.path.join(REPO, "blender")
-if BLENDER_PKG not in sys.path:
-    sys.path.insert(0, BLENDER_PKG)
+from harness import isolate_data_root
 
 
 class BakeSafetyTests(unittest.TestCase):
@@ -27,9 +20,7 @@ class BakeSafetyTests(unittest.TestCase):
     def setUpClass(cls):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        bpy.context.preferences.addons["stageloom"].preferences.data_root = tempfile.mkdtemp(
-            prefix="stageloom-bake-safety-"
-        )
+        cls.enterClassContext(isolate_data_root("stageloom-bake-safety-"))
         from stageloom.blender import nodes, ops
 
         cls.nodes = nodes

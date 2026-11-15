@@ -2,34 +2,13 @@
 
 import json
 import os
-import subprocess
-import sys
 import tempfile
 import time
 import unittest
 
 import bpy
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-BLENDER_PKG = os.path.join(REPO, "blender")
-if BLENDER_PKG not in sys.path:
-    sys.path.insert(0, BLENDER_PKG)
-
-PORT = 9141
-
-
-def pump(seconds=8.0, until=None):
-    """Drive the engine timer directly: bpy.app.timers is inert under -b."""
-    import stageloom.blender.engine as engine
-
-    deadline = time.time() + seconds
-    while time.time() < deadline:
-        engine._timer()
-        if until is not None and until():
-            return True
-        time.sleep(0.01)
-    return until is None
+from harness import free_port, isolate_data_root, pump, start_fake, stop_fake
 
 
 class EngineDemoTests(unittest.TestCase):
@@ -39,14 +18,13 @@ class EngineDemoTests(unittest.TestCase):
         # which would disable the add-on if it ran after addon_enable.
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        bpy.context.preferences.addons["stageloom"].preferences.data_root = tempfile.mkdtemp(
-            prefix="stageloom-test-"
-        )
+        cls.enterClassContext(isolate_data_root("stageloom-test-"))
         import stageloom.blender.engine as engine
         import stageloom.blender.stack as stack_mod
 
         cls.engine = engine
         cls.stack_mod = stack_mod
+        cls.port = free_port()
         cls.report_path = os.path.join(tempfile.gettempdir(), "fake_gh_report.json")
         if os.path.exists(cls.report_path):
             os.remove(cls.report_path)
@@ -55,33 +33,14 @@ class EngineDemoTests(unittest.TestCase):
         cls.obj = bpy.context.object
         cls.obj.name = "Demo"
 
-        engine.start_server(PORT)
+        engine.start_server(cls.port)
         time.sleep(0.5)
 
         bpy.ops.stageloom.add_stage(label="Demo")
         cls.stage = cls.obj.gh_stack.stages[0]
         cls.param_name = "gh/%s/%s" % (cls.stage.key, "00000000-0000-4000-8000-0000000000aa")
 
-        cls.fake = subprocess.Popen(
-            [
-                sys.executable,
-                os.path.join(REPO, "tools", "fake_gh", "fake_gh.py"),
-                "--port",
-                str(PORT),
-                "--stage",
-                cls.stage.key,
-                "--report",
-                cls.report_path,
-            ],
-            env=dict(
-                os.environ,
-                PYTHONPATH=os.pathsep.join(
-                    [os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]
-                ),
-            ),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
+        cls.fake = start_fake(cls.stage.key, cls.report_path, port=cls.port)
 
         # Wait for the connection and the schema, then for the first response.
         def ready():
@@ -93,11 +52,7 @@ class EngineDemoTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls.fake.terminate()
-        try:
-            cls.fake.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            cls.fake.kill()
+        stop_fake(cls.fake)
         bpy.ops.preferences.addon_disable(module="stageloom")
 
     def helper(self):

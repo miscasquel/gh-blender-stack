@@ -1,27 +1,18 @@
 """Layer B: stage addressing, modifier order and prefix invalidation."""
 
-import os
-import sys
-import tempfile
 import unittest
 from types import SimpleNamespace
 
 import bpy
 import numpy as np
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-BLENDER_PKG = os.path.join(REPO, "blender")
-if BLENDER_PKG not in sys.path:
-    sys.path.insert(0, BLENDER_PKG)
+from harness import isolate_data_root
 
 
-def enable():
+def enable(case):
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.preferences.addon_enable(module="stageloom")
-    bpy.context.preferences.addons["stageloom"].preferences.data_root = (
-        tempfile.mkdtemp(prefix="stageloom-addressing-")
-    )
+    case.enterClassContext(isolate_data_root("stageloom-addressing-"))
 
 
 def make_stack_object(name):
@@ -36,7 +27,7 @@ def make_stack_object(name):
 class StageOrderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        enable()
+        enable(cls)
         import stageloom.blender.engine as engine
         import stageloom.blender.nodes as nodes
         import stageloom.blender.ops as ops
@@ -118,7 +109,7 @@ class StageOrderTests(unittest.TestCase):
 class ApplyInvalidationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        enable()
+        enable(cls)
         import stageloom.blender.engine as engine
         import stageloom.blender.stack as stack_mod
 
@@ -177,7 +168,7 @@ class CachedPrefixBatchTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        enable()
+        enable(cls)
         import stageloom.blender.engine as engine
         import stageloom.blender.stack as stack_mod
 
@@ -338,7 +329,7 @@ class SurfaceStageRejectionTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        enable()
+        enable(cls)
         import stageloom.blender.ops as ops
 
         cls.ops = ops
@@ -450,7 +441,7 @@ class LegacyNameAmbiguityTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        enable()
+        enable(cls)
         import stageloom.blender.engine as engine
         import stageloom.blender.stack as stack_mod
 

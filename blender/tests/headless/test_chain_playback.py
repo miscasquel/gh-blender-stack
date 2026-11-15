@@ -14,22 +14,16 @@ fakes and assertions instead of growing a second copy of the scaffolding.
 """
 
 import os
-import sys
 import tempfile
 import time
 import unittest
 
 import bpy
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-BLENDER_PKG = os.path.join(REPO, "blender")
-for path in (BLENDER_PKG, HERE):
-    if path not in sys.path:
-        sys.path.insert(0, path)
-
-from test_playback_sync import (  # noqa: E402
+from harness import (
+    free_port,
     helper_max,
+    isolate_data_root,
     keyframe_scale,
     pump,
     report_of,
@@ -37,8 +31,6 @@ from test_playback_sync import (  # noqa: E402
     start_fake,
     stop_fake,
 )
-
-PORT = 9158
 
 
 def wait_for(read, check, seconds=2.0):
@@ -61,9 +53,9 @@ class ChainPlaybackTests(unittest.TestCase):
 
         cls.engine = engine
         cls.playback = playback
-        prefs = bpy.context.preferences.addons["stageloom"].preferences
-        prefs.data_root = tempfile.mkdtemp(prefix="stageloom-chain-playback-")
-        engine.start_server(PORT)
+        cls.enterClassContext(isolate_data_root("stageloom-chain-playback-"))
+        cls.port = free_port()
+        engine.start_server(cls.port)
         time.sleep(0.5)
 
         # Blender's Bevel re-evaluates its interpolated UVs with last-bit (and
@@ -122,10 +114,10 @@ class ChainPlaybackTests(unittest.TestCase):
             if os.path.exists(path):
                 os.remove(path)
         cls.fake_a = start_fake(
-            cls.stage_a.key, cls.report_a, "--delay-ms", "60", port=PORT
+            cls.stage_a.key, cls.report_a, "--delay-ms", "60", port=cls.port
         )
         cls.fake_b = start_fake(
-            cls.stage_b.key, cls.report_b, "--delay-ms", "60", port=PORT
+            cls.stage_b.key, cls.report_b, "--delay-ms", "60", port=cls.port
         )
         deadline = time.time() + 10.0
         while time.time() < deadline and bridge.state["clients"] < 2:

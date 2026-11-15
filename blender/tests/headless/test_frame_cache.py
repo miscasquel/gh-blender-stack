@@ -1,9 +1,6 @@
 """Layer B: the frame cache — fill, replay, resets, eviction and idle quiet."""
 
-import json
 import os
-import subprocess
-import sys
 import tempfile
 import time
 import unittest
@@ -11,27 +8,19 @@ import unittest
 import bpy
 import numpy as np
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-BLENDER_PKG = os.path.join(REPO, "blender")
-if BLENDER_PKG not in sys.path:
-    sys.path.insert(0, BLENDER_PKG)
-
-PORT = 9146
-SCALE = "00000000-0000-4000-8000-0000000000aa"
-
-
-def pump(seconds=8.0, until=None):
-    """Drive the engine timer directly: bpy.app.timers is inert under -b."""
-    import stageloom.blender.engine as engine
-
-    deadline = time.time() + seconds
-    while time.time() < deadline:
-        engine._timer()
-        if until is not None and until():
-            return True
-        time.sleep(0.01)
-    return until is None
+from harness import (
+    SCALE,
+    free_port,
+    helper_max,
+    isolate_data_root,
+    keyframe_scale,
+    pump,
+    pump_dirty,
+    report_of,
+    requests_of,
+    start_fake,
+    stop_fake,
+)
 
 
 def scrub(obj, frame):
@@ -41,85 +30,6 @@ def scrub(obj, frame):
 
     bpy.context.scene.frame_set(frame)
     engine._mark_object_dirty(obj)
-
-
-def pump_dirty(obj, seconds=8.0, until=None):
-    """Like pump, but keeps the object dirty. The request timeout is only
-    noticed on a pass, so a test waiting for a retry has to ask for passes (a
-    scene change would do the same in a session)."""
-    import stageloom.blender.engine as engine
-
-    deadline = time.time() + seconds
-    while time.time() < deadline:
-        engine._mark_object_dirty(obj)
-        engine._timer()
-        if until is not None and until():
-            return True
-        time.sleep(0.01)
-    return until is None
-
-
-def start_fake(stage_key, report, *extra):
-    return subprocess.Popen(
-        [
-            sys.executable,
-            os.path.join(REPO, "tools", "fake_gh", "fake_gh.py"),
-            "--port", str(PORT),
-            "--stage", stage_key,
-            "--report", report,
-            *extra,
-        ],
-        env=dict(
-            os.environ,
-            PYTHONPATH=os.pathsep.join(
-                [os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]
-            ),
-        ),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-
-
-def stop_fake(process):
-    if process is None:
-        return
-    if process.poll() is None:
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-
-
-def report_of(path):
-    if not os.path.exists(path):
-        return {}
-    try:
-        return json.load(open(path))
-    except ValueError:
-        return {}
-
-
-def requests_of(path):
-    report = report_of(path)
-    return report.get("full", 0) + report.get("ref", 0)
-
-
-def helper_max(obj, stage_key):
-    """The largest absolute coordinate in a stage's mesh helper: the fake scales
-    the whole mesh by the parameter, so this is the parameter value."""
-    import stageloom.blender.helpers as helpers
-
-    helper = helpers.helper_for(obj, stage_key, "mesh")
-    if helper is None:
-        return 0.0
-    mesh = helper.data
-    count = len(mesh.vertices)
-    if not count:
-        return 0.0
-    co = np.empty(count * 3, dtype=np.float32)
-    mesh.vertices.foreach_get("co", co)
-    return float(np.abs(co.reshape(-1, 3)).max())
 
 
 def helper_bounds(obj, stage_key):
@@ -183,18 +93,6 @@ def memory_count(obj, stage):
     return len(engine._cache.get((record.stack_id, stage.key), {}))
 
 
-def keyframe_scale(obj, stage, values):
-    """Keyframe the stage's float parameter at frames 1..len(values)."""
-    import stageloom.blender.stack as stack_mod
-
-    name = stack_mod.param_prop_name(stage.key, SCALE)
-    if name not in obj:
-        obj[name] = 1.0
-    for frame, value in enumerate(values, start=1):
-        obj[name] = float(value)
-        obj.keyframe_insert(data_path='["%s"]' % name, frame=frame)
-
-
 class FrameCacheTestCase(unittest.TestCase):
     """Shared setup: fresh scene, temp data root, one stack object."""
 
@@ -209,13 +107,15 @@ class FrameCacheTestCase(unittest.TestCase):
 
         cls.engine = engine
         cls.stack_mod = stack_mod
+        cls.data_root = cls.enterClassContext(
+            isolate_data_root("stageloom-cache-test-")
+        )
         prefs = bpy.context.preferences.addons["stageloom"].preferences
-        cls.data_root = tempfile.mkdtemp(prefix="stageloom-cache-test-")
-        prefs.data_root = cls.data_root
         if cls.cache_mb is not None:
             prefs.cache_size_mb = cls.cache_mb
 
-        engine.start_server(PORT)
+        cls.port = free_port()
+        engine.start_server(cls.port)
         time.sleep(0.5)
 
     @classmethod
@@ -272,7 +172,7 @@ class ProgressiveFillTests(FrameCacheTestCase):
         cls.obj, cls.stage = cls.add_cube("Fill")
         keyframe_scale(cls.obj, cls.stage, [1.0, 2.0, 3.0, 4.0, 5.0])
         cls.report = cls.report_path("fill")
-        cls.fake = start_fake(cls.stage.key, cls.report)
+        cls.fake = start_fake(cls.stage.key, cls.report, port=cls.port)
         cls.await_client()
 
     @classmethod
@@ -323,7 +223,7 @@ class GhEditResetTests(FrameCacheTestCase):
         cls.obj, cls.stage = cls.add_cube("Edit")
         keyframe_scale(cls.obj, cls.stage, [1.0, 2.0, 3.0])
         cls.report = cls.report_path("edit")
-        cls.fake = start_fake(cls.stage.key, cls.report, "--gh-edit-after", "3")
+        cls.fake = start_fake(cls.stage.key, cls.report, "--gh-edit-after", "3", port=cls.port)
         cls.await_client()
         # Cache two frames first; the third response triggers the GH-side edit
         # inside test_01, where the generation is captured beforehand.
@@ -382,7 +282,7 @@ class SchemaResetTests(FrameCacheTestCase):
         cls.obj, cls.stage = cls.add_cube("Schema")
         keyframe_scale(cls.obj, cls.stage, [1.0, 2.0])
         cls.report = cls.report_path("schema")
-        cls.fake = start_fake(cls.stage.key, cls.report, "--schema-after", "2")
+        cls.fake = start_fake(cls.stage.key, cls.report, "--schema-after", "2", port=cls.port)
         cls.await_client()
         scrub(cls.obj, 1)
         pump(until=lambda: memory_count(cls.obj, cls.stage) >= 1)
@@ -432,7 +332,7 @@ class NoOpQuietTests(FrameCacheTestCase):
         pre.width = 0.2
         cls.obj.modifiers.move(len(cls.obj.modifiers) - 1, 0)
         cls.report = cls.report_path("quiet")
-        cls.fake = start_fake(cls.stage.key, cls.report, "--echo-after", "1")
+        cls.fake = start_fake(cls.stage.key, cls.report, "--echo-after", "1", port=cls.port)
         cls.await_client()
         scrub(cls.obj, 1)
         pump(until=lambda: cls.stage.state == "ok" and report_of(cls.report).get("echoes", 0) >= 1)
@@ -505,7 +405,7 @@ class DocumentResetTests(FrameCacheTestCase):
         cls.obj, cls.stage = cls.add_cube("Doc")
         keyframe_scale(cls.obj, cls.stage, [1.0, 2.0])
         cls.report = cls.report_path("doc")
-        cls.fake = start_fake(cls.stage.key, cls.report, "--doc", "first.gh")
+        cls.fake = start_fake(cls.stage.key, cls.report, "--doc", "first.gh", port=cls.port)
         cls.await_client()
         scrub(cls.obj, 1)
         pump(until=lambda: memory_count(cls.obj, cls.stage) >= 1)
@@ -519,7 +419,7 @@ class DocumentResetTests(FrameCacheTestCase):
 
     def test_01_document_change_resets(self):
         generation = self.stage.generation
-        type(self).fake = start_fake(self.stage.key, self.report, "--doc", "second.gh")
+        type(self).fake = start_fake(self.stage.key, self.report, "--doc", "second.gh", port=self.port)
         self.await_client()
 
         def reset():
@@ -566,7 +466,7 @@ class EvictionTests(FrameCacheTestCase):
         cls.stage.live = False  # this class pins the deterministic frame cache
         keyframe_scale(cls.obj, cls.stage, [1.0, 2.0, 3.0, 4.0])
         cls.report = cls.report_path("evict")
-        cls.fake = start_fake(cls.stage.key, cls.report)
+        cls.fake = start_fake(cls.stage.key, cls.report, port=cls.port)
         cls.await_client()
         for frame in range(1, 5):
             scrub(cls.obj, frame)
@@ -618,7 +518,7 @@ class OneEvaluationAtATimeTests(FrameCacheTestCase):
         cls.obj, cls.stage = cls.add_cube("Slow")
         keyframe_scale(cls.obj, cls.stage, [1.0, 2.0, 3.0])
         cls.report = cls.report_path("slow")
-        cls.fake = start_fake(cls.stage.key, cls.report, "--delay-ms", "800")
+        cls.fake = start_fake(cls.stage.key, cls.report, "--delay-ms", "800", port=cls.port)
         cls.await_client()
         scrub(cls.obj, 1)
         pump(seconds=10.0, until=lambda: cls.stage.state == "ok")
@@ -678,7 +578,7 @@ class PlaybackTests(FrameCacheTestCase):
         keyframe_scale(cls.obj, cls.stage, [float(f) for f in range(1, 9)])
         cls.report = cls.report_path("play")
         # A round trip slower than the playhead step, as a real GH solve can be.
-        cls.fake = start_fake(cls.stage.key, cls.report, "--delay-ms", "400")
+        cls.fake = start_fake(cls.stage.key, cls.report, "--delay-ms", "400", port=cls.port)
         cls.await_client()
         scrub(cls.obj, 1)
         pump(seconds=10.0, until=lambda: cls.stage.state == "ok")
@@ -741,7 +641,7 @@ class OneRequestOutstandingTests(FrameCacheTestCase):
         cls.obj, cls.stage = cls.add_cube("Outstanding")
         keyframe_scale(cls.obj, cls.stage, [float((f % 7) + 1) for f in range(1, 21)])
         cls.report = cls.report_path("outstanding")
-        cls.fake = start_fake(cls.stage.key, cls.report, "--delay-ms", "300")
+        cls.fake = start_fake(cls.stage.key, cls.report, "--delay-ms", "300", port=cls.port)
         cls.await_client()
 
     @classmethod
@@ -810,7 +710,7 @@ class UnknownRefTests(FrameCacheTestCase):
         cls.obj, cls.stage = cls.add_cube("Ref")
         keyframe_scale(cls.obj, cls.stage, [1.0, 2.0])
         cls.report = cls.report_path("unknown_ref")
-        cls.fake = start_fake(cls.stage.key, cls.report, "--forget-after", "1")
+        cls.fake = start_fake(cls.stage.key, cls.report, "--forget-after", "1", port=cls.port)
         cls.await_client()
         scrub(cls.obj, 1)
         pump(seconds=10.0, until=lambda: cls.stage.state == "ok")
@@ -851,7 +751,13 @@ class UnknownRefResponseTests(UnknownRefTests):
         stop_fake(cls.fake)
         cls.report = cls.report_path("unknown_ref_response")
         cls.fake = start_fake(
-            cls.stage.key, cls.report, "--forget-after", "1", "--refusal", "response"
+            cls.stage.key,
+            cls.report,
+            "--forget-after",
+            "1",
+            "--refusal",
+            "response",
+            port=cls.port,
         )
         cls.await_client()
         cls.stage.geom_hash = ""
@@ -878,7 +784,7 @@ class SolveFailureTests(FrameCacheTestCase):
         cls.report = cls.report_path("solve_failure")
         # The second response fails; the first (frame 1) settles the class, and
         # the third is the recovery after the next change.
-        cls.fake = start_fake(cls.stage.key, cls.report, "--fail-after", "2")
+        cls.fake = start_fake(cls.stage.key, cls.report, "--fail-after", "2", port=cls.port)
         cls.await_client()
         scrub(cls.obj, 1)
         pump(seconds=10.0, until=lambda: cls.stage.state == "ok")
@@ -954,7 +860,7 @@ class CoalescedAnswerTests(FrameCacheTestCase):
         prefs.timeout = 1.0
         cls.obj, cls.stage = cls.add_cube("Coalesce")
         cls.report = cls.report_path("coalesce")
-        cls.fake = start_fake(cls.stage.key, cls.report, "--coalesce", "--delay-ms", "1800")
+        cls.fake = start_fake(cls.stage.key, cls.report, "--coalesce", "--delay-ms", "1800", port=cls.port)
         cls.await_client()
 
     @classmethod
@@ -1025,7 +931,7 @@ class TimeDrivenPrefixTests(FrameCacheTestCase):
         cls.obj[stack_mod.param_prop_name(cls.stage.key, SCALE)] = 1.0
         time_driven_modifier(cls.obj)
         cls.report = cls.report_path("clock")
-        cls.fake = start_fake(cls.stage.key, cls.report)
+        cls.fake = start_fake(cls.stage.key, cls.report, port=cls.port)
         cls.await_client()
 
     @classmethod

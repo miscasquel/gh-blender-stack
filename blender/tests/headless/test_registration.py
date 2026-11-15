@@ -1,17 +1,12 @@
 """Layer B: registration order, reports and preference migration."""
 
 import os
-import sys
 import time
 import unittest
 
 import bpy
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-BLENDER_PKG = os.path.join(REPO, "blender")
-if BLENDER_PKG not in sys.path:
-    sys.path.insert(0, BLENDER_PKG)
+from harness import free_port
 
 
 class RegistrationOrderTests(unittest.TestCase):
@@ -47,6 +42,7 @@ class RegistrationOrderTests(unittest.TestCase):
             settings.port = prefs_mod.OLD_DEFAULT_PORT
             prefs_mod._migrate_old_port()
             self.assertEqual(settings.port, prefs_mod.DEFAULT_PORT)
+            # Any port that is not the legacy default; nothing binds it.
             settings.port = 9158
             prefs_mod._migrate_old_port()
             self.assertEqual(settings.port, 9158, "a deliberate port was moved")
@@ -59,15 +55,16 @@ class RegistrationOrderTests(unittest.TestCase):
 
         prefs = bpy.context.preferences.addons["stageloom"].preferences
         original = prefs.port
+        port = free_port()
         try:
-            prefs.port = 9157
+            prefs.port = port
             self.assertTrue(engine.start_server())
             deadline = time.time() + 5.0
-            while time.time() < deadline and server_mod.SERVER.port != 9157:
+            while time.time() < deadline and server_mod.SERVER.port != port:
                 time.sleep(0.05)
             self.assertEqual(
                 server_mod.SERVER.port,
-                9157,
+                port,
                 "the server did not bind the preferred port",
             )
         finally:

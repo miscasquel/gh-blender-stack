@@ -21,7 +21,6 @@ CHILD_LIMIT = 20
 CHILD = """
 import sys
 
-sys.path.insert(0, {headless!r})
 import run
 
 run.HERE = {case_dir!r}
@@ -71,7 +70,12 @@ class RunnerTimeoutTests(unittest.TestCase):
             env = dict(os.environ)
             env["STAGELOOM_TEST_TIMEOUT"] = str(CAP)
             env["STAGELOOM_TEST_PATTERN"] = "test_*.py"
-            child = CHILD.format(headless=HERE, case_dir=case_dir)
+            # The child imports the runner from the headless directory; the
+            # runner itself owns the add-on paths.
+            env["PYTHONPATH"] = os.pathsep.join(
+                [HERE, env.get("PYTHONPATH", "")]
+            ).rstrip(os.pathsep)
+            child = CHILD.format(case_dir=case_dir)
             return subprocess.run(
                 [sys.executable, "-c", child],
                 capture_output=True,
