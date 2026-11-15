@@ -1,0 +1,161 @@
+{
+  "package": "bl_ext.user_default.stageloom",
+  "blender": "5.3.0",
+  "stages": {
+    "a": "a-3c2187",
+    "b": "b-f86aa4",
+    "c": "c-1180f8"
+  },
+  "bake": {
+    "result": [
+      "FINISHED"
+    ],
+    "baked": true,
+    "frozen": true,
+    "token": "f43e252010333476",
+    "a_frozen": true,
+    "a_marker": "f43e252010333476",
+    "c_frozen": true,
+    "c_marker": "f43e252010333476"
+  },
+  "offline": {
+    "sends_before": 9,
+    "frames": {
+      "1": {
+        "holder": {
+          "verts": 32,
+          "hash": "bcefd7a126e5927cf9e532ad0f013951c1ab7500aea6f95c9be3082f2c3f8a17",
+          "extent": 1.0
+        },
+        "source": {
+          "verts": 8,
+          "hash": "c6aa6a730aeda578a616845b184a0c0ca6c15244bbccb4a214c09ddeda0e9098",
+          "extent": 1.0
+        }
+      },
+      "2": {
+        "holder": {
+          "verts": 32,
+          "hash": "bcefd7a126e5927cf9e532ad0f013951c1ab7500aea6f95c9be3082f2c3f8a17",
+          "extent": 1.0
+        },
+        "source": {
+          "verts": 8,
+          "hash": "c6aa6a730aeda578a616845b184a0c0ca6c15244bbccb4a214c09ddeda0e9098",
+          "extent": 1.0
+        }
+      },
+      "3": {
+        "holder": {
+          "verts": 32,
+          "hash": "bcefd7a126e5927cf9e532ad0f013951c1ab7500aea6f95c9be3082f2c3f8a17",
+          "extent": 1.0
+        },
+        "source": {
+          "verts": 8,
+          "hash": "c6aa6a730aeda578a616845b184a0c0ca6c15244bbccb4a214c09ddeda0e9098",
+          "extent": 1.0
+        }
+      }
+    },
+    "sends_after": 9
+  },
+  "render": {
+    "path": "/tmp/opencode/stageloom-live-chain/offline-",
+    "frames": [
+      "/tmp/opencode/stageloom-live-chain/offline-0001.png",
+      "/tmp/opencode/stageloom-live-chain/offline-0002.png",
+      "/tmp/opencode/stageloom-live-chain/offline-0003.png"
+    ]
+  },
+  "reload": {
+    "baked": true,
+    "frozen": true,
+    "token": "f43e252010333476",
+    "a_frozen": true,
+    "a_marker": "f43e252010333476",
+    "c_frozen": true,
+    "c_marker": "f43e252010333476",
+    "offline": {
+      "1": {
+        "holder": {
+          "verts": 32,
+          "hash": "bcefd7a126e5927cf9e532ad0f013951c1ab7500aea6f95c9be3082f2c3f8a17",
+          "extent": 1.0
+        },
+        "source": {
+          "verts": 8,
+          "hash": "c6aa6a730aeda578a616845b184a0c0ca6c15244bbccb4a214c09ddeda0e9098",
+          "extent": 1.0
+        }
+      },
+      "2": {
+        "holder": {
+          "verts": 32,
+          "hash": "bcefd7a126e5927cf9e532ad0f013951c1ab7500aea6f95c9be3082f2c3f8a17",
+          "extent": 1.0
+        },
+        "source": {
+          "verts": 8,
+          "hash": "c6aa6a730aeda578a616845b184a0c0ca6c15244bbccb4a214c09ddeda0e9098",
+          "extent": 1.0
+        }
+      },
+      "3": {
+        "holder": {
+          "verts": 32,
+          "hash": "bcefd7a126e5927cf9e532ad0f013951c1ab7500aea6f95c9be3082f2c3f8a17",
+          "extent": 1.0
+        },
+        "source": {
+          "verts": 8,
+          "hash": "c6aa6a730aeda578a616845b184a0c0ca6c15244bbccb4a214c09ddeda0e9098",
+          "extent": 1.0
+        }
+      }
+    }
+  },
+  "clear": {
+    "result": [
+      "FINISHED"
+    ],
+    "b_frozen": false,
+    "token": "",
+    "a_frozen": false,
+    "a_marker": "",
+    "c_frozen": false,
+    "c_marker": ""
+  },
+  "live": {
+    "settled": true,
+    "sends_before": 9,
+    "sends_after": 14,
+    "states": {
+      "Holder/A": "ok",
+      "Holder/B": "ok",
+      "Source/C": "ok"
+    }
+  },
+  "helpers": {
+    "a": {
+      "verts": 8,
+      "hash": "c6aa6a730aeda578a616845b184a0c0ca6c15244bbccb4a214c09ddeda0e9098",
+      "extent": 1.0
+    },
+    "c": {
+      "verts": 8,
+      "hash": "c6aa6a730aeda578a616845b184a0c0ca6c15244bbccb4a214c09ddeda0e9098",
+      "extent": 1.0
+    }
+  },
+  "meta": {
+    "date": "2026-11-15",
+    "blender": "5.3.0",
+    "addon": "working-tree 0.6.0 + W2 (throwaway 5.3 config)",
+    "plugin": "Stageloom.gha 0.6.0 (deployed)",
+    "rhino": "8 under wine",
+    "platform": "Linux 7.3.4 (CachyOS)",
+    "scene": "Holder/A -> Bevel -> ReadsSource(Source/C) -> Holder/B; three Stage In/Out passthroughs",
+    "method": "real native bake; stop server; Cycles render + depsgraph evaluation; packed reload; restart server; Clear Bake"
+  }
+}

@@ -17,3 +17,4 @@ Short records of decisions that shape the project. Format: context, decision, co
 | [0011](0011-plugin-endpoint-configuration.md) | Persisted loopback endpoint for the Grasshopper plugin | Accepted |
 | [0012](0012-bake-data-irreversible.md) | Bake data is irreversible; Clear Bake confirms | Accepted |
 | [0013](0013-stage-key-uniqueness.md) | Stage keys are unique; duplicates are a strict conflict | Accepted |
+| [0014](0014-bake-freezes-upstream.md) | Bake stage freezes its upstream chain | Accepted |

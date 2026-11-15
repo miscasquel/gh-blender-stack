@@ -83,9 +83,12 @@ Blender                                          Rhino / Grasshopper (wine)
   Cycles keeps accumulating samples.
 - **Bake.** Each stage group carries a native Geometry Nodes Bake node. **Bake
   stage** steps the scene frame range through the same gate, shows cursor
-  progress, freezes the stage and renders from the bake with no Grasshopper
-  request; **Clear Bake** removes it and resumes live output. A packed bake is
-  kept when the `.blend` is saved.
+  progress, freezes the stage and every upstream stage it depends on (including
+  stages on other objects), and renders from the bake with no Grasshopper
+  request. Bake the last stage of a chain to freeze the whole upstream tree;
+  downstream stages stay live. **Clear Bake** removes the bake, unfreezes the
+  stages that bake froze and resumes live output. A packed bake is kept when
+  the `.blend` is saved.
 - **Tests.** `scripts/test-core` (standard library only), `scripts/test-blender`
   (Blender headless against `tools/fake_gh`), `scripts/test-gha` (the C# codec
   against the golden fixtures, under wine), `scripts/test-extension` (installed
