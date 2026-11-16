@@ -325,10 +325,9 @@ namespace Stageloom.Tests.Console
 
                 // 9. the receive path answers a version mismatch and an
                 //    oversized frame, and notes a bad frame without answering.
-                var wrongVersion = new Dictionary<string, object>();
-                wrongVersion["type"] = "ping";
-                wrongVersion["v"] = 3L;
-                server.Send(FrameCodec.Encode(wrongVersion, null));
+                // The encoder now refuses a caller-supplied v other than the
+                // integer 2, so a mis-versioned *peer* frame is built raw.
+                server.Send(FrameWithHeader("{\"type\":\"ping\",\"v\":3}"));
                 Dictionary<string, object> mismatch = ReadUntil(server, "error");
                 Check("proto_mismatch code", (string)Json.Get(mismatch, "code") == "proto_mismatch",
                     "code=" + Json.Get(mismatch, "code"));

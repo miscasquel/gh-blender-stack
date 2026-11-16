@@ -27,11 +27,18 @@ namespace Stageloom.Core
 
         public static object Parse(string text)
         {
+            if (text == null) throw new JsonException("input is null");
             int pos = 0;
             object value = ParseValue(text, ref pos, 0);
             SkipWhitespace(text, ref pos);
             if (pos != text.Length)
                 throw new JsonException("trailing content at index " + pos);
+            // Python's json decoder accepts two things strict UTF-8 cannot
+            // carry: an escaped lone surrogate and a float that overflowed to
+            // an infinity. Walking the tree once here keeps both codecs on the
+            // same set of valid headers, whether the value is a key, a value or
+            // nested inside an array.
+            ValidateTree(value);
             return value;
         }
 
@@ -67,6 +74,11 @@ namespace Stageloom.Core
                 if (pos >= s.Length || s[pos] != '"')
                     throw new JsonException("expected a key string at index " + pos);
                 string key = ParseString(s, ref pos);
+                // Python's object_pairs_hook rejects a repeated key; keeping the
+                // last one would let two different frame texts decode to the
+                // same header and let a peer smuggle data past validation.
+                if (obj.ContainsKey(key))
+                    throw new JsonException("duplicate object key");
                 SkipWhitespace(s, ref pos);
                 if (pos >= s.Length || s[pos] != ':')
                     throw new JsonException("expected ':' at index " + pos);
@@ -106,7 +118,16 @@ namespace Stageloom.Core
                 if (pos >= s.Length) throw new JsonException("unterminated string");
                 char c = s[pos++];
                 if (c == '"') return sb.ToString();
-                if (c != '\\') { sb.Append(c); continue; }
+                if (c != '\\')
+                {
+                    // JSON forbids raw C0 controls inside a string; the escaped
+                    // forms below stay valid. A lenient reader here would let a
+                    // peer send a byte sequence Python refuses.
+                    if (c < 0x20)
+                        throw new JsonException("raw control character in string at index " + (pos - 1));
+                    sb.Append(c);
+                    continue;
+                }
                 if (pos >= s.Length) throw new JsonException("unterminated escape");
                 char e = s[pos++];
                 switch (e)
@@ -120,11 +141,19 @@ namespace Stageloom.Core
                     case 'r': sb.Append('\r'); break;
                     case 't': sb.Append('\t'); break;
                     case 'u':
-                        if (pos + 4 > s.Length) throw new JsonException("bad unicode escape");
-                        int code;
-                        if (!int.TryParse(s.Substring(pos, 4), NumberStyles.HexNumber,
-                                          CultureInfo.InvariantCulture, out code))
-                            throw new JsonException("bad unicode escape at index " + pos);
+                        // Exactly four hex digits. NumberStyles.HexNumber, the
+                        // old route through int.TryParse, also accepts leading
+                        // and trailing whitespace, and Substring hid that.
+                        if (pos + 4 > s.Length)
+                            throw new JsonException("bad unicode escape");
+                        int code = 0;
+                        for (int i = 0; i < 4; i++)
+                        {
+                            int digit = HexDigit(s[pos + i]);
+                            if (digit < 0)
+                                throw new JsonException("bad unicode escape at index " + pos);
+                            code = (code << 4) | digit;
+                        }
                         sb.Append((char)code);
                         pos += 4;
                         break;
@@ -132,6 +161,77 @@ namespace Stageloom.Core
                         throw new JsonException("bad escape '\\" + e + "'");
                 }
             }
+        }
+
+        private static int HexDigit(char c)
+        {
+            if (c >= '0' && c <= '9') return c - '0';
+            if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+            if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+            return -1;
+        }
+
+        /// <summary>Reject a string with a UTF-16 surrogate that is not half of
+        /// a valid pair; strict UTF-8 cannot carry one.</summary>
+        private static void ValidateString(string s)
+        {
+            for (int i = 0; i < s.Length; i++)
+            {
+                char c = s[i];
+                if (char.IsHighSurrogate(c))
+                {
+                    if (i + 1 >= s.Length || !char.IsLowSurrogate(s[i + 1]))
+                        throw new JsonException("lone surrogate in string");
+                    i++;
+                }
+                else if (char.IsLowSurrogate(c))
+                {
+                    throw new JsonException("lone surrogate in string");
+                }
+            }
+        }
+
+        /// <summary>Reject a value tree a strict UTF-8 JSON peer cannot carry.
+        /// The parser calls this after decoding; the frame encoder calls it
+        /// before it writes, so both directions refuse the same headers.
+        /// A valid high/low surrogate pair is one character (Python combines
+        /// it too); either half on its own is a lone surrogate.</summary>
+        internal static void ValidateTree(object value)
+        {
+            var text = value as string;
+            if (text != null) { ValidateString(text); return; }
+            if (value == null || value is bool || value is long || value is int) return;
+            if (value is double)
+            {
+                if (double.IsNaN((double)value) || double.IsInfinity((double)value))
+                    throw new JsonException("non-finite number");
+                return;
+            }
+            if (value is float)
+            {
+                if (float.IsNaN((float)value) || float.IsInfinity((float)value))
+                    throw new JsonException("non-finite number");
+                return;
+            }
+            var obj = value as Dictionary<string, object>;
+            if (obj != null)
+            {
+                foreach (KeyValuePair<string, object> entry in obj)
+                {
+                    ValidateString(entry.Key);
+                    ValidateTree(entry.Value);
+                }
+                return;
+            }
+            var list = value as System.Collections.IList;
+            if (list != null)
+            {
+                foreach (object item in list) ValidateTree(item);
+                return;
+            }
+            // Json.WriteValue would throw the same typed error, but validation
+            // has to happen before the version check to keep Python's order.
+            throw new JsonException("cannot encode " + value.GetType().Name);
         }
 
         private static bool IsDigit(char c)
@@ -143,9 +243,9 @@ namespace Stageloom.Core
         /// The grammar is enforced here rather than left to double.TryParse:
         /// TryParse also takes "+2", "01" and "1.", which Python's json module
         /// rejects, and a peer must not be accepted on one side and refused on
-        /// the other. A syntactically valid number double cannot hold is
-        /// an infinity, exactly as Python's float() reads it, so an out-of-range
-        /// `v` classifies the same way on both sides.</summary>
+        /// the other. An overflowing float is Python's JSON extension
+        /// ``Infinity`` after parsing, but Q6 rejects that as non-finite, so
+        /// this parser refuses it too: a header number is never unrepresentable.</summary>
         private static object ParseNumber(string s, ref int pos)
         {
             int start = pos;
@@ -180,9 +280,13 @@ namespace Stageloom.Core
                     return l;
             }
             double value;
-            if (double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+            // On .NET Framework and Mono an overflow may report failure rather
+            // than infinity; both are non-finite for the protocol, so both take
+            // the same classified path. Underflow to 0.0 is finite and fine.
+            if (double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out value)
+                && !double.IsNaN(value) && !double.IsInfinity(value))
                 return value;
-            return token[0] == '-' ? double.NegativeInfinity : double.PositiveInfinity;
+            throw new JsonException("non-finite number at index " + start);
         }
 
         private static void Expect(string s, ref int pos, string word)
@@ -266,6 +370,9 @@ namespace Stageloom.Core
 
         private static void WriteString(StringBuilder sb, string s)
         {
+            // A lone surrogate cannot be encoded as UTF-8; Encoding.UTF8 would
+            // silently write U+FFFD, inventing a value no Python peer produced.
+            ValidateString(s);
             sb.Append('"');
             foreach (char c in s)
             {

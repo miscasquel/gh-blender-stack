@@ -123,6 +123,11 @@ namespace Stageloom.Core
         public const int MaxHeaderBytes = 1024 * 1024;
         public const long MaxMessageBytes = 512L * 1024 * 1024;
 
+        // The default UTF-8 decoder replaces an invalid byte with U+FFFD, which
+        // would turn a malformed peer frame into a valid-looking header. Python
+        // decodes the header strictly (codec.py), so this side must too.
+        private static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(false, true);
+
         /// <summary>The fixed geometry-hash order (protocol §5 table order).</summary>
         public static readonly string[] HashSectionOrder = new string[]
         {
@@ -139,20 +144,66 @@ namespace Stageloom.Core
         // -------------------------------------------------------------- encode
 
         /// <summary>Encode one frame. The header gains "v" and the section table,
-        /// exactly as the Python codec does, so headers stay in sync with bytes.</summary>
+        /// exactly as the Python codec does, so headers stay in sync with bytes.
+        /// The encoder refuses every shape its decoder refuses; a caller cannot
+        /// emit a frame the peer will reject.</summary>
         public static byte[] Encode(Dictionary<string, object> header, IList<Section> sections)
         {
+            if (header == null)
+                throw new FrameException("bad_frame", "header must be an object");
             var head = new Dictionary<string, object>(header);
             if (!head.ContainsKey("v")) head["v"] = (long)ProtocolVersion;
-            if (!(head.ContainsKey("type") && head["type"] is string))
-                throw new FrameException("bad_frame", "header needs a type");
+
+            // Python's encode_frame checks type, then the whole value tree, then
+            // the version. The order decides the code when two fields are bad at
+            // once (for example v=3 plus NaN is bad_frame, not proto_mismatch).
+            object typeObj;
+            if (!head.TryGetValue("type", out typeObj)
+                || !(typeObj is string) || ((string)typeObj).Length == 0)
+                throw new FrameException("bad_frame", "header type must be a non-empty string");
+            try
+            {
+                Json.ValidateTree(head);
+            }
+            catch (JsonException ex)
+            {
+                throw new FrameException("bad_frame", "header is not JSON: " + ex.Message);
+            }
+
+            object v = head["v"];
+            // Python's check_version wants an exact JSON integer: 2.0 and true
+            // are different values even though both compare equal to 2.
+            bool versionOk = (v is long && (long)v == ProtocolVersion)
+                             || (v is int && (int)v == ProtocolVersion);
+            if (!versionOk)
+                throw new FrameException("proto_mismatch",
+                    "header v must be the integer " + ProtocolVersion);
 
             var table = new List<object>();
             long total = 0;
             if (sections != null && sections.Count > 0)
             {
+                var seen = new HashSet<string>(StringComparer.Ordinal);
                 foreach (Section s in sections)
                 {
+                    if (s == null)
+                        throw new FrameException("bad_frame", "null section");
+                    if (string.IsNullOrEmpty(s.Name))
+                        throw new FrameException("bad_frame", "section name must be a non-empty string");
+                    if (!IsKnownDtype(s.Dtype))
+                        throw new FrameException("bad_frame",
+                            "section " + s.Name + " has unknown dtype " + (s.Dtype ?? "(missing)"));
+                    if (s.Raw == null)
+                        throw new FrameException("bad_frame",
+                            "section " + s.Name + " has no bytes");
+                    if (s.Raw.Length % ItemSize(s.Dtype) != 0)
+                        throw new FrameException("bad_frame",
+                            "section " + s.Name + " length " + s.Raw.Length
+                            + " is not a multiple of " + ItemSize(s.Dtype));
+                    if (!seen.Add(s.Name))
+                        throw new FrameException("bad_frame",
+                            "duplicate section name " + s.Name);
+
                     var entry = new Dictionary<string, object>();
                     entry["name"] = s.Name;
                     entry["dtype"] = s.Dtype;
@@ -168,7 +219,17 @@ namespace Stageloom.Core
                 head.Remove("sections");
             }
 
-            byte[] headBytes = Json.WriteCanonicalUtf8(head);
+            byte[] headBytes;
+            try
+            {
+                // The writer refuses non-finite numbers and lone surrogates,
+                // the same values Python's _validate_json_tree refuses.
+                headBytes = Json.WriteCanonicalUtf8(head);
+            }
+            catch (JsonException ex)
+            {
+                throw new FrameException("bad_frame", "header is not canonical JSON: " + ex.Message);
+            }
             if (headBytes.Length > MaxHeaderBytes)
                 throw new FrameException("too_large", "header over the cap");
             if (4 + (long)headBytes.Length + total > MaxMessageBytes)
@@ -204,7 +265,15 @@ namespace Stageloom.Core
             if (frame.Length < 4 + headLen)
                 throw new FrameException("bad_frame", "header is truncated");
 
-            string headText = Encoding.UTF8.GetString(frame, 4, (int)headLen);
+            string headText;
+            try
+            {
+                headText = StrictUtf8.GetString(frame, 4, (int)headLen);
+            }
+            catch (DecoderFallbackException ex)
+            {
+                throw new FrameException("bad_frame", "header is not valid UTF-8: " + ex.Message);
+            }
             object parsed;
             try
             {
@@ -219,76 +288,160 @@ namespace Stageloom.Core
                 throw new FrameException("bad_frame", "header is not a JSON object");
 
             object v = Json.Get(header, "v");
-            // A number compares like Python's `v != expect`, so 2.0 == 2 holds
-            // and a string "2" does not. A non-number must land here as a
-            // proto_mismatch, not as a converter exception: the caller
-            // would otherwise tear down a healthy connection over one bad frame.
-            bool versionOk = Json.IsNumber(v)
-                             && Convert.ToDouble(v, CultureInfo.InvariantCulture) == ProtocolVersion;
+            // An exact JSON integer, as Python's check_version requires: 2.0,
+            // true, "2", null and a missing key are all proto_mismatch. A wrong
+            // type must land here as a classified failure, not as a converter
+            // exception, or one bad frame tears down a healthy connection.
+            bool versionOk = (v is long && (long)v == ProtocolVersion)
+                             || (v is int && (int)v == ProtocolVersion);
             if (!versionOk)
                 throw new FrameException("proto_mismatch",
                     "header v=" + (v == null ? "(missing)" : Convert.ToString(v, CultureInfo.InvariantCulture))
                     + ", expected " + ProtocolVersion);
 
+            object typeObj = Json.Get(header, "type");
+            string type = typeObj as string;
+            if (string.IsNullOrEmpty(type))
+                throw new FrameException("bad_frame", "header type must be a non-empty string");
+
+            return new DecodedFrame(header, DecodeSections(frame, 4 + headLen, header));
+        }
+
+        /// <summary>Validate the section table and decode it in order. This is
+        /// the one place a section's name, dtype, byte count, duplicate name,
+        /// shape and payload extent are checked before the bytes are indexed or
+        /// interpreted; every failure is a bad_frame, matching codec.py's
+        /// _decode_sections.</summary>
+        private static List<Section> DecodeSections(byte[] frame, long offset,
+                                                    Dictionary<string, object> header)
+        {
             var sections = new List<Section>();
-            long offset = 4 + headLen;
-            object tableObj = Json.Get(header, "sections");
-            if (tableObj != null && !(tableObj is List<object>))
-                throw new FrameException("bad_frame", "sections is not an array");
-            var table = tableObj as List<object>;
-            if (table != null)
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            object tableObj;
+            if (header.TryGetValue("sections", out tableObj))
             {
-                foreach (object entryObj in table)
+                var table = tableObj as List<object>;
+                if (table == null)
+                    throw new FrameException("bad_frame", "header sections must be an array");
+                for (int index = 0; index < table.Count; index++)
                 {
-                    var entry = entryObj as Dictionary<string, object>;
+                    var entry = table[index] as Dictionary<string, object>;
                     if (entry == null)
-                        throw new FrameException("bad_frame", "section entry is not an object");
-                    // Validate before the values are used: a missing name makes
-                    // the section unmatchable (`Find` compares names), and an
-                    // unknown dtype is a frame Python rejects (codec.py:88).
-                    // The reads are typed: Json.GetString/GetLong would throw
-                    // InvalidCastException or FormatException for a number
-                    // where a string belongs (or a string where a number
-                    // belongs), which is not the classified failure the decoder
-                    // contract promises.
-                    string name = Json.Get(entry, "name") as string;
+                        throw new FrameException("bad_frame",
+                            "section " + index + " is not a JSON object");
+
+                    object nameObj;
+                    entry.TryGetValue("name", out nameObj);
+                    string name = nameObj as string;
                     if (string.IsNullOrEmpty(name))
-                        throw new FrameException("bad_frame", "section entry without a name");
-                    string dtype = Json.Get(entry, "dtype") as string;
-                    if (dtype != "f32" && dtype != "i32" && dtype != "u32" && dtype != "u8")
+                        throw new FrameException("bad_frame",
+                            "section " + index + " name must be a non-empty string");
+
+                    object dtypeObj;
+                    entry.TryGetValue("dtype", out dtypeObj);
+                    string dtype = dtypeObj as string;
+                    if (!IsKnownDtype(dtype))
                         throw new FrameException("bad_frame",
                             "section " + name + " has unknown dtype " + (dtype ?? "(missing)"));
-                    object bytesObj = Json.Get(entry, "bytes");
+
+                    object bytesObj;
+                    entry.TryGetValue("bytes", out bytesObj);
                     long nbytes;
                     if (bytesObj is long) nbytes = (long)bytesObj;
                     else if (bytesObj is int) nbytes = (int)bytesObj;
                     else throw new FrameException("bad_frame",
-                        "section " + name + " bytes is not an integer");
+                        "section " + name + " bytes must be a non-negative integer");
+                    if (nbytes < 0)
+                        throw new FrameException("bad_frame",
+                            "section " + name + " bytes must be a non-negative integer");
+
+                    if (!seen.Add(name))
+                        throw new FrameException("bad_frame", "duplicate section name " + name);
+
+                    int itemSize = ItemSize(dtype);
+                    object shapeObj;
+                    if (entry.TryGetValue("shape", out shapeObj))
+                    {
+                        var shape = shapeObj as List<object>;
+                        if (shape == null)
+                            throw new FrameException("bad_frame",
+                                "section " + name + " shape must be an array");
+                        bool anyZero = false;
+                        for (int i = 0; i < shape.Count; i++)
+                        {
+                            object dimObj = shape[i];
+                            long dim;
+                            if (!(dimObj is long))
+                                throw new FrameException("bad_frame",
+                                    "section " + name + " shape must hold non-negative integers");
+                            dim = (long)dimObj;
+                            if (dim < 0)
+                                throw new FrameException("bad_frame",
+                                    "section " + name + " shape must hold non-negative integers");
+                            if (dim == 0) anyZero = true;
+                        }
+                        long count;
+                        if (anyZero)
+                        {
+                            // Python computes an arbitrary-precision product, so
+                            // a zero dimension wins over any other dimension.
+                            count = 0;
+                        }
+                        else
+                        {
+                            count = 1;
+                            try
+                            {
+                                for (int i = 0; i < shape.Count; i++)
+                                    count = checked(count * (long)shape[i]);
+                            }
+                            catch (OverflowException)
+                            {
+                                // The target is at most the payload size, so an
+                                // overflowing product cannot match it; classify
+                                // instead of wrapping.
+                                throw new FrameException("bad_frame",
+                                    "section " + name + " shape product does not match "
+                                    + nbytes + " bytes");
+                            }
+                        }
+                        if (nbytes % itemSize != 0 || count != nbytes / itemSize)
+                            throw new FrameException("bad_frame",
+                                "section " + name + " shape product does not match "
+                                + nbytes + " bytes");
+                    }
+                    if (nbytes % itemSize != 0)
+                        throw new FrameException("bad_frame",
+                            "section " + name + " length " + nbytes
+                            + " is not a multiple of " + itemSize);
+
                     // Compare against the remainder, not offset + nbytes: a
                     // huge declared length would overflow the sum and slip
-                    // through to an array allocation. A negative length can
-                    // never fit either.
-                    if (nbytes < 0 || nbytes > frame.Length - offset)
-                        throw new FrameException("bad_frame", "section " + name + " runs past the payload");
+                    // through to an array allocation. A negative length never
+                    // reaches here.
+                    if (nbytes > frame.Length - offset)
+                        throw new FrameException("bad_frame",
+                            "section " + name + " runs past the payload");
                     var raw = new byte[nbytes];
                     Buffer.BlockCopy(frame, (int)offset, raw, 0, (int)nbytes);
                     offset += nbytes;
-                    if (dtype == "u8")
-                    {
-                        // one byte per element, nothing to check
-                    }
-                    else if (nbytes % 4 != 0)
-                    {
-                        throw new FrameException("bad_frame",
-                            "section " + name + " length " + nbytes + " is not a multiple of 4");
-                    }
                     sections.Add(new Section(name, dtype, raw));
                 }
             }
             if (offset != frame.Length)
                 throw new FrameException("bad_frame",
                     (frame.Length - offset) + " trailing bytes after the declared sections");
-            return new DecodedFrame(header, sections);
+            return sections;
+        }
+
+        private static bool IsKnownDtype(string dtype)
+        {
+            return dtype == "f32" || dtype == "i32" || dtype == "u32" || dtype == "u8";
+        }
+
+        private static int ItemSize(string dtype)
+        {
+            return dtype == "u8" ? 1 : 4;
         }
 
         // --------------------------------------------------------------- hash

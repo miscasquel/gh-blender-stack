@@ -257,14 +257,24 @@ namespace Stageloom.Tests.Console
         }
 
         /// <summary>Decoder boundary: malformed input must fail as a classified
-        /// exception, never as a raw one a caller cannot catch.</summary>
+        /// exception, never as a raw one a caller cannot catch. The frame cases
+        /// mirror blender/tests/core/test_codec_boundaries.py, and every frame
+        /// rejection is checked for its FrameException.Code.</summary>
         private static void CheckDecoderBoundary()
         {
             var problems = new List<string>();
 
             // The parser's contract is JsonException.
+            CheckThrows<JsonException>(problems, "null input",
+                delegate { Json.Parse(null); });
             CheckThrows<JsonException>(problems, "\\uZZZZ escape",
                 delegate { Json.Parse("\"\\uZZZZ\""); });
+            CheckThrows<JsonException>(problems, "\\u12 short escape",
+                delegate { Json.Parse("\"\\u12\""); });
+            CheckThrows<JsonException>(problems, "\\u12G4 escape",
+                delegate { Json.Parse("\"\\u12G4\""); });
+            CheckThrows<JsonException>(problems, "\\u whitespace",
+                delegate { Json.Parse("\"\\u 123\""); });
             CheckThrows<JsonException>(problems, "1.2.3",
                 delegate { Json.Parse("1.2.3"); });
             CheckThrows<JsonException>(problems, "1e",
@@ -283,30 +293,106 @@ namespace Stageloom.Tests.Console
                 delegate { Json.Parse("1."); });
             CheckThrows<JsonException>(problems, ".5",
                 delegate { Json.Parse(".5"); });
-            // A syntactically valid number beyond double is Python's float('inf')
-            // (json.loads accepts it), not a syntax error.
-            object huge = Json.Parse("1e400");
-            if (!(huge is double) || !double.IsPositiveInfinity((double)huge))
-                problems.Add("1e400 did not parse as an infinity");
-            object tiny = Json.Parse("-1e400");
-            if (!(tiny is double) || !double.IsNegativeInfinity((double)tiny))
-                problems.Add("-1e400 did not parse as a negative infinity");
+
+            // Duplicate keys are rejected at every nesting level, not last-wins.
+            CheckThrows<JsonException>(problems, "duplicate top-level key",
+                delegate { Json.Parse("{\"a\":1,\"a\":2}"); });
+            CheckThrows<JsonException>(problems, "duplicate nested key",
+                delegate { Json.Parse("{\"outer\":{\"a\":1,\"a\":2}}"); });
+            CheckThrows<JsonException>(problems, "duplicate key inside an array object",
+                delegate { Json.Parse("[{\"a\":1,\"a\":2}]"); });
+
+            // Raw control characters are not JSON; their escapes still are.
+            CheckThrows<JsonException>(problems, "raw newline in string",
+                delegate { Json.Parse("\"line\nbreak\""); });
+            CheckThrows<JsonException>(problems, "raw tab in string",
+                delegate { Json.Parse("\"tab\there\""); });
+            string escaped = (string)Json.Parse("\"caf\\u00e9\\u0000\"");
+            if (escaped != "caf" + (char)0x00E9 + (char)0)
+                problems.Add("valid \\u escapes did not decode");
+            string pair = (string)Json.Parse("\"\\ud83d\\ude00\"");
+            if (pair != char.ConvertFromUtf32(0x1F600))
+                problems.Add("a valid surrogate pair did not decode");
+
+            // Python's decoder accepts escaped lone surrogates; strict UTF-8
+            // cannot carry them, so both sides reject them after parsing.
+            CheckThrows<JsonException>(problems, "lone high surrogate",
+                delegate { Json.Parse("\"\\ud800\""); });
+            CheckThrows<JsonException>(problems, "lone low surrogate",
+                delegate { Json.Parse("\"\\udfff\""); });
+            CheckThrows<JsonException>(problems, "lone surrogate key",
+                delegate { Json.Parse("{\"\\ud800\":1}"); });
+            CheckThrows<JsonException>(problems, "lone surrogate nested in an array",
+                delegate { Json.Parse("{\"items\":[\"ok\",\"\\udfff\"]}"); });
+
+            // Non-finite values are not JSON and Q6 rejects their JSON extension
+            // spellings; a float that overflows to infinity is refused too.
+            CheckThrows<JsonException>(problems, "NaN literal",
+                delegate { Json.Parse("NaN"); });
+            CheckThrows<JsonException>(problems, "Infinity literal",
+                delegate { Json.Parse("Infinity"); });
+            CheckThrows<JsonException>(problems, "-Infinity literal",
+                delegate { Json.Parse("-Infinity"); });
+            CheckThrows<JsonException>(problems, "1e400 overflow",
+                delegate { Json.Parse("1e400"); });
+            CheckThrows<JsonException>(problems, "-1e400 overflow",
+                delegate { Json.Parse("-1e400"); });
+            CheckThrows<JsonException>(problems, "nested 1e400 overflow",
+                delegate { Json.Parse("{\"a\":[1e400]}"); });
 
             // A header that is not valid JSON decodes as a bad_frame.
             CheckFrameProblem(problems, "truncated header json",
                 FrameWithHeader("{\"type\":\"ping\",\"v\":2"), "bad_frame");
             CheckFrameProblem(problems, "deeply nested header",
                 FrameWithHeader(new string('[', 1000) + new string(']', 1000)), "bad_frame");
+            CheckFrameProblem(problems, "header is not an object",
+                FrameWithHeader("[]"), "bad_frame");
 
-            // Unknown dtype and a missing name are bad_frames.
-            CheckFrameProblem(problems, "unknown dtype",
-                FrameCodec.Encode(PingHeader(),
-                    new List<Section> { new Section("mesh.verts", "f64", new byte[4]) }),
+            // The JSON boundary applies to the header as a whole, including
+            // duplicate keys, controls, escapes and surrogates.
+            CheckFrameProblem(problems, "duplicate top-level json key",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"type\":\"pong\"}"),
                 "bad_frame");
-            CheckFrameProblem(problems, "missing name",
-                FrameCodec.Encode(PingHeader(),
-                    new List<Section> { new Section("", "f32", new byte[4]) }),
+            CheckFrameProblem(problems, "duplicate nested json key",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"outer\":{\"a\":1,\"a\":2}}"),
                 "bad_frame");
+            CheckFrameProblem(problems, "raw control character in header",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"note\":\"line\nbreak\"}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "bad unicode escape in header",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"note\":\"\\u12G4\"}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "lone surrogate value in header",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"note\":\"\\ud800\"}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "lone surrogate key in header",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"\\ud800\":1}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "lone surrogate nested in header",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"items\":[\"ok\",\"\\udfff\"]}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "invalid UTF-8 header",
+                FrameWithRawHeader(InvalidUtf8Header()), "bad_frame");
+            CheckFrameProblem(problems, "NaN header value",
+                FrameWithHeader("{\"type\":\"x\",\"v\":2,\"number\":NaN}"), "bad_frame");
+            CheckFrameProblem(problems, "Infinity header value",
+                FrameWithHeader("{\"type\":\"x\",\"v\":2,\"number\":Infinity}"), "bad_frame");
+            CheckFrameProblem(problems, "overflowing float header value",
+                FrameWithHeader("{\"type\":\"x\",\"v\":2,\"number\":1e400}"), "bad_frame");
+
+            // A valid escape and finite number still decode; this is the accept
+            // side of the tightening above.
+            DecodedFrame escapedFrame = CheckFrameAccepted(problems,
+                "valid escapes and finite numbers",
+                FrameWithHeader("{\"type\":\"x\",\"v\":2,\"note\":\"caf\\u00e9\",\"number\":1e308}"));
+            if (escapedFrame != null)
+            {
+                if (Json.GetString(escapedFrame.Header, "note") != "caf" + (char)0x00E9)
+                    problems.Add("valid escape did not reach the header");
+                object number = Json.Get(escapedFrame.Header, "number");
+                if (!(number is double) || (double)number <= 1e307)
+                    problems.Add("finite 1e308 did not decode as a double");
+            }
 
             // The section table's field types are part of the contract: a
             // number where a name belongs, or a string where a length belongs,
@@ -326,15 +412,167 @@ namespace Stageloom.Tests.Console
             CheckFrameProblem(problems, "astronomical section bytes",
                 FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"mesh.verts\",\"dtype\":\"f32\",\"bytes\":9223372036854775807}]}"),
                 "bad_frame");
-            CheckFrameProblem(problems, "sections is not an array",
-                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":{\"name\":\"x\"}}"),
+            CheckFrameProblem(problems, "beyond-long section bytes",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"mesh.verts\",\"dtype\":\"f32\",\"bytes\":1000000000000000000000000000000}]}"),
                 "bad_frame");
-            CheckFrameProblem(problems, "section entry is not an object",
-                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[4]}"),
+            CheckFrameProblem(problems, "header sections is null",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":null}"),
                 "bad_frame");
+
+            string[] notArrays = new string[] { "{}", "\"mesh.verts\"", "null", "7", "true" };
+            foreach (string value in notArrays)
+                CheckFrameProblem(problems, "sections is " + value,
+                    FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":" + value + "}"),
+                    "bad_frame");
+
+            string[] badEntries = new string[] { "42", "\"mesh.verts\"", "[]", "null", "true" };
+            foreach (string entry in badEntries)
+                CheckFrameProblem(problems, "section entry is " + entry,
+                    FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[" + entry + "]}"),
+                    "bad_frame");
+
+            // Name and dtype: missing, null, empty and the wrong JSON type are
+            // all bad_frames before any payload is read.
+            CheckFrameProblem(problems, "missing section name",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"dtype\":\"f32\",\"bytes\":4}]}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "empty section name",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"\",\"dtype\":\"f32\",\"bytes\":4}]}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "null section name",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":null,\"dtype\":\"f32\",\"bytes\":4}]}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "array section name",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":[],\"dtype\":\"f32\",\"bytes\":4}]}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "missing section dtype",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"mesh.verts\",\"bytes\":4}]}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "null section dtype",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"mesh.verts\",\"dtype\":null,\"bytes\":4}]}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "empty section dtype",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"mesh.verts\",\"dtype\":\"\",\"bytes\":4}]}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "unknown section dtype",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"mesh.verts\",\"dtype\":\"f64\",\"bytes\":4}]}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "float32 section dtype",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"mesh.verts\",\"dtype\":\"float32\",\"bytes\":4}]}"),
+                "bad_frame");
+
+            // bytes must be a JSON integer, not a float, bool, string or null.
+            CheckFrameProblem(problems, "missing section bytes",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"mesh.verts\",\"dtype\":\"f32\"}]}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "null section bytes",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"mesh.verts\",\"dtype\":\"f32\",\"bytes\":null}]}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "float section bytes",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"mesh.verts\",\"dtype\":\"f32\",\"bytes\":4.0}]}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "bool section bytes",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"mesh.verts\",\"dtype\":\"f32\",\"bytes\":true}]}"),
+                "bad_frame");
+
+            CheckFrameProblem(problems, "duplicate section names",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":["
+                    + "{\"name\":\"mesh.verts\",\"dtype\":\"f32\",\"bytes\":4},"
+                    + "{\"name\":\"mesh.verts\",\"dtype\":\"f32\",\"bytes\":4}]}"),
+                "bad_frame");
+
+            // shape, when present, is an array of non-negative integers whose
+            // product is bytes/itemsize.
+            string[] badShapes = new string[] { "\"4\"", "4", "null", "{}" };
+            foreach (string shape in badShapes)
+                CheckFrameProblem(problems, "shape is " + shape,
+                    FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"mesh.verts\",\"dtype\":\"f32\",\"shape\":"
+                        + shape + ",\"bytes\":4}]}"),
+                    "bad_frame");
+
+            string[] badShapeValues = new string[] { "[true]", "[-1]", "[1.0]", "[\"1\"]", "[[1]]", "[null]" };
+            foreach (string shape in badShapeValues)
+                CheckFrameProblem(problems, "shape holds " + shape,
+                    FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"mesh.verts\",\"dtype\":\"f32\",\"shape\":"
+                        + shape + ",\"bytes\":4}]}"),
+                    "bad_frame");
+
+            string[] badProducts = new string[]
+            {
+                "{\"name\":\"a\",\"dtype\":\"f32\",\"shape\":[2],\"bytes\":4}",
+                "{\"name\":\"a\",\"dtype\":\"f32\",\"shape\":[1],\"bytes\":8}",
+                "{\"name\":\"a\",\"dtype\":\"f32\",\"shape\":[2,2],\"bytes\":8}",
+                "{\"name\":\"a\",\"dtype\":\"f32\",\"shape\":[],\"bytes\":8}",
+            };
+            foreach (string entry in badProducts)
+                CheckFrameProblem(problems, "shape product mismatch",
+                    FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[" + entry + "]}"),
+                    "bad_frame");
+
+            DecodedFrame shape22 = CheckFrameAccepted(problems, "shape [2,2] u8",
+                FrameWithBody("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"a\",\"dtype\":\"u8\",\"shape\":[2,2],\"bytes\":4}]}",
+                    new byte[] { 1, 2, 3, 4 }));
+            if (shape22 == null || shape22.Sections.Count != 1 || shape22.Sections[0].Raw.Length != 4)
+                problems.Add("shape [2,2] u8 did not decode");
+            DecodedFrame shapeEmpty = CheckFrameAccepted(problems, "empty shape u8",
+                FrameWithBody("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"a\",\"dtype\":\"u8\",\"shape\":[],\"bytes\":1}]}",
+                    new byte[] { 5 }));
+            if (shapeEmpty == null || shapeEmpty.Sections.Count != 1 || shapeEmpty.Sections[0].ElementCount != 1)
+                problems.Add("empty shape u8 did not decode as one element");
+            DecodedFrame shapeZero = CheckFrameAccepted(problems, "zero-length f32",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"a\",\"dtype\":\"f32\",\"shape\":[0],\"bytes\":0}]}"));
+            if (shapeZero == null || shapeZero.Sections.Count != 1 || shapeZero.Sections[0].ElementCount != 0)
+                problems.Add("zero-length f32 did not decode");
+            DecodedFrame shapeOptional = CheckFrameAccepted(problems, "shape omitted",
+                FrameWithBody("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"a\",\"dtype\":\"f32\",\"bytes\":4}]}",
+                    new byte[4]));
+            if (shapeOptional == null || shapeOptional.Sections.Count != 1)
+                problems.Add("a section without shape did not decode");
+
+            // A zero dimension wins over huge siblings in Python's
+            // arbitrary-precision product; the C# checked multiply must not
+            // overflow before it sees the zero.
+            CheckFrameAccepted(problems, "shape [LONG_MAX,0]",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"a\",\"dtype\":\"u8\",\"shape\":[9223372036854775807,0],\"bytes\":0}]}"));
+            CheckFrameProblem(problems, "shape [LONG_MAX,2] overflows",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"a\",\"dtype\":\"u8\",\"shape\":[9223372036854775807,2],\"bytes\":0}]}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "shape [LONG_MAX] mismatches",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"a\",\"dtype\":\"u8\",\"shape\":[9223372036854775807],\"bytes\":0}]}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "shape dimension beyond long",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"a\",\"dtype\":\"u8\",\"shape\":[1000000000000000000000000000000],\"bytes\":0}]}"),
+                "bad_frame");
+
+            // Alignment and payload extent.
+            CheckFrameProblem(problems, "misaligned f32",
+                FrameWithBody("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"a\",\"dtype\":\"f32\",\"bytes\":3}]}",
+                    new byte[3]), "bad_frame");
+            CheckFrameProblem(problems, "misaligned i32",
+                FrameWithBody("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"a\",\"dtype\":\"i32\",\"bytes\":6}]}",
+                    new byte[6]), "bad_frame");
+            CheckFrameProblem(problems, "misaligned u32",
+                FrameWithBody("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"a\",\"dtype\":\"u32\",\"bytes\":1}]}",
+                    new byte[1]), "bad_frame");
+            CheckFrameProblem(problems, "section past the payload",
+                FrameWithBody("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"a\",\"dtype\":\"f32\",\"bytes\":4}]}",
+                    new byte[2]), "bad_frame");
             CheckFrameProblem(problems, "trailing bytes after a section",
                 FrameWithPayload("{\"type\":\"ping\",\"v\":2,\"sections\":[{\"name\":\"mesh.verts\",\"dtype\":\"u8\",\"bytes\":1}]}", "xy"),
                 "bad_frame");
+            CheckFrameProblem(problems, "trailing bytes after multiple sections",
+                FrameWithBody("{\"type\":\"ping\",\"v\":2,\"sections\":["
+                    + "{\"name\":\"a\",\"dtype\":\"u8\",\"bytes\":2},"
+                    + "{\"name\":\"b\",\"dtype\":\"u8\",\"bytes\":2}]}",
+                    new byte[5]), "bad_frame");
+            CheckFrameProblem(problems, "trailing bytes with no sections",
+                FrameWithBody("{\"type\":\"ping\",\"v\":2}", new byte[] { 0 }), "bad_frame");
+
+            // An empty table is valid and the body must then be empty.
+            DecodedFrame emptyTable = CheckFrameAccepted(problems, "empty sections list",
+                FrameWithHeader("{\"type\":\"response\",\"v\":2,\"sections\":[]}"));
+            if (emptyTable == null || emptyTable.Sections.Count != 0)
+                problems.Add("empty sections list did not decode");
 
             // The size caps are too_large, the code protocol §4.6 reserves for
             // "message exceeds the size limit"; answerable frames are the ones
@@ -347,13 +585,17 @@ namespace Stageloom.Tests.Console
             overCap[3] = (byte)((cap >> 24) & 0xFF);
             CheckFrameProblem(problems, "header over the cap", overCap, "too_large");
 
-            // v: exactly Python's check_version semantics — a JSON number equal
-            // to 2 is accepted (2 and 2.0), everything else is a
-            // proto_mismatch: a string, a bool, a list, null, a missing key, a
-            // different number. 1e400 overflows to an infinity, as Python's
-            // float() reads it, and mismatches rather than failing to parse.
+            // v: exactly Python's check_version semantics — only the JSON
+            // integer 2 is accepted. 2.0 and true compare equal in C# but are
+            // different JSON values, so they are proto_mismatch like a string,
+            // a list, null, a missing key or a different integer. 1e400 is
+            // non-finite after parsing, so it is a bad_frame before the version
+            // check, exactly as Q6 rejected it.
             CheckVersionAccepted(problems, "v=2", "{\"type\":\"ping\",\"v\":2}");
-            CheckVersionAccepted(problems, "v=2.0", "{\"type\":\"ping\",\"v\":2.0}");
+            CheckFrameProblem(problems, "v=2.0",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":2.0}"), "proto_mismatch");
+            CheckFrameProblem(problems, "v=1e0",
+                FrameWithHeader("{\"type\":\"ping\",\"v\":1e0}"), "proto_mismatch");
             CheckFrameProblem(problems, "v=\"2\"",
                 FrameWithHeader("{\"type\":\"ping\",\"v\":\"2\"}"), "proto_mismatch");
             CheckFrameProblem(problems, "v=true",
@@ -371,9 +613,159 @@ namespace Stageloom.Tests.Console
             CheckFrameProblem(problems, "v=2.0000000000000004",
                 FrameWithHeader("{\"type\":\"ping\",\"v\":2.0000000000000004}"), "proto_mismatch");
             CheckFrameProblem(problems, "v=1e400",
-                FrameWithHeader("{\"type\":\"ping\",\"v\":1e400}"), "proto_mismatch");
+                FrameWithHeader("{\"type\":\"ping\",\"v\":1e400}"), "bad_frame");
             CheckFrameProblem(problems, "v=+2 (not JSON)",
                 FrameWithHeader("{\"type\":\"ping\",\"v\":+2}"), "bad_frame");
+
+            // type must be a non-empty string.
+            CheckFrameProblem(problems, "type missing",
+                FrameWithHeader("{\"v\":2}"), "bad_frame");
+            CheckFrameProblem(problems, "type empty",
+                FrameWithHeader("{\"type\":\"\",\"v\":2}"), "bad_frame");
+            CheckFrameProblem(problems, "type null",
+                FrameWithHeader("{\"type\":null,\"v\":2}"), "bad_frame");
+            CheckFrameProblem(problems, "type number",
+                FrameWithHeader("{\"type\":5,\"v\":2}"), "bad_frame");
+            CheckFrameProblem(problems, "type array",
+                FrameWithHeader("{\"type\":[],\"v\":2}"), "bad_frame");
+            CheckFrameProblem(problems, "type bool",
+                FrameWithHeader("{\"type\":true,\"v\":2}"), "bad_frame");
+
+            // The encoder must refuse what the decoder refuses.
+            CheckEncodeProblem(problems, "encode null header", null, null, "bad_frame");
+
+            var noType = new Dictionary<string, object>();
+            CheckEncodeProblem(problems, "encode type missing", noType, null, "bad_frame");
+            CheckEncodeProblem(problems, "encode type empty", HeaderWith("", null), null, "bad_frame");
+            CheckEncodeProblem(problems, "encode type null", HeaderWith(null, null), null, "bad_frame");
+            CheckEncodeProblem(problems, "encode type number", HeaderWith(5L, null), null, "bad_frame");
+            CheckEncodeProblem(problems, "encode type array", HeaderWith(new List<object>(), null), null, "bad_frame");
+
+            object[] badVersions = new object[] { 1L, 3L, 2.0, true, "2", null };
+            foreach (object badVersion in badVersions)
+            {
+                var badHeader = new Dictionary<string, object>();
+                badHeader["type"] = "x";
+                badHeader["v"] = badVersion;
+                CheckEncodeProblem(problems, "encode v=" + (badVersion ?? "null"),
+                    badHeader, null, "proto_mismatch");
+            }
+
+            var duplicateSections = new List<Section>();
+            duplicateSections.Add(new Section("a", "u8", new byte[] { 1 }));
+            duplicateSections.Add(new Section("a", "u8", new byte[] { 2 }));
+            CheckEncodeProblem(problems, "encode duplicate section names",
+                PingHeader(), duplicateSections, "bad_frame");
+            CheckEncodeProblem(problems, "encode unknown dtype",
+                PingHeader(), new List<Section> { new Section("a", "f64", new byte[4]) }, "bad_frame");
+            CheckEncodeProblem(problems, "encode empty section name",
+                PingHeader(), new List<Section> { new Section("", "u8", new byte[1]) }, "bad_frame");
+            CheckEncodeProblem(problems, "encode lone surrogate section name",
+                PingHeader(), new List<Section> { new Section("a\ud800", "u8", new byte[1]) }, "bad_frame");
+            CheckEncodeProblem(problems, "encode null section",
+                PingHeader(), new List<Section> { null }, "bad_frame");
+            CheckEncodeProblem(problems, "encode null section bytes",
+                PingHeader(), new List<Section> { new Section("a", "f32", null) }, "bad_frame");
+            CheckEncodeProblem(problems, "encode misaligned section",
+                PingHeader(), new List<Section> { new Section("a", "f32", new byte[3]) }, "bad_frame");
+
+            var nanHeader = PingHeader();
+            nanHeader["number"] = double.NaN;
+            CheckEncodeProblem(problems, "encode NaN header value", nanHeader, null, "bad_frame");
+            var infinityHeader = PingHeader();
+            infinityHeader["number"] = double.PositiveInfinity;
+            CheckEncodeProblem(problems, "encode infinity header value", infinityHeader, null, "bad_frame");
+            var surrogateValue = PingHeader();
+            surrogateValue["note"] = "\ud800";
+            CheckEncodeProblem(problems, "encode lone surrogate header value",
+                surrogateValue, null, "bad_frame");
+            var surrogateKey = PingHeader();
+            surrogateKey["\ud800"] = 1L;
+            CheckEncodeProblem(problems, "encode lone surrogate header key",
+                surrogateKey, null, "bad_frame");
+
+            // Python validates type and the whole tree before check_version, so
+            // a bad type or a non-finite value wins over a bad v.
+            CheckEncodeProblem(problems, "encode bad type with bad v",
+                HeaderWith("", 3L), null, "bad_frame");
+            var nanAndBadVersion = HeaderWith("x", 3L);
+            nanAndBadVersion["number"] = double.NaN;
+            CheckEncodeProblem(problems, "encode NaN with bad v",
+                nanAndBadVersion, null, "bad_frame");
+
+            // A valid surrogate pair is a legal UTF-16 string and must encode.
+            var pairHeader = PingHeader();
+            pairHeader["note"] = char.ConvertFromUtf32(0x1F600);
+            DecodedFrame pairDecoded = CheckFrameAccepted(problems, "encode valid surrogate pair",
+                FrameCodec.Encode(pairHeader, null));
+            if (pairDecoded != null
+                && Json.GetString(pairDecoded.Header, "note") != char.ConvertFromUtf32(0x1F600))
+                problems.Add("valid surrogate pair did not round-trip");
+
+            // v defaults to 2; an explicit integer 2 is accepted and a caller's
+            // header is not mutated.
+            var defaultHeader = PingHeader();
+            byte[] defaultFrame = FrameCodec.Encode(defaultHeader, null);
+            DecodedFrame defaultDecoded = CheckFrameAccepted(problems, "encode default v", defaultFrame);
+            if (defaultDecoded != null && !(Json.Get(defaultDecoded.Header, "v") is long
+                                            && (long)Json.Get(defaultDecoded.Header, "v") == 2L))
+                problems.Add("encode did not write integer v=2");
+            if (defaultHeader.ContainsKey("v") || defaultHeader.ContainsKey("sections"))
+                problems.Add("encode mutated the caller header");
+
+            CheckFrameAccepted(problems, "encode explicit long v=2",
+                FrameCodec.Encode(HeaderWith("x", 2L), null));
+            CheckFrameAccepted(problems, "encode explicit int v=2",
+                FrameCodec.Encode(HeaderWith("x", 2), null));
+
+            // Valid sections keep their order and survive decode/re-encode.
+            var validSections = new List<Section>();
+            validSections.Add(Section.Floats("mesh.verts", new float[] { 0.0f, 1.5f, -2.0f }));
+            validSections.Add(Section.U32("mesh.face_counts", new uint[] { 3 }));
+            validSections.Add(Section.Ints("attr.0.values", new int[] { -1, 0, 7 }));
+            validSections.Add(Section.Bytes("mesh.colors", new byte[] { 1, 2, 3, 4 }));
+            var validHeader = PingHeader();
+            byte[] validFrame = FrameCodec.Encode(validHeader, validSections);
+            DecodedFrame validDecoded = CheckFrameAccepted(problems, "encode multi-section", validFrame);
+            if (validDecoded != null)
+            {
+                string[] expectedNames = new string[] { "mesh.verts", "mesh.face_counts", "attr.0.values", "mesh.colors" };
+                if (validDecoded.Sections.Count != expectedNames.Length)
+                    problems.Add("multi-section count changed");
+                else
+                    for (int i = 0; i < expectedNames.Length; i++)
+                        if (validDecoded.Sections[i].Name != expectedNames[i])
+                            problems.Add("section order changed at " + i);
+                byte[] rebuilt = FrameCodec.Encode(
+                    new Dictionary<string, object>(validDecoded.Header), validDecoded.Sections);
+                if (!BytesEqual(validFrame, rebuilt))
+                    problems.Add("decode/re-encode changed valid frame bytes");
+            }
+            if (validHeader.ContainsKey("v") || validHeader.ContainsKey("sections"))
+                problems.Add("encode with sections mutated the caller header");
+
+            // A truncation at any byte must still be a classified FrameException,
+            // as Python's boundary suite asserts for its valid frame.
+            for (int cut = 0; cut < validFrame.Length; cut++)
+            {
+                var truncated = new byte[cut];
+                Array.Copy(validFrame, truncated, cut);
+                try
+                {
+                    FrameCodec.Decode(truncated);
+                    problems.Add("truncated at " + cut + ": decoded without error");
+                }
+                catch (FrameException ex)
+                {
+                    if (ex.Code != "bad_frame")
+                        problems.Add("truncated at " + cut + ": code " + ex.Code);
+                }
+                catch (Exception ex)
+                {
+                    problems.Add("truncated at " + cut + ": threw "
+                        + ex.GetType().Name + ": " + ex.Message);
+                }
+            }
 
             if (problems.Count == 0)
             {
@@ -383,6 +775,14 @@ namespace Stageloom.Tests.Console
             _failures += problems.Count;
             System.Console.WriteLine("FAIL decoder-boundary");
             foreach (string p in problems) System.Console.WriteLine("     " + p);
+        }
+
+        private static Dictionary<string, object> HeaderWith(object type, object version)
+        {
+            var header = new Dictionary<string, object>();
+            header["type"] = type;
+            if (version != null) header["v"] = version;
+            return header;
         }
 
         /// <summary>A header that must decode, as the version boundary's accept side.</summary>
@@ -398,12 +798,57 @@ namespace Stageloom.Tests.Console
             }
         }
 
+        private static DecodedFrame CheckFrameAccepted(List<string> problems, string what, byte[] frame)
+        {
+            try
+            {
+                return FrameCodec.Decode(frame);
+            }
+            catch (Exception ex)
+            {
+                problems.Add(what + ": refused (" + ex.GetType().Name + ": " + ex.Message + ")");
+                return null;
+            }
+        }
+
+        private static void CheckEncodeProblem(List<string> problems, string what,
+            Dictionary<string, object> header, IList<Section> sections, string code)
+        {
+            try
+            {
+                FrameCodec.Encode(header, sections);
+                problems.Add(what + ": encoded without error");
+            }
+            catch (FrameException ex)
+            {
+                if (ex.Code != code)
+                    problems.Add(what + ": code " + ex.Code + " != " + code);
+            }
+            catch (Exception ex)
+            {
+                problems.Add(what + ": threw " + ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+
         /// <summary>A hand-built frame around raw header text and raw payload
         /// bytes, for shapes the encoder refuses to produce.</summary>
         private static byte[] FrameWithPayload(string text, string payload)
         {
-            byte[] head = Encoding.UTF8.GetBytes(text);
-            byte[] body = Encoding.UTF8.GetBytes(payload);
+            return FrameWithBody(text, Encoding.UTF8.GetBytes(payload));
+        }
+
+        private static byte[] FrameWithBody(string text, byte[] body)
+        {
+            return FrameWithRawHeaderAndBody(Encoding.UTF8.GetBytes(text), body);
+        }
+
+        private static byte[] FrameWithRawHeader(byte[] head)
+        {
+            return FrameWithRawHeaderAndBody(head, new byte[0]);
+        }
+
+        private static byte[] FrameWithRawHeaderAndBody(byte[] head, byte[] body)
+        {
             var frame = new byte[4 + head.Length + body.Length];
             frame[0] = (byte)(head.Length & 0xFF);
             frame[1] = (byte)((head.Length >> 8) & 0xFF);
@@ -412,6 +857,15 @@ namespace Stageloom.Tests.Console
             Buffer.BlockCopy(head, 0, frame, 4, head.Length);
             Buffer.BlockCopy(body, 0, frame, 4 + head.Length, body.Length);
             return frame;
+        }
+
+        /// <summary>UTF-8 bytes with one invalid 0xFF inside a header string.</summary>
+        private static byte[] InvalidUtf8Header()
+        {
+            var head = new List<byte>(Encoding.UTF8.GetBytes("{\"type\":\"ping\",\"v\":2,\"note\":\""));
+            head.Add(0xFF);
+            head.AddRange(Encoding.UTF8.GetBytes("\"}"));
+            return head.ToArray();
         }
 
         /// <summary>FormatDouble's boundary: byte-identical to Python's
@@ -640,14 +1094,7 @@ namespace Stageloom.Tests.Console
         /// something the encoder would not produce.</summary>
         private static byte[] FrameWithHeader(string text)
         {
-            byte[] head = Encoding.UTF8.GetBytes(text);
-            var frame = new byte[4 + head.Length];
-            frame[0] = (byte)(head.Length & 0xFF);
-            frame[1] = (byte)((head.Length >> 8) & 0xFF);
-            frame[2] = (byte)((head.Length >> 16) & 0xFF);
-            frame[3] = (byte)((head.Length >> 24) & 0xFF);
-            Buffer.BlockCopy(head, 0, frame, 4, head.Length);
-            return frame;
+            return FrameWithRawHeader(Encoding.UTF8.GetBytes(text));
         }
 
         private static void CheckThrows<T>(List<string> problems, string what, Action action)
