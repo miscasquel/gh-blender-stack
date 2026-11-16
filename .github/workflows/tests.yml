@@ -9,7 +9,7 @@
 #   assemblies (RhinoCommon, Grasshopper, GH_IO); there is no verified
 #   stock-runner path in this repository. It runs on the development machine
 #   as part of scripts/check-all and is skipped there by `--ci` with a printed
-#   reason. The C# tasks (Q7/Q8) own adding a real stock-runner codec job; this
+#   reason. A real stock-runner codec job remains future CI work; this
 #   workflow does not claim C# coverage.
 name: tests
 

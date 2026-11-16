@@ -5,10 +5,11 @@ native Geometry Nodes modifiers, in one visible object per stack. Geometry and
 parameters can flow through the stack, so parameters can be keyframed, driven,
 and played back.
 
-That is the v1 goal. **v0.6.0 is a working demo**: geometry (meshes, curves,
-points, SubD cages) driven by a real Grasshopper definition, with named
-attributes and Grasshopper blocks (instances) travelling both ways, parameters
-you can edit and keyframe in Blender, packaged as a Blender extension.
+That is the v1 goal. **v0.7.0 is the current release**: geometry (meshes,
+curves, points, SubD cages) driven by a real Grasshopper definition, with named
+attributes and Grasshopper blocks (instances, including nested and multi-part
+definitions) travelling both ways, parameters you can edit and keyframe in
+Blender, packaged as a Blender extension.
 [DEMO.md](DEMO.md) walks through the loop.
 
 ```
@@ -53,20 +54,21 @@ Blender                                          Rhino / Grasshopper (wine)
   channels (vertex colours, SubD tags).
 - **Blocks (instances).** Blender's instanced geometry crosses as Grasshopper
   block definitions and instances, built graph-side with no document write;
-  nested blocks work both ways. On the Blender side each definition is drawn
-  through `Instance on Points` — nested placements are true instances, one per
-  placement — and all of the helper data lives in a dedicated `Stageloom Stage`
-  scene, so your own scene and outliner stay clean.
+  nested and multi-part blocks work both ways. On the Blender side each
+  definition is drawn through `Instance on Points` — nested placements are true
+  instances, one per placement — and all of the helper data lives in a
+  dedicated `Stageloom Stage` scene, so your own scene and outliner stay clean.
 - **Parameters.** `Param` components declare float, int, bool, vector3, colour,
   value list, and text parameters. Blender draws them in the N-panel with
-  ranges, a value-list dropdown, keyframe decorators, and drivers. A new Param
-  node starts compact with Key, Label and Type; **Show all inputs** reveals
+  independent min/max ranges, a value-list dropdown, keyframe decorators, and
+  drivers. A new Param node starts compact with Key, Label and Type;
+  **Show all inputs** reveals
   Default, Min, Max, Step, Values and Group, and **Hide unused inputs** removes
   any optional input that has no value and no wire. The parameter list is saved
   with the definition, so the choice sticks.
 - **Protocol.** Binary frames with a canonical JSON header; geometry and
   parameters in the same stream. The Python and C# codecs are checked against
-  twelve shared golden fixtures.
+  fourteen shared golden fixtures.
 - **Lifecycle.** States (`idle`, `waiting`, `ok`, `error`, `disconnected`,
   `disabled`, `frozen`, `unbound`, `conflict`), timeouts, latest-wins requests,
   and reconnect with backoff. `disabled`/`frozen`/`conflict` follow the stage's
@@ -94,11 +96,14 @@ Blender                                          Rhino / Grasshopper (wine)
   manual freeze are untouched. A packed bake is kept when the `.blend` is saved.
 - **Tests.** `scripts/check-all` is the local gate: docs, core, Blender headless
   (plus the offline gate), benchmarks, the installed extension round trip and
-  the C# suites, with per-step timing. `scripts/test-core` (standard library
-  only), `scripts/test-blender` (Blender headless against `tools/fake_gh`),
+  the C# suites, with per-step timing. The current release is checked by 110
+  core tests, 413 Blender headless tests, fourteen golden fixtures and the C#
+  console suites. `scripts/test-core` (standard library only),
+  `scripts/test-blender` (Blender headless against `tools/fake_gh`),
   `scripts/test-gha` (the C# codec against the golden fixtures, plus the
-  conversion, attribute, link and component suites, under wine) and
-  `scripts/test-extension` (installed extension round trip) are its steps.
+  conversion, attribute, instance, transport, link, component and stage
+  suites, under wine) and `scripts/test-extension` (installed extension round
+  trip) are its steps.
 
 ## What is deliberately not here yet
 
@@ -166,7 +171,7 @@ The add-on's logs live in its per-user extension data directory by default; the
 ## Install
 
 Download the add-on zip and the Grasshopper `.gha` from the
-[v0.6.0 release](https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.6.0).
+[v0.7.0 release](https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.7.0).
 The commands below are the build path.
 
 Release path: the add-on ships as a Blender extension with the official
@@ -238,7 +243,7 @@ CI runs the core layer on Python 3.13 and 3.14. A second job installs Blender
 with the offline gate, benchmarks and the installed-extension round trip. That
 job names and skips the C# step because a stock runner has no wine prefix with
 Rhino 8; the C# suites run on the development machine here, and a stock-runner
-codec job is left to the C# tasks rather than claimed.
+codec job remains future CI work rather than a claim.
 
 ## Support
 

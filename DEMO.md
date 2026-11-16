@@ -1,4 +1,4 @@
-# Demo v0 — the working loop
+# The Stageloom working loop
 
 What this shows: a mesh object in Blender driven by a Grasshopper definition,
 as a stage in its modifier stack, with a parameter you can edit in Blender.

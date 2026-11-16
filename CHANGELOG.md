@@ -10,6 +10,86 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-11-16
+
+This release is about correctness rather than new features. Every stage is live,
+a bake keeps its downstream chain consistent, multi-part blocks survive both
+directions, and malformed frames or geometry produce a typed error or a visible
+warning instead of a silent approximation. Duplicate stage keys are an explicit
+conflict, and helpers survive rename, delete, load and multi-scene work.
+
+**Upgrade:** rebuild and redeploy `Stageloom.gha`, then restart Rhino. The
+Blender add-on upgrades in place; existing `.blend` stages, parameters,
+keyframes and animation are preserved, and the removed cache fields are ignored.
+There is no frame cache to migrate: use **Freeze** or **Bake stage** for offline
+frames. A `.blend` whose stages share a key opens with `conflict` on the
+affected stages; resolve each affected stage once in the panel.
+
+### Changed
+
+- **Every stage is live.** The custom frame cache and the per-stage **Live**
+  toggle are gone. A delivered request is one solver step, one request is
+  outstanding at a time, and an answer for a superseded request is dropped
+  rather than replayed. A disconnected stage keeps its last output; **Freeze**
+  holds it and native **Bake stage** is the offline per-frame path. The data
+  root now holds logs only.
+- **Blocks with several parts round-trip both ways.** A Grasshopper block
+  definition can carry multiple geometry parts, including nested placements and
+  per-part attributes; Blender sends and receives `parts`, and the optional
+  `blocks/2` capability makes an unsupported peer explicit instead of silently
+  collapsing the definition.
+- **Bake keeps the dependency chain consistent.** **Bake stage** still freezes
+  the selected stage's upstream chain, then triggers each downstream dependent
+  once with the baked output and freezes it on that answer. Only the selected
+  stage gets native bake data; **Clear Bake** removes only that stage's bake and
+  the freezes it created. A dependent that needs per-frame offline output is
+  baked in turn.
+- **Stage labels are editable.** The label drives the modifier and helper names
+  while the stage key stays immutable, so renaming a stage cannot break its
+  requests, helpers or animation.
+- **Parameter ranges are independent.** A Param can declare only a minimum, only
+  a maximum, or a maximum of zero. int/float, vector, colour, value-list, text
+  and bool values now migrate through a real type change instead of being
+  dropped.
+- **Helpers survive stage changes.** Helper objects, definitions and clouds are
+  keyed by stage identity rather than object name, so rename, delete, undo,
+  duplicate, load and two scenes on different frames no longer leak or
+  cross-talk.
+
+### Fixed
+
+- **The codecs are total at the trust boundary.** Python and C# now reject
+  malformed headers, section tables, dtype/length mismatches, invalid UTF-8,
+  raw JSON control characters, lone surrogates and non-finite numbers with
+  typed errors. C# validates attribute descriptors, mesh and curve sections,
+  counts and array bounds before geometry code sees them, and both codecs format
+  doubles exactly like Python's `repr` across the full finite range.
+- **Geometry changes are detected by topology, not only by vertex count.** A
+  same-count rebuild with different faces, a flipped quad diagonal and an n-gon
+  reorder now rebuild the mesh; a position-only change keeps the fast path.
+  Colour stays sRGB on the wire (linear float colours are converted), absent
+  point radii clear the previous values, and mixed mesh/SubD groups and
+  malformed curve arrays are rejected instead of paired or indexed blindly.
+- **Approximations are visible.** Catmull-Rom fitting, missing Bezier handles,
+  clamped NURBS order, dropped crease edges and ignored mixed groups now produce
+  a counted stage warning instead of disappearing.
+- **Grasshopper ownership is document-scoped.** Registries and claims belong to
+  their document, RhinoCommon is read on the UI thread from snapshots, and a
+  duplicate key is a strict per-stage `conflict` rather than a last-writer
+  merge.
+- **Transport and playback cannot cross-talk.** The WebSocket client verifies
+  the handshake, caps a frame before allocating it, and handles close,
+  continuation and fragmentation correctly. Playback checks supersession before
+  every wait, stale errors are scoped to their request id, and a stopped connect
+  cannot revive or clear the next outbox.
+
+### Tests
+
+- 110 core tests; 413 Blender headless tests plus the offline gate; fourteen
+  golden fixtures; the C# codec and its seven console suites; the installed
+  extension round trip. `scripts/check-all` passes in 113.0 s on the development
+  machine.
+
 ## [0.6.0] — 2026-11-14
 
 Grasshopper's endpoint is now configurable and saved for the whole

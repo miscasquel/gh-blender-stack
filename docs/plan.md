@@ -1,6 +1,6 @@
 # Stageloom — 1.0 plan
 
-**Status:** planning, 2026-11-14. Baseline: **v0.6.0**.
+**Status:** planning, 2026-11-16. Baseline: **v0.7.0**.
 **Target:** Blender 5.3. **Compatibility floor:** Blender 5.2.
 **Goal:** ship a stable 1.0 for the declared v1 scope: Grasshopper definitions as
 stackable Blender modifiers, with geometry and parameters flowing both ways,
@@ -35,33 +35,36 @@ of the gaps below.
 
 ---
 
-## 2. Baseline: v0.6.0
+## 2. Baseline: v0.7.0
 
-**Shipped:** meshes, curves, point clouds, SubD cages, Breps (meshed, warned),
-attributes, Grasshopper blocks/instances, parameters with keyframes and drivers,
-mid-stack `GH → GN → GH` chains, stage lifecycle (Pull, Freeze, Bake stage,
-Clear Bake, Key all, Purge orphans), Play Every Frame sync, Frame Drop
-latest-wins requests, a bounded disk frame cache, multi-stage duplication
-handling, selective stage solves, generator and live stages, one-way Stage
-In-only feeds, nested instance
-baking, strictly unique stage keys with per-stage conflict resolution, the
-persisted loopback endpoint component, the non-metre units matrix, and the
-reference performance matrix with its recorded Linux baseline.
+**Shipped:** live-only stages (the custom frame cache and the `Live` toggle are
+removed; Freeze and the native Bake node are the offline path), nested and
+multi-part Grasshopper block definitions in both directions with the `blocks/2`
+capability, bake stages that trigger and freeze downstream dependents while only
+the selected stage is baked, a total Python/C# codec (typed errors, strict
+JSON/UTF-8/number validation, exact Python-repr float formatting, payload
+bounds), geometry correctness for topology, colour, point radii, mixed groups
+and curves with visible conversion warnings, document-scoped Grasshopper
+ownership and UI-thread marshaling, a hardened WebSocket transport,
+supersession-aware playback and rid-scoped recovery, stable helper identity
+across rename/delete/load/multi-scene, editable stage labels, independent
+parameter ranges with real type migrations, and an explicit `conflict` state.
+Meshes, curves, point clouds, SubD cages, Breps (meshed, warned), attributes,
+parameters with keyframes and drivers, mid-stack `GH → GN → GH` chains, Pull,
+Freeze, Clear Bake, Key all, Purge orphans, Play Every Frame, Frame Drop,
+generator stages, one-way Stage In feeds, the persisted loopback endpoint
+component, the non-metre units matrix and the reference performance matrix
+remain.
 
-**Verified at release:** 57 core tests, 279 Blender headless tests plus the
-offline gate, the C# fixture/attribute/link/component/stage suites, the
-installed extension round trip, and the reference benchmark matrix (all budgets
-met on 2026-11-14).
+**Verified at release:** 110 core tests, 413 Blender headless tests plus the
+offline gate, the C# codec and its seven console suites, fourteen golden
+fixtures, the installed extension round trip, and `scripts/check-all` in 113.0 s
+on the development machine.
 
-**Post-release live check (2026-11-14):** the 13× 99,458-triangle reference
-scene updates in 60.6 ms median (64.5 ms p95) with preview on, inside the
-100 ms target; preview off is within noise. See
+**Performance check (2026-11-14):** the 13× 99,458-triangle reference scene
+updates in 60.6 ms median (64.5 ms p95) with preview on, inside the 100 ms
+target; preview off is within noise. See
 [`../benchmarks/results/2026-11-14-live-rhino.md`](../benchmarks/results/2026-11-14-live-rhino.md).
-
-**Changed in 0.7.0:** the custom frame cache and the Live toggle are removed
-([ADR 0016](decisions/0016-live-only-stages.md)). Every stage is live, Freeze
-keeps the last applied output, and the native Bake node is the offline path.
-The v0.6.0 baseline above still describes what that release shipped.
 
 **Known gaps carried forward:**
 
@@ -69,8 +72,8 @@ The v0.6.0 baseline above still describes what that release shipped.
 |---|---|
 | No native Windows Rhino acceptance run | Wine is a development environment, not the target user platform. |
 | No GH component migration | Old documents keep old parameter/output lists and never gain newer capabilities. |
-| No chain-level playback/bake proof | Bake stage now freezes the upstream chain and triggers plus freezes downstream dependents (ADR 0015), but the acceptance is headless; a Windows/Rhino chain render is still missing. |
-| Release verification is manual and single-machine | A 1.0 needs a reproducible, multi-platform gate. |
+| No chain-level Windows/Rhino playback/bake proof | Bake stage freezes the upstream chain and triggers plus freezes downstream dependents (ADR 0015); the 0.7.0 acceptance is headless, so a Windows/Rhino chain render is still missing. |
+| Release verification is manual and single-machine | A 1.0 needs a reproducible, tag-triggered, multi-platform gate. |
 
 ---
 
@@ -105,9 +108,8 @@ floor.
 
 ### In 1.0
 
-- Everything already shipped in v0.6.0, except the custom frame cache and the
-  Live toggle, which 0.7.0 removes (ADR 0016).
-- The hardening work in §5.
+- Everything already shipped in v0.7.0.
+- The remaining hardening work in §5.
 - Migrations and compatibility guarantees in §5C.
 - Platform and distribution work in §5B and §5F.
 
@@ -259,8 +261,9 @@ state, and Clear Bake restores live behavior without restarting Blender.
 
 **Work**
 
-- CI: run layer A and layer B (Blender headless against `fake_gh`) on pull
-  requests. Run the C# console suite under wine or on a Windows runner. Add a
+- CI: layer A and the Blender quality gate (headless against `fake_gh`, offline
+  gate, benchmarks and extension round trip) already run on pull requests; the
+  C# suites run in the local full gate. Add a stock-runner codec job and a
   self-hosted Rhino smoke job for the live half.
 - Add tag-triggered build and validation for `stageloom-<version>.zip` and
   `Stageloom.gha`; fail on a version mismatch or a validator error.
@@ -285,9 +288,9 @@ after 0.8 except fixes required by a gate.
 
 | Milestone | Content | Exit |
 |---|---|---|
-| **0.6** | Performance harness and instance fix; units matrix; plugin endpoint; bake undo safety | Instance case inside budget; units and endpoint tests pass; bake is safe to undo or clearly irreversible |
-| **0.7** | Compatibility/migration; GH `Read()`; chain-level playback/bake | Last two releases upgrade cleanly; a multi-stage chain renders offline from a bake |
-| **0.8** | Windows platform acceptance; CI layers; tag-triggered builds; distribution routes | Windows matrix passes; CI builds and validates artifacts from a tag |
+| **0.6** | Performance harness and instance fix; units matrix; plugin endpoint; bake undo safety | Shipped 2026-11-14 |
+| **0.7** | Quality release: live-only stages, nested/multi-part blocks, bake dependents, codec/geometry hardening, lifecycle/UI/state; custom cache and `Live` removed | Shipped 2026-11-16; full gate green, no known blocker or major from the 2026-11-15 audit |
+| **0.8** | Architecture seams (W7), performance gates (W8), lean/docs/CI/framework (W9), verification (W10); Windows acceptance; tag-triggered distribution | Every module ≥ 8.5; baseline gate green; docs/CI true; Windows matrix passes; reproducible artifacts from a tag |
 | **0.9** | Release candidate; soak; freeze protocol v2 and file formats; full acceptance on supported platforms | No open release-blocking defect; all gates below pass |
 | **1.0** | Release | Artifacts, notes and hashes published; support matrix signed off |
 
@@ -308,7 +311,7 @@ The old A1–A10 remain the functional core. Add the release gates that the
   counted and warned.
 - **A6 SubD.** Cage and edge creases round-trip; the semi-sharp limitation is
   visible.
-- **A7 Persistence.** Undo/redo, save/reload, and upgrades from 0.4.1 and 0.5.0
+- **A7 Persistence.** Undo/redo, save/reload, and upgrades from 0.6.0 and 0.7.0
   preserve stages, parameters, animation and helpers.
 - **A8 GH lifecycle.** Closed, reopened and restarted Grasshopper reconnects with
   no manual step and keeps the last good output while disconnected.
@@ -322,7 +325,8 @@ The old A1–A10 remain the functional core. Add the release gates that the
   the Linux/wine development matrix remains green.
 - **A12 Chain playback/bake.** Multi-stage Play Every Frame works, and a
   multi-stage bake renders with Grasshopper closed and restores live behavior
-  with Clear Bake.
+  with Clear Bake. The headless chain is green in 0.7.0; the Windows/Rhino
+  render remains the 1.0 acceptance.
 - **A13 Compatibility.** Old GH components gain new outputs through migration;
   an incompatible add-on/plugin pair reports a clear mismatch; protocol v2
   remains interoperable.
@@ -370,8 +374,10 @@ The old A1–A10 remain the functional core. Add the release gates that the
 2. Is extensions.blender.org a 1.0 requirement or a post-1.0 distribution step?
 3. Is Yak packaging for the `.gha` required for 1.0?
 4. Does 1.0 ship Rhino 8/GH1 only, with GH2 in a later release?
-5. Is the native bake scope enough for animation-heavy chains, or does 1.0 need
-   a chain-level bake? (The custom frame cache is gone; see ADR 0016.)
+5. Is the 0.7 native-bake scope (only the selected stage is baked; downstream
+   dependents are frozen on one frame each) enough for animation-heavy 1.0
+   chains, or does 1.0 need a chain-level bake? (The custom frame cache is gone;
+   see ADR 0016.)
 
 ---
 
