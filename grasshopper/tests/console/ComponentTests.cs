@@ -57,6 +57,7 @@ namespace Stageloom.Tests.Console
                 RunUnitTransforms();
                 RunParamVisibilityTests();
                 RunLifecycleTests(server, stageIn, stageOut);
+                RunDocumentIsolationTests();
                 RunConnectionComponent();
             }
             catch (Exception ex)
@@ -632,6 +633,359 @@ namespace Stageloom.Tests.Console
             return da;
         }
 
+        // ------------------------------------------------------ document scope
+
+        /// <summary>Ownership is per document: a request for one document's
+        /// key fills and pins only that document's slot, a key two documents
+        /// claim is a strict conflict with no hello row, no schema and no
+        /// answer, and removing one claimant restores the survivor. The
+        /// console has no Rhino process, so documents are represented by their
+        /// stable ids (the identity a real GH_Document would supply).</summary>
+        private static void RunDocumentIsolationTests()
+        {
+            System.Console.WriteLine();
+            System.Console.WriteLine("document isolation");
+
+            var server = new FakeServer();
+            var docA = new Guid("11111111-1111-4111-8111-111111111111");
+            var docB = new Guid("22222222-2222-4222-8222-222222222222");
+            var docC = new Guid("33333333-3333-4333-8333-333333333333");
+            var docD = new Guid("44444444-4444-4444-8444-444444444444");
+            var docE = new Guid("55555555-5555-4555-8555-555555555555");
+            var docF = new Guid("66666666-6666-4666-8666-666666666666");
+
+            var inA = new StageInHarness();
+            var outA = new StageOutHarness();
+            var inB = new StageInHarness();
+            var outB = new StageOutHarness();
+            var outC = new StageOutHarness();
+            var paramC = new ParamHarness();
+            var outD = new StageOutHarness();
+            var paramD = new ParamHarness();
+            var outE1 = new StageOutHarness();
+            var outE2 = new StageOutHarness();
+            var paramE = new ParamHarness();
+            var outF = new StageOutHarness();
+            var outF2 = new StageOutHarness();
+            var outG = new StageOutHarness();
+            var outH = new StageOutHarness();
+
+            try
+            {
+                GhLink.Configure("127.0.0.1", server.Port, false);
+                GhLink.Start();
+                server.Accept();
+                ReadUntil(server, "hello");
+
+                // Two documents with different keys publish and solve apart.
+                GhLink.RegisterInDocumentForTest(inA, docA);
+                GhLink.RegisterInDocumentForTest(outA, docA);
+                GhLink.RegisterInDocumentForTest(inB, docB);
+                GhLink.RegisterInDocumentForTest(outB, docB);
+                Check("each document has its own registration",
+                    GhLink.DocumentCount == 2, "documents=" + GhLink.DocumentCount);
+                GhLink.PublishStageIn(inA, "doc-a", true);
+                GhLink.PublishStageOut(outA, "doc-a", true);
+                GhLink.PublishStageIn(inB, "doc-b", true);
+                GhLink.PublishStageOut(outB, "doc-b", true);
+                GhLink.Publish(null);
+                Dictionary<string, object> hello = ReadUntil(server, "hello");
+                Check("two documents publish their own keys",
+                    FindStage(hello, "doc-a") != null && FindStage(hello, "doc-b") != null,
+                    "stages=" + Json.WriteCanonical(Json.Get(hello, "stages")));
+
+                SendRequest(server, "doc-a", "sha256:doc-a", Sections());
+                StageSlot slotA = WaitSlotIn(docA, "doc-a", "sha256:doc-a");
+                Check("a request fills the owning document's slot",
+                    slotA != null && slotA.Rid == "sha256:doc-a",
+                    "rid=" + (slotA == null ? "(none)" : slotA.Rid));
+                Check("a request creates no slot in the other document",
+                    GhLink.FindSlot(docB, "doc-a") == null, "slot exists");
+                Guid requested;
+                Check("the request solve names the owning document",
+                    GhLink.BeginRequestSolveForTest(out requested) && requested == docA,
+                    "document=" + requested);
+                Check("only the requested document's key is request-driven",
+                    GhLink.IsRequestDriven("doc-a") && !GhLink.IsRequestDriven("doc-b"), "");
+                Quiet(slotA);
+                GhLink.EndRequestSolveForTest();
+
+                // The same key in two documents is a strict conflict.
+                GhLink.RegisterInDocumentForTest(outC, docC);
+                GhLink.RegisterInDocumentForTest(paramC, docC);
+                GhLink.RegisterInDocumentForTest(outD, docD);
+                GhLink.RegisterInDocumentForTest(paramD, docD);
+                GhLink.PublishStageOut(outC, "doc-dup", true);
+                GhLink.PublishParam(paramC, "doc-dup", ParamDeclaration("c"));
+                GhLink.Publish(null);
+                hello = ReadHello(server, "doc-dup", true);
+                Check("one document can publish the key before the conflict",
+                    hello != null, "no hello");
+                GhLink.PublishStageOut(outD, "doc-dup", true);
+                GhLink.PublishParam(paramD, "doc-dup", ParamDeclaration("d"));
+                Check("two documents on one key are a strict conflict",
+                    GhLink.IsStageConflicted("doc-dup")
+                    && GhLink.StageConflict("doc-dup").IndexOf("duplicate stage key",
+                        StringComparison.Ordinal) >= 0,
+                    GhLink.StageConflict("doc-dup"));
+                Check("a conflicted key has no schema declaration",
+                    GhLink.StageParamCount("doc-dup") == 0,
+                    "params=" + GhLink.StageParamCount("doc-dup"));
+
+                GhLink.Publish(null);
+                hello = ReadUntil(server, "hello");
+                Check("a conflicted key is withheld from hello",
+                    FindStage(hello, "doc-dup") == null,
+                    "stages=" + Json.WriteCanonical(Json.Get(hello, "stages")));
+
+                SendRequest(server, "doc-dup", "sha256:doc-dup", Sections());
+                Dictionary<string, object> duplicate = ReadUntil(server, "error");
+                Check("a request for a conflicted key is refused",
+                    Json.GetString(duplicate, "code") == "duplicate_stage"
+                    && Json.GetString(duplicate, "stage") == "doc-dup",
+                    "error=" + Json.WriteCanonical(duplicate));
+                Check("the conflict names both documents",
+                    Json.GetString(duplicate, "message") != null
+                    && Json.GetString(duplicate, "message").IndexOf("claimed by",
+                        StringComparison.Ordinal) >= 0,
+                    Json.GetString(duplicate, "message"));
+                Check("a conflicted request touches neither document's slot",
+                    GhLink.FindSlot(docC, "doc-dup") == null
+                    && GhLink.FindSlot(docD, "doc-dup") == null, "slot exists");
+
+                // A component on a conflicted key reports the duplication and
+                // sends no response.
+                outC.ClearRuntimeMessages();
+                FakeDa duplicateDa = StageOutData(outC, "doc-dup");
+                duplicateDa.Inputs["Geometry"] = new List<IGH_Goo> { new GH_Point(new Point3d(0, 0, 0)) };
+                outC.Run(duplicateDa);
+                Check("a conflicted Stage Out explains the duplicate",
+                    RuntimeText(outC, GH_RuntimeMessageLevel.Error).IndexOf("duplicate stage key",
+                        StringComparison.Ordinal) >= 0,
+                    RuntimeText(outC, GH_RuntimeMessageLevel.Error));
+                Check("a conflicted Stage Out emits no response",
+                    !(bool)OutputValue(duplicateDa, "Sent")
+                    && NoFrameOfType(server, "response", 400), "");
+
+                // Removing one duplicate document restores the survivor's stage
+                // and schema.
+                GhLink.Unregister(outD);
+                GhLink.Unregister(paramD);
+                Check("removing one claimant clears the conflict",
+                    !GhLink.IsStageConflicted("doc-dup") && GhLink.ConflictCount == 0,
+                    "conflicts=" + GhLink.ConflictCount);
+                Check("the survivor's schema is restored",
+                    GhLink.StageParamCount("doc-dup") == 1,
+                    "params=" + GhLink.StageParamCount("doc-dup"));
+                hello = ReadHello(server, "doc-dup", true);
+                Check("the survivor's stage is republished",
+                    hello != null && FindStage(hello, "doc-dup") != null,
+                    hello == null ? "no hello" : Json.WriteCanonical(Json.Get(hello, "stages")));
+                Dictionary<string, object> restoredSchema = ReadUntil(server, "schema");
+                Check("the survivor's schema is republished alone",
+                    Json.GetString(restoredSchema, "stage") == "doc-dup"
+                    && ((List<object>)Json.Get(restoredSchema, "params")).Count == 1,
+                    "schema=" + Json.WriteCanonical(restoredSchema));
+
+                SendRequest(server, "doc-dup", "sha256:doc-dup-2", Sections());
+                StageSlot survivor = WaitSlotIn(docC, "doc-dup", "sha256:doc-dup-2");
+                Check("the survivor answers its own request",
+                    survivor != null && GhLink.FindSlot(docD, "doc-dup") == null,
+                    survivor == null ? "no slot" : "rid=" + survivor.Rid);
+                FakeDa survivorDa = StageOutData(outC, "doc-dup");
+                survivorDa.Inputs["Geometry"] = new List<IGH_Goo> { new GH_Point(new Point3d(0, 0, 0)) };
+                Check("the survivor starts a request batch",
+                    GhLink.BeginRequestSolveForTest(), "");
+                outC.Run(survivorDa);
+                Dictionary<string, object> answer = ReadUntil(server, "response");
+                Check("the survivor's answer carries the request",
+                    Json.GetString(answer, "stage") == "doc-dup"
+                    && Json.GetString(answer, "rid") == "sha256:doc-dup-2",
+                    "response=" + Json.WriteCanonical(answer));
+                Quiet(survivor);
+                GhLink.EndRequestSolveForTest();
+
+                // If the earlier owner leaves, the later claimant becomes the
+                // owner with a fresh slot: it must not inherit the departed
+                // document's held frame.
+                var docG = new Guid("77777777-7777-4777-8777-777777777777");
+                var docH = new Guid("88888888-8888-4888-8888-888888888888");
+                GhLink.RegisterInDocumentForTest(outG, docG);
+                GhLink.PublishStageOut(outG, "doc-owner-drop", true);
+                GhLink.Publish(null);
+                ReadHello(server, "doc-owner-drop", true);
+                SendRequest(server, "doc-owner-drop", "sha256:owner-g", Sections());
+                StageSlot oldOwner = WaitSlotIn(docG, "doc-owner-drop", "sha256:owner-g");
+                Check("the first owner holds its own frame",
+                    oldOwner != null && oldOwner.Frame.GeometryHash == "sha256:hash-sha256:owner-g",
+                    oldOwner == null ? "no slot" : oldOwner.Frame.GeometryHash);
+
+                GhLink.RegisterInDocumentForTest(outH, docH);
+                GhLink.PublishStageOut(outH, "doc-owner-drop", true);
+                Check("the later claimant creates a conflict",
+                    GhLink.IsStageConflicted("doc-owner-drop"), GhLink.StageConflict("doc-owner-drop"));
+                GhLink.Unregister(outG);
+                Check("the later claimant becomes the owner when the first leaves",
+                    !GhLink.IsStageConflicted("doc-owner-drop")
+                    && GhLink.FindSlot(docG, "doc-owner-drop") == null
+                    && GhLink.FindSlot(docH, "doc-owner-drop") == null,
+                    "conflict=" + GhLink.StageConflict("doc-owner-drop"));
+
+                SendRequest(server, "doc-owner-drop", "sha256:owner-h", Sections());
+                StageSlot newOwner = WaitSlotIn(docH, "doc-owner-drop", "sha256:owner-h");
+                Check("the surviving owner answers with its own fresh frame",
+                    newOwner != null && newOwner.Frame.GeometryHash == "sha256:hash-sha256:owner-h"
+                    && GhLink.FindSlot(docG, "doc-owner-drop") == null,
+                    newOwner == null ? "no slot" : newOwner.Frame.GeometryHash);
+                Guid newOwnerDocument;
+                Check("the surviving owner's request is routed to it",
+                    GhLink.BeginRequestSolveForTest(out newOwnerDocument)
+                    && newOwnerDocument == docH, "document=" + newOwnerDocument);
+                Quiet(newOwner);
+                GhLink.EndRequestSolveForTest();
+                GhLink.Unregister(outH);
+
+                // Duplicate roles within one document stay a strict conflict:
+                // hello/schema must not keep the last writer's values.
+                GhLink.RegisterInDocumentForTest(outE1, docE);
+                GhLink.RegisterInDocumentForTest(outE2, docE);
+                GhLink.RegisterInDocumentForTest(paramE, docE);
+                GhLink.PublishStageOut(outE1, "doc-local-dup", true);
+                GhLink.PublishParam(paramE, "doc-local-dup", ParamDeclaration("e"));
+                GhLink.Publish(null);
+                hello = ReadHello(server, "doc-local-dup", true);
+                Check("one Stage Out can publish the key before the duplicate",
+                    hello != null, "no hello");
+                GhLink.PublishStageOut(outE2, "doc-local-dup", false);
+                Check("duplicate Stage Outs in one document are a strict conflict",
+                    GhLink.IsStageConflicted("doc-local-dup")
+                    && GhLink.StageParamCount("doc-local-dup") == 0,
+                    GhLink.StageConflict("doc-local-dup"));
+                GhLink.Publish(null);
+                hello = ReadUntil(server, "hello");
+                Check("an in-document duplicate is withheld from hello",
+                    FindStage(hello, "doc-local-dup") == null,
+                    "stages=" + Json.WriteCanonical(Json.Get(hello, "stages")));
+
+                GhLink.Unregister(outE2);
+                Check("removing the duplicate role clears the local conflict",
+                    !GhLink.IsStageConflicted("doc-local-dup")
+                    && GhLink.StageParamCount("doc-local-dup") == 1,
+                    "conflict=" + GhLink.StageConflict("doc-local-dup")
+                    + " params=" + GhLink.StageParamCount("doc-local-dup"));
+                hello = ReadHello(server, "doc-local-dup", true);
+                Dictionary<string, object> survivorRow = hello == null ? null : FindStage(hello, "doc-local-dup");
+                Check("the remaining Stage Out republishes its stage",
+                    survivorRow != null, hello == null ? "no hello" : Json.WriteCanonical(Json.Get(hello, "stages")));
+                Check("the survivor restores its own enabled value",
+                    survivorRow != null && (bool)Json.Get(survivorRow, "enabled"),
+                    survivorRow == null ? "no row" : Json.WriteCanonical(survivorRow));
+
+                // Removal removes the document's ownership; re-adding a
+                // component recomputes it from the live claims.
+                GhLink.RegisterInDocumentForTest(outF, docF);
+                GhLink.PublishStageOut(outF, "doc-readd", true);
+                GhLink.Publish(null);
+                hello = ReadHello(server, "doc-readd", true);
+                Check("a new document claims its key", hello != null, "no hello");
+
+                GhLink.Unregister(outF);
+                hello = ReadHello(server, "doc-readd", false);
+                Check("removing the last component releases the key",
+                    hello != null && FindStage(hello, "doc-readd") == null,
+                    hello == null ? "no hello" : Json.WriteCanonical(Json.Get(hello, "stages")));
+
+                GhLink.RegisterInDocumentForTest(outF2, docF);
+                GhLink.PublishStageOut(outF2, "doc-readd", true);
+                GhLink.Publish(null);
+                hello = ReadHello(server, "doc-readd", true);
+                Check("re-adding the component reclaims the key",
+                    hello != null && FindStage(hello, "doc-readd") != null,
+                    hello == null ? "no hello" : Json.WriteCanonical(Json.Get(hello, "stages")));
+            }
+            catch (Exception ex)
+            {
+                _failures++;
+                System.Console.WriteLine("FAIL document isolation: " + ex);
+            }
+            finally
+            {
+                GhLink.Unregister(outA);
+                GhLink.Unregister(inA);
+                GhLink.Unregister(outB);
+                GhLink.Unregister(inB);
+                GhLink.Unregister(outC);
+                GhLink.Unregister(paramC);
+                GhLink.Unregister(outE1);
+                GhLink.Unregister(outE2);
+                GhLink.Unregister(paramE);
+                GhLink.Unregister(outF);
+                GhLink.Unregister(outF2);
+                GhLink.Unregister(outG);
+                GhLink.Unregister(outH);
+                GhLink.Stop();
+                server.Dispose();
+            }
+        }
+
+        private static Dictionary<string, object> ParamDeclaration(string id)
+        {
+            var declaration = new Dictionary<string, object>();
+            declaration["id"] = id;
+            declaration["label"] = "Value";
+            declaration["type"] = "float";
+            declaration["default"] = 1.0;
+            declaration["min"] = null;
+            declaration["max"] = null;
+            declaration["step"] = 0.1;
+            declaration["values"] = new List<object>();
+            declaration["group"] = "";
+            return declaration;
+        }
+
+        private static List<Section> Sections()
+        {
+            return new List<Section>
+            {
+                Section.U32("test.unknown", new uint[] { 1 }),
+            };
+        }
+
+        private static StageSlot WaitSlotIn(Guid documentId, string key, string rid)
+        {
+            DateTime end = DateTime.UtcNow.AddSeconds(3);
+            while (DateTime.UtcNow < end)
+            {
+                StageSlot slot = GhLink.FindSlot(documentId, key);
+                if (slot != null && slot.Frame.Rid == rid) return slot;
+                Thread.Sleep(20);
+            }
+            throw new Exception("timed out waiting for stage " + key + " in document " + documentId);
+        }
+
+        /// <summary>Read hellos until one carries (or does not carry) a key.
+        /// Reconcile publishes immediately after a removal; an older heartbeat
+        /// may still be ahead of it in the server's receive queue.</summary>
+        private static Dictionary<string, object> ReadHello(FakeServer server, string key, bool present)
+        {
+            DateTime end = DateTime.UtcNow.AddSeconds(3);
+            while (DateTime.UtcNow < end)
+            {
+                bool closed;
+                byte[] frame = server.TryReadFrame(250, out closed);
+                if (frame == null)
+                {
+                    if (closed) break;
+                    continue;
+                }
+                var decoded = FrameCodec.Decode(frame);
+                if (Json.GetString(decoded.Header, "type") != "hello") continue;
+                bool found = FindStage(decoded.Header, key) != null;
+                if (found == present) return decoded.Header;
+            }
+            return null;
+        }
+
         // ------------------------------------------------------ connection node
 
         /// <summary>The Stageloom Connection component: bad input is a runtime
@@ -756,6 +1110,18 @@ namespace Stageloom.Tests.Console
         }
 
         // ------------------------------------------------------------ helpers
+
+        private static Dictionary<string, object> FindStage(Dictionary<string, object> hello, string key)
+        {
+            var stages = Json.Get(hello, "stages") as List<object>;
+            if (stages == null) return null;
+            foreach (object entry in stages)
+            {
+                var row = entry as Dictionary<string, object>;
+                if (row != null && (string)Json.Get(row, "key") == key) return row;
+            }
+            return null;
+        }
 
         private static void SendRequest(FakeServer server, string key, string rid,
                                         List<Section> sections)

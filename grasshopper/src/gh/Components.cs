@@ -102,8 +102,13 @@ namespace Stageloom
                 return;
             }
             GhLink.PublishStageIn(this, key, enabled);
+            string conflict = GhLink.StageConflict(key);
+            if (!string.IsNullOrEmpty(conflict))
+            {
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, conflict);
+            }
 
-            StageSlot slot = GhLink.Slot(key);
+            StageSlot slot = GhLink.Slot(this, key);
             // Read the frame once: a request arriving during this solve must
             // not pair its sections with this frame's attributes or rid. The
             // epoch is read with it so a late verdict can be dropped.
@@ -186,6 +191,7 @@ namespace Stageloom
                 if (goo is GH_InstanceReference) blocks++;
             if (blocks > 0)
                 Message = Message + " · " + blocks + (blocks == 1 ? " block" : " blocks");
+            if (!string.IsNullOrEmpty(conflict)) Message = conflict;
             GhLink.Publish(OnPingDocument());
         }
     }
@@ -249,8 +255,13 @@ namespace Stageloom
                 return;
             }
             GhLink.PublishStageOut(this, key, enabled);
+            string conflict = GhLink.StageConflict(key);
+            if (!string.IsNullOrEmpty(conflict))
+            {
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, conflict);
+            }
 
-            StageSlot slot = GhLink.Slot(key);
+            StageSlot slot = GhLink.Slot(this, key);
             bool sent = false;
             string outHash = "";
             string status = slot.OutStatus;
@@ -265,7 +276,9 @@ namespace Stageloom
                 da.SetData("Sent", false);
                 da.SetData("Output hash", "");
                 da.SetData("Status", status);
-                Message = GhLink.Connected ? status : "disconnected";
+                Message = !string.IsNullOrEmpty(conflict)
+                    ? conflict
+                    : (GhLink.Connected ? status : "disconnected");
                 GhLink.Publish(OnPingDocument());
                 return;
             }
@@ -407,7 +420,9 @@ namespace Stageloom
             da.SetData("Sent", sent);
             da.SetData("Output hash", outHash);
             da.SetData("Status", status);
-            Message = GhLink.Connected ? status : "disconnected";
+            Message = !string.IsNullOrEmpty(conflict)
+                ? conflict
+                : (GhLink.Connected ? status : "disconnected");
             GhLink.Publish(OnPingDocument());
         }
     }

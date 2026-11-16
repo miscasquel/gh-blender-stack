@@ -1,15 +1,16 @@
 // Stageloom link: the Grasshopper side of the protocol.
 //
-// Owns the socket thread, the per-stage latest slots, and the publication of
-// `hello` and `schema`.
+// Owns the socket thread, the per-document stage slots, and the publication of
+// `hello` and `schema`. A stage key has one owning document; a key claimed by
+// two documents is a strict conflict that is neither published nor solved.
 //
 // Threading: GH objects only on the UI thread. The socket thread decodes frames
-// and stores them in slots; it asks the UI thread to solve through
-// GH_Document.ScheduleSolution(10, ...). Requests are queued by stage key: at
-// most one scheduled solve owns the queue, expires only the requested stages
-// and expires them with ExpireSolution(false) so the already-scheduled solution
-// is the one recompute. Replies are queued and sent by a dedicated sender
-// thread.
+// and stores them in the owning document's slot; it asks the UI thread to solve
+// through a scheduling delegate captured at registration. Requests are queued
+// with their document id: a scheduled solve only expires components in that
+// document, and only expires the requested stages, with ExpireSolution(false)
+// so the already-scheduled solution is the one recompute. Replies are queued and
+// sent by a dedicated sender thread.
 
 using System;
 using System.Collections.Generic;
@@ -59,6 +60,10 @@ namespace Stageloom
     /// <summary>What one stage has been told by Blender.</summary>
     public class StageSlot
     {
+        /// <summary>The document this slot belongs to. Filled when the slot is
+        /// created through the document-scoped lookup; a request only ever
+        /// reads and writes the owning document's slot.</summary>
+        internal Guid DocumentId = Guid.Empty;
         public volatile string Rid = "";
         /// <summary>The rid the current solve is answering. Pinned only for the
         /// stages a request solve names, because a request can overwrite `Rid`
@@ -177,8 +182,15 @@ namespace Stageloom
         // reconfigure can join the old worker without holding the lock the
         // worker needs in its exit path.
         private static readonly object LifecycleGate = new object();
-        private static readonly Dictionary<string, StageSlot> Slots = new Dictionary<string, StageSlot>();
-        private static readonly List<GH_Component> Components = new List<GH_Component>();
+        // Slots are document-scoped: a stage key names at most one slot in
+        // each document. Requests route to the document that owns the key, so
+        // one document's frame, rid and statuses can never be read by another.
+        private static readonly Dictionary<Guid, Dictionary<string, StageSlot>> Slots =
+            new Dictionary<Guid, Dictionary<string, StageSlot>>();
+        // Registrations carry the document identity captured on the UI thread.
+        // Components themselves stay alive in their document; the registry only
+        // needs reference identity plus the owning document id.
+        private static readonly List<Registration> Components = new List<Registration>();
         private static readonly List<string> Notes = new List<string>();
         private static readonly Queue<byte[]> Outbox = new Queue<byte[]>();
         private static long OutboxBytes = 0;  // total frame bytes queued; under Gate
@@ -227,18 +239,54 @@ namespace Stageloom
         // a stage that waits forever. The normal path clears the flag in
         // OnSolutionEnd; this only covers a missed event or a wedged document.
         private const double SolveWatchdogSeconds = 30.0;
-        // Request solves are serialized. PendingRequests holds the latest rid
-        // per stage key; at most one scheduled delegate owns the queue.
-        // _activeRequests is non-null only between that delegate and
-        // SolutionEnd, and names exactly the stages this solve answers.
-        private static readonly Dictionary<string, string> PendingRequests =
-            new Dictionary<string, string>();
-        private static Dictionary<string, string> _activeRequests;  // under Gate
+        // Request solves are serialized. PendingRequests holds the latest
+        // request per stage key together with the document that owns it; at
+        // most one scheduled delegate owns the queue, and it only consumes the
+        // requests for one document. _activeRequests is non-null only between
+        // that delegate and SolutionEnd, and names exactly the stages this
+        // solve answers.
+        private sealed class PendingRequest
+        {
+            public Guid DocumentId;
+            public string Rid;
+            public PendingRequest(Guid documentId, string rid)
+            {
+                DocumentId = documentId;
+                Rid = rid ?? "";
+            }
+        }
+        private static readonly Dictionary<string, PendingRequest> PendingRequests =
+            new Dictionary<string, PendingRequest>();
+        private static Dictionary<string, PendingRequest> _activeRequests;  // under Gate
+        private static Guid _activeDocumentId = Guid.Empty;                // under Gate
+        private static Guid _solveDocumentId = Guid.Empty;                 // under Gate
         private static bool _solveQueued;                            // under Gate
         private static DateTime _solveQueuedAt = DateTime.MinValue;  // under Gate
         // Published once per connection; read and reserved under Gate.
         private static bool _publishedThisConnection = false;
         private static MiniWsClient _client;  // under Gate; Stop disposes it
+
+        // A registered component and the document it belongs to. The document
+        // id is captured on the UI thread; the scheduler uses a separate opaque
+        // scheduling snapshot, so no socket path walks a GH document.
+        private sealed class Registration
+        {
+            public GH_Component Owner;
+            public Guid DocumentId;
+        }
+
+        private sealed class DocumentEntry
+        {
+            public string Name;
+            public int ComponentCount;
+            // Captured on the UI thread at registration. The socket thread only
+            // invokes this opaque snapshot; it never walks the document or calls
+            // OnPingDocument. The remaining off-thread ScheduleSolution call is
+            // Q12's threading item.
+            public Action<GH_Document.GH_ScheduleDelegate> Schedule;
+        }
+        private static readonly Dictionary<Guid, DocumentEntry> Documents =
+            new Dictionary<Guid, DocumentEntry>();
 
         // The keys live components have published. Every publish replaces its
         // owner's one entry, so the union is the document's live key set and
@@ -250,25 +298,38 @@ namespace Stageloom
         private class Claim
         {
             public GH_Component Owner;
+            public Guid DocumentId;
             public ClaimRole Role;
             public string StageKey;
             public string ParamKey;
             public string ParamId;
+            public Dictionary<string, object> Declaration;
+            // Last enabled value this component published and its publish
+            // order. The newest stage claim in the owning document decides the
+            // published enabled flag, exactly as a single document's solves did
+            // before, without retaining state from a removed duplicate.
+            public bool Enabled;
+            public long Sequence;
         }
 
         private static readonly List<Claim> Claims = new List<Claim>();
+        private static long _claimSequence = 0;  // under Gate
 
-        // The published document state: stages present and parameter declarations.
+        // Published state, derived from claims by RebuildPublicationLocked.
+        // A key appears here only while one document owns it and no duplicate
+        // role claim exists. Conflicted keys are withheld from hello, schema,
+        // request solves and rule responses, but their per-document slots are
+        // kept so removing one claimant restores the survivor's state.
         private static readonly Dictionary<string, bool> StageEnabled = new Dictionary<string, bool>();
-        // Stage keys with at least one Stage In claim. Derived by
-        // ReconcileOwnership, published as `has_stage_in`.
         private static readonly HashSet<string> StageHasIn = new HashSet<string>();
-        // Stage keys with at least one Stage Out claim. Derived the same way and
-        // published as `has_stage_out`: a key with only a Stage In is one-way
-        // (Blender sends geometry, but nothing answers).
         private static readonly HashSet<string> StageHasOut = new HashSet<string>();
         private static readonly Dictionary<string, List<Dictionary<string, object>>> StageParams =
             new Dictionary<string, List<Dictionary<string, object>>>();
+        // One owner key -> document id, or a strict conflict message. Derived
+        // from the live claims; never merged last-writer across documents.
+        private static readonly Dictionary<string, Guid> KeyOwners = new Dictionary<string, Guid>();
+        private static readonly Dictionary<string, string> Conflicts =
+            new Dictionary<string, string>();
 
         public static bool Connected { get { return _connected; } }
 
@@ -299,6 +360,16 @@ namespace Stageloom
             get { lock (Gate) { return Claims.Count; } }
         }
 
+        internal static int DocumentCount
+        {
+            get { lock (Gate) { return Documents.Count; } }
+        }
+
+        internal static int ConflictCount
+        {
+            get { lock (Gate) { return Conflicts.Count; } }
+        }
+
         internal static int StageParamCount(string key)
         {
             lock (Gate)
@@ -310,9 +381,70 @@ namespace Stageloom
 
         // ------------------------------------------------------------- registry
 
+        /// <summary>Registers a component with no document identity. Scripts
+        /// and the console tests use this form; product components use the
+        /// document overload so ownership and solving are document-scoped.</summary>
         public static void Register(GH_Component component)
         {
-            lock (Gate) { if (!Components.Contains(component)) Components.Add(component); }
+            RegisterCore(component, Guid.Empty, "", null);
+        }
+
+        /// <summary>Registers a component in the document Grasshopper added it
+        /// to. Called from AddedToDocument on the UI thread; the document id is
+        /// the only stable identity carried into the socket-thread registries.</summary>
+        public static void Register(GH_Component component, GH_Document document)
+        {
+            Guid id = Guid.Empty;
+            string name = "";
+            if (document != null)
+            {
+                id = document.DocumentID;
+                string path = document.FilePath;
+                name = string.IsNullOrEmpty(path)
+                    ? "document " + ShortId(id)
+                    : path;
+            }
+            RegisterCore(component, id, name, document);
+        }
+
+        /// <summary>Test hook: registers a component under a synthetic document
+        /// id. A real GH_Document cannot be constructed without a Rhino
+        /// process, so the console suites exercise isolation with these ids.</summary>
+        internal static void RegisterInDocumentForTest(GH_Component component, Guid documentId)
+        {
+            RegisterCore(component, documentId, "document " + ShortId(documentId), null);
+        }
+
+        private static void RegisterCore(GH_Component component, Guid documentId,
+                                         string documentName, GH_Document reference)
+        {
+            lock (Gate)
+            {
+                if (FindRegistrationLocked(component) == null)
+                {
+                    var registration = new Registration();
+                    registration.Owner = component;
+                    registration.DocumentId = documentId;
+                    Components.Add(registration);
+
+                    DocumentEntry entry;
+                    if (!Documents.TryGetValue(documentId, out entry))
+                    {
+                        entry = new DocumentEntry();
+                        Documents[documentId] = entry;
+                    }
+                    entry.ComponentCount++;
+                    if (!string.IsNullOrEmpty(documentName)) entry.Name = documentName;
+                    if (reference != null)
+                    {
+                        GH_Document document = reference;
+                        entry.Schedule = delegate(GH_Document.GH_ScheduleDelegate work)
+                        {
+                            document.ScheduleSolution(10, work);
+                        };
+                    }
+                }
+            }
             Start();
         }
 
@@ -321,12 +453,33 @@ namespace Stageloom
             bool last;
             lock (Gate)
             {
-                Components.Remove(component);
-                RemoveClaimLocked(component);
+                Registration registration = FindRegistrationLocked(component);
+                if (registration != null)
+                {
+                    Guid documentId = registration.DocumentId;
+                    Components.Remove(registration);
+                    RemoveClaimLocked(component);
+
+                    DocumentEntry entry;
+                    if (Documents.TryGetValue(documentId, out entry))
+                    {
+                        entry.ComponentCount--;
+                        if (entry.ComponentCount <= 0)
+                        {
+                            Documents.Remove(documentId);
+                            RemoveDocumentStateLocked(documentId);
+                        }
+                    }
+                }
+                else
+                {
+                    RemoveClaimLocked(component);
+                }
                 last = Components.Count == 0;
             }
             // The keys this component published go with it; keys another live
-            // component still claims stay.
+            // component still claims stay, and removing a duplicate claimant
+            // clears the conflict for the survivor.
             ReconcileOwnership();
             if (last)
             {
@@ -334,18 +487,7 @@ namespace Stageloom
                 // retrying a connection nothing will answer on. Start() runs
                 // again on the next Register.
                 Stop();
-                lock (Gate)
-                {
-                    Slots.Clear();
-                    StageEnabled.Clear();
-                    StageHasIn.Clear();
-                    StageHasOut.Clear();
-                    StageParams.Clear();
-                    _lastStages.Clear();
-                    _lastStageIns.Clear();
-                    _lastSchema.Clear();
-                    _publishedThisConnection = false;
-                }
+                lock (Gate) { ClearAllLocked(); }
             }
         }
 
@@ -381,11 +523,12 @@ namespace Stageloom
                 claim.StageKey = key;
                 claim.ParamKey = null;
                 claim.ParamId = null;
-                StageEnabled[key] = enabled;
-                // A Stage In makes the stage a geometry consumer. Reconcile
-                // prunes the flag when no live Input claim names the key.
-                if (role == ClaimRole.Input) StageHasIn.Add(key);
-                else if (role == ClaimRole.Output) StageHasOut.Add(key);
+                claim.Declaration = null;
+                claim.Enabled = enabled;
+                claim.Sequence = ++_claimSequence;
+                // Rebuild only this document's published view. A key claimed by
+                // two documents stays out of hello/schema until one leaves.
+                RebuildPublicationLocked();
             }
         }
 
@@ -404,16 +547,8 @@ namespace Stageloom
                 claim.StageKey = null;
                 claim.ParamKey = key;
                 claim.ParamId = id;
-
-                List<Dictionary<string, object>> list;
-                if (!StageParams.TryGetValue(key, out list))
-                {
-                    list = new List<Dictionary<string, object>>();
-                    StageParams[key] = list;
-                }
-                for (int i = 0; i < list.Count; i++)
-                    if (Json.GetString(list[i], "id") == id) { list[i] = declaration; return; }
-                list.Add(declaration);
+                claim.Declaration = declaration;
+                RebuildPublicationLocked();
             }
         }
 
@@ -434,6 +569,8 @@ namespace Stageloom
                     claim.StageKey = null;
                     claim.ParamKey = null;
                     claim.ParamId = null;
+                    claim.Declaration = null;
+                    RebuildPublicationLocked();
                     return;
                 }
             }
@@ -459,17 +596,32 @@ namespace Stageloom
             }
         }
 
+        /// <summary>The owner's slot for a key. Product components call this
+        /// overload so a solve reads and writes only its own document's state.
+        /// Called on the UI thread.</summary>
+        public static StageSlot Slot(GH_Component owner, string key)
+        {
+            lock (Gate)
+            {
+                Guid documentId = DocumentIdLocked(owner);
+                return GetOrCreateSlotLocked(documentId, key ?? "");
+            }
+        }
+
+        /// <summary>Compatibility form for scripts and the console suites: the
+        /// owning document's slot when one document owns the key, otherwise the
+        /// document-less slot the tests use.</summary>
         public static StageSlot Slot(string key)
         {
             lock (Gate)
             {
-                StageSlot slot;
-                if (!Slots.TryGetValue(key ?? "", out slot))
-                {
-                    slot = new StageSlot();
-                    Slots[key ?? ""] = slot;
-                }
-                return slot;
+                string name = key ?? "";
+                Guid owner;
+                if (KeyOwners.TryGetValue(name, out owner))
+                    return GetOrCreateSlotLocked(owner, name);
+                StageSlot existing = FindAnySlotLocked(name);
+                if (existing != null) return existing;
+                return GetOrCreateSlotLocked(Guid.Empty, name);
             }
         }
 
@@ -489,12 +641,14 @@ namespace Stageloom
         /// that key changed its inputs. The answer uses the slot's own rid and
         /// is gated by <see cref="StageSlot.ShouldSend"/> like a user-driven
         /// solve. A stage with a newer request queued is excluded: this solve
-        /// would read the old inputs and label them with that newer rid.</summary>
+        /// would read the old inputs and label them with that newer rid. A
+        /// conflicted key never answers.</summary>
         public static bool ShouldAnswer(string key)
         {
             lock (Gate)
             {
                 string name = key ?? "";
+                if (Conflicts.ContainsKey(name)) return false;
                 if (_activeRequests == null || _activeRequests.ContainsKey(name)) return true;
                 return !PendingRequests.ContainsKey(name);
             }
@@ -507,19 +661,51 @@ namespace Stageloom
         {
             lock (Gate)
             {
-                return _activeRequests != null && _activeRequests.ContainsKey(key ?? "");
+                string name = key ?? "";
+                return !Conflicts.ContainsKey(name)
+                       && _activeRequests != null && _activeRequests.ContainsKey(name);
             }
         }
 
-        /// <summary>The slot for a key, or null. Never creates one: used by paths
-        /// that must not grow the registry (an error naming a stage nobody has).</summary>
+        /// <summary>The owning document's slot for a key, or null. Never
+        /// creates one: used by paths that must not grow the registry (an error
+        /// naming a stage nobody has).</summary>
         public static StageSlot FindSlot(string key)
         {
             lock (Gate)
             {
-                StageSlot slot;
-                return Slots.TryGetValue(key ?? "", out slot) ? slot : null;
+                string name = key ?? "";
+                // A conflicted key has no owner: an inbound error naming it
+                // must not mark either document's stage.
+                if (Conflicts.ContainsKey(name)) return null;
+                Guid owner;
+                if (KeyOwners.TryGetValue(name, out owner))
+                    return FindSlotLocked(owner, name);
+                return FindAnySlotLocked(name);
             }
+        }
+
+        /// <summary>The slot for one exact document. Internal so the console
+        /// suites can prove requests never create a slot in another document.</summary>
+        internal static StageSlot FindSlot(Guid documentId, string key)
+        {
+            lock (Gate) { return FindSlotLocked(documentId, key ?? ""); }
+        }
+
+        /// <summary>The duplicate-key diagnostic for a stage, or "" when the
+        /// key has one owner. Components surface it as a runtime note.</summary>
+        internal static string StageConflict(string key)
+        {
+            lock (Gate)
+            {
+                string message;
+                return Conflicts.TryGetValue(key ?? "", out message) ? message : "";
+            }
+        }
+
+        internal static bool IsStageConflicted(string key)
+        {
+            lock (Gate) { return Conflicts.ContainsKey(key ?? ""); }
         }
 
         /// <summary>The solve verdict for a stage, written under the same lock
@@ -645,11 +831,13 @@ namespace Stageloom
                 // one, and no solve queued for it may suppress the next.
                 PendingRequests.Clear();
                 _activeRequests = null;
+                _activeDocumentId = Guid.Empty;
+                _solveDocumentId = Guid.Empty;
                 _solveQueued = false;
                 _solveQueuedAt = DateTime.MinValue;
                 // No solve scheduled for the old session may suppress the next
                 // session's retry.
-                foreach (StageSlot slot in Slots.Values)
+                foreach (StageSlot slot in AllSlotsLocked())
                 {
                     slot.SolveInFlight = false;
                     slot.SolveStartedAt = DateTime.MinValue;
@@ -725,7 +913,7 @@ namespace Stageloom
                         // that carried the frame, not about the document. A new
                         // peer has not received the last answer, so a user-driven
                         // solve must send it again even when the bytes match.
-                        foreach (StageSlot slot in Slots.Values)
+                        foreach (StageSlot slot in AllSlotsLocked())
                             slot.MarkSent("", "");
                     }
                     backoffMs = 500;
@@ -876,26 +1064,48 @@ namespace Stageloom
             string mode = geom == null ? null : Json.GetString(geom, "mode");
             string hash = geom == null ? null : Json.GetString(geom, "hash");
 
-            StageSlot slot;
+            StageSlot slot = null;
             bool noComponents = false;
+            string conflict = "";
             lock (Gate)
             {
-                Slots.TryGetValue(key ?? "", out slot);
-                if (slot == null)
+                // A key two documents claim has no proven owner. Refuse it
+                // before a slot is touched: neither document may answer, and
+                // neither document's state may overwrite the other.
+                if (Conflicts.TryGetValue(key, out conflict))
                 {
-                    // No component means no key can ever be claimed; do not grow
-                    // the registry for a request nothing can answer.
-                    if (Components.Count == 0)
+                    // The frame is answered below, outside the lock.
+                }
+                else
+                {
+                    Guid ownerId = Guid.Empty;
+                    bool owned = KeyOwners.TryGetValue(key, out ownerId);
+                    slot = FindSlotLocked(ownerId, key);
+                    if (slot == null)
                     {
-                        noComponents = true;
+                        // No component means no key can ever be claimed; do not
+                        // grow the registry for a request nothing can answer.
+                        if (Components.Count == 0)
+                        {
+                            noComponents = true;
+                        }
+                        else
+                        {
+                            slot = GetOrCreateSlotLocked(ownerId, key);
+                            slot.Provisional = !owned;
+                        }
                     }
-                    else
+                    else if (!owned)
                     {
-                        slot = new StageSlot();
-                        slot.Provisional = !IsOwnedLocked(key);
-                        Slots[key ?? ""] = slot;
+                        slot.Provisional = true;
                     }
                 }
+            }
+            if (!string.IsNullOrEmpty(conflict))
+            {
+                Note(conflict);
+                Enqueue(ErrorFrame("duplicate_stage", conflict, key, rid));
+                return;
             }
             if (noComponents)
             {
@@ -1032,53 +1242,75 @@ namespace Stageloom
         /// queued or in flight joins the next batch instead of scheduling a
         /// second solve. A retry whose rid the slot has already replaced is
         /// dropped: queueing it would answer the newer request with inputs it
-        /// never sent.</summary>
+        /// never sent. The owning document id travels with the request so the
+        /// scheduled solve never has to guess an origin component.</summary>
         internal static void RequestStage(string key, string rid)
         {
             if (string.IsNullOrEmpty(key)) return;
             lock (Gate)
             {
-                StageSlot slot;
-                if (Slots.TryGetValue(key, out slot)
+                string conflict;
+                if (Conflicts.TryGetValue(key, out conflict)) return;
+                Guid owner = Guid.Empty;
+                bool owned = KeyOwners.TryGetValue(key, out owner);
+                StageSlot slot = owned ? FindSlotLocked(owner, key) : FindAnySlotLocked(key);
+                if (slot != null
                     && !string.IsNullOrEmpty(slot.Rid) && slot.Rid != (rid ?? ""))
                     return;
-                PendingRequests[key] = rid ?? "";
+                Guid documentId = slot != null
+                    ? slot.DocumentId
+                    : (owned ? owner : Guid.Empty);
+                PendingRequests[key] = new PendingRequest(documentId, rid);
             }
             SchedulePendingSolve();
         }
 
-        /// <summary>Schedules the one request solve that owns the pending map.
-        /// The delegate runs on the GH UI thread; when there is no document or
-        /// component the queue is released and the pending requests stay for
-        /// the retry path.</summary>
+        /// <summary>Schedules the request solve that owns the pending map. The
+        /// delegate runs on the GH UI thread. The document reference was
+        /// captured on the UI thread at registration; no OnPingDocument call is
+        /// made here. When no pending document has a live reference the queue
+        /// is released and the requests stay for the retry path.</summary>
         private static void SchedulePendingSolve()
         {
-            GH_Component origin;
+            Guid documentId = Guid.Empty;
+            Action<GH_Document.GH_ScheduleDelegate> schedule = null;
             lock (Gate)
             {
                 if (_solveQueued || PendingRequests.Count == 0) return;
+                Guid first = Guid.Empty;
+                foreach (KeyValuePair<string, PendingRequest> pair in PendingRequests)
+                {
+                    if (first == Guid.Empty) first = pair.Value.DocumentId;
+                    DocumentEntry entry;
+                    if (Documents.TryGetValue(pair.Value.DocumentId, out entry)
+                        && entry.Schedule != null)
+                    {
+                        documentId = pair.Value.DocumentId;
+                        schedule = entry.Schedule;
+                        break;
+                    }
+                }
+                if (schedule == null)
+                {
+                    // Keep the first pending document id for the diagnostic; the
+                    // pending requests are not lost and the retry path re-runs.
+                    documentId = first;
+                    Note("request received, but no active document; held in the slot");
+                    return;
+                }
+                // Reserve the one scheduled delegate before leaving the lock:
+                // two requests for the same document coalesce, and a request
+                // for another document waits for the next batch.
                 _solveQueued = true;
                 _solveQueuedAt = DateTime.UtcNow;
-                origin = Components.Count > 0 ? Components[0] : null;
-            }
-            if (origin == null)
-            {
-                ReleaseQueuedSolve();
-                Note("request received, but no Stageloom component is on the canvas");
-                return;
-            }
-            GH_Document doc = null;
-            try { doc = origin.OnPingDocument(); }
-            catch (Exception ex) { Note("OnPingDocument failed: " + FirstLine(ex)); }
-            if (doc == null)
-            {
-                ReleaseQueuedSolve();
-                Note("request received, but no active document; held in the slot");
-                return;
+                _solveDocumentId = documentId;
             }
             try
             {
-                doc.ScheduleSolution(10, delegate(GH_Document d) { RunRequestSolve(d); });
+                schedule(new GH_Document.GH_ScheduleDelegate(delegate(GH_Document d)
+                {
+                    RunRequestSolve(d, documentId);
+                }));
             }
             catch (Exception ex)
             {
@@ -1093,20 +1325,21 @@ namespace Stageloom
             {
                 _solveQueued = false;
                 _solveQueuedAt = DateTime.MinValue;
+                _solveDocumentId = Guid.Empty;
             }
         }
 
         /// <summary>The scheduled solution's work. The pending map becomes the
         /// active context first, so requests arriving during the solve queue
-        /// for the next one. Then only the requested stages are expired: Stage
-        /// In and Params are sources, Stage Out is the explicit sink, so a
-        /// branch that is not connected still answers. recompute=false expires
-        /// those objects and their dependents without asking the document for
-        /// another solution; this scheduled solution is the one that
-        /// recomputes.</summary>
-        private static void RunRequestSolve(GH_Document document)
+        /// for the next one. Then only the requested stages, in the owning
+        /// document, are expired: Stage In and Params are sources, Stage Out is
+        /// the explicit sink, so a branch that is not connected still answers.
+        /// recompute=false expires those objects and their dependents without
+        /// asking the document for another solution; this scheduled solution is
+        /// the one that recomputes.</summary>
+        private static void RunRequestSolve(GH_Document document, Guid documentId)
         {
-            List<GH_Component> expire = BeginRequestSolve();
+            List<GH_Component> expire = BeginRequestSolve(documentId);
             if (expire == null)
             {
                 // A duplicate delegate can arrive when a queued callback was
@@ -1118,6 +1351,7 @@ namespace Stageloom
                     {
                         _solveQueued = false;
                         _solveQueuedAt = DateTime.MinValue;
+                        _solveDocumentId = Guid.Empty;
                     }
                 }
                 return;
@@ -1130,18 +1364,30 @@ namespace Stageloom
             }
         }
 
-        /// <summary>Moves the pending requests into the active solve context.
-        /// Returns the components to expire, or null when another delegate has
-        /// already taken the batch. The caller must not hold Gate while
-        /// expiring: ExpireSolution is a GH API call on the UI thread.</summary>
-        private static List<GH_Component> BeginRequestSolve()
+        private static Guid FirstPendingDocumentLocked()
+        {
+            foreach (KeyValuePair<string, PendingRequest> pair in PendingRequests)
+                return pair.Value.DocumentId;
+            return Guid.Empty;
+        }
+
+        /// <summary>Moves one document's pending requests into the active solve
+        /// context. Returns the components to expire, or null when that
+        /// document has nothing pending or another delegate already owns the
+        /// batch. The caller must not hold Gate while expiring: ExpireSolution
+        /// is a GH API call on the UI thread.</summary>
+        private static List<GH_Component> BeginRequestSolve(Guid documentId)
         {
             lock (Gate)
             {
-                if (PendingRequests.Count == 0) return null;
-                var active = new Dictionary<string, string>(PendingRequests);
-                PendingRequests.Clear();
+                var active = new Dictionary<string, PendingRequest>();
+                foreach (KeyValuePair<string, PendingRequest> pair in PendingRequests)
+                    if (pair.Value.DocumentId == documentId)
+                        active[pair.Key] = pair.Value;
+                if (active.Count == 0) return null;
+                foreach (string key in active.Keys) PendingRequests.Remove(key);
                 _activeRequests = active;
+                _activeDocumentId = documentId;
                 // The batch owns the queue from the delegate until
                 // SolutionEnd; a request arriving meanwhile must not schedule a
                 // second solve. Restored here as well because the retry path
@@ -1150,34 +1396,36 @@ namespace Stageloom
                 // A solve that reached its delegate is alive: the watchdog
                 // measures this batch from here, not from the schedule call.
                 _solveQueuedAt = DateTime.UtcNow;
+                _solveDocumentId = documentId;
                 DateTime started = DateTime.UtcNow;
-                foreach (KeyValuePair<string, string> pair in active)
+                foreach (KeyValuePair<string, PendingRequest> pair in active)
                 {
-                    StageSlot slot;
-                    if (!Slots.TryGetValue(pair.Key, out slot)) continue;
+                    StageSlot slot = FindSlotLocked(documentId, pair.Key);
+                    if (slot == null) continue;
                     // Pin the answer rid per requested key before its inputs
                     // are read: a request arriving mid-solve overwrites Rid,
                     // and answering the newer rid would relabel this answer.
-                    slot.SolveRid = pair.Value;
+                    slot.SolveRid = pair.Value.Rid;
                     // Only this batch's stages are in flight. RetryStaleSolves
                     // must not schedule a second solve for a merely slow one.
                     slot.SolveInFlight = true;
                     slot.SolveStartedAt = started;
                 }
-                return StageComponentsLocked(active.Keys);
+                return StageComponentsLocked(active.Keys, documentId);
             }
         }
 
-        /// <summary>Every component owning one of <paramref name="keys"/>:
-        /// Stage In and Stage Out with that stage key, Params declaring it.
-        /// Deduplicated by owner reference; the Stage Out is included whether
-        /// or not its input is connected. Under Gate.</summary>
-        private static List<GH_Component> StageComponentsLocked(IEnumerable<string> keys)
+        /// <summary>Every component in one document owning one of
+        /// <paramref name="keys"/>: Stage In and Stage Out with that stage key,
+        /// Params declaring it. Deduplicated by owner reference; the Stage Out
+        /// is included whether or not its input is connected. Under Gate.</summary>
+        private static List<GH_Component> StageComponentsLocked(IEnumerable<string> keys, Guid documentId)
         {
             var wanted = new HashSet<string>(keys);
             var owners = new List<GH_Component>();
             foreach (Claim claim in Claims)
             {
+                if (claim.DocumentId != documentId) continue;
                 bool owns;
                 if (claim.Role == ClaimRole.Param)
                     owns = !string.IsNullOrEmpty(claim.ParamKey) && wanted.Contains(claim.ParamKey);
@@ -1197,7 +1445,17 @@ namespace Stageloom
         /// <see cref="EndRequestSolveForTest"/>. Not public API.</summary>
         internal static bool BeginRequestSolveForTest()
         {
-            return BeginRequestSolve() != null;
+            Guid documentId;
+            lock (Gate) { documentId = FirstPendingDocumentLocked(); }
+            return BeginRequestSolve(documentId) != null;
+        }
+
+        /// <summary>Test hook: like <see cref="BeginRequestSolveForTest"/> but
+        /// also reports which document's batch started.</summary>
+        internal static bool BeginRequestSolveForTest(out Guid documentId)
+        {
+            lock (Gate) { documentId = FirstPendingDocumentLocked(); }
+            return BeginRequestSolve(documentId) != null;
         }
 
         /// <summary>Test hook: finishes the active request context exactly as
@@ -1235,14 +1493,16 @@ namespace Stageloom
             {
                 foreach (string key in _activeRequests.Keys)
                 {
-                    StageSlot slot;
-                    if (!Slots.TryGetValue(key, out slot)) continue;
+                    StageSlot slot = FindSlotLocked(_activeDocumentId, key);
+                    if (slot == null) continue;
                     slot.SolveRid = "";
                     slot.SolveInFlight = false;
                     slot.SolveStartedAt = DateTime.MinValue;
                 }
                 _activeRequests = null;
             }
+            _activeDocumentId = Guid.Empty;
+            _solveDocumentId = Guid.Empty;
             _solveQueued = false;
             _solveQueuedAt = DateTime.MinValue;
             return PendingRequests.Count > 0;
@@ -1252,7 +1512,8 @@ namespace Stageloom
         /// keys, parameter declarations, and the slots they served. A
         /// provisional slot whose key nobody claimed answers `unknown_stage`
         /// before it goes, so the peer sees the mismatch instead of a
-        /// timeout.</summary>
+        /// timeout. Conflicted keys keep their per-document slots so removing
+        /// one claimant restores the survivor's state.</summary>
         private static void ReconcileOwnership()
         {
             var refused = new List<KeyValuePair<string, string>>();
@@ -1265,74 +1526,349 @@ namespace Stageloom
                 for (int i = Claims.Count - 1; i >= 0; i--)
                     if (!IsRegisteredLocked(Claims[i].Owner)) Claims.RemoveAt(i);
 
-                var stageKeys = new HashSet<string>();
-                var stageInKeys = new HashSet<string>();
-                var stageOutKeys = new HashSet<string>();
-                var paramIds = new Dictionary<string, HashSet<string>>();
+                RebuildPublicationLocked();
+
+                var claimedByDocument = new Dictionary<Guid, HashSet<string>>();
                 foreach (Claim claim in Claims)
                 {
-                    if (!string.IsNullOrEmpty(claim.StageKey))
+                    string key = ClaimKey(claim);
+                    if (string.IsNullOrEmpty(key)) continue;
+                    HashSet<string> keys;
+                    if (!claimedByDocument.TryGetValue(claim.DocumentId, out keys))
                     {
-                        stageKeys.Add(claim.StageKey);
-                        if (claim.Role == ClaimRole.Input) stageInKeys.Add(claim.StageKey);
-                        else if (claim.Role == ClaimRole.Output) stageOutKeys.Add(claim.StageKey);
+                        keys = new HashSet<string>();
+                        claimedByDocument[claim.DocumentId] = keys;
                     }
-                    if (!string.IsNullOrEmpty(claim.ParamKey) && claim.ParamId != null)
+                    keys.Add(key);
+                }
+
+                foreach (KeyValuePair<Guid, Dictionary<string, StageSlot>> document
+                         in new List<KeyValuePair<Guid, Dictionary<string, StageSlot>>>(Slots))
+                {
+                    HashSet<string> claimed;
+                    claimedByDocument.TryGetValue(document.Key, out claimed);
+                    var documentSlots = new List<KeyValuePair<string, StageSlot>>(document.Value);
+                    foreach (KeyValuePair<string, StageSlot> pair in documentSlots)
                     {
-                        HashSet<string> ids;
-                        if (!paramIds.TryGetValue(claim.ParamKey, out ids))
+                        if (claimed != null && claimed.Contains(pair.Key))
                         {
-                            ids = new HashSet<string>();
-                            paramIds[claim.ParamKey] = ids;
+                            pair.Value.Provisional = false;
+                            continue;
                         }
-                        ids.Add(claim.ParamId);
+                        document.Value.Remove(pair.Key);
+                        if (pair.Value.Provisional && !string.IsNullOrEmpty(pair.Value.Rid))
+                            refused.Add(new KeyValuePair<string, string>(pair.Key, pair.Value.Rid));
                     }
-                }
-
-                foreach (string key in new List<string>(StageEnabled.Keys))
-                    if (!stageKeys.Contains(key)) StageEnabled.Remove(key);
-
-                // has_stage_in is derived from live claims, not published:
-                // a key has a Stage In exactly while one Input claim names it.
-                StageHasIn.Clear();
-                foreach (string key in stageInKeys) StageHasIn.Add(key);
-                StageHasOut.Clear();
-                foreach (string key in stageOutKeys) StageHasOut.Add(key);
-
-                foreach (string key in new List<string>(StageParams.Keys))
-                {
-                    HashSet<string> ids;
-                    if (paramIds.TryGetValue(key, out ids))
-                    {
-                        List<Dictionary<string, object>> list = StageParams[key];
-                        for (int i = list.Count - 1; i >= 0; i--)
-                            if (!ids.Contains(Json.GetString(list[i], "id") ?? ""))
-                                list.RemoveAt(i);
-                        if (list.Count > 0) continue;
-                    }
-                    StageParams.Remove(key);
-                }
-
-                foreach (KeyValuePair<string, StageSlot> pair in new List<KeyValuePair<string, StageSlot>>(Slots))
-                {
-                    if (stageKeys.Contains(pair.Key) || paramIds.ContainsKey(pair.Key))
-                    {
-                        pair.Value.Provisional = false;
-                        continue;
-                    }
-                    Slots.Remove(pair.Key);
-                    if (pair.Value.Provisional && !string.IsNullOrEmpty(pair.Value.Rid))
-                        refused.Add(new KeyValuePair<string, string>(pair.Key, pair.Value.Rid));
+                    if (document.Value.Count == 0) Slots.Remove(document.Key);
                 }
             }
             foreach (KeyValuePair<string, string> entry in refused)
                 Enqueue(ErrorFrame("unknown_stage",
                     "no Stageloom component claims this stage key", entry.Key, entry.Value));
+            // Ownership and conflict changes must reach the peer now: a key that
+            // just resolved has to appear in hello/schema without waiting for
+            // the next canvas solve or heartbeat.
+            SendPublication();
         }
 
-        private static bool IsOwnedLocked(string key)
+        /// <summary>Rebuilds the published view from the live claims. One key
+        /// is published only when every claim for it belongs to one document
+        /// and no role is duplicated within that document. A key two documents
+        /// claim is a strict conflict: no hello row, no schema, no solve, and
+        /// no document's state overwrites the other. Under Gate.</summary>
+        private static void RebuildPublicationLocked()
         {
-            return StageEnabled.ContainsKey(key ?? "") || StageParams.ContainsKey(key ?? "");
+            var keyClaims = new Dictionary<string, List<Claim>>();
+            foreach (Claim claim in Claims)
+            {
+                string key = ClaimKey(claim);
+                if (string.IsNullOrEmpty(key)) continue;
+                List<Claim> list;
+                if (!keyClaims.TryGetValue(key, out list))
+                {
+                    list = new List<Claim>();
+                    keyClaims[key] = list;
+                }
+                list.Add(claim);
+            }
+
+            var owners = new Dictionary<string, Guid>();
+            var conflicts = new Dictionary<string, string>();
+            var enabled = new Dictionary<string, bool>();
+            var hasIn = new HashSet<string>();
+            var hasOut = new HashSet<string>();
+            var parameters = new Dictionary<string, List<Dictionary<string, object>>>();
+
+            foreach (KeyValuePair<string, List<Claim>> pair in keyClaims)
+            {
+                string key = pair.Key;
+                List<Claim> claims = pair.Value;
+                var documents = new HashSet<Guid>();
+                foreach (Claim claim in claims) documents.Add(claim.DocumentId);
+
+                string conflict = null;
+                Guid owner = Guid.Empty;
+                if (documents.Count > 1)
+                {
+                    conflict = ConflictMessage(key, documents);
+                }
+                else
+                {
+                    owner = claims[0].DocumentId;
+                    int inputs = 0;
+                    int outputs = 0;
+                    var paramIds = new Dictionary<string, int>();
+                    foreach (Claim claim in claims)
+                    {
+                        if (claim.Role == ClaimRole.Input) inputs++;
+                        else if (claim.Role == ClaimRole.Output) outputs++;
+                        else if (claim.Role == ClaimRole.Param
+                                 && !string.IsNullOrEmpty(claim.ParamId))
+                        {
+                            int count;
+                            paramIds.TryGetValue(claim.ParamId, out count);
+                            paramIds[claim.ParamId] = count + 1;
+                        }
+                    }
+                    if (inputs > 1)
+                        conflict = RoleConflictMessage(key, owner, "more than one Stage In");
+                    else if (outputs > 1)
+                        conflict = RoleConflictMessage(key, owner, "more than one Stage Out");
+                    else
+                    {
+                        foreach (KeyValuePair<string, int> id in paramIds)
+                        {
+                            if (id.Value > 1)
+                            {
+                                conflict = RoleConflictMessage(
+                                    key, owner, "duplicate parameter id " + id.Key);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(conflict))
+                {
+                    conflicts[key] = conflict;
+                    continue;
+                }
+
+                owners[key] = owner;
+                bool stageEnabled = true;
+                long newest = long.MinValue;
+                bool stageCount = false;
+                var paramList = new List<Dictionary<string, object>>();
+                foreach (Claim claim in claims)
+                {
+                    if (claim.Role == ClaimRole.Param)
+                    {
+                        if (claim.Declaration != null) paramList.Add(claim.Declaration);
+                        continue;
+                    }
+                    stageCount = true;
+                    if (claim.Sequence >= newest)
+                    {
+                        newest = claim.Sequence;
+                        stageEnabled = claim.Enabled;
+                    }
+                    if (claim.Role == ClaimRole.Input) hasIn.Add(key);
+                    else if (claim.Role == ClaimRole.Output) hasOut.Add(key);
+                }
+                if (stageCount) enabled[key] = stageEnabled;
+                if (paramList.Count > 0) parameters[key] = paramList;
+            }
+
+            foreach (KeyValuePair<string, string> pair in conflicts)
+            {
+                string previous;
+                if (!Conflicts.TryGetValue(pair.Key, out previous) || previous != pair.Value)
+                    Note(pair.Value);
+            }
+            foreach (string key in Conflicts.Keys)
+            {
+                if (!conflicts.ContainsKey(key))
+                    Note("duplicate stage key '" + key + "' resolved; the surviving claim owns it");
+            }
+
+            // A conflicted key must not answer an already queued request. The
+            // active batch drops it too; ShouldAnswer also refuses it, so a
+            // component already running cannot emit a response.
+            foreach (string key in conflicts.Keys)
+            {
+                PendingRequests.Remove(key);
+                if (_activeRequests != null && _activeRequests.ContainsKey(key))
+                {
+                    _activeRequests.Remove(key);
+                    foreach (Dictionary<string, StageSlot> documentSlots in Slots.Values)
+                    {
+                        StageSlot slot;
+                        if (!documentSlots.TryGetValue(key, out slot)) continue;
+                        slot.SolveRid = "";
+                        slot.SolveInFlight = false;
+                        slot.SolveStartedAt = DateTime.MinValue;
+                    }
+                }
+            }
+
+            StageEnabled.Clear();
+            foreach (KeyValuePair<string, bool> pair in enabled) StageEnabled[pair.Key] = pair.Value;
+            StageHasIn.Clear();
+            foreach (string key in hasIn) StageHasIn.Add(key);
+            StageHasOut.Clear();
+            foreach (string key in hasOut) StageHasOut.Add(key);
+            StageParams.Clear();
+            foreach (KeyValuePair<string, List<Dictionary<string, object>>> pair in parameters)
+                StageParams[pair.Key] = pair.Value;
+            KeyOwners.Clear();
+            foreach (KeyValuePair<string, Guid> pair in owners) KeyOwners[pair.Key] = pair.Value;
+            Conflicts.Clear();
+            foreach (KeyValuePair<string, string> pair in conflicts) Conflicts[pair.Key] = pair.Value;
+        }
+
+        private static string ClaimKey(Claim claim)
+        {
+            if (claim.Role == ClaimRole.Param) return claim.ParamKey;
+            return claim.StageKey;
+        }
+
+        private static string ConflictMessage(string key, HashSet<Guid> documents)
+        {
+            var names = new List<string>();
+            foreach (Guid id in documents) names.Add(DocumentNameLocked(id));
+            names.Sort(StringComparer.Ordinal);
+            return "duplicate stage key '" + key + "': claimed by "
+                   + string.Join(" and ", names.ToArray())
+                   + "; not publishing or solving it until one document releases it";
+        }
+
+        private static string RoleConflictMessage(string key, Guid owner, string problem)
+        {
+            return "duplicate stage key '" + key + "': " + problem + " in "
+                   + DocumentNameLocked(owner)
+                   + "; not publishing or solving it until one component is removed";
+        }
+
+        private static string DocumentNameLocked(Guid id)
+        {
+            DocumentEntry entry;
+            if (Documents.TryGetValue(id, out entry) && !string.IsNullOrEmpty(entry.Name))
+                return entry.Name;
+            return "document " + ShortId(id);
+        }
+
+        private static string ShortId(Guid id)
+        {
+            string text = id.ToString("N");
+            return text.Length > 8 ? text.Substring(0, 8) : text;
+        }
+
+        private static Registration FindRegistrationLocked(GH_Component owner)
+        {
+            foreach (Registration registration in Components)
+                if (object.ReferenceEquals(registration.Owner, owner)) return registration;
+            return null;
+        }
+
+        private static Guid DocumentIdLocked(GH_Component owner)
+        {
+            Registration registration = FindRegistrationLocked(owner);
+            return registration == null ? Guid.Empty : registration.DocumentId;
+        }
+
+        private static StageSlot FindSlotLocked(Guid documentId, string key)
+        {
+            Dictionary<string, StageSlot> documentSlots;
+            if (!Slots.TryGetValue(documentId, out documentSlots)) return null;
+            StageSlot slot;
+            return documentSlots.TryGetValue(key ?? "", out slot) ? slot : null;
+        }
+
+        private static StageSlot GetOrCreateSlotLocked(Guid documentId, string key)
+        {
+            Dictionary<string, StageSlot> documentSlots;
+            if (!Slots.TryGetValue(documentId, out documentSlots))
+            {
+                documentSlots = new Dictionary<string, StageSlot>();
+                Slots[documentId] = documentSlots;
+            }
+            string name = key ?? "";
+            StageSlot slot;
+            if (!documentSlots.TryGetValue(name, out slot))
+            {
+                slot = new StageSlot();
+                slot.DocumentId = documentId;
+                documentSlots[name] = slot;
+            }
+            return slot;
+        }
+
+        private static StageSlot FindAnySlotLocked(string key)
+        {
+            foreach (Dictionary<string, StageSlot> documentSlots in Slots.Values)
+            {
+                StageSlot slot;
+                if (documentSlots.TryGetValue(key ?? "", out slot)) return slot;
+            }
+            return null;
+        }
+
+        private static List<StageSlot> AllSlotsLocked()
+        {
+            var slots = new List<StageSlot>();
+            foreach (Dictionary<string, StageSlot> documentSlots in Slots.Values)
+                foreach (StageSlot slot in documentSlots.Values)
+                    slots.Add(slot);
+            return slots;
+        }
+
+        private static void RemoveDocumentStateLocked(Guid documentId)
+        {
+            Slots.Remove(documentId);
+
+            var pending = new List<string>();
+            foreach (KeyValuePair<string, PendingRequest> pair in PendingRequests)
+                if (pair.Value.DocumentId == documentId) pending.Add(pair.Key);
+            foreach (string key in pending) PendingRequests.Remove(key);
+
+            if (_activeRequests != null)
+            {
+                var active = new List<string>();
+                foreach (KeyValuePair<string, PendingRequest> pair in _activeRequests)
+                    if (pair.Value.DocumentId == documentId) active.Add(pair.Key);
+                foreach (string key in active) _activeRequests.Remove(key);
+            }
+            if (_solveDocumentId == documentId && _activeRequests == null)
+            {
+                _solveQueued = false;
+                _solveQueuedAt = DateTime.MinValue;
+                _solveDocumentId = Guid.Empty;
+            }
+        }
+
+        private static void ClearAllLocked()
+        {
+            Slots.Clear();
+            Documents.Clear();
+            Claims.Clear();
+            _claimSequence = 0;
+            KeyOwners.Clear();
+            Conflicts.Clear();
+            StageEnabled.Clear();
+            StageHasIn.Clear();
+            StageHasOut.Clear();
+            StageParams.Clear();
+            PendingRequests.Clear();
+            _activeRequests = null;
+            _activeDocumentId = Guid.Empty;
+            _solveDocumentId = Guid.Empty;
+            _solveQueued = false;
+            _solveQueuedAt = DateTime.MinValue;
+            _lastStages.Clear();
+            _lastStageIns.Clear();
+            _lastStageOuts.Clear();
+            _lastSchema.Clear();
+            _publishedThisConnection = false;
         }
 
         private static Claim ClaimForLocked(GH_Component owner)
@@ -1341,20 +1877,26 @@ namespace Stageloom
             // left the document may still run one last solve; do not resurrect
             // a claim for it, because no live owner would publish or remove it
             // afterwards.
-            if (!IsRegisteredLocked(owner)) return null;
+            Registration registration = FindRegistrationLocked(owner);
+            if (registration == null) return null;
             foreach (Claim claim in Claims)
-                if (object.ReferenceEquals(claim.Owner, owner)) return claim;
+            {
+                if (object.ReferenceEquals(claim.Owner, owner))
+                {
+                    claim.DocumentId = registration.DocumentId;
+                    return claim;
+                }
+            }
             var fresh = new Claim();
             fresh.Owner = owner;
+            fresh.DocumentId = registration.DocumentId;
             Claims.Add(fresh);
             return fresh;
         }
 
         private static bool IsRegisteredLocked(GH_Component owner)
         {
-            foreach (GH_Component component in Components)
-                if (object.ReferenceEquals(component, owner)) return true;
-            return false;
+            return FindRegistrationLocked(owner) != null;
         }
 
         private static void RemoveClaimLocked(GH_Component owner)
@@ -1406,7 +1948,7 @@ namespace Stageloom
         /// retried: it is slow, not lost.</summary>
         internal static void RetryStaleSolves()
         {
-            var waiting = new List<KeyValuePair<string, string>>();
+            var waiting = new List<KeyValuePair<string, PendingRequest>>();
             bool watchdog = false;
             bool rescheduled = false;
             DateTime now = DateTime.UtcNow;
@@ -1421,6 +1963,7 @@ namespace Stageloom
                 {
                     _solveQueued = false;
                     _solveQueuedAt = DateTime.MinValue;
+                    _solveDocumentId = Guid.Empty;
                     rescheduled = true;
                 }
                 // A batch that never reported SolutionEnd still owns the
@@ -1431,29 +1974,34 @@ namespace Stageloom
                     FinishRequestSolveLocked();
                     watchdog = true;
                 }
-                foreach (var kv in Slots)
+                foreach (var documentSlots in Slots)
                 {
-                    StageSlot slot = kv.Value;
-                    if (slot.Status != "waiting") continue;
-                    // No request to answer: an unsolicited document solve must
-                    // not leave a Stage Out looking like a stalled request.
-                    if (string.IsNullOrEmpty(slot.Rid)) continue;
-                    if (slot.SolveInFlight)
+                    foreach (var kv in documentSlots.Value)
                     {
-                        if ((now - slot.SolveStartedAt).TotalSeconds < SolveWatchdogSeconds)
-                            continue;
-                        // The solve never reached SolutionEnd. Let the retry
-                        // path take over rather than leaving the stage silent.
-                        slot.SolveInFlight = false;
-                        slot.SolveStartedAt = DateTime.MinValue;
-                        slot.SolveRid = "";
-                        watchdog = true;
+                        StageSlot slot = kv.Value;
+                        if (Conflicts.ContainsKey(kv.Key)) continue;
+                        if (slot.Status != "waiting") continue;
+                        // No request to answer: an unsolicited document solve must
+                        // not leave a Stage Out looking like a stalled request.
+                        if (string.IsNullOrEmpty(slot.Rid)) continue;
+                        if (slot.SolveInFlight)
+                        {
+                            if ((now - slot.SolveStartedAt).TotalSeconds < SolveWatchdogSeconds)
+                                continue;
+                            // The solve never reached SolutionEnd. Let the retry
+                            // path take over rather than leaving the stage silent.
+                            slot.SolveInFlight = false;
+                            slot.SolveStartedAt = DateTime.MinValue;
+                            slot.SolveRid = "";
+                            watchdog = true;
+                        }
+                        if ((now - slot.RequestedAt).TotalMilliseconds < 250) continue;
+                        if (slot.ResolveAttempts >= 8) continue;
+                        slot.ResolveAttempts++;
+                        slot.RequestedAt = now;
+                        waiting.Add(new KeyValuePair<string, PendingRequest>(
+                            kv.Key, new PendingRequest(documentSlots.Key, slot.Rid)));
                     }
-                    if ((now - slot.RequestedAt).TotalMilliseconds < 250) continue;
-                    if (slot.ResolveAttempts >= 8) continue;
-                    slot.ResolveAttempts++;
-                    slot.RequestedAt = now;
-                    waiting.Add(new KeyValuePair<string, string>(kv.Key, slot.Rid));
                 }
             }
             if (watchdog)
@@ -1469,8 +2017,8 @@ namespace Stageloom
             // One retry batch, one diagnostic: RequestStage below coalesces the
             // keys into the next solve.
             Interlocked.Increment(ref _retryRequests);
-            foreach (KeyValuePair<string, string> pair in waiting)
-                RequestStage(pair.Key, pair.Value);
+            foreach (KeyValuePair<string, PendingRequest> pair in waiting)
+                RequestStage(pair.Key, pair.Value.Rid);
         }
 
         private static void SendFrames(MiniWsClient client)

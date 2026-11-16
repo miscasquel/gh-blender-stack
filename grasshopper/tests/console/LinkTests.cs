@@ -594,7 +594,8 @@ namespace Stageloom.Tests.Console
             System.Console.WriteLine("link reconfigure");
             var first = new FakeServer();
             var second = new FakeServer();
-            var component = new TestComponent();
+            var stageComponent = new TestComponent();
+            var paramComponent = new TestComponent();
             try
             {
                 GhLink.Configure("127.0.0.1", first.Port, false);
@@ -602,8 +603,9 @@ namespace Stageloom.Tests.Console
                 first.Accept();
                 ReadUntil(first, "hello");
 
-                GhLink.Register(component);
-                GhLink.PublishStageOut(component, "reconfigure", true);
+                GhLink.Register(stageComponent);
+                GhLink.Register(paramComponent);
+                GhLink.PublishStageOut(stageComponent, "reconfigure", true);
                 var declaration = new Dictionary<string, object>();
                 declaration["id"] = "p1";
                 declaration["label"] = "Port";
@@ -612,7 +614,7 @@ namespace Stageloom.Tests.Console
                 declaration["step"] = 1L;
                 declaration["values"] = new List<object>();
                 declaration["group"] = "";
-                GhLink.PublishParam(component, "reconfigure", declaration);
+                GhLink.PublishParam(paramComponent, "reconfigure", declaration);
                 GhLink.Publish(null);
                 ReadUntil(first, "hello");
                 ReadUntil(first, "schema");
@@ -655,7 +657,8 @@ namespace Stageloom.Tests.Console
             }
             finally
             {
-                GhLink.Unregister(component);
+                GhLink.Unregister(stageComponent);
+                GhLink.Unregister(paramComponent);
                 GhLink.Stop();
                 first.Dispose();
                 second.Dispose();

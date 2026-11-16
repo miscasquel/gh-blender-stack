@@ -127,7 +127,7 @@ namespace Stageloom
                 return;
             }
             string type = TypeName(typeIndex);
-            StageSlot slot = GhLink.Slot(key);
+            StageSlot slot = GhLink.Slot(this, key);
             object value = null;
             // One read of the published snapshot: the socket thread replaces the
             // dictionary whole, so a local keeps this solve on one request even
@@ -161,9 +161,14 @@ namespace Stageloom
             declaration["values"] = valueList;
             declaration["group"] = group;
             GhLink.PublishParam(this, key, declaration);
+            string conflict = GhLink.StageConflict(key);
+            if (!string.IsNullOrEmpty(conflict))
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, conflict);
 
             da.SetData("Value", OutputValue(type, value));
-            Message = type + (GhLink.Connected ? "" : " (disconnected)");
+            Message = !string.IsNullOrEmpty(conflict)
+                ? conflict
+                : type + (GhLink.Connected ? "" : " (disconnected)");
             GhLink.Publish(OnPingDocument());
         }
 

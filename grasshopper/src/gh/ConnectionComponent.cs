@@ -122,7 +122,7 @@ namespace Stageloom
         {
             base.AddedToDocument(document);
             SeedPortFromSettings();
-            GhLink.Register(this);
+            GhLink.Register(this, document);
         }
 
         public override void RemovedFromDocument(GH_Document document)

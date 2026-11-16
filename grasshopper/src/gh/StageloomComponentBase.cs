@@ -28,7 +28,7 @@ namespace Stageloom
         public override void AddedToDocument(GH_Document document)
         {
             base.AddedToDocument(document);
-            GhLink.Register(this);
+            GhLink.Register(this, document);
             OnAddedToDocument(document);
         }
 
