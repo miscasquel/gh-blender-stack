@@ -34,7 +34,9 @@ class ResponseValidationTests(unittest.TestCase):
     def setUp(self):
         self.engine._pending.clear()
         self.engine._sent.clear()
+        self.engine._verify.clear()
         self.engine._pull_permits.clear()
+        self.engine._pull_deadlines.clear()
         self.stage.enabled = True
         self.stage.frozen = False
         self.stage.state = self.stack_mod.STATE_OK
@@ -326,6 +328,7 @@ class ResponseValidationTests(unittest.TestCase):
         self.stage.state = self.stack_mod.STATE_FROZEN
         self.stage.rid = "sha256:saved-frozen-rid"
         self.engine._pull_permits.add(key)
+        self.engine._pull_deadlines[key] = time.monotonic() + 30.0
 
         self.engine._on_load()
 
@@ -335,9 +338,154 @@ class ResponseValidationTests(unittest.TestCase):
             self.engine._pull_permits,
             "a Pull armed before the save survived the load",
         )
+        self.assertNotIn(
+            key,
+            self.engine._pull_deadlines,
+            "a Pull deadline armed before the save survived the load",
+        )
         self.assertEqual(
             self.engine._process_stage(self.obj, self.record, self.stage),
             "idle",
             "the saved frozen stage sent the old Pull after reopening",
         )
         self.assertEqual(self.stage.state, self.stack_mod.STATE_FROZEN)
+
+    def test_12_a_stale_standalone_error_keeps_the_newer_pending_request(self):
+        import stageloom.blender.bridge as bridge
+
+        old_rid = "sha256:stale-standalone"
+        new_rid = "sha256:newer-standalone"
+        key = (self.record.stack_id, self.stage.key)
+        self.stage.rid = new_rid
+        self.stage.state = self.stack_mod.STATE_WAITING
+        self.engine._pending[key] = {new_rid: time.monotonic()}
+
+        bridge.post_incoming(
+            {
+                "type": "error",
+                "code": "unknown_stage",
+                "stage": self.stage.key,
+                "rid": old_rid,
+                "message": "stale no claim",
+            },
+            {},
+        )
+        self.engine._handle_incoming()
+
+        self.assertIn(
+            new_rid,
+            self.engine._pending_of(self.record.stack_id, self.stage.key),
+            "a stale standalone error cleared the newer pending request",
+        )
+        self.assertEqual(self.stage.rid, new_rid)
+        self.assertEqual(self.stage.state, self.stack_mod.STATE_WAITING)
+        self.assertEqual(self.stage.error, "", "a stale error reached the stage row")
+
+    def test_13_an_uncorrelated_error_keeps_the_pending_wait(self):
+        import stageloom.blender.bridge as bridge
+
+        rid = "sha256:uncorrelated-pending"
+        key = (self.record.stack_id, self.stage.key)
+        self.stage.rid = rid
+        self.stage.state = self.stack_mod.STATE_WAITING
+        self.engine._pending[key] = {rid: time.monotonic()}
+
+        bridge.post_incoming(
+            {
+                "type": "error",
+                "code": "unknown_stage",
+                "stage": self.stage.key,
+                "message": "no request id",
+            },
+            {},
+        )
+        self.engine._handle_incoming()
+
+        self.assertIn(
+            rid,
+            self.engine._pending_of(self.record.stack_id, self.stage.key),
+            "an error without a rid cancelled the newer pending request",
+        )
+        self.assertEqual(self.stage.state, self.stack_mod.STATE_WAITING)
+        self.assertEqual(self.stage.error, "")
+
+    def test_14_a_stale_failed_response_keeps_the_newer_pending_request(self):
+        old_rid = "sha256:stale-failed"
+        new_rid = "sha256:newer-failed"
+        key = (self.record.stack_id, self.stage.key)
+        self.stage.rid = new_rid
+        self.stage.state = self.stack_mod.STATE_WAITING
+        self.engine._pending[key] = {new_rid: time.monotonic()}
+
+        self.engine._report_message_failure(
+            {"type": "response", "stage": self.stage.key, "rid": old_rid},
+            RuntimeError("stale frame failure"),
+        )
+        self.engine._clear_failed_response(self.stage.key, old_rid)
+
+        self.assertIn(
+            new_rid,
+            self.engine._pending_of(self.record.stack_id, self.stage.key),
+            "a stale failed response consumed the newer pending request",
+        )
+        self.assertEqual(self.stage.rid, new_rid)
+        self.assertEqual(self.stage.state, self.stack_mod.STATE_WAITING)
+        self.assertNotIn(
+            key,
+            self.engine._verify,
+            "a stale failed response armed a resend for the newer request",
+        )
+
+        # The failure for the request actually in flight still recovers it.
+        self.engine._clear_failed_response(self.stage.key, new_rid)
+        self.assertFalse(
+            self.engine._pending_of(self.record.stack_id, self.stage.key),
+            "the current failed response was not consumed",
+        )
+        self.assertEqual(self.stage.state, self.stack_mod.STATE_IDLE)
+        self.assertIn(key, self.engine._verify)
+        self.assertIn(self.obj.name, self.engine._dirty)
+
+    def test_15_a_frozen_pull_with_no_answer_settles(self):
+        rid = "sha256:lost-pull"
+        key = (self.record.stack_id, self.stage.key)
+        self.stage.frozen = True
+        self.stage.state = self.stack_mod.STATE_WAITING
+        self.stage.rid = rid
+        self.engine._pending[key] = {rid: time.monotonic() - 100.0}
+        self.engine._arm_pull(key)
+        self.engine._pull_deadlines[key] = time.monotonic() - 0.01
+        self.engine._dirty.clear()
+        self.engine._last_stall_check = 0.0
+        try:
+            self.engine._nudge_stalled_waits()
+        finally:
+            self.stage.frozen = False
+
+        self.assertNotIn(
+            key, self.engine._pending, "the lost Pull left the request pending"
+        )
+        self.assertNotIn(
+            key, self.engine._pull_permits, "the lost Pull left its permit armed"
+        )
+        self.assertNotIn(
+            key, self.engine._pull_deadlines, "the lost Pull left its deadline behind"
+        )
+        self.assertEqual(self.stage.state, self.stack_mod.STATE_FROZEN)
+        self.assertEqual(self.stage.rid, "")
+        self.assertIn("Pull timed out", self.stage.error)
+        self.assertNotIn(
+            self.obj.name,
+            self.engine._dirty,
+            "the expired Pull dirtied the object",
+        )
+
+        # An idle second scan must stay quiet: the once-a-second dirty loop this
+        # deadline removes is what made a lost Pull cost a pass per second.
+        self.engine._last_stall_check = 0.0
+        self.engine._nudge_stalled_waits()
+        self.assertNotIn(
+            self.obj.name,
+            self.engine._dirty,
+            "the settled Pull kept dirtying the object",
+        )

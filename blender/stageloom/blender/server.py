@@ -10,12 +10,18 @@ read, the online-access gate, happens in `start()` on the caller's thread.
 """
 
 import asyncio
+import concurrent.futures
 import threading
 
 import bpy
 
 from ..core import codec
 from . import bridge, prefs
+
+# How long the main thread waits for the loop to make the enqueue decision.
+# It is a round trip to a thread that is already running, not a network wait;
+# the cap only keeps a wedged loop from freezing the frame handler.
+SEND_DECISION_TIMEOUT = 0.2
 
 
 def _load_websockets():
@@ -101,20 +107,51 @@ class GhServer(object):
 
     # ------------------------------------------------------------------- send
     def send(self, frame):
-        """Queue a frame from the main thread. False when there is no client to
-        receive it: a dropped request must not be recorded as sent, or the caller
-        waits out a whole timeout for an answer nobody was ever asked for."""
+        """Queue a frame from the main thread, returning whether it was queued.
+
+        The observation of ``_clients`` and the enqueue happen in one callback
+        on the loop thread: ``_clients`` is owned there, so a disconnect cannot
+        land between the check and the put. The caller records the request as
+        sent only when this returns True; a False leaves the stage free to ask
+        again instead of waiting out a timeout for a frame nobody carried.
+        """
         if not bridge.state["clients"]:
+            # Fast negative only: a stale positive is resolved by the atomic
+            # decision below, and this avoids a loop round trip when there is
+            # provably no socket to carry a frame.
             return False
         loop = self._loop
         if loop is None:
             return False
-        loop.call_soon_threadsafe(self._enqueue, frame)
-        return True
+        decision = concurrent.futures.Future()
 
-    def _enqueue(self, frame):
-        if self._send_queue is not None:
-            self._send_queue.put_nowait(frame)
+        def enqueue_if_connected():
+            # A timed-out caller cancelled the decision; do not enqueue after
+            # saying the send failed.
+            if not decision.set_running_or_notify_cancel():
+                return
+            if not self._clients or self._send_queue is None:
+                decision.set_result(False)
+                return
+            try:
+                self._send_queue.put_nowait(frame)
+            except Exception as exc:  # pragma: no cover - loop teardown
+                decision.set_exception(exc)
+            else:
+                decision.set_result(True)
+
+        try:
+            loop.call_soon_threadsafe(enqueue_if_connected)
+        except RuntimeError:
+            # The loop closed between the read above and the scheduling.
+            return False
+        try:
+            return bool(decision.result(timeout=SEND_DECISION_TIMEOUT))
+        except concurrent.futures.TimeoutError:
+            decision.cancel()
+            return False
+        except Exception:
+            return False
 
     # ------------------------------------------------------------------ loop
     def _run(self):

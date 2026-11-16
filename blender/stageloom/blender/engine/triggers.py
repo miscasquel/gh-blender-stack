@@ -186,6 +186,7 @@ def _on_load(scene=None):
     engine._sent.clear()
     engine._last_frame.clear()
     engine._pull_permits.clear()
+    engine._pull_deadlines.clear()
     engine._prefix_memo.clear()
     engine._state_since.clear()
     engine._last_no_send.clear()
@@ -401,6 +402,10 @@ def _nudge_stalled_waits():
     without the nudge a supersede would wait for an unrelated edit. The scan
     walks the scene's stack objects — not names captured at send time, which a
     rename invalidates — and runs at most once a second.
+
+    A frozen Pull is different: it has one permit with a deadline and no newer
+    request to supersede it. The nudge expires it instead of poking the object
+    forever, and otherwise leaves the object alone until its answer lands.
     """
     now = engine.time.monotonic()
     if now - engine._last_stall_check < 1.0:
@@ -410,7 +415,12 @@ def _nudge_stalled_waits():
     for obj in engine._all_stack_objects():
         record = engine.stack_mod.stack_of(obj)
         for stage in record.stages:
-            pending = engine._pending.get((record.stack_id, stage.key))
+            key = (record.stack_id, stage.key)
+            if key in engine._pull_permits:
+                if engine._pull_expired(key, now):
+                    engine._expire_pull(record, stage)
+                continue
+            pending = engine._pending.get(key)
             if not pending:
                 continue
             waiting.add(obj.name)

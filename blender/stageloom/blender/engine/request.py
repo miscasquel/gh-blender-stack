@@ -75,6 +75,63 @@ def _empty_geometry_hash():
     return _EMPTY_GEOMETRY_HASH
 
 
+def _arm_pull(key):
+    """Allow one request while frozen, with a deadline.
+
+    A Pull is a request like any other: if its answer never lands, waiting
+    forever would leave the stall nudge dirtying the object once a second. The
+    permit carries the same bound as a request timeout, so the stage settles
+    back to frozen and keeps its last output.
+    """
+    engine._pull_permits.add(key)
+    engine._pull_deadlines[key] = engine.time.monotonic() + _timeout()
+
+
+def _clear_pull(key):
+    """Drop one Pull permit and its deadline together."""
+    engine._pull_permits.discard(key)
+    engine._pull_deadlines.pop(key, None)
+
+
+def _pull_expired(key, now=None):
+    """Whether a Pull permit has outlived its bounded wait.
+
+    A permit planted directly (a test, or state from before deadlines existed)
+    gets the same bound from the first pass that sees it.
+    """
+    now = engine.time.monotonic() if now is None else now
+    deadline = engine._pull_deadlines.get(key)
+    if deadline is None:
+        deadline = now + _timeout()
+        engine._pull_deadlines[key] = deadline
+    return now >= deadline
+
+
+def _expire_pull(record, stage):
+    """Settle a Pull whose answer never came: frozen, with a visible error."""
+    key = (record.stack_id, stage.key)
+    timeout = _timeout()
+    engine._clear_pull(key)
+    engine._forget(record.stack_id, stage.key)
+    engine._set(stage, "rid", "")
+    engine._set(
+        stage,
+        "state",
+        engine.stack_mod.STATE_FROZEN if stage.frozen else engine.stack_mod.STATE_IDLE,
+    )
+    engine._set(
+        stage,
+        "error",
+        "Pull timed out after %.0f s; keeping the last output" % timeout,
+    )
+    line = "%s: Pull timed out after %.0f s; keeping the last output" % (
+        stage.key,
+        timeout,
+    )
+    engine._trace.append(line)
+    engine.prefs.log("[stageloom] " + line, flush=True)
+
+
 def _no_send(record, stage, reason, rid=None):
     """Explain why a pass that saw the scene move sent nothing.
 
@@ -141,13 +198,25 @@ def _process_stage(obj, record, stage):
         engine._no_send(record, stage, "disabled")
         return "idle"
     engine._repair_plumbing(obj, record, stage, modifier)
-    if stage.frozen and (record.stack_id, stage.key) not in engine._pull_permits:
-        # Freeze: no requests; the helpers keep their last output. Pull
-        # (engine.request_again) plants a one-shot permit above and works while
-        # frozen; it is consumed here.
-        engine._set(stage, "state", engine.stack_mod.STATE_FROZEN)
-        engine._no_send(record, stage, "frozen")
-        return "idle"
+    key = (record.stack_id, stage.key)
+    if stage.frozen:
+        if key in engine._pull_permits and engine._pull_expired(key):
+            engine._expire_pull(record, stage)
+            engine._no_send(record, stage, "Pull timed out")
+            return "idle"
+        if key not in engine._pull_permits:
+            # Freeze: no requests; the helpers keep their last output. Pull
+            # (engine.request_again) plants a one-shot permit above and works
+            # while frozen; it is consumed here, or when its answer lands.
+            if engine._pending.get(key):
+                # A Pull whose permit was cleared (freeze, load, conflict) has
+                # no answer to wait for. Leaving it pending is what made the
+                # stall nudge dirty the object once a second forever.
+                engine._forget(record.stack_id, stage.key)
+                engine._set(stage, "rid", "")
+            engine._set(stage, "state", engine.stack_mod.STATE_FROZEN)
+            engine._no_send(record, stage, "frozen")
+            return "idle"
 
     connected = bool(engine.bridge.state["connected"])
     if not connected:
@@ -313,10 +382,12 @@ def _process_stage(obj, record, stage):
     # the next full/ref decision (until undo or a reconnect says otherwise).
     engine._sent[verify_key] = (rid, geom_hash)
     engine._last_frame[verify_key] = engine.bpy.context.scene.frame_float
-    # A Pull permit is spent by the send it caused, not before it: a send that
+    # A Pull permit is held until the request it caused settles: a send that
     # never left (disconnected, undelivered) leaves the Pull armed for the next
-    # pass instead of losing it silently.
-    engine._pull_permits.discard((record.stack_id, stage.key))
+    # pass, and an answer or the permit deadline releases it. A one-way stage
+    # never answers, so its delivery is the end of the Pull.
+    if one_way or not stage.frozen:
+        engine._clear_pull((record.stack_id, stage.key))
     engine._trace.append(
         "%s: sent %s %s" % (stage.key, mode, rid[-8:] if rid else "")
     )

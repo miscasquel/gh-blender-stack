@@ -56,7 +56,7 @@ def _report_message_failure(header, exc):
     engine.prefs.log("[stageloom] incoming %s failed:\n%s" % (where, traceback.format_exc()), flush=True)
     if mtype == "response" and stage_key:
         try:
-            engine._clear_failed_response(stage_key)
+            engine._clear_failed_response(stage_key, header.get("rid"))
         except Exception as recovery:
             # Best-effort, like the cleanup: a stage that cannot be recovered
             # must not cost the *other* messages their chance to be handled.
@@ -67,18 +67,42 @@ def _report_message_failure(header, exc):
             )
 
 
-def _clear_failed_response(stage_key):
+def _clear_failed_response(stage_key, rid=None):
     """Put the stage of a failed response back in a retryable state.
 
-    The failed answer consumed its pending entry, so arm the same permit a
-    reconnect uses: the next pass must ask again instead of treating the
-    unchanged request id as already delivered. Pending is cleared
-    (idempotent) and the state leaves `waiting`, where an empty pending map
-    would look like an answer still on its way.
+    Only the request the failed message names is consumed. A message for an
+    older rid is stale: the stage is waiting on a newer request, and clearing
+    that wait here would make the newer answer look unsolicited. Without a rid
+    the failed response cannot be attributed to any request, so a pending wait
+    is left untouched for the same reason.
+
+    The consumed answer may already have removed its pending entry before the
+    handler raised; ``rid == stage.rid`` still identifies that current request.
+    The failed answer consumed its permit, so arm the same one a reconnect uses:
+    the next pass must ask again instead of treating the unchanged request id as
+    already delivered. Pending is cleared (idempotent) and the state leaves
+    `waiting`, where an empty pending map would look like an answer on its way.
     """
     for obj, record, stage in engine._stage_views(stage_key):
-        engine._forget(record.stack_id, stage.key)
-        engine._verify.add((record.stack_id, stage.key))
+        key = (record.stack_id, stage.key)
+        pending = engine._pending.get(key) or {}
+        if rid:
+            if rid in pending:
+                pending.pop(rid, None)
+                if not pending:
+                    engine._pending.pop(key, None)
+            elif rid != stage.rid:
+                engine._trace.append(
+                    "%s: ignored a stale failed response" % stage.key
+                )
+                continue
+        elif pending:
+            engine._trace.append(
+                "%s: ignored an uncorrelated failed response" % stage.key
+            )
+            continue
+        engine._clear_pull(key)
+        engine._verify.add(key)
         engine._set(
             stage,
             "state",
@@ -139,6 +163,10 @@ def _on_client_hello(header):
             if stage.state == engine.stack_mod.STATE_WAITING:
                 engine._forget(record.stack_id, stage.key)
                 engine._set(stage, "state", engine.stack_mod.STATE_IDLE)
+            # A request id names a request this client session was asked. The
+            # next client may be a different document: a late response carrying
+            # the old id must not apply before the verify request goes out.
+            engine._set(stage, "rid", "")
             engine._set(stage, "geom_hash", "")
             engine._sent.pop((record.stack_id, stage.key), None)
             engine._last_frame.pop((record.stack_id, stage.key), None)
@@ -286,6 +314,7 @@ def _handle_response(header, sections):
 
         if not stage.enabled:
             engine._forget(record.stack_id, stage.key)
+            engine._clear_pull((record.stack_id, stage.key))
             continue
 
         pending_key = (record.stack_id, stage.key)
@@ -318,6 +347,9 @@ def _handle_response(header, sections):
                 # Remove only this request. A different pending entry belongs
                 # to a newer request and must survive a late error.
                 _answer_pending(record, stage, rid)
+                # The error ends a Pull as surely as an answer does: without
+                # this the permit would arm one more request while frozen.
+                engine._clear_pull(pending_key)
             if not stage.frozen:
                 engine._set(stage, "state", engine.stack_mod.STATE_ERROR)
             engine._set(stage, "error", error.get("message") if isinstance(error, dict) else str(error))
@@ -378,6 +410,9 @@ def _handle_response(header, sections):
         # normally, and a frozen stage stays frozen because freeze owns state.
         engine._set(stage, "state", engine._rest_state(stage))
         engine._set(stage, "error", "")
+        # A Pull is one request: the answer that names its rid ends the permit,
+        # so a frozen stage parks again instead of asking forever.
+        engine._clear_pull(pending_key)
         if applied:
             engine.stats["tags"] += 1
             obj.update_tag()
@@ -392,9 +427,15 @@ def _handle_error(header):
     `unknown_ref` is the one that needs action: Grasshopper does not hold the
     geometry the last request named. Everything else is reported on the stages it
     names so a protocol mismatch is not silent.
+
+    An error with a `rid` belongs to exactly that request: a late one must not
+    cancel the newer request the stage is now waiting on. Without a rid the
+    message cannot be attributed, so it never consumes a pending wait; it only
+    surfaces the error when there is no wait that could be the newer one.
     """
     code = header.get("code")
     message = header.get("message") or code or "protocol error"
+    rid = header.get("rid")
     if engine._stage_key_conflicted(header.get("stage")):
         engine.prefs.log(
             "[stageloom] error for duplicate stage key %r ignored"
@@ -406,6 +447,22 @@ def _handle_error(header):
         matched = False
         for obj, record, stage in engine._stage_views(header.get("stage")):
             matched = True
+            key = (record.stack_id, stage.key)
+            pending = engine._pending.get(key) or {}
+            if rid:
+                if not _request_is_current(record, stage, rid):
+                    engine._trace.append(
+                        "%s: ignored a stale unknown_ref" % stage.key
+                    )
+                    continue
+            elif pending:
+                # No rid: this could answer a request that has already been
+                # superseded. A full resend forgets the pending map, which
+                # would cancel the newer request.
+                engine._trace.append(
+                    "%s: ignored an uncorrelated unknown_ref" % stage.key
+                )
+                continue
             engine._resend_in_full(obj, record, stage, "unknown_ref")
         if not matched:
             engine.prefs.log("[stageloom] unknown_ref for unknown stage %r" % (header.get("stage"),), flush=True)
@@ -418,10 +475,31 @@ def _handle_error(header):
         # The error is left on display and the stage is not dirtied — retrying
         # here would ask a component that just failed, in a loop; the next
         # change or Push retries (protocol §7).
-        engine._forget(record.stack_id, stage.key)
+        key = (record.stack_id, stage.key)
+        pending = engine._pending.get(key) or {}
+        if rid:
+            if not _request_is_current(record, stage, rid):
+                engine._trace.append("%s: ignored a stale protocol error" % stage.key)
+                continue
+            if rid in pending:
+                _answer_pending(record, stage, rid)
+            engine._clear_pull(key)
+        elif pending:
+            engine._trace.append(
+                "%s: ignored an uncorrelated protocol error" % stage.key
+            )
+            continue
         engine._set(stage, "error", "%s: %s" % (code, message))
         if stage.state == engine.stack_mod.STATE_WAITING:
             engine._set(stage, "state", engine.stack_mod.STATE_ERROR)
+
+
+def _request_is_current(record, stage, rid):
+    """Whether ``rid`` names the request this stage is waiting on now."""
+    if not rid:
+        return False
+    pending = engine._pending.get((record.stack_id, stage.key)) or {}
+    return rid in pending or rid == stage.rid
 
 
 def _resend_in_full(obj, record, stage, reason):

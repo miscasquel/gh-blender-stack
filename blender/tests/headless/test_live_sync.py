@@ -1346,7 +1346,9 @@ class SelfHealingTests(LiveSyncTestCase):
         engine = self.engine
         record = self.stack_mod.stack_of(self.obj)
         key = (record.stack_id, self.stage.key)
-        engine._pending[key] = {"stale-rid": time.monotonic()}
+        rid = "sha256:standalone-error"
+        engine._pending[key] = {rid: time.monotonic()}
+        self.stage.rid = rid
         self.stage.state = "waiting"
 
         engine._handle_error(
@@ -1354,6 +1356,7 @@ class SelfHealingTests(LiveSyncTestCase):
                 "type": "error",
                 "code": "unknown_stage",
                 "stage": self.stage.key,
+                "rid": rid,
                 "message": "no claim",
             }
         )
@@ -1402,6 +1405,119 @@ class SelfHealingTests(LiveSyncTestCase):
         )
         self.stage.frozen = False
         engine.unfreeze(self.obj, self.stage)
+
+    def test_04_a_frozen_pull_with_no_answer_settles_and_stops_dirtying(self):
+        import stageloom.blender.server as server
+
+        engine = self.engine
+        record = self.stack_mod.stack_of(self.obj)
+        key = (record.stack_id, self.stage.key)
+        self.stage.frozen = True
+        engine.freeze(self.obj, self.stage)
+        real_send = server.SERVER.send
+        server.SERVER.send = lambda frame: True
+        try:
+            engine.request_again(self.obj, self.stage)
+            engine._mark_object_dirty(self.obj)
+            engine._timer()
+        finally:
+            server.SERVER.send = real_send
+        self.assertIn(key, engine._pending, "the Pull was not recorded as in flight")
+        self.assertEqual(self.stage.state, self.stack_mod.STATE_WAITING)
+        self.assertIn(key, engine._pull_permits)
+
+        # The answer never lands; the permit deadline is what must settle it.
+        engine._pull_deadlines[key] = time.monotonic() - 0.01
+        engine._last_stall_check = 0.0
+        engine._dirty.clear()
+        try:
+            engine._nudge_stalled_waits()
+        finally:
+            self.stage.frozen = False
+        self.assertNotIn(key, engine._pending)
+        self.assertNotIn(key, engine._pull_permits)
+        self.assertNotIn(key, engine._pull_deadlines)
+        self.assertEqual(self.stage.state, self.stack_mod.STATE_FROZEN)
+        self.assertIn("Pull timed out", self.stage.error)
+        self.assertNotIn(self.obj.name, engine._dirty)
+
+        engine._last_stall_check = 0.0
+        engine._nudge_stalled_waits()
+        self.assertNotIn(
+            self.obj.name,
+            engine._dirty,
+            "a lost Pull dirtied the object once a second after it had settled",
+        )
+
+        engine.unfreeze(self.obj, self.stage)
+        engine.request_again(self.obj, self.stage)
+        self.assertTrue(
+            pump(seconds=15.0, until=lambda: self.stage.state == "ok"),
+            "the stage did not recover after the lost Pull (state=%s, error=%s)"
+            % (self.stage.state, self.stage.error),
+        )
+
+    def test_05_a_client_leaving_between_the_check_and_the_send_is_not_recorded(self):
+        import stageloom.blender.bridge as bridge
+        import stageloom.blender.server as server
+
+        engine = self.engine
+        record = self.stack_mod.stack_of(self.obj)
+        key = (record.stack_id, self.stage.key)
+        stop_fake(type(self).fake)
+        type(self).fake = None
+        self.assertTrue(
+            pump(seconds=5.0, until=lambda: not bridge.state["clients"]),
+            "the fake never disconnected",
+        )
+        engine._pending.clear()
+        engine._sent.clear()
+        engine._verify.clear()
+        engine._last_frame.clear()
+        engine._dirty.clear()
+        previous = (bridge.state["clients"], bridge.state["connected"])
+        # The stale observation the old send() trusted: a client count with no
+        # socket behind it, the exact window between its check and its enqueue.
+        bridge.state["clients"] = 1
+        bridge.state["connected"] = True
+        try:
+            self.assertFalse(
+                server.SERVER.send(b"a frame with no socket"),
+                "send claimed a frame was carried with no client socket",
+            )
+            undelivered = engine.stats["undelivered"]
+            engine.request_again(self.obj, self.stage)
+            engine._mark_object_dirty(self.obj)
+            engine._timer()
+            self.assertEqual(
+                engine.stats["undelivered"],
+                undelivered + 1,
+                "the request path counted an undelivered frame as sent",
+            )
+            self.assertFalse(
+                engine._pending.get(key),
+                "an undelivered frame armed a pending answer wait",
+            )
+            self.assertNotIn(
+                key, engine._sent, "an undelivered frame recorded a sent request"
+            )
+            self.assertEqual(self.stage.state, self.stack_mod.STATE_DISCONNECTED)
+        finally:
+            bridge.state["clients"], bridge.state["connected"] = previous
+            type(self).fake = start_fake(
+                self.stage.key, self.report, port=self.port
+            )
+            self.assertTrue(
+                pump(seconds=10.0, until=lambda: bridge.state["clients"] >= 1),
+                "the restarted fake never connected",
+            )
+            settle(
+                engine,
+                self.stack_mod,
+                [self.obj],
+                lambda: self.stage.state == "ok",
+            )
+
 
 
 class HashTrustTests(LiveSyncTestCase):

@@ -274,3 +274,39 @@ class ChainPlaybackTests(unittest.TestCase):
             2 * (stats["playback_frames"] - stats["playback_synced"]),
             "the disconnected frames did not fail once per stage per gate pass",
         )
+
+    def test_03_a_raising_stage_does_not_stop_the_next_stage(self):
+        type(self).start_fakes()
+        self.assertTrue(
+            pump(seconds=15.0, until=type(self).settled),
+            "the chain never settled before the fault",
+        )
+        engine = self.engine
+        real_process = engine._process_stage
+
+        def failing_process(obj, record, stage):
+            if stage.key == self.stage_a.key:
+                raise RuntimeError("stage A pass fault")
+            return real_process(obj, record, stage)
+
+        scene = bpy.context.scene
+        engine._process_stage = failing_process
+        try:
+            scene.frame_set(2)
+            engine._playback_sync = True
+            try:
+                ready = engine._sync_playback_frame(scene)
+            finally:
+                engine._playback_sync = False
+        finally:
+            engine._process_stage = real_process
+
+        self.assertFalse(ready, "a failed stage reported the chain ready")
+        self.assertEqual(self.stage_a.state, "error")
+        self.assertIn("stage A pass fault", self.stage_a.error)
+        self.assertTrue(
+            pump(seconds=10.0, until=lambda: self.stage_b.state == "ok"),
+            "the stage after the fault was not processed (state=%s, error=%s)"
+            % (self.stage_b.state, self.stage_b.error),
+        )
+        self.assertEqual(self.stage_b.state, "ok", self.stage_b.error)

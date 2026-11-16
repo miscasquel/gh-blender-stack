@@ -79,7 +79,8 @@ Blender                                          Rhino / Grasshopper (wine)
 - **Playback.** In **Play Every Frame**, the playhead waits for each stage's
   output for the frame before advancing; a disconnected stage keeps its last
   output. **Frame Drop** keeps requests latest-wins. A **Sync wait limit**
-  preference caps the wait per stage (0 waits until the answer or a disconnect).
+  preference caps the wait per stage (0 waits until the answer, a disconnect,
+  or the ten-minute backstop).
 - **Bake.** Each stage group carries a native Geometry Nodes Bake node. **Bake
   stage** steps the scene frame range through the same gate, shows cursor
   progress, freezes the stage and every upstream stage it depends on (including

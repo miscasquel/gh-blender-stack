@@ -48,6 +48,9 @@ _prefix_batching = False
 # (stack_id, stage_key) pairs allowed exactly one request while frozen: Pull.
 # Transient session state, like `_pending` — never saved, cleared on register.
 _pull_permits = set()
+# Deadline for each permit above: a Pull whose answer never lands must settle
+# back to frozen instead of dirtying the object once a second forever.
+_pull_deadlines = {}
 # The depsgraph generation: one counter, moved by every update Blender reports
 # and by every engine write. A memoized prefix is only valid within the
 # generation that produced it, so anything the depsgraph tags retires every
@@ -505,6 +508,7 @@ def register():
     _state_since.clear()
     _verify.clear()
     _pull_permits.clear()
+    _pull_deadlines.clear()
     _last_no_send.clear()
     _timings.clear()
     # The prefix guard and tick flag are session state: register is a clean
@@ -599,19 +603,23 @@ from .apply import (
     _write_rows_cloud,
 )
 from .request import (
+    _arm_pull,
     _build_prefix_batch,
     _bump_epochs,
     _bump_id,
     _cleanup_prefix_clone,
+    _clear_pull,
     _clone_prefix,
     _clone_prefixes,
     _close_enough,
     _drop_owned_data,
+    _expire_pull,
     _modifier_index,
     _no_send,
     _prefix_revision,
     _prefix_sections,
     _process_stage,
+    _pull_expired,
     _rest_state,
     _same_prefix,
     _sections_hash,
@@ -672,6 +680,7 @@ from .messages import (
     _resend_in_full,
 )
 from .playback import (
+    _flush_playback_edits,
     _on_frame_change_sync,
     _on_playback_post,
     _on_playback_pre,
@@ -738,19 +747,23 @@ __all__ = [
     "_rows_of",
     "_warnings_text",
     "_write_rows_cloud",
+    "_arm_pull",
     "_build_prefix_batch",
     "_bump_epochs",
     "_bump_id",
     "_cleanup_prefix_clone",
+    "_clear_pull",
     "_clone_prefix",
     "_clone_prefixes",
     "_close_enough",
     "_drop_owned_data",
+    "_expire_pull",
     "_modifier_index",
     "_no_send",
     "_prefix_revision",
     "_prefix_sections",
     "_process_stage",
+    "_pull_expired",
     "_rest_state",
     "_same_prefix",
     "_sections_hash",
@@ -807,6 +820,7 @@ __all__ = [
     "_on_client_hello",
     "_report_message_failure",
     "_resend_in_full",
+    "_flush_playback_edits",
     "_on_frame_change_sync",
     "_on_playback_post",
     "_on_playback_pre",

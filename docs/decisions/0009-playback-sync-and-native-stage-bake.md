@@ -36,8 +36,10 @@ last output while the playhead kept moving. Two gaps remained.
   the gate owns the frame so the two cannot race.
 - **A configurable sync wait limit.** `playback_timeout` caps one stage's wait
   per frame. The default is 0: wait until the answer or a disconnect, which is
-  what "Play Every Frame" means for an external solver. A positive value keeps
-  the last output and continues after that many seconds.
+  what "Play Every Frame" means for an external solver. A finite ten-minute
+  backstop still applies when the preference is 0, so a wedged client or a
+  superseding hello cannot pin the main thread. A positive value keeps the last
+  output and continues after that many seconds.
 - **Each stage group carries a native Bake node.** `GeometryNodeBake` sits
   between Join Geometry and the Group Output, with one Geometry bake item. It
   passes the live stage output through until the stage is baked.

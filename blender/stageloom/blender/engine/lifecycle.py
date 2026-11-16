@@ -107,7 +107,7 @@ def _mark_key_conflict(key):
         engine._forget(stack_id, key)
         engine._sent.pop((stack_id, key), None)
         engine._verify.discard((stack_id, key))
-        engine._pull_permits.discard((stack_id, key))
+        engine._clear_pull((stack_id, key))
         engine._last_frame.pop((stack_id, key), None)
         engine._last_no_send.pop((stack_id, key), None)
         engine._state_since.pop((stack_id, key), None)
@@ -610,7 +610,7 @@ def _drop_removed_stages(obj, record):
         engine._state_since.pop(key, None)
         engine._timings.pop(key, None)
         engine._last_no_send.pop(key, None)
-        engine._pull_permits.discard(key)
+        engine._clear_pull(key)
         engine._verify.discard(key)
         engine._forget_prefix(obj, stage.key)
         engine.helpers.remove_helper(obj, stage.key)
@@ -689,7 +689,7 @@ def request_again(obj, stage=None, skip_frozen=False):
         engine._forget_prefix(obj, item.key)
         if item.frozen:
             # Pull on a frozen stage: one request, then parked again.
-            engine._pull_permits.add((record.stack_id, item.key))
+            engine._arm_pull((record.stack_id, item.key))
             engine._set(item, "state", engine.stack_mod.STATE_FROZEN)
         else:
             engine._set(item, "state", engine.stack_mod.STATE_IDLE)
@@ -707,7 +707,7 @@ def freeze(obj, stage):
     record = engine.stack_mod.stack_of(obj)
     if record is None:
         return
-    engine._pull_permits.discard((record.stack_id, stage.key))
+    engine._clear_pull((record.stack_id, stage.key))
     engine._forget(record.stack_id, stage.key)
     engine._set(stage, "rid", "")
     engine._set(stage, "error", "")
@@ -718,7 +718,7 @@ def unfreeze(obj, stage):
     """Resume a frozen stage: the next pass asks Grasshopper again."""
     record = engine.stack_mod.stack_of(obj)
     if record is not None:
-        engine._pull_permits.discard((record.stack_id, stage.key))
+        engine._clear_pull((record.stack_id, stage.key))
     engine._set(stage, "state", engine.stack_mod.STATE_IDLE)
     engine._ensure_active()
     engine._dirty.add(obj.name)
