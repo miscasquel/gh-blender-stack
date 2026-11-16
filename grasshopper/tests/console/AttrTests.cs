@@ -39,6 +39,12 @@ namespace Stageloom.Tests.Console
             CheckCurveAttributes();
             CheckWireTransforms();
             CheckMalformedStringOffsets();
+            CheckDescriptorValidation();
+            CheckDtypeValidation();
+            CheckShortValues();
+            CheckCurveValidation();
+            CheckCollectValidation();
+            CheckHasIgnoresNonAttributes();
 
             System.Console.WriteLine();
             if (_failures == 0)
@@ -419,6 +425,19 @@ namespace Stageloom.Tests.Console
                 notes.Count == 1 && notes[0].IndexOf("offsets cover", StringComparison.Ordinal) >= 0,
                 string.Join(" | ", notes));
 
+            // Invalid UTF-8 must not become U+FFFD silently.
+            var utfSections = new List<Section>();
+            var utfDescriptors = new List<Dictionary<string, object>>();
+            AddStringDescriptor(utfSections, utfDescriptors, "bad_utf", new uint[] { 2 },
+                new byte[] { 0xC3, 0x28 });
+            notes.Clear();
+            var utfRoot = new ArchivableDictionary();
+            AttributeStore.Attach(utfRoot, "mesh", utfDescriptors, utfSections, null,
+                delegate(string note) { notes.Add(note); });
+            Check("invalid UTF-8 is rejected",
+                notes.Count == 1 && notes[0].IndexOf("UTF-8", StringComparison.Ordinal) >= 0,
+                string.Join(" | ", notes));
+
             // Values without offsets are not zero strings.
             var noOffsetSections = new List<Section>();
             var noOffsetDescriptors = new List<Dictionary<string, object>>();
@@ -427,6 +446,8 @@ namespace Stageloom.Tests.Console
             noOffsets["name"] = "no_offsets";
             noOffsets["domain"] = "POINT";
             noOffsets["type"] = "STRING";
+            noOffsets["components"] = 1L;
+            noOffsets["count"] = 1L;
             noOffsets["section"] = "noff.values";
             noOffsetSections.Add(Section.Bytes("noff.values",
                 System.Text.Encoding.UTF8.GetBytes("abc")));
@@ -438,6 +459,640 @@ namespace Stageloom.Tests.Console
             Check("string without offsets is rejected",
                 notes.Count == 1 && notes[0].IndexOf("no offsets", StringComparison.Ordinal) >= 0,
                 string.Join(" | ", notes));
+        }
+
+        private static void CheckDescriptorValidation()
+        {
+            List<Section> sections;
+            Dictionary<string, object> good = BaseFloatDescriptor(out sections);
+
+            Dictionary<string, object> d = CopyDescriptor(good);
+            d["group"] = 5L;
+            ExpectSkipped("descriptor: numeric group is skipped", d, sections, "group");
+            d = CopyDescriptor(good);
+            d["group"] = new List<object> { "mesh" };
+            ExpectSkipped("descriptor: array group is skipped", d, sections, "group");
+            d = CopyDescriptor(good);
+            d["group"] = null;
+            ExpectSkipped("descriptor: null group is skipped", d, sections, "group");
+
+            d = CopyDescriptor(good);
+            d["type"] = 5L;
+            ExpectSkipped("descriptor: numeric type is skipped", d, sections, "type");
+            d = CopyDescriptor(good);
+            d["type"] = new List<object> { "FLOAT" };
+            ExpectSkipped("descriptor: array type is skipped", d, sections, "type");
+            d = CopyDescriptor(good);
+            d["type"] = null;
+            ExpectSkipped("descriptor: null type is skipped", d, sections, "type");
+            d = CopyDescriptor(good);
+            d["type"] = "NOPE";
+            ExpectSkipped("descriptor: unknown type is skipped", d, sections, "unknown attribute type");
+            d = CopyDescriptor(good);
+            d["name"] = 5L;
+            ExpectSkipped("descriptor: numeric name is skipped", d, sections, "name");
+            d = CopyDescriptor(good);
+            d["name"] = new List<object>();
+            ExpectSkipped("descriptor: array name is skipped", d, sections, "name");
+            d = CopyDescriptor(good);
+            d["name"] = null;
+            ExpectSkipped("descriptor: null name is skipped", d, sections, "name");
+            d = CopyDescriptor(good);
+            d["name"] = "";
+            ExpectSkipped("descriptor: empty name is skipped", d, sections, "name");
+
+            d = CopyDescriptor(good);
+            d["domain"] = 5L;
+            ExpectSkipped("descriptor: numeric domain is skipped", d, sections, "domain");
+            d = CopyDescriptor(good);
+            d["domain"] = new List<object> { "POINT" };
+            ExpectSkipped("descriptor: array domain is skipped", d, sections, "domain");
+            d = CopyDescriptor(good);
+            d["domain"] = null;
+            ExpectSkipped("descriptor: null domain is skipped", d, sections, "domain");
+            d = CopyDescriptor(good);
+            d["domain"] = "INSTANCE";
+            ExpectSkipped("descriptor: unknown domain is skipped", d, sections, "domain");
+
+            d = CopyDescriptor(good);
+            d["section"] = 5L;
+            ExpectSkipped("descriptor: numeric section is skipped", d, sections, "section");
+            d = CopyDescriptor(good);
+            d["section"] = new List<object>();
+            ExpectSkipped("descriptor: array section is skipped", d, sections, "section");
+            d = CopyDescriptor(good);
+            d["section"] = null;
+            ExpectSkipped("descriptor: null section is skipped", d, sections, "section");
+            d = CopyDescriptor(good);
+            d["section"] = "missing.values";
+            ExpectSkipped("descriptor: missing section is skipped", d, sections, "is missing");
+
+            d = CopyDescriptor(good);
+            d["definition"] = "0";
+            ExpectSkipped("descriptor: string definition is skipped", d, sections, "definition");
+            d = CopyDescriptor(good);
+            d["definition"] = 0.5;
+            ExpectSkipped("descriptor: float definition is skipped", d, sections, "definition");
+            d = CopyDescriptor(good);
+            d["definition"] = new List<object>();
+            ExpectSkipped("descriptor: array definition is skipped", d, sections, "definition");
+            d = CopyDescriptor(good);
+            d["definition"] = -1L;
+            ExpectSkipped("descriptor: negative definition is skipped", d, sections, "definition");
+
+            d = CopyDescriptor(good);
+            d["count"] = "2";
+            ExpectSkipped("descriptor: string count is skipped", d, sections, "count");
+            d = CopyDescriptor(good);
+            d["count"] = 2.0;
+            ExpectSkipped("descriptor: float count is skipped", d, sections, "count");
+            d = CopyDescriptor(good);
+            d["count"] = new List<object>();
+            ExpectSkipped("descriptor: array count is skipped", d, sections, "count");
+            d = CopyDescriptor(good);
+            d["count"] = null;
+            ExpectSkipped("descriptor: null count is skipped", d, sections, "count");
+            d = CopyDescriptor(good);
+            d["count"] = -1L;
+            ExpectSkipped("descriptor: negative count is skipped", d, sections, "count");
+            d = CopyDescriptor(good);
+            d.Remove("count");
+            ExpectSkipped("descriptor: missing count is skipped", d, sections, "count is missing");
+            d = CopyDescriptor(good);
+            d["count"] = 3L;
+            ExpectSkipped("descriptor: count mismatch is skipped", d, sections, "does not match");
+
+            d = CopyDescriptor(good);
+            d["components"] = "1";
+            ExpectSkipped("descriptor: string components is skipped", d, sections, "components");
+            d = CopyDescriptor(good);
+            d["components"] = new List<object>();
+            ExpectSkipped("descriptor: array components is skipped", d, sections, "components");
+            d = CopyDescriptor(good);
+            d["components"] = 3L;
+            ExpectSkipped("descriptor: components mismatch is skipped", d, sections, "components");
+            d = CopyDescriptor(good);
+            d["components"] = 0L;
+            ExpectSkipped("descriptor: zero components is skipped", d, sections, "components");
+
+            var stringSections = new List<Section>();
+            var stringDescriptors = new List<Dictionary<string, object>>();
+            AddStringDescriptor(stringSections, stringDescriptors, "text",
+                new uint[] { 2 }, System.Text.Encoding.UTF8.GetBytes("hi"));
+            d = CopyDescriptor(stringDescriptors[0]);
+            d["offsets"] = 5L;
+            ExpectSkipped("descriptor: numeric offsets is skipped", d, stringSections, "offsets");
+
+            // An absent components field is legal; the type determines the
+            // shape. The decoded values still have to match count.
+            d = CopyDescriptor(good);
+            d.Remove("components");
+            var notes = new List<string>();
+            var root = new ArchivableDictionary();
+            AttributeStore.Attach(root, "mesh",
+                new List<Dictionary<string, object>> { d }, sections, null,
+                delegate(string text) { notes.Add(text); });
+            string type, domain;
+            object values;
+            Check("descriptor: absent components uses the type's shape",
+                notes.Count == 0
+                && AttributeStore.TryGet(root, "value", out type, out domain, out values),
+                "notes: " + string.Join(" | ", notes.ToArray()));
+
+            // A malformed descriptor must not stop its valid neighbour.
+            var bad = CopyDescriptor(good);
+            bad["type"] = "NOPE";
+            var neighbour = CopyDescriptor(good);
+            neighbour["name"] = "neighbour";
+            notes.Clear();
+            root = new ArchivableDictionary();
+            AttributeStore.Attach(root, "mesh",
+                new List<Dictionary<string, object>> { bad, neighbour }, sections, null,
+                delegate(string text) { notes.Add(text); });
+            Check("descriptor: a valid neighbour still attaches",
+                notes.Count == 1
+                && AttributeStore.TryGet(root, "neighbour", out type, out domain, out values)
+                && !AttributeStore.TryGet(root, "value", out type, out domain, out values),
+                "notes: " + string.Join(" | ", notes.ToArray())
+                + "; attached: " + DescribeRoot(root));
+        }
+
+        private static void CheckDtypeValidation()
+        {
+            ExpectDtypeMismatch("FLOAT", 1, "i32", "must be f32");
+            ExpectDtypeMismatch("FLOAT_VECTOR", 3, "i32", "must be f32");
+            ExpectDtypeMismatch("FLOAT2", 2, "i32", "must be f32");
+            ExpectDtypeMismatch("FLOAT4", 4, "i32", "must be f32");
+            ExpectDtypeMismatch("FLOAT_COLOR", 4, "i32", "must be f32");
+            ExpectDtypeMismatch("QUATERNION", 4, "i32", "must be f32");
+            ExpectDtypeMismatch("FLOAT4X4", 16, "i32", "must be f32");
+            ExpectDtypeMismatch("INT", 1, "f32", "must be i32");
+            ExpectDtypeMismatch("INT8", 1, "f32", "must be i32");
+            ExpectDtypeMismatch("INT16_2D", 2, "f32", "must be i32");
+            ExpectDtypeMismatch("INT32_2D", 2, "f32", "must be i32");
+            ExpectDtypeMismatch("BOOLEAN", 1, "f32", "must be u8");
+            ExpectDtypeMismatch("BYTE_COLOR", 4, "f32", "must be u8");
+
+            var sections = new List<Section>();
+            sections.Add(Section.Floats("attr.0.values", new float[] { 1f }));
+            sections.Add(Section.U32("attr.0.offsets", new uint[] { 1 }));
+            ExpectSkipped("dtype: STRING values reject f32",
+                StringEntry(1), sections, "must be u8");
+
+            sections = new List<Section>();
+            sections.Add(Section.Bytes("attr.0.values",
+                System.Text.Encoding.UTF8.GetBytes("hi")));
+            sections.Add(Section.Ints("attr.0.offsets", new int[] { 2 }));
+            Dictionary<string, object> entry = StringEntry(1);
+            entry["offsets"] = "attr.0.offsets";
+            ExpectSkipped("dtype: STRING offsets reject i32", entry, sections, "must be u32");
+
+            sections = new List<Section>();
+            sections.Add(Section.Bytes("attr.0.values",
+                System.Text.Encoding.UTF8.GetBytes("hi")));
+            sections.Add(new Section("attr.0.offsets", "u32", new byte[] { 2, 0, 0 }));
+            entry = StringEntry(1);
+            entry["offsets"] = "attr.0.offsets";
+            ExpectSkipped("dtype: truncated STRING offsets are skipped",
+                entry, sections, "multiple of 4");
+
+            sections = new List<Section>();
+            sections.Add(Section.Bytes("attr.0.values",
+                System.Text.Encoding.UTF8.GetBytes("hi")));
+            ExpectSkipped("dtype: STRING without offsets is skipped",
+                StringEntry(1), sections, "no offsets");
+
+            entry = StringEntry(1);
+            entry["offsets"] = "missing.offsets";
+            ExpectSkipped("dtype: STRING with a missing offsets section is skipped",
+                entry, sections, "offsets section");
+        }
+
+        private static void CheckShortValues()
+        {
+            List<Section> sections;
+            Dictionary<string, object> d;
+
+            d = FloatDescriptor(new float[] { 1.5f }, 2, out sections);
+            ExpectSkipped("short: count above a short section is skipped",
+                d, sections, "does not match");
+            d = FloatDescriptor(new float[] { 1.5f, 2.5f }, 3, out sections);
+            ExpectSkipped("short: count above the section is skipped",
+                d, sections, "does not match");
+            d = FloatDescriptor(new float[] { 1.5f, 2.5f, 3.5f }, 2, out sections);
+            ExpectSkipped("short: count below the section is skipped",
+                d, sections, "does not match");
+            d = FloatDescriptor(new float[] { 1.5f, 2.5f }, 1, out sections);
+            ExpectSkipped("short: count below a long section is skipped",
+                d, sections, "does not match");
+
+            var broken = new List<Section>();
+            broken.Add(new Section("attr.0.values", "f32", new byte[] { 0, 0, 0 }));
+            ExpectSkipped("short: a partial f32 element is skipped",
+                MeshDescriptor("broken", "FLOAT", 1, 1, "attr.0.values"),
+                broken, "multiple of 4");
+
+            var vectorSections = new List<Section>();
+            vectorSections.Add(Section.Floats("attr.0.values", new float[] { 1, 2, 3, 4 }));
+            ExpectSkipped("short: a partial vector is skipped",
+                MeshDescriptor("vector", "FLOAT_VECTOR", 3, 1, "attr.0.values"),
+                vectorSections, "does not match");
+        }
+
+        private static void CheckCurveValidation()
+        {
+            uint[] counts = new uint[] { 3, 2 };
+
+            List<Section> sections;
+            Dictionary<string, object> curve = CurveDescriptor("CURVE", "BOOLEAN",
+                Section.Bytes("unused", new byte[] { 1, 0 }), out sections);
+            Dictionary<string, object> d = CopyDescriptor(curve);
+            d["count"] = "2";
+            ExpectCurveSkipped("curve: string count is skipped", d, sections, counts, "count");
+            d = CopyDescriptor(curve);
+            d.Remove("count");
+            ExpectCurveSkipped("curve: missing count is skipped", d, sections, counts, "count");
+            d = CopyDescriptor(curve);
+            d["count"] = 3L;
+            var threeCurves = new List<Section>();
+            threeCurves.Add(Section.Bytes("attr.0.values", new byte[] { 1, 0, 1 }));
+            ExpectCurveSkipped("curve: count mismatch is skipped",
+                d, threeCurves, counts, "curves");
+            d = CopyDescriptor(curve);
+            d["domain"] = "BOGUS";
+            ExpectCurveSkipped("curve: unknown domain is skipped", d, sections, counts, "domain");
+
+            var badBoolean = new List<Section>();
+            badBoolean.Add(Section.Floats("attr.0.values", new float[] { 1, 0 }));
+            d = MeshDescriptor("curve", "BOOLEAN", 1, 2, "attr.0.values");
+            d["group"] = "crv";
+            d["domain"] = "CURVE";
+            ExpectCurveSkipped("curve: dtype mismatch is skipped", d, badBoolean, counts, "must be u8");
+
+            Dictionary<string, object> point = CurveDescriptor("POINT", "INT",
+                Section.Ints("unused", new int[] { 10, 11, 12, 20, 21 }), out sections);
+            d = CopyDescriptor(point);
+            d["count"] = 4L;
+            var fourPoints = new List<Section>();
+            fourPoints.Add(Section.Ints("attr.0.values", new int[] { 10, 11, 12, 20 }));
+            ExpectCurveSkipped("curve: point count mismatch is skipped",
+                d, fourPoints, counts, "curve points");
+            ExpectCurveSkipped("curve: missing point counts are skipped",
+                point, sections, null, "counts are missing");
+            ExpectCurveSkipped("curve: wrong count-section length is skipped",
+                point, sections, new uint[] { 5 }, "curve counts");
+            d = CopyDescriptor(point);
+            var shortPoints = new List<Section>();
+            shortPoints.Add(Section.Ints("attr.0.values", new int[] { 10, 11, 12, 20 }));
+            ExpectCurveSkipped("curve: short point values are skipped",
+                d, shortPoints, counts, "does not match");
+
+            var stringSections = new List<Section>();
+            var stringDescriptors = new List<Dictionary<string, object>>();
+            AddStringDescriptor(stringSections, stringDescriptors, "tag",
+                new uint[] { 4 }, System.Text.Encoding.UTF8.GetBytes("abc"));
+            stringDescriptors[0]["group"] = "crv";
+            stringDescriptors[0]["domain"] = "CURVE";
+            ExpectCurveSkipped("curve: malformed STRING offsets are skipped",
+                stringDescriptors[0], stringSections, counts, "runs past");
+
+            // A malformed curve attribute must not stop a valid one, and a
+            // valid STRING per-curve attribute keeps its two offsets.
+            var mixedSections = new List<Section>();
+            var mixedDescriptors = new List<Dictionary<string, object>>();
+            AddAttribute(mixedSections, mixedDescriptors, "crv", "bad", "CURVE", "BOOLEAN",
+                Section.Bytes("unused", new byte[] { 1, 0 }));
+            AddAttribute(mixedSections, mixedDescriptors, "crv", "pidx", "POINT", "INT",
+                Section.Ints("unused", new int[] { 10, 11, 12, 20, 21 }));
+            var bad = CopyDescriptor(mixedDescriptors[0]);
+            bad["count"] = "2";
+            var roots = new List<ArchivableDictionary>
+            {
+                new ArchivableDictionary(),
+                new ArchivableDictionary(),
+            };
+            var notes = new List<string>();
+            AttributeStore.AttachCurves(roots, counts,
+                new List<Dictionary<string, object>> { bad, mixedDescriptors[1] },
+                mixedSections, null, delegate(string text) { notes.Add(text); });
+            string type, domain;
+            object values;
+            Check("curve: a valid neighbour still attaches to every curve",
+                notes.Count == 1
+                && !AttributeStore.TryGet(roots[0], "bad", out type, out domain, out values)
+                && AttributeStore.TryGet(roots[0], "pidx", out type, out domain, out values)
+                && AttributeStore.TryGet(roots[1], "pidx", out type, out domain, out values),
+                "notes: " + string.Join(" | ", notes.ToArray()));
+
+            var stringRoots = new List<ArchivableDictionary>
+            {
+                new ArchivableDictionary(),
+                new ArchivableDictionary(),
+            };
+            var stringCurveSections = new List<Section>();
+            var stringCurveDescriptors = new List<Dictionary<string, object>>();
+            AddStringDescriptor(stringCurveSections, stringCurveDescriptors, "tag",
+                new uint[] { 1, 1 }, System.Text.Encoding.UTF8.GetBytes("ab"));
+            stringCurveDescriptors[0]["group"] = "crv";
+            stringCurveDescriptors[0]["domain"] = "CURVE";
+            AttributeStore.AttachCurves(stringRoots, new uint[] { 1, 1 },
+                stringCurveDescriptors, stringCurveSections);
+            bool gotTag0 = AttributeStore.TryGet(stringRoots[0], "tag", out type, out domain, out values);
+            bool gotTag1 = AttributeStore.TryGet(stringRoots[1], "tag", out type, out domain, out values);
+            Check("curve: valid STRING values attach per curve",
+                gotTag0 && domain == "CURVE" && values is string[]
+                && ((string[])values).Length == 1
+                && gotTag1 && AttributeStore.TryGet(stringRoots[1], "tag", out type, out domain, out values)
+                && ((string[])values).Length == 1,
+                gotTag0 ? "first " + ValuesName(values) : "missing");
+        }
+
+        private static void CheckCollectValidation()
+        {
+            var root = new ArchivableDictionary();
+            root.Set("junk", new double[] { 1.0 });
+            ExpectBadAttribute("collect: a non-dictionary entry is bad_attribute",
+                root, "not a dictionary");
+
+            var record = new ArchivableDictionary();
+            record.Set("values", new double[] { 1.0 });
+            ExpectBadAttribute("collect: a missing type is bad_attribute",
+                RootOf(record), "type");
+
+            record = new ArchivableDictionary();
+            record.Set("type", "NOPE");
+            record.Set("domain", "POINT");
+            record.Set("values", new double[] { 1.0 });
+            ExpectBadAttribute("collect: an unknown type is bad_attribute",
+                RootOf(record), "unknown attribute type");
+
+            record = new ArchivableDictionary();
+            record.Set("type", "FLOAT");
+            record.Set("domain", "POINT");
+            record.Set("values", new int[] { 1 });
+            ExpectBadAttribute("collect: a wrong array kind is bad_attribute",
+                RootOf(record), "double[]");
+
+            record = new ArchivableDictionary();
+            record.Set("type", "FLOAT_VECTOR");
+            record.Set("domain", "POINT");
+            record.Set("values", new double[] { 1, 2, 3, 4, 5 });
+            ExpectBadAttribute("collect: a partial element is bad_attribute",
+                RootOf(record), "multiple of 3");
+
+            record = new ArchivableDictionary();
+            record.Set("type", "FLOAT");
+            record.Set("domain", 5);
+            record.Set("values", new double[] { 1.0 });
+            ExpectBadAttribute("collect: a non-string domain is bad_attribute",
+                RootOf(record), "domain");
+
+            record = new ArchivableDictionary();
+            record.Set("type", "STRING");
+            record.Set("domain", "POINT");
+            record.Set("values", new string[] { null });
+            ExpectBadAttribute("collect: a null STRING value is bad_attribute",
+                RootOf(record), "null");
+
+            record = new ArchivableDictionary();
+            record.Set("type", "FLOAT");
+            record.Set("domain", "POINT");
+            ExpectBadAttribute("collect: missing values are bad_attribute",
+                RootOf(record), "values");
+
+            record = new ArchivableDictionary();
+            record.Set("type", "FLOAT");
+            record.Set("domain", "");
+            record.Set("values", new double[] { 1.0 });
+            ExpectBadAttribute("collect: an empty domain is bad_attribute",
+                RootOf(record), "domain");
+
+            record = new ArchivableDictionary();
+            record.Set("type", "FLOAT");
+            record.Set("domain", "BOGUS");
+            record.Set("values", new double[] { 1.0 });
+            ExpectBadAttribute("collect: an unknown domain is bad_attribute",
+                RootOf(record), "domain");
+
+            root = new ArchivableDictionary();
+            var setRoot = root;
+            ExpectBadAttribute("set: a wrong array kind is bad_attribute", delegate
+            {
+                AttributeStore.Set(setRoot, "x", "FLOAT", "POINT", new int[] { 1 });
+            }, "double[]");
+            ExpectBadAttribute("set: a partial element is bad_attribute", delegate
+            {
+                AttributeStore.Set(setRoot, "x", "FLOAT_VECTOR", "POINT", new double[] { 1, 2 });
+            }, "multiple of 3");
+            ExpectBadAttribute("set: an unknown type is bad_attribute", delegate
+            {
+                AttributeStore.Set(setRoot, "x", "NOPE", "POINT", new double[] { 1.0 });
+            }, "unknown attribute type");
+            ExpectBadAttribute("set: an empty domain is bad_attribute", delegate
+            {
+                AttributeStore.Set(setRoot, "x", "FLOAT", "", new double[] { 1.0 });
+            }, "domain");
+            ExpectBadAttribute("set: an empty name is bad_attribute", delegate
+            {
+                AttributeStore.Set(setRoot, "", "FLOAT", "POINT", new double[] { 1.0 });
+            }, "name");
+        }
+
+        private static void CheckHasIgnoresNonAttributes()
+        {
+            var root = new ArchivableDictionary();
+            root.Set("junk", new double[] { 1.0 });
+            Check("has: a non-dictionary entry does not count",
+                !AttributeStore.Has(root), DescribeRoot(root));
+
+            var record = new ArchivableDictionary();
+            record.Set("type", "NOPE");
+            record.Set("values", new double[] { 1.0 });
+            root.Set("unknown", record);
+            Check("has: an unknown type does not count",
+                !AttributeStore.Has(root), DescribeRoot(root));
+
+            AttributeStore.Set(root, "good", "FLOAT", "POINT", new double[] { 1.0 });
+            Check("has: a valid attribute counts",
+                AttributeStore.Has(root), DescribeRoot(root));
+            Check("has: an empty root has nothing",
+                !AttributeStore.Has(new ArchivableDictionary()), "empty");
+
+            var noDomain = new ArchivableDictionary();
+            noDomain.Set("type", "FLOAT");
+            noDomain.Set("values", new double[] { 1.0 });
+            root = new ArchivableDictionary();
+            root.Set("nodomain", noDomain);
+            Check("has: a missing domain does not count",
+                !AttributeStore.Has(root), DescribeRoot(root));
+
+            var badValues = new ArchivableDictionary();
+            badValues.Set("type", "FLOAT");
+            badValues.Set("domain", "POINT");
+            badValues.Set("values", new int[] { 1 });
+            root = new ArchivableDictionary();
+            root.Set("bad", badValues);
+            string type, domain;
+            object values;
+            Check("tryget: a malformed value shape is not returned",
+                !AttributeStore.TryGet(root, "bad", out type, out domain, out values),
+                DescribeRoot(root));
+        }
+
+        private static Dictionary<string, object> BaseFloatDescriptor(out List<Section> sections)
+        {
+            return FloatDescriptor(new float[] { 1.5f, 2.5f }, null, out sections);
+        }
+
+        private static Dictionary<string, object> FloatDescriptor(float[] values, long? count,
+                                                                  out List<Section> sections)
+        {
+            var descriptors = new List<Dictionary<string, object>>();
+            sections = new List<Section>();
+            AddAttribute(sections, descriptors, "mesh", "value", "POINT", "FLOAT",
+                Section.Floats("unused", values));
+            if (count.HasValue) descriptors[0]["count"] = count.Value;
+            return descriptors[0];
+        }
+
+        private static Dictionary<string, object> CurveDescriptor(string domain, string type,
+                                                                  Section values,
+                                                                  out List<Section> sections)
+        {
+            var descriptors = new List<Dictionary<string, object>>();
+            sections = new List<Section>();
+            AddAttribute(sections, descriptors, "crv", "attr", domain, type, values);
+            return descriptors[0];
+        }
+
+        private static Dictionary<string, object> MeshDescriptor(string name, string type,
+                                                                 int components, long count,
+                                                                 string section)
+        {
+            var entry = new Dictionary<string, object>();
+            entry["group"] = "mesh";
+            entry["name"] = name;
+            entry["domain"] = "POINT";
+            entry["type"] = type;
+            entry["components"] = (long)components;
+            entry["count"] = count;
+            entry["section"] = section;
+            return entry;
+        }
+
+        private static Dictionary<string, object> StringEntry(long count)
+        {
+            return MeshDescriptor("text", "STRING", 1, count, "attr.0.values");
+        }
+
+        private static Dictionary<string, object> CopyDescriptor(Dictionary<string, object> source)
+        {
+            return new Dictionary<string, object>(source);
+        }
+
+        private static ArchivableDictionary RootOf(ArchivableDictionary record)
+        {
+            var root = new ArchivableDictionary();
+            root.Set("bad", record);
+            return root;
+        }
+
+        private static void ExpectSkipped(string what, Dictionary<string, object> descriptor,
+                                          List<Section> sections, string expectedNote)
+        {
+            var notes = new List<string>();
+            var root = new ArchivableDictionary();
+            Exception failure = null;
+            try
+            {
+                AttributeStore.Attach(root, "mesh",
+                    new List<Dictionary<string, object>> { descriptor }, sections, null,
+                    delegate(string text) { notes.Add(text); });
+            }
+            catch (Exception ex) { failure = ex; }
+            Check(what, failure == null && AttributeStore.Names(root).Length == 0
+                && notes.Count == 1
+                && notes[0].IndexOf(expectedNote, StringComparison.Ordinal) >= 0,
+                (failure != null ? "threw " + failure.GetType().Name + ": "
+                    + failure.Message + "; " : "")
+                + "attached [" + DescribeRoot(root) + "]; notes: "
+                + string.Join(" | ", notes.ToArray()));
+        }
+
+        private static void ExpectCurveSkipped(string what, Dictionary<string, object> descriptor,
+                                               List<Section> sections, uint[] counts,
+                                               string expectedNote)
+        {
+            var roots = new List<ArchivableDictionary>
+            {
+                new ArchivableDictionary(),
+                new ArchivableDictionary(),
+            };
+            var notes = new List<string>();
+            Exception failure = null;
+            try
+            {
+                AttributeStore.AttachCurves(roots, counts,
+                    new List<Dictionary<string, object>> { descriptor }, sections, null,
+                    delegate(string text) { notes.Add(text); });
+            }
+            catch (Exception ex) { failure = ex; }
+            Check(what, failure == null
+                && AttributeStore.Names(roots[0]).Length == 0
+                && AttributeStore.Names(roots[1]).Length == 0
+                && notes.Count == 1
+                && notes[0].IndexOf(expectedNote, StringComparison.Ordinal) >= 0,
+                (failure != null ? "threw " + failure.GetType().Name + ": "
+                    + failure.Message + "; " : "")
+                + "attached [" + DescribeRoot(roots[0]) + "]/["
+                + DescribeRoot(roots[1]) + "]; notes: " + string.Join(" | ", notes.ToArray()));
+        }
+
+        private static void ExpectDtypeMismatch(string type, int components, string wrongDtype,
+                                                string expectedNote)
+        {
+            var sections = new List<Section>();
+            Section wrong;
+            if (wrongDtype == "i32")
+                wrong = Section.Ints("wrong", new int[components]);
+            else
+                wrong = Section.Floats("wrong", new float[components]);
+            sections.Add(new Section("attr.0.values", wrong.Dtype, wrong.Raw));
+            ExpectSkipped("dtype: " + type + " rejects " + wrongDtype,
+                MeshDescriptor("dtype", type, components, 1, "attr.0.values"),
+                sections, expectedNote);
+        }
+
+        private static void ExpectBadAttribute(string what, ArchivableDictionary root,
+                                               string expectedNote)
+        {
+            ExpectBadAttribute(what, delegate
+            {
+                AttributeStore.Collect(root, "mesh", new List<Section>(),
+                    new List<Dictionary<string, object>>());
+            }, expectedNote);
+        }
+
+        private static void ExpectBadAttribute(string what, Action action, string expectedNote)
+        {
+            try
+            {
+                action();
+            }
+            catch (FrameException ex)
+            {
+                Check(what, ex.Code == "bad_attribute"
+                    && ex.Message.IndexOf(expectedNote, StringComparison.Ordinal) >= 0,
+                    "code " + ex.Code + ": " + ex.Message);
+                return;
+            }
+            catch (Exception ex)
+            {
+                Check(what, false,
+                    "unclassified " + ex.GetType().Name + ": " + ex.Message);
+                return;
+            }
+            Check(what, false, "no exception");
         }
 
         private static void AddStringDescriptor(List<Section> sections,
@@ -452,6 +1107,8 @@ namespace Stageloom.Tests.Console
             entry["name"] = name;
             entry["domain"] = "POINT";
             entry["type"] = "STRING";
+            entry["components"] = 1L;
+            entry["count"] = (long)offsets.Length;
             entry["section"] = "attr." + index + ".values";
             entry["offsets"] = "attr." + index + ".offsets";
             descriptors.Add(entry);
