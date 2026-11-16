@@ -183,10 +183,10 @@ class GhServer(object):
                     bridge.state["error"] = "bad frame: %s" % (exc,)
                     # Answer with the protocol's own code (§4.6) instead of
                     # silence: a wrong version additionally ends the connection
-                    # (returning from this handler closes it).
-                    code = codec.code_of(exc)
-                    await _refuse(ws, code, str(exc))
-                    if code == "proto_mismatch":
+                    # (returning from this handler closes it). The codec carries
+                    # the code on the exception; never infer it from text.
+                    await _refuse(ws, exc.code, str(exc))
+                    if exc.code == "proto_mismatch":
                         break
                     continue
                 if header.get("type") == "hello":

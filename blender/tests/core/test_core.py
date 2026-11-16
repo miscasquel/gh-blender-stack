@@ -115,7 +115,7 @@ class FrameRoundTripTests(unittest.TestCase):
         frame = frame.replace(b'"v":2', b'"v":3', 1)
         with self.assertRaises(codec.CodecError) as ctx:
             codec.decode_frame(frame)
-        self.assertIn("proto_mismatch", str(ctx.exception))
+        self.assertEqual(ctx.exception.code, "proto_mismatch")
 
     def test_unknown_dtype_rejected(self):
         with self.assertRaises(codec.SectionError):
