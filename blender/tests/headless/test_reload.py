@@ -55,12 +55,52 @@ class ReopenTests(unittest.TestCase):
             time.sleep(0.05)
         cls.connected = bridge.state["connected"]
 
+        # A decoded frame from the old file's session sits in the queue when
+        # the new file opens. It must neither be applied nor leak the schema
+        # of the previous document into the new one.
+        cls.stale_queued = 2
+        bridge.post_incoming(
+            {
+                "type": "schema",
+                "stage": cls.stage_key,
+                "params": [
+                    {
+                        "id": "00000000-0000-4000-8000-0000000000aa",
+                        "label": "Stale",
+                        "type": "float",
+                        "default": 1.0,
+                    }
+                ],
+            },
+            {},
+        )
+        bridge.post_incoming(
+            {
+                "type": "response",
+                "stage": cls.stage_key,
+                "rid": "sha256:stale-before-load",
+                "status": "ok",
+                "out_hash": "stale-before-load",
+            },
+            {},
+        )
         bpy.ops.wm.open_mainfile(filepath=cls.blend)
 
     @classmethod
     def tearDownClass(cls):
         stop_fake(getattr(cls, "fake", None))
         bpy.ops.preferences.addon_disable(module="stageloom")
+
+    def test_00_the_load_dropped_the_queued_frames(self):
+        obj = bpy.data.objects.get("Reload")
+        stage = obj.gh_stack.stages[0]
+        self.assertEqual(
+            self.bridge.INCOMING.qsize(),
+            0,
+            "the load kept %d old-session frame(s) queued" % self.stale_queued,
+        )
+        self.assertEqual(len(stage.params), 0, "a schema from the old file was applied")
+        self.assertEqual(stage.applied_out_hash, "", "a response from the old file was applied")
 
     def test_01_engine_hooks_survive_the_load(self):
         self.assertTrue(

@@ -73,6 +73,24 @@ class DisconnectedFastPathTests(unittest.TestCase):
             engine._in_background = real_background
             engine._dirty.clear()
 
+    def test_03_an_unrelated_scene_does_not_wake_the_stage(self):
+        engine = self.engine
+        other = bpy.data.scenes.new("Activity Other Scene")
+        try:
+            engine._dirty.clear()
+            engine._on_depsgraph(other)
+            self.assertNotIn(self.obj.name, engine._dirty, "an unrelated depsgraph woke the stage")
+            engine._dirty.clear()
+            engine._on_frame_change(other)
+            self.assertNotIn(self.obj.name, engine._dirty, "an unrelated frame woke the stage")
+
+            engine._dirty.clear()
+            engine._on_frame_change(bpy.context.scene)
+            self.assertIn(self.obj.name, engine._dirty, "the stage's own frame did not wake it")
+        finally:
+            engine._dirty.clear()
+            bpy.data.scenes.remove(other)
+
 
 if __name__ == "__main__":
     unittest.main()

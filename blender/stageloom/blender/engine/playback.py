@@ -44,6 +44,11 @@ def _clear_report(stage):
     _reported.pop(stage.key, None)
 
 
+def _reset_reports():
+    """Forget the per-stage dedup lines of a session that just ended."""
+    _reported.clear()
+
+
 def _playback_hard_cap():
     """The finite cap that applies even when the preference says "no timeout"."""
     try:
@@ -320,6 +325,7 @@ def _on_playback_pre(scene, depsgraph=None):
     for counter in ("playback_frames", "playback_synced", "playback_failures"):
         engine.stats[counter] = 0
     engine._playback_sync = bool(_scene_stacks(scene)) and scene.sync_mode == "NONE"
+    engine._playback_scene = scene.as_pointer() if engine._playback_sync else None
     if engine._playback_sync:
         engine._trace.append("playback sync: Play Every Frame waits for Grasshopper")
         engine.prefs.log(
@@ -331,8 +337,13 @@ def _on_playback_pre(scene, depsgraph=None):
 @engine.bpy.app.handlers.persistent
 def _on_playback_post(scene, depsgraph=None):
     """Disarm the gate when playback stops."""
+    if engine._playback_scene is not None and scene is not None:
+        if scene.as_pointer() != engine._playback_scene:
+            # A post event from another scene must not disarm this one's gate.
+            return
     was_synced = engine._playback_sync
     engine._playback_sync = False
+    engine._playback_scene = None
     _reported.clear()
     if was_synced:
         stats = engine.stats
@@ -374,16 +385,27 @@ def _run_gate(scene):
 @engine.bpy.app.handlers.persistent
 def _on_frame_change_sync(scene, depsgraph=None):
     """One gated frame: block until the current frame's stages are ready."""
+    if engine._switching_scene:
+        # The prefix read activated another scene for its depsgraph; this is
+        # not a playback or bake frame.
+        return
+    pointer = scene.as_pointer() if scene is not None else None
     if engine._bake_sync:
         # A native Bake job steps frames and fires this handler. The stage
-        # outputs it stores must be the ones for *this* frame.
+        # outputs it stores must be the ones for *this* frame. A bake belongs
+        # to one scene; a frame event from another must not enter it.
+        if pointer is not None and engine._bake_scene is not None and pointer != engine._bake_scene:
+            return
         _update_bake_progress(scene)
         _run_gate(scene)
         return
     if not engine._playback_sync:
         return
+    if pointer is not None and engine._playback_scene is not None and pointer != engine._playback_scene:
+        return
     if scene.sync_mode != "NONE":
         # The mode changed while playing; hand the frame back to the timer.
         engine._playback_sync = False
+        engine._playback_scene = None
         return
     _run_gate(scene)

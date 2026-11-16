@@ -17,7 +17,9 @@ def _on_depsgraph(scene, depsgraph=None):
     engine._heartbeat["trigger_at"] = engine.time.monotonic()
     engine._heartbeat["trigger_count"] += 1
     engine._heartbeat["trigger_updates"] = engine._bump_epochs(depsgraph)
-    engine._mark_dirty_all()
+    # A depsgraph event belongs to one scene. Marking every stack made an
+    # unrelated scene's stage ask again, with the wrong scene's frame.
+    engine._mark_dirty_scene(scene)
     engine._mark_hot()
 
 
@@ -109,8 +111,13 @@ def _flush_edit_mode():
 @engine.bpy.app.handlers.persistent
 def _on_frame_change(scene, depsgraph=None):
     # A frame change tags nothing (the frame is part of the prefix revision).
-    # It queues every stack: a live stage solves once per frame.
-    engine._mark_dirty_all()
+    # It queues the stacks of *this* scene: a stage on an object in another
+    # scene keeps that scene's frame and is not woken by this one.
+    if engine._switching_scene:
+        # Fired by the prefix read temporarily activating the object's scene,
+        # not by the user or by playback.
+        return
+    engine._mark_dirty_scene(scene)
     engine._mark_hot()
 
 
@@ -181,16 +188,31 @@ def _on_load(scene=None):
     """
     # A file from before the stage scene still has its plumbing in the user's
     # scene: move it now, so the outliner is clean before the first apply.
+    # This also renames object-name-based helpers to the stable stack-id
+    # identity, so a file saved under the old scheme keeps its geometry.
     engine.helpers.adopt_existing()
+    # A decoded frame belongs to the session that just ended. A response or
+    # schema queued before the load must not be applied to the new file (the
+    # stage keys may even coincide).
+    engine.bridge.clear_incoming()
     engine._pending.clear()
     engine._sent.clear()
     engine._last_frame.clear()
     engine._pull_permits.clear()
     engine._pull_deadlines.clear()
     engine._prefix_memo.clear()
+    engine._prefix_batch.clear()
+    engine._prefix_batch_built = False
+    engine._prefix_batching = False
+    engine._prefix_epoch = 0
+    engine._verify.clear()
     engine._state_since.clear()
     engine._last_no_send.clear()
     engine._timings.clear()
+    engine._waiting_objects.clear()
+    engine._last_stall_check = 0.0
+    engine._reset_reports()
+    engine._dirty.clear()
     # The guard belongs to the session that just ended. A pass can only be
     # running on the main thread, but a load (a new file, a revert) must not
     # inherit the previous file's wedge: with `_evaluating` set the depsgraph
@@ -201,6 +223,10 @@ def _on_load(scene=None):
     engine._ticking = False
     engine._playback_sync = False
     engine._bake_sync = False
+    engine._bake_progress = None
+    engine._playback_scene = None
+    engine._bake_scene = None
+    engine._switching_scene = False
     # A load cannot prove which of two objects sharing a key was the original.
     # Build the index without trusting the previous session's owners: a shared
     # key becomes a visible conflict rather than a name-based silent split.

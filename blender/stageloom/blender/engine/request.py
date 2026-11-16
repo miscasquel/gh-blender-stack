@@ -1,10 +1,44 @@
 """Prefix evaluation, request IDs, sends and the per-stage pass."""
 
+import contextlib
 import sys
 
 from ...core import CAP_BLOCKS_2
 
 engine = sys.modules[__package__]
+
+
+@contextlib.contextmanager
+def _owned_scene(obj):
+    """Make the object's own scene the evaluation scene for this read.
+
+    ``bpy.context.evaluated_depsgraph_get()`` and the frame-dependent part of a
+    prefix belong to the *active* scene. A stage on an object in a non-active
+    scene therefore needs its scene activated for the clone evaluation, then
+    restored. A normal single-scene session never pays for the switch (the
+    context scene already is the object's scene).
+    """
+    scene = engine.helpers.scene_of(obj)
+    window = getattr(engine.bpy.context, "window", None)
+    current = getattr(window, "scene", None) if window is not None else None
+    if scene is None or window is None or current == scene:
+        yield scene
+        return
+    previous_layer = getattr(window, "view_layer", None)
+    engine._switching_scene = True
+    try:
+        window.scene = scene
+        try:
+            yield scene
+        finally:
+            window.scene = current
+            if previous_layer is not None:
+                try:
+                    window.view_layer = previous_layer
+                except (AttributeError, TypeError, ValueError):
+                    pass
+    finally:
+        engine._switching_scene = False
 
 
 def _set(stage, field, value):
@@ -328,7 +362,7 @@ def _process_stage(obj, record, stage):
     if (
         rid == stage.rid
         and last_frame is not None
-        and last_frame == engine.bpy.context.scene.frame_float
+        and last_frame == engine.helpers.frame_of(obj)
         and verify_key not in engine._verify
         and not retry_note
     ):
@@ -381,7 +415,7 @@ def _process_stage(obj, record, stage):
     # The client has now been told this request; `_sent` is the session truth for
     # the next full/ref decision (until undo or a reconnect says otherwise).
     engine._sent[verify_key] = (rid, geom_hash)
-    engine._last_frame[verify_key] = engine.bpy.context.scene.frame_float
+    engine._last_frame[verify_key] = engine.helpers.frame_of(obj)
     # A Pull permit is held until the request it caused settles: a send that
     # never left (disconnected, undelivered) leaves the Pull armed for the next
     # pass, and an answer or the permit deadline releases it. A one-way stage
@@ -617,66 +651,75 @@ def _clone_prefixes(obj, stages, subd):
     sees the removals.
     """
     clones = []
+    results = {}
+    cleanup_failure = None
+    primary_failed = False
     engine._guard_owner = (obj.name, "prefix batch")
     engine._evaluating_since = engine.time.monotonic()
     engine._evaluating = True
-    results = {}
     try:
-        for stage, index in stages:
-            clone = obj.copy()
-            owned_data = obj.data.copy() if obj.mode == "EDIT" else None
-            if owned_data is not None:
-                clone.data = owned_data
-            # Register before linking: a link or modifier-removal failure must
-            # still remove the clone in the finally block.
-            clones.append((stage, clone, owned_data))
-            engine.bpy.context.scene.collection.objects.link(clone)
-            for later in list(clone.modifiers)[index:]:
-                clone.modifiers.remove(later)
-        depsgraph = engine.bpy.context.evaluated_depsgraph_get()
-        for stage, clone, _owned_data in clones:
-            geometry = clone.evaluated_get(depsgraph).evaluated_geometry()
-            notes = []
-            sections, attributes, definitions = (
-                engine.geometry_io.geometry_set_to_sections(
-                    geometry, as_subd=subd, notes=notes,
-                    blocks_2=_peer_blocks_2(),
-                )
-            )
-            results[stage.key] = (sections, attributes, definitions, notes)
-    finally:
-        primary_failed = engine.sys.exc_info()[0] is not None
-        cleanup_failure = None
-        try:
-            for stage, clone, owned_data in clones:
-                failure = engine._cleanup_prefix_clone(
-                    clone, owned_data, stage.key, update_view_layer=False
-                )
-                if cleanup_failure is None:
-                    cleanup_failure = failure
+        # The clones live in, and are evaluated by, the object's own scene.
+        # Evaluating them in the active scene read its frame for a stage that
+        # belongs to another one.
+        with _owned_scene(obj) as scene:
+            target = scene.collection if scene is not None else engine.bpy.context.scene.collection
             try:
-                # Flush the removals while the guard is still up. Without this
-                # the depsgraph delivers the clone link/remove tags after the
-                # guard drops, marks every stack dirty, and the next pass builds
-                # another batch: a live-session feedback loop.
-                engine.bpy.context.view_layer.update()
-            except Exception as exc:
-                if cleanup_failure is None:
-                    cleanup_failure = exc
-                message = "prefix cleanup failed (update view layer): %r" % (exc,)
-                engine.bridge.state["error"] = message
-                if not engine._trace or engine._trace[-1] != message:
-                    engine._trace.append(message)
-                import traceback
+                for stage, index in stages:
+                    clone = obj.copy()
+                    owned_data = obj.data.copy() if obj.mode == "EDIT" else None
+                    if owned_data is not None:
+                        clone.data = owned_data
+                    # Register before linking: a link or modifier-removal failure must
+                    # still remove the clone in the finally block.
+                    clones.append((stage, clone, owned_data))
+                    target.objects.link(clone)
+                    for later in list(clone.modifiers)[index:]:
+                        clone.modifiers.remove(later)
+                depsgraph = engine.bpy.context.evaluated_depsgraph_get()
+                for stage, clone, _owned_data in clones:
+                    geometry = clone.evaluated_get(depsgraph).evaluated_geometry()
+                    notes = []
+                    sections, attributes, definitions = (
+                        engine.geometry_io.geometry_set_to_sections(
+                            geometry, as_subd=subd, notes=notes,
+                            blocks_2=_peer_blocks_2(),
+                        )
+                    )
+                    results[stage.key] = (sections, attributes, definitions, notes)
+            finally:
+                primary_failed = engine.sys.exc_info()[0] is not None
+                try:
+                    for stage, clone, owned_data in clones:
+                        failure = engine._cleanup_prefix_clone(
+                            clone, owned_data, stage.key, update_view_layer=False
+                        )
+                        if cleanup_failure is None:
+                            cleanup_failure = failure
+                    try:
+                        # Flush the removals while the guard is still up. Without this
+                        # the depsgraph delivers the clone link/remove tags after the
+                        # guard drops, marks every stack dirty, and the next pass builds
+                        # another batch: a live-session feedback loop.
+                        engine.bpy.context.view_layer.update()
+                    except Exception as exc:
+                        if cleanup_failure is None:
+                            cleanup_failure = exc
+                        message = "prefix cleanup failed (update view layer): %r" % (exc,)
+                        engine.bridge.state["error"] = message
+                        if not engine._trace or engine._trace[-1] != message:
+                            engine._trace.append(message)
+                        import traceback
 
-                engine.prefs.log(
-                    "[stageloom] %s\n%s" % (message, traceback.format_exc()),
-                    flush=True,
-                )
-        finally:
-            engine._evaluating = False
-        if cleanup_failure is not None and not primary_failed:
-            raise cleanup_failure
+                        engine.prefs.log(
+                            "[stageloom] %s\n%s" % (message, traceback.format_exc()),
+                            flush=True,
+                        )
+                finally:
+                    engine._evaluating = False
+    finally:
+        engine._evaluating = False
+    if cleanup_failure is not None and not primary_failed:
+        raise cleanup_failure
     return results
 
 
@@ -705,27 +748,36 @@ def _clone_prefix(obj, index, subd, stage_key=None, notes=None):
     engine._guard_owner = (obj.name, stage_key)
     engine._evaluating_since = engine.time.monotonic()
     engine._evaluating = True
+    sections = attributes = definitions = None
     try:
-        engine.bpy.context.scene.collection.objects.link(clone)
-        for later in list(clone.modifiers)[index:]:
-            clone.modifiers.remove(later)
-        depsgraph = engine.bpy.context.evaluated_depsgraph_get()
-        geometry = clone.evaluated_get(depsgraph).evaluated_geometry()
-        sections, attributes, definitions = engine.geometry_io.geometry_set_to_sections(
-            geometry, as_subd=subd, notes=notes, blocks_2=_peer_blocks_2()
-        )
+        # Link and evaluate in the object's own scene, not whichever scene is
+        # active. The latter is the multi-scene frame bug: the clone was read
+        # with another scene's playhead.
+        with _owned_scene(obj) as scene:
+            target = scene.collection if scene is not None else engine.bpy.context.scene.collection
+            try:
+                target.objects.link(clone)
+                for later in list(clone.modifiers)[index:]:
+                    clone.modifiers.remove(later)
+                depsgraph = engine.bpy.context.evaluated_depsgraph_get()
+                geometry = clone.evaluated_get(depsgraph).evaluated_geometry()
+                sections, attributes, definitions = engine.geometry_io.geometry_set_to_sections(
+                    geometry, as_subd=subd, notes=notes, blocks_2=_peer_blocks_2()
+                )
+            finally:
+                # The primary failure, if any, is captured before cleanup runs: a
+                # cleanup failure must not mask it, and the guard reset must happen
+                # either way. The reset is the inner `finally` of the two, so it runs
+                # even if `_cleanup_prefix_clone` itself surprises us.
+                primary_failed = engine.sys.exc_info()[0] is not None
+                try:
+                    cleanup_failure = engine._cleanup_prefix_clone(clone, owned_data, stage_key)
+                finally:
+                    engine._evaluating = False
+                if cleanup_failure is not None and not primary_failed:
+                    raise cleanup_failure
     finally:
-        # The primary failure, if any, is captured before cleanup runs: a
-        # cleanup failure must not mask it, and the guard reset must happen
-        # either way. The reset is the inner `finally` of the two, so it runs
-        # even if `_cleanup_prefix_clone` itself surprises us.
-        primary_failed = engine.sys.exc_info()[0] is not None
-        try:
-            cleanup_failure = engine._cleanup_prefix_clone(clone, owned_data, stage_key)
-        finally:
-            engine._evaluating = False
-        if cleanup_failure is not None and not primary_failed:
-            raise cleanup_failure
+        engine._evaluating = False
     return sections, attributes, definitions
 
 
@@ -814,7 +866,7 @@ def _prefix_revision(obj, record):
     list of references is silent stale geometry when it misses one. The frame
     (a frame change tags nothing) and the SubD cage flag are read directly.
     """
-    return (engine._prefix_epoch, bool(record.subd), engine.bpy.context.scene.frame_float)
+    return (engine._prefix_epoch, bool(record.subd), engine.helpers.frame_of(obj))
 
 
 def _bump_epochs(depsgraph=None):

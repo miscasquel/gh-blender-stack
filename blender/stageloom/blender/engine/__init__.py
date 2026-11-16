@@ -152,6 +152,11 @@ _evaluating = False
 # frame_change_post and the engine timer stays out of the way. Frame Drop
 # leaves this false and keeps the existing asynchronous engine behaviour.
 _playback_sync = False
+# True while a prefix read temporarily makes a non-active object's scene the
+# window scene (so its depsgraph evaluates at that scene's frame). Switching
+# the window scene fires frame_change_post for both scenes; those synthetic
+# events must not queue a pass or enter a gate.
+_switching_scene = False
 # True while a native Geometry Nodes Bake is running. Its bake job steps frames
 # and fires frame_change_post, so the same synchronous stage pass runs per frame
 # and the Bake node stores the current Grasshopper output. The timer stays out
@@ -160,6 +165,11 @@ _bake_sync = False
 # (window_manager, start_frame, total_frames) while a bake runs, so the frame
 # handler can update Blender's cursor progress number. None otherwise.
 _bake_progress = None
+# The scene that owns the armed playback gate or bake. A frame event from
+# another scene must not enter either gate; None means "any scene", the
+# fallback for direct tests and callers that set the flag themselves.
+_playback_scene = None
+_bake_scene = None
 # Who set the guard, and when: written once per clone, so the watchdog at the
 # top of `_timer` can name the object and stage that left it up without
 # formatting a traceback per clone. `_ticking` tells the depsgraph handler
@@ -444,6 +454,7 @@ def _deactivate():
     pending pass could still need.
     """
     global _active, _hot_until, _playback_sync, _bake_sync, _bake_progress
+    global _playback_scene, _bake_scene, _switching_scene
     if bpy.app.timers.is_registered(_timer):
         bpy.app.timers.unregister(_timer)
     for handler_list, handler in _ACTIVE_HANDLERS:
@@ -454,6 +465,9 @@ def _deactivate():
     _playback_sync = False
     _bake_sync = False
     _bake_progress = None
+    _playback_scene = None
+    _bake_scene = None
+    _switching_scene = False
     _dirty.clear()
     return False
 
@@ -484,7 +498,8 @@ def register():
     global _registered, _hot_until, _index_dirty
     global _evaluating, _guard_owner, _evaluating_since, _ticking
     global _prefix_batch_built, _prefix_batching, _playback_sync, _bake_sync
-    global _bake_progress
+    global _bake_progress, _playback_scene, _bake_scene, _prefix_epoch
+    global _last_stall_check, _switching_scene
     if _registered:
         return
     _stage_index.clear()
@@ -498,6 +513,7 @@ def register():
     # Leaving them behind served a stale prefix and stale counters across a
     # disable/enable. `_dirty` is left alone — it discards nameless objects on its
     # own, and clearing it could skip the first pass a stack needs.
+    bridge.clear_incoming()
     _pending.clear()
     _sent.clear()
     _last_frame.clear()
@@ -505,12 +521,16 @@ def register():
     _prefix_batch.clear()
     _prefix_batch_built = False
     _prefix_batching = False
+    _prefix_epoch = 0
     _state_since.clear()
     _verify.clear()
     _pull_permits.clear()
     _pull_deadlines.clear()
     _last_no_send.clear()
     _timings.clear()
+    _waiting_objects.clear()
+    _last_stall_check = 0.0
+    _reset_reports()
     # The prefix guard and tick flag are session state: register is a clean
     # start, with the watchdog left as the in-session guard.
     _evaluating = False
@@ -520,6 +540,9 @@ def register():
     _playback_sync = False
     _bake_sync = False
     _bake_progress = None
+    _playback_scene = None
+    _bake_scene = None
+    _switching_scene = False
     for field in _heartbeat:
         _heartbeat[field] = 0 if field in ("trigger_count", "trigger_updates") else None
     _hot_until = 0.0
@@ -632,6 +655,7 @@ from .lifecycle import (
     _ensure_index,
     _forget_prefix,
     _mark_dirty_all,
+    _mark_dirty_scene,
     _mark_object_dirty,
     _ordered_stages,
     _process_object,
@@ -684,6 +708,7 @@ from .playback import (
     _on_frame_change_sync,
     _on_playback_post,
     _on_playback_pre,
+    _reset_reports,
     _sync_playback_frame,
 )
 
@@ -774,6 +799,7 @@ __all__ = [
     "_ensure_index",
     "_forget_prefix",
     "_mark_dirty_all",
+    "_mark_dirty_scene",
     "_mark_object_dirty",
     "_ordered_stages",
     "_process_object",
@@ -824,5 +850,6 @@ __all__ = [
     "_on_frame_change_sync",
     "_on_playback_post",
     "_on_playback_pre",
+    "_reset_reports",
     "_sync_playback_frame",
 ]

@@ -362,6 +362,7 @@ class STAGELOOM_OT_bake(bpy.types.Operator):
         # nested Instance-on-Points chains crash Blender 5.3 if we do.
         nodes.hold_group_updates(True)
         engine._bake_sync = True
+        engine._bake_scene = scene.as_pointer()
         for counter in ("playback_frames", "playback_synced", "playback_failures"):
             engine.stats[counter] = 0
         original = scene.frame_current
@@ -389,6 +390,7 @@ class STAGELOOM_OT_bake(bpy.types.Operator):
             if wm is not None:
                 wm.progress_end()
             engine._bake_sync = False
+            engine._bake_scene = None
             nodes.hold_group_updates(False)
             try:
                 scene.frame_set(original)

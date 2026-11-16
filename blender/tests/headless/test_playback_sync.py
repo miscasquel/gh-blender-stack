@@ -486,6 +486,29 @@ class PlaybackSyncTests(unittest.TestCase):
         self.stage.state = engine.stack_mod.STATE_OK
         self.stage.error = ""
 
+    def test_15_the_gate_ignores_another_scenes_frame_event(self):
+        """Play Every Frame arms one scene; a frame event from another scene
+        must not run (or block on) that scene's stages."""
+        scene = bpy.context.scene
+        other = bpy.data.scenes.new("Playback Other Scene")
+        other.sync_mode = "NONE"
+        try:
+            self.engine._on_playback_pre(scene)
+            self.assertTrue(self.engine._playback_sync)
+            frames = self.engine.stats["playback_frames"]
+            self.engine._on_frame_change_sync(other)
+            self.assertEqual(
+                self.engine.stats["playback_frames"],
+                frames,
+                "another scene's frame entered the playback gate",
+            )
+            self.engine._on_playback_post(other)
+            self.assertTrue(self.engine._playback_sync, "another scene disarmed the gate")
+        finally:
+            self.engine._on_playback_post(scene)
+            bpy.data.scenes.remove(other)
+        self.assertFalse(self.engine._playback_sync)
+
     def test_14_playback_flushes_edit_mode_before_reading_the_prefix(self):
         engine = self.engine
         self.stage.applied_out_hash = ""

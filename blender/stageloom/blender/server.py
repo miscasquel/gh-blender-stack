@@ -22,6 +22,11 @@ from . import bridge, prefs
 # It is a round trip to a thread that is already running, not a network wait;
 # the cap only keeps a wedged loop from freezing the frame handler.
 SEND_DECISION_TIMEOUT = 0.2
+# How long stop() waits for the socket thread. The thread is daemon and gets a
+# wake-up on its own loop, so a healthy stop finishes in milliseconds. The cap
+# is only the fallback for a loop wedged in code the stop event cannot reach;
+# the old unconditional 3 s join blocked the UI for the full cap in that case.
+STOP_JOIN_TIMEOUT = 1.0
 
 
 def _load_websockets():
@@ -52,6 +57,7 @@ class GhServer(object):
         self._thread = None
         self._loop = None
         self._stop = threading.Event()
+        self._stop_event = None  # asyncio.Event, woken from stop()
         self._port = None
         self._send_queue = None  # asyncio.Queue, created on the loop
         self._clients = []  # live sockets; only touched on the loop thread
@@ -84,14 +90,23 @@ class GhServer(object):
 
     def stop(self):
         self._stop.set()
-        # The serve loop polls the stop event every 100 ms and then closes its
-        # connections on the live loop. Stopping the loop directly here would
-        # make websockets schedule its close on a dead loop (noisy RuntimeError
-        # at interpreter shutdown).
+        # Wake the serve loop instead of waiting out its poll interval. The
+        # serve task still closes its connections on the live loop; stopping
+        # the loop directly here would make websockets schedule its close on a
+        # dead loop (noisy RuntimeError at interpreter shutdown).
+        loop = self._loop
+        stop_event = self._stop_event
+        if loop is not None and stop_event is not None:
+            try:
+                loop.call_soon_threadsafe(stop_event.set)
+            except RuntimeError:
+                # The loop closed between the read and the scheduling.
+                pass
         if self._thread is not None:
-            self._thread.join(timeout=3.0)
+            self._thread.join(timeout=STOP_JOIN_TIMEOUT)
         self._thread = None
         self._loop = None
+        self._stop_event = None
         bridge.set_listening(False)
         bridge.set_disconnected("server stopped")
 
@@ -157,17 +172,25 @@ class GhServer(object):
     def _run(self):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        stop_event = asyncio.Event()
         self._loop = loop
+        self._stop_event = stop_event
         try:
-            loop.run_until_complete(self._serve())
+            loop.run_until_complete(self._serve(stop_event))
         except Exception as exc:  # pragma: no cover - surfaced in the UI
             bridge.state["error"] = "server error: %r" % (exc,)
         finally:
             bridge.set_listening(False)
             bridge.set_disconnected("server stopped")
+            # A stop that timed out can leave this thread finishing after a
+            # restart already installed the next loop. Only clear our own.
+            if self._loop is loop:
+                self._loop = None
+            if self._stop_event is stop_event:
+                self._stop_event = None
             loop.close()
 
-    async def _serve(self):
+    async def _serve(self, stop_event):
         self._send_queue = asyncio.Queue()
         try:
             # The keepalive closes a peer that stops answering: with the
@@ -191,8 +214,10 @@ class GhServer(object):
                 bridge.state["error"] = ""
                 sender = asyncio.create_task(self._sender())
                 try:
-                    while not self._stop.is_set():
-                        await asyncio.sleep(0.1)
+                    # stop() wakes this immediately. A start/stop race before
+                    # the loop was ready leaves `_stop` set; honour it here.
+                    if not self._stop.is_set():
+                        await stop_event.wait()
                 finally:
                     sender.cancel()
         except OSError as exc:

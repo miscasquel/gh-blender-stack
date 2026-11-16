@@ -202,6 +202,10 @@ def _rebuild_index():
             continue
         if _clear_conflict_error(stage):
             obj.update_tag()
+    # A deleted stack object cannot run its own cleanup: its helpers,
+    # definitions and clouds outlive the record until this sweep names the
+    # stack ids that still exist. Only owned plumbing is removed.
+    engine.helpers.sweep_orphans()
 
 
 def _index_has_stale_object():
@@ -341,6 +345,25 @@ def _all_stack_objects():
 def _mark_dirty_all():
     """Queue every stack object for a pass."""
     for obj in engine._all_stack_objects():
+        engine._dirty.add(obj.name)
+
+
+def _scene_stack_objects(scene):
+    """Every stack object linked into one scene, for a scene-scoped trigger."""
+    for obj in engine._all_stack_objects():
+        if scene is None or obj.name in scene.objects:
+            yield obj
+
+
+def _mark_dirty_scene(scene):
+    """Queue only the stacks the triggering scene owns.
+
+    A depsgraph or frame event carries its scene. Marking every stack made an
+    edit in the active scene wake a stage in an unrelated one, which then asked
+    for the active scene's frame. ``None`` keeps the old all-stacks behaviour
+    for callers that have no scene (tests, a load-driven full pass).
+    """
+    for obj in _scene_stack_objects(scene):
         engine._dirty.add(obj.name)
 
 

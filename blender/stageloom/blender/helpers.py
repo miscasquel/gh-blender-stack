@@ -10,6 +10,8 @@ user's.
 import bpy
 import numpy as np
 
+from . import stack as stack_mod
+
 COLLECTION_NAME = "Stageloom Stage Data"
 SCENE_NAME = "Stageloom Stage"
 HELPER_PREFIX = "SL "
@@ -17,6 +19,46 @@ OLD_COLLECTION_NAME = "GH Stage Data"
 OLD_SCENE_NAME = "GH Stage"
 OLD_HELPER_PREFIX = "GHS "
 KINDS = ("mesh", "curves", "points")
+
+
+def identity(stack_obj):
+    """The stable root of every plumbing datablock name: the saved stack id.
+
+    The object name is *not* part of it. Growing/shrinking a name or renaming
+    the object in the outliner used to address a different helper set, which
+    created a second set and orphaned the first. The stack id travels with the
+    .blend and is independent of every user-facing name.
+    """
+    record = stack_mod.ensure_stack(stack_obj)
+    if record is None:
+        return ""
+    return record.stack_id
+
+
+def scene_of(obj):
+    """The scene whose frame and playback own ``obj``.
+
+    An object can be linked into several scenes; the active one wins when it
+    is among them (that is the scene the user is looking at), otherwise the
+    first link is its home. Never read the active scene for an object that is
+    not in it: that is the multi-scene bug.
+    """
+    scenes = getattr(obj, "users_scene", None)
+    if scenes:
+        active = getattr(bpy.context, "scene", None)
+        for scene in scenes:
+            if scene == active:
+                return scene
+        return scenes[0]
+    return getattr(bpy.context, "scene", None)
+
+
+def frame_of(obj):
+    """The current frame of the scene that owns ``obj``."""
+    scene = scene_of(obj)
+    if scene is None:
+        return 0.0
+    return float(scene.frame_float)
 
 
 def stage_scene():
@@ -65,6 +107,7 @@ def adopt_existing():
         # restricted there; the load_post hook adopts once the file is in.
         return
     _migrate_old_names()
+    _migrate_identity_names()
     for coll in list(bpy.data.collections):
         if coll.name == COLLECTION_NAME or coll.name.startswith(HELPER_PREFIX):
             _adopt(coll)
@@ -93,8 +136,231 @@ def _migrate_old_names():
     nodes.migrate_names()
 
 
+def _object_has_data(obj):
+    """Whether an owned plumbing object already displays geometry.
+
+    Used only when a migrated name collides with an existing datablock: keeping
+    the populated one preserves what the user was looking at.
+    """
+    data = obj.data
+    if data is None:
+        return False
+    if isinstance(data, bpy.types.Mesh):
+        return bool(len(data.vertices) or len(data.polygons))
+    if isinstance(data, bpy.types.Curve):
+        return bool(len(data.splines))
+    if isinstance(data, bpy.types.PointCloud):
+        return bool(len(data.points))
+    return False
+
+
+def _remove_object(obj):
+    """Remove one owned object and its data when nothing else uses it."""
+    data = obj.data
+    bpy.data.objects.remove(obj, do_unlink=True)
+    if data is not None and data.users == 0:
+        _remove_data(data)
+
+
+def _rename_object(old_name, new_name):
+    """Rename one owned plumbing object, keeping the populated datablock.
+
+    A session interrupted between the old name and the stable name can hold
+    both. Prefer the one with geometry (the other is a freshly created empty
+    helper) so a migration never discards output.
+    """
+    obj = bpy.data.objects.get(old_name)
+    if obj is None:
+        return
+    existing = bpy.data.objects.get(new_name)
+    if existing is not None and existing != obj:
+        if _object_has_data(existing) and not _object_has_data(obj):
+            _remove_object(obj)
+            return
+        _remove_object(existing)
+    obj.name = new_name
+    data = obj.data
+    if data is not None and data.name == old_name:
+        data.name = new_name
+
+
+def _rename_prefix(old, new):
+    """Rename every owned object/collection under one plumbing name prefix."""
+    if old == new:
+        return
+    for obj in list(bpy.data.objects):
+        if obj.name != old and not obj.name.startswith(old + "."):
+            continue
+        _rename_object(obj.name, new + obj.name[len(old):])
+    for coll in list(bpy.data.collections):
+        if coll.name != old and not coll.name.startswith(old + "."):
+            continue
+        target = new + coll.name[len(old):]
+        existing = bpy.data.collections.get(target)
+        if existing is not None and existing != coll:
+            # Same interrupted migration as an object: fold the old collection
+            # into the stable one instead of leaving two owners.
+            for child in list(coll.objects):
+                child_target = target + child.name[len(coll.name):]
+                _rename_object(child.name, child_target)
+                existing.objects.link(child)
+                coll.objects.unlink(child)
+            bpy.data.collections.remove(coll)
+            continue
+        coll.name = target
+
+
+def _live_records():
+    """Yield every ``(object, record)`` a saved stack still claims."""
+    for obj in bpy.data.objects:
+        record = getattr(obj, "gh_stack", None)
+        if record is not None:
+            yield obj, record
+
+
+def _migrate_identity_names():
+    """Move object-name-based plumbing to the stable stack-id identity.
+
+    0.6/early-0.7 files named helpers ``SL <object name>.<stage key>``. A
+    rename then addressed a second, empty set. Every live stage's old names are
+    renamed in place, which keeps the data (and the node-group references) and
+    leaves no old set behind. Files already using the stable name are a no-op.
+
+    A stage key is globally unique outside a duplicate conflict, so its old
+    prefix is found even when the object was renamed *before* this build first
+    saw the file. Conflicts keep the current-object-name lookup: two claimants
+    of one key cannot prove which old helper set is whose.
+    """
+    records = list(_live_records())
+    claims = {}
+    for owner, record in records:
+        for stage in record.stages:
+            if stage.key:
+                claims.setdefault(stage.key, []).append(owner)
+
+    for obj, record in records:
+        if not record.stack_id:
+            record.stack_id = stack_mod.new_stack_id()
+        for stage in record.stages:
+            if not stage.key:
+                continue
+            new = helper_name(obj, stage.key)
+            if len(claims.get(stage.key, ())) == 1:
+                for old in _stage_name_candidates(stage.key):
+                    if old != new:
+                        _rename_prefix(old, new)
+            else:
+                old = "%s%s.%s" % (HELPER_PREFIX, obj.name, stage.key)
+                if old != new:
+                    _rename_prefix(old, new)
+
+
+def _stage_name_candidates(stage_key):
+    """Every owned-name prefix that ends in one stage key, stable one excluded.
+
+    The object-name part can contain dots, so the stage key is matched as the
+    suffix component(s) rather than by splitting the name: ``SL any.name.key``
+    and ``SL any.name.key.def0`` both yield ``SL any.name.key``.
+    """
+    marker = "." + stage_key
+    found = set()
+    for item in list(bpy.data.objects) + list(bpy.data.collections):
+        name = item.name
+        if not name.startswith(HELPER_PREFIX):
+            continue
+        start = len(HELPER_PREFIX)
+        last = None
+        while True:
+            at = name.find(marker, start)
+            if at < 0:
+                break
+            end = at + len(marker)
+            if end == len(name) or name[end] == ".":
+                # The last qualifying occurrence is the stage-key component:
+                # an object name may itself contain dots (and even look like a
+                # key), but the plumbing suffix is what follows it.
+                last = at
+            start = at + 1
+        if last is not None:
+            found.add(name[: last + len(marker)])
+    return sorted(found)
+
+
+def _remove_collection(coll):
+    """Remove one owned definition collection and everything inside it."""
+    for obj in list(coll.objects):
+        _remove_object(obj)
+    bpy.data.collections.remove(coll)
+
+
+def _plumbing_is_live(name, live_ids, live_names):
+    """Whether a named datablock still belongs to a live stack.
+
+    Stable names carry the stack id; an old object-name-based name is kept when
+    a live stack object of that name exists, even if its stage record is
+    temporarily missing (a load, undo or duplicate split in progress). Only a
+    stack whose id is gone is swept, so plumbing is never discarded merely
+    because a stage is between records.
+    """
+    if not name.startswith(HELPER_PREFIX):
+        return True
+    rest = name[len(HELPER_PREFIX):]
+    if rest.split(".", 1)[0] in live_ids:
+        return True
+    return any(name.startswith(HELPER_PREFIX + object_name + ".") for object_name in live_names)
+
+
+def sweep_orphans():
+    """Remove plumbing whose stack id no longer exists.
+
+    Called after an index rebuild (a delete, a load, an undo), when the set of
+    live stacks is authoritative. Only Stageloom's own collections and node
+    groups are touched; user objects are never candidates.
+    """
+    if not hasattr(bpy.data, "collections"):
+        return
+    live_ids = set()
+    live_names = set()
+    live_keys = set()
+    for obj, record in _live_records():
+        live_names.add(obj.name)
+        if record.stack_id:
+            live_ids.add(record.stack_id)
+        for stage in record.stages:
+            if stage.key:
+                live_keys.add(stage.key)
+
+    helper_coll = bpy.data.collections.get(COLLECTION_NAME)
+    if helper_coll is not None:
+        for obj in list(helper_coll.objects):
+            if not _plumbing_is_live(obj.name, live_ids, live_names):
+                _remove_object(obj)
+
+    stage = bpy.data.scenes.get(SCENE_NAME)
+    if stage is not None:
+        for coll in list(stage.collection.children):
+            if coll.name == COLLECTION_NAME or not coll.name.startswith(HELPER_PREFIX):
+                continue
+            if not _plumbing_is_live(coll.name, live_ids, live_names):
+                _remove_collection(coll)
+
+    # A deleted stack object leaves its node group with no user once the
+    # modifier went with it. Only groups this builder stamped are candidates;
+    # a live key (even a conflicted one) is never removed while its record
+    # exists.
+    for group in list(bpy.data.node_groups):
+        if group.get("gh_stack_format") is None:
+            continue
+        if not group.name.startswith(HELPER_PREFIX):
+            continue
+        if group.name[len(HELPER_PREFIX):] in live_keys:
+            continue
+        if group.users == 0:
+            bpy.data.node_groups.remove(group)
+
+
 def helper_name(stack_obj, stage_key, kind="mesh"):
-    base = "%s%s.%s" % (HELPER_PREFIX, stack_obj.name, stage_key)
+    base = "%s%s.%s" % (HELPER_PREFIX, identity(stack_obj), stage_key)
     return base if kind == "mesh" else "%s.%s" % (base, kind)
 
 
@@ -134,7 +400,7 @@ def helper_for(stack_obj, stage_key, kind):
 
 
 def definition_collection_name(stack_obj, stage_key, index):
-    return "%s%s.%s.def%d" % (HELPER_PREFIX, stack_obj.name, stage_key, index)
+    return "%s%s.%s.def%d" % (HELPER_PREFIX, identity(stack_obj), stage_key, index)
 
 
 # The number of parts a definition's collection holds (protocol §5.2). Written
@@ -158,13 +424,13 @@ def definition_name(stack_obj, stage_key, index, kind="mesh", part=None):
 
 def instance_name(stack_obj, stage_key, index):
     """The top-level row point cloud of one definition."""
-    return "%s%s.%s.inst%d" % (HELPER_PREFIX, stack_obj.name, stage_key, index)
+    return "%s%s.%s.inst%d" % (HELPER_PREFIX, identity(stack_obj), stage_key, index)
 
 
 def nested_name(stack_obj, stage_key, index):
     """The nested placement point cloud of one definition: the placements of
     child definitions inside it (``idef.<i>.inst.*``)."""
-    return "%s%s.%s.nest%d" % (HELPER_PREFIX, stack_obj.name, stage_key, index)
+    return "%s%s.%s.nest%d" % (HELPER_PREFIX, identity(stack_obj), stage_key, index)
 
 
 def _definition_collection(stack_obj, stage_key, index):
@@ -347,15 +613,7 @@ def remove_definition(stack_obj, stage_key, index):
     definitions and are left alone."""
     coll = bpy.data.collections.get(definition_collection_name(stack_obj, stage_key, index))
     if coll is not None:
-        for obj in list(coll.objects):
-            data = obj.data
-            bpy.data.collections[coll.name].objects.unlink(obj)
-            bpy.data.objects.remove(obj, do_unlink=True)
-            if data is not None and data.users == 0:
-                _remove_data(data)
-        # Unconditionally: the collection is linked in the scene, so a users
-        # count never reaches zero, and remove() unlinks it as it goes.
-        bpy.data.collections.remove(coll)
+        _remove_collection(coll)
 
     for cloud in (
         bpy.data.objects.get(instance_name(stack_obj, stage_key, index)),
@@ -366,21 +624,24 @@ def remove_definition(stack_obj, stage_key, index):
 
 
 def remove_helper(stack_obj, stage_key):
-    """Remove every helper of one stage and its orphaned data."""
+    """Remove one stage's entire plumbing: every helper kind, every definition
+    part collection, and both row-cloud families.
+
+    One owner for the stage's namespace, so removing a stage (or dropping a
+    duplicate's old key) cannot leave a part, collection or cloud behind. The
+    identity is the stack id, never the object name.
+    """
     for kind in KINDS:
         helper = helper_for(stack_obj, stage_key, kind)
         if helper is None:
             continue
-        data = helper.data
-        bpy.data.objects.remove(helper, do_unlink=True)
-        if data is None or data.users != 0:
-            continue
-        if kind == "curves":
-            bpy.data.curves.remove(data)
-        elif kind == "points":
-            bpy.data.pointclouds.remove(data)
-        else:
-            bpy.data.meshes.remove(data)
+        _remove_object(helper)
+    for index in list(definition_collections(stack_obj, stage_key)):
+        remove_definition(stack_obj, stage_key, index)
+    for index in list(instance_clouds(stack_obj, stage_key)):
+        remove_cloud(bpy.data.objects[instance_name(stack_obj, stage_key, index)])
+    for index in list(nested_clouds(stack_obj, stage_key)):
+        remove_cloud(bpy.data.objects[nested_name(stack_obj, stage_key, index)])
 
 
 def _new_data(name, kind):

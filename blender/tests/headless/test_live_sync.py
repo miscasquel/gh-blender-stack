@@ -1016,6 +1016,64 @@ class StallRenameTests(LiveSyncTestCase):
             if self.obj.name != original_name:
                 self.obj.name = original_name
 
+    def test_02_a_rename_keeps_the_same_helpers_and_node_group(self):
+        import stageloom.blender.helpers as helpers
+        import stageloom.blender.nodes as nodes
+
+        self.assertEqual(self.stage.state, "ok", self.stage.error)
+        record = self.stack_mod.stack_of(self.obj)
+        helper = helpers.helper_for(self.obj, self.stage.key, "mesh")
+        self.assertIsNotNone(helper)
+        prefix = helpers.helper_name(self.obj, self.stage.key)
+        before = {
+            item.name
+            for item in list(bpy.data.objects) + list(bpy.data.collections)
+            if item.name == prefix or item.name.startswith(prefix + ".")
+        }
+        group = nodes.modifier_of(self.obj, self.stage).node_group
+        original_name = self.obj.name
+        renamed = original_name + "HelperStable"
+
+        try:
+            self.obj.name = renamed
+            self.engine._mark_object_dirty(self.obj)
+            self.assertTrue(
+                pump(seconds=15.0, until=lambda: self.stage.state == "ok"),
+                "the renamed stage never settled (state=%s, error=%s)"
+                % (self.stage.state, self.stage.error),
+            )
+
+            self.assertIs(
+                helpers.helper_for(self.obj, self.stage.key, "mesh"),
+                helper,
+                "the rename created a second helper set",
+            )
+            after = {
+                item.name
+                for item in list(bpy.data.objects) + list(bpy.data.collections)
+                if item.name == prefix or item.name.startswith(prefix + ".")
+            }
+            self.assertEqual(after, before, "the rename created or orphaned plumbing")
+            self.assertFalse(
+                any(
+                    item.name.startswith("SL %s." % original_name)
+                    for item in list(bpy.data.objects) + list(bpy.data.collections)
+                ),
+                "an object-name-based plumbing set was left behind",
+            )
+            self.assertIs(
+                nodes.modifier_of(self.obj, self.stage).node_group,
+                group,
+                "the rename rebuilt the stage group",
+            )
+            self.assertEqual(
+                self.obj.gh_stack.stack_id,
+                record.stack_id,
+                "the rename changed the stack identity",
+            )
+        finally:
+            self.obj.name = original_name
+
 
 
 class WhyNoSendTests(LiveSyncTestCase):
@@ -1182,6 +1240,19 @@ class SessionResetTests(LiveSyncTestCase):
             engine._evaluating_since = time.monotonic()
             engine._ticking = True
             engine._sent[("Wedged", self.stage.key)] = ("rid", "hash")
+            engine._pending[("Wedged", self.stage.key)] = {"rid": time.monotonic()}
+            engine._last_frame[("Wedged", self.stage.key)] = 1.0
+            engine._pull_permits.add(("Wedged", self.stage.key))
+            engine.bridge.post_incoming(
+                {
+                    "type": "response",
+                    "stage": self.stage.key,
+                    "rid": "sha256:queued-before-register",
+                    "status": "ok",
+                    "out_hash": "queued-before-register",
+                },
+                {},
+            )
 
             engine.register()
             self.assertFalse(engine._evaluating, "register() kept a wedged prefix guard")
@@ -1189,6 +1260,14 @@ class SessionResetTests(LiveSyncTestCase):
             self.assertIsNone(engine._evaluating_since)
             self.assertFalse(engine._ticking, "register() kept the previous session's tick flag")
             self.assertFalse(engine._sent, "register() kept the previous session's client state")
+            self.assertFalse(engine._pending, "register() kept a pending request")
+            self.assertFalse(engine._last_frame, "register() kept a delivered frame")
+            self.assertFalse(engine._pull_permits, "register() kept a Pull permit")
+            self.assertEqual(
+                engine.bridge.INCOMING.qsize(),
+                0,
+                "register() kept a frame from the previous session",
+            )
 
             # A retry of register() (a partial failure is the reason it can run
             # again) must not append the same handler twice.

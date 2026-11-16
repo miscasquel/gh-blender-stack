@@ -566,5 +566,75 @@ class NormalReloadTests(unittest.TestCase):
             self.assertIs(self.engine._stage_owners[stage.key], obj)
 
 
+class DuplicateLifecycleTests(unittest.TestCase):
+    """A runtime duplicate owns a separate helper identity, so renaming one or
+    deleting it never reaches the other's plumbing."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.engine, cls.helpers, cls.nodes, cls.props, cls.stack_mod, cls.bridge = enable(cls)
+        cls.obj, cls.stage = make_stack("DupLifeRoot", "DupLifeRoot", params=None)
+        cls.dup = duplicate_object(cls.obj, "DupLifeCopy")
+        cls.engine._process_object(cls.dup)
+        while cls.dup.gh_stack.stages[0].key == cls.stage.key:
+            # The split is deterministic for a given name; a rerun of the same
+            # name can collide with a previous class state. Nudge the name.
+            cls.dup.name += "x"
+            cls.engine._process_object(cls.dup)
+        cls.dup_stage = cls.dup.gh_stack.stages[0]
+        # A definition and a row cloud on each side: delete/rename must address
+        # every namespace, not only the three base helpers.
+        for obj, stage in ((cls.obj, cls.stage), (cls.dup, cls.dup_stage)):
+            cls.helpers.ensure_definition_parts(obj, stage.key, 0, 2)
+            cls.helpers.ensure_instance_cloud(obj, stage.key, 0)
+
+    @classmethod
+    def tearDownClass(cls):
+        bpy.ops.preferences.addon_disable(module="stageloom")
+
+    def _prefix(self, obj, stage):
+        return self.helpers.helper_name(obj, stage.key)
+
+    def _datablocks(self, prefix):
+        return {
+            item.name
+            for item in list(bpy.data.objects) + list(bpy.data.collections)
+            if item.name == prefix or item.name.startswith(prefix + ".")
+        }
+
+    def test_01_renaming_the_original_does_not_touch_the_duplicates_plumbing(self):
+        helper = self.helpers.helper_for(self.obj, self.stage.key, "mesh")
+        dup_helper = self.helpers.helper_for(self.dup, self.dup_stage.key, "mesh")
+        original_prefix = self._prefix(self.obj, self.stage)
+        dup_prefix = self._prefix(self.dup, self.dup_stage)
+        original_blocks = self._datablocks(original_prefix)
+        dup_blocks = self._datablocks(dup_prefix)
+
+        self.obj.name = "DupLifeRoot Renamed"
+        self.engine._process_object(self.obj)
+
+        self.assertIs(self.helpers.helper_for(self.obj, self.stage.key, "mesh"), helper)
+        self.assertIs(self.helpers.helper_for(self.dup, self.dup_stage.key, "mesh"), dup_helper)
+        self.assertEqual(self._datablocks(original_prefix), original_blocks)
+        self.assertEqual(self._datablocks(dup_prefix), dup_blocks)
+        self.assertNotEqual(original_prefix, dup_prefix)
+        self.assertEqual(
+            _group_objects(self.nodes.modifier_of(self.obj, self.stage).node_group),
+            {self.helpers.helper_name(self.obj, self.stage.key, kind) for kind in self.helpers.KINDS},
+        )
+
+    def test_02_deleting_the_duplicate_keeps_the_original_and_removes_its_plumbing(self):
+        prefix = self._prefix(self.dup, self.dup_stage)
+        original_prefix = self._prefix(self.obj, self.stage)
+        group_name = self.nodes.group_name(self.dup_stage.key)
+        bpy.data.objects.remove(self.dup, do_unlink=True)
+        self.engine._rebuild_index()
+
+        self.assertEqual(self._datablocks(prefix), set(), "the duplicate's plumbing was orphaned")
+        self.assertIsNone(bpy.data.node_groups.get(group_name))
+        self.assertNotEqual(self._datablocks(original_prefix), set())
+        self.assertIsNotNone(self.helpers.helper_for(self.obj, self.stage.key, "mesh"))
+
+
 if __name__ == "__main__":
     unittest.main()

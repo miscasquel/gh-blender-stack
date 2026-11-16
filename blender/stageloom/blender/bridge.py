@@ -47,6 +47,16 @@ def drain_incoming():
     return items
 
 
+def clear_incoming():
+    """Discard every queued frame.
+
+    A file load or a fresh registration starts a new session: a decoded frame
+    from the previous document must not be applied to the new one, even when a
+    stage key happens to coincide. Returns how many frames were dropped.
+    """
+    return len(drain_incoming())
+
+
 def set_connected(doc):
     state["connected"] = True
     state["doc"] = doc or ""
