@@ -149,11 +149,11 @@ def ensure_group(stack_obj, stage_key, nested_rows=None):
         proto = group.nodes.new("GeometryNodeJoinGeometry")
         proto.location = (-800.0, next_row())
         prototype_by_index[index] = proto
-        objects, _cloud, nested = definitions.get(index, ({}, None, None))
-        for kind in helpers.KINDS:
+        objects, _cloud, nested = definitions.get(index, ([], None, None))
+        for obj in objects:
             info = group.nodes.new("GeometryNodeObjectInfo")
             info.location = (-1200.0, next_row())
-            info.inputs["Object"].default_value = objects[kind]
+            info.inputs["Object"].default_value = obj
             info.transform_space = "ORIGINAL"
             group.links.new(info.outputs["Geometry"], proto.inputs["Geometry"])
         for target in wired.get(index, []):
@@ -285,17 +285,29 @@ def _note_skipped(stage_key, definitions, nested_rows, wired):
 
 
 def _definitions(stack_obj, stage_key, nested_rows=None):
-    """The stage's block definitions: index -> (prototype objects by kind,
-    top-level row cloud or None, nested placement cloud or None). A definition
-    only a parent instances has no top cloud, so no chain of its own is drawn;
-    one that nests children gets a nested cloud even before the first apply
-    fills it, so a rebuilt chain still wires."""
+    """The stage's block definitions: index -> (prototype objects, top-level row
+    cloud or None, nested placement cloud or None). A definition only a parent
+    instances has no top cloud, so no chain of its own is drawn; one that nests
+    children gets a nested cloud even before the first apply fills it, so a
+    rebuilt chain still wires.
+
+    ``objects`` is the definition's per-part, per-kind helpers in part order: a
+    multi-part definition contributes every part to its prototype join, which is
+    what keeps the parts together in one block (§5.2).
+    """
     top = helpers.instance_clouds(stack_obj, stage_key)
     nested = helpers.nested_clouds(stack_obj, stage_key)
     rows = nested_rows or {}
     definitions = {}
     for index in sorted(helpers.definition_collections(stack_obj, stage_key)):
-        _collection, objects = helpers.ensure_definition(stack_obj, stage_key, index)
+        _collection, part_objects = helpers.ensure_definition_layout(
+            stack_obj, stage_key, index
+        )
+        objects = [
+            part_objects[part][kind]
+            for part in range(len(part_objects))
+            for kind in helpers.KINDS
+        ]
         if index not in nested and rows.get(index):
             # The apply path normally wrote it already; ensuring it here keeps
             # a rebuilt chain wired (empty until the next apply).
@@ -340,7 +352,7 @@ def _group_matches(group, helpers_map, definitions, signature="", nested_rows=No
     expected = set(helpers_map.values())
     for index in _reachable(definitions, wired):
         objects, cloud, nested = definitions[index]
-        expected.update(objects.values())
+        expected.update(objects)
         if cloud is not None:
             expected.add(cloud)
         if nested is not None and wired.get(index):

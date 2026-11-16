@@ -61,10 +61,13 @@ def section_names(index, prefix=""):
     return prefix + "attr.%d.values" % index, prefix + "attr.%d.offsets" % index
 
 
-def descriptor(group, name, domain, type_name, count, index, prefix="", definition=None):
+def descriptor(group, name, domain, type_name, count, index, prefix="",
+               definition=None, part=None):
     """The header entry for one attribute section. ``definition`` is the
     instance-definition index the attribute belongs to, when it is not the
-    frame's own geometry (§5.2)."""
+    frame's own geometry (§5.2). ``part`` names the part of a multi-part
+    definition; it is absent for a single-part definition and required for a
+    multi-part one."""
     section, offsets = section_names(index, prefix)
     entry = {
         "group": group,
@@ -77,6 +80,8 @@ def descriptor(group, name, domain, type_name, count, index, prefix="", definiti
     }
     if definition is not None:
         entry["definition"] = int(definition)
+    if part is not None:
+        entry["part"] = int(part)
     if type_name == "STRING":
         entry["offsets"] = offsets
     return entry

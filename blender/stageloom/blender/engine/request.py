@@ -27,6 +27,19 @@ def _set_input_warnings(stage, notes):
     engine._set(stage, "input_warnings", text)
 
 
+def _peer_blocks_2():
+    """Whether the connected peer advertised ``blocks/2`` (protocol §8).
+
+    An absent list means no capabilities. The sender must not emit a multi-part
+    definition to a peer that cannot read one: it splits it into single-part
+    definitions and leaves a visible note instead.
+    """
+    caps = engine.bridge.state.get("caps") or ()
+    if not isinstance(caps, (list, tuple, set, frozenset)):
+        return False
+    return CAP_BLOCKS_2 in caps
+
+
 def _prefix_result(result):
     """``(sections, attributes, definitions, notes)`` from a prefix read.
 
@@ -370,7 +383,12 @@ def _prefix_sections(obj, record, stage):
     # Keyed by identity, not by name: as_pointer() is stable for the session and
     # keeps no reference, so a deleted object does not live on through this dict.
     memo_key = (obj.as_pointer(), stage.key)
+    blocks_2 = _peer_blocks_2()
     memo = engine._prefix_memo.get(memo_key)
+    if memo is not None and memo.get("blocks_2") != blocks_2:
+        # A different peer capability changes the definition namespaces this
+        # read must produce; the memoized frame belongs to the other peer.
+        memo = None
     if memo is not None and memo["revision"] == revision:
         engine.stats["prefix_memo_hits"] += 1
         _set_input_warnings(stage, memo.get("notes"))
@@ -420,6 +438,7 @@ def _prefix_sections(obj, record, stage):
     geom_hash = engine._sections_hash(sections, attributes, definitions)
     engine._prefix_memo[memo_key] = {
         "revision": revision,
+        "blocks_2": blocks_2,
         "sections": sections,
         "geom_hash": geom_hash,
         "attributes": attributes,
@@ -549,7 +568,8 @@ def _clone_prefixes(obj, stages, subd):
             notes = []
             sections, attributes, definitions = (
                 engine.geometry_io.geometry_set_to_sections(
-                    geometry, as_subd=subd, notes=notes
+                    geometry, as_subd=subd, notes=notes,
+                    blocks_2=_peer_blocks_2(),
                 )
             )
             results[stage.key] = (sections, attributes, definitions, notes)
@@ -621,7 +641,7 @@ def _clone_prefix(obj, index, subd, stage_key=None, notes=None):
         depsgraph = engine.bpy.context.evaluated_depsgraph_get()
         geometry = clone.evaluated_get(depsgraph).evaluated_geometry()
         sections, attributes, definitions = engine.geometry_io.geometry_set_to_sections(
-            geometry, as_subd=subd, notes=notes
+            geometry, as_subd=subd, notes=notes, blocks_2=_peer_blocks_2()
         )
     finally:
         # The primary failure, if any, is captured before cleanup runs: a

@@ -110,6 +110,12 @@ def _on_client_hello(header):
     stay.
     """
     doc = (header or {}).get("doc") or ""
+    caps = (header or {}).get("caps")
+    engine.bridge.state["caps"] = (
+        [cap for cap in caps if isinstance(cap, str)]
+        if isinstance(caps, list)
+        else []
+    )
     claims = {}
     for entry in (header or {}).get("stages") or []:
         if not isinstance(entry, dict):
@@ -347,7 +353,10 @@ def _handle_response(header, sections):
         if out_hash != stage.applied_out_hash or engine._payload_missing(obj, stage, sections):
             started = engine.time.monotonic()
             try:
-                engine._apply(obj, stage, sections, header.get("attributes"))
+                engine._apply(
+                    obj, stage, sections, header.get("attributes"),
+                    header.get("definitions", []),
+                )
             except engine.geometry_io.GeometryIOError as exc:
                 # A malformed or internally inconsistent section group is a
                 # classified stage error, not an anonymous incoming-frame crash.

@@ -269,7 +269,8 @@ def _take_attribute_values(values, indices, comps):
     return np.ascontiguousarray(values.reshape(-1, comps)[indices].reshape(-1))
 
 
-def _emit_attribute(group, name, domain, type_name, values, index, prefix="", definition=None):
+def _emit_attribute(group, name, domain, type_name, values, index, prefix="",
+                    definition=None, part=None):
     """Sections plus descriptor for one already-read attribute value array."""
     value_section, offsets_section = attr_mod.section_names(index, prefix)
     if type_name == "STRING":
@@ -286,12 +287,13 @@ def _emit_attribute(group, name, domain, type_name, values, index, prefix="", de
 
     descriptor = attr_mod.descriptor(
         group, name, domain, type_name, count, index,
-        prefix=prefix, definition=definition,
+        prefix=prefix, definition=definition, part=part,
     )
     return sections, descriptor
 
 
-def read_attributes(owner, group, index0=0, skip=(), prefix="", definition=None):
+def read_attributes(owner, group, index0=0, skip=(), prefix="", definition=None,
+                    part=None):
     """Every transportable attribute of one geometry data owner, as
     ``(sections, descriptors)``.
 
@@ -319,14 +321,15 @@ def read_attributes(owner, group, index0=0, skip=(), prefix="", definition=None)
         index = index0 + len(descriptors)
         attribute_sections, descriptor = _emit_attribute(
             group, name, attr.domain, type_name, _attribute_values(attr), index,
-            prefix=prefix, definition=definition,
+            prefix=prefix, definition=definition, part=part,
         )
         sections += attribute_sections
         descriptors.append(descriptor)
     return sections, descriptors
 
 
-def mesh_attributes(mesh, as_subd=False, index0=0, prefix="", definition=None):
+def mesh_attributes(mesh, as_subd=False, index0=0, prefix="", definition=None,
+                    part=None):
     """The generic attributes of a mesh (or SubD cage). The active colour
     attribute is excluded only when the native ``mesh.colors`` channel carries
     it, so a SubD cage's colours travel as an ordinary attribute."""
@@ -337,7 +340,7 @@ def mesh_attributes(mesh, as_subd=False, index0=0, prefix="", definition=None):
             skip.append(color.name)
     return read_attributes(
         mesh, "subd" if as_subd else "mesh", index0=index0, skip=skip,
-        prefix=prefix, definition=definition,
+        prefix=prefix, definition=definition, part=part,
     )
 
 
@@ -371,7 +374,8 @@ def isolated_vertex_indices(mesh):
     return np.nonzero(degree == 0)[0].astype(np.uint32)
 
 
-def wire_mesh_to_sections(mesh, index0=0, prefix="", definition=None, notes=None):
+def wire_mesh_to_sections(mesh, index0=0, prefix="", definition=None, part=None,
+                          notes=None):
     """Loose mesh edges and vertices as curves and points, plus their attributes.
 
     Each loose edge becomes one two-point polyline. That is the only lossless
@@ -430,13 +434,13 @@ def wire_mesh_to_sections(mesh, index0=0, prefix="", definition=None, notes=None
 
     attribute_sections, attributes = wire_attributes(
         mesh, loose, edge_verts, isolated, index0=index0,
-        prefix=prefix, definition=definition, notes=notes,
+        prefix=prefix, definition=definition, part=part, notes=notes,
     )
     return sections + attribute_sections, attributes
 
 
 def wire_attributes(mesh, loose, edge_verts, isolated, index0=0, prefix="", definition=None,
-                    notes=None):
+                    part=None, notes=None):
     """Reindex a mesh's attributes onto its emitted curves and points.
 
     EDGE attributes become one value per curve (domain ``CURVE``). POINT
@@ -467,7 +471,7 @@ def wire_attributes(mesh, loose, edge_verts, isolated, index0=0, prefix="", defi
             index = index0 + len(descriptors)
             attribute_sections, descriptor = _emit_attribute(
                 "crv", name, "CURVE", type_name, mapped, index,
-                prefix=prefix, definition=definition,
+                prefix=prefix, definition=definition, part=part,
             )
             sections += attribute_sections
             descriptors.append(descriptor)
@@ -483,7 +487,7 @@ def wire_attributes(mesh, loose, edge_verts, isolated, index0=0, prefix="", defi
             index = index0 + len(descriptors)
             attribute_sections, descriptor = _emit_attribute(
                 "crv", name, "POINT", type_name, mapped, index,
-                prefix=prefix, definition=definition,
+                prefix=prefix, definition=definition, part=part,
             )
             sections += attribute_sections
             descriptors.append(descriptor)
@@ -493,7 +497,7 @@ def wire_attributes(mesh, loose, edge_verts, isolated, index0=0, prefix="", defi
             index = index0 + len(descriptors)
             attribute_sections, descriptor = _emit_attribute(
                 "pts", name, "POINT", type_name, mapped, index,
-                prefix=prefix, definition=definition,
+                prefix=prefix, definition=definition, part=part,
             )
             sections += attribute_sections
             descriptors.append(descriptor)
@@ -507,7 +511,8 @@ def wire_attributes(mesh, loose, edge_verts, isolated, index0=0, prefix="", defi
     return sections, descriptors
 
 
-def points_attributes(cloud, index0=0, prefix="", definition=None, notes=None):
+def points_attributes(cloud, index0=0, prefix="", definition=None, part=None,
+                      notes=None):
     """The generic attributes of a point cloud. The native ``pts.colors``
     channel carries the active colour attribute; everything else travels."""
     skip = []
@@ -516,7 +521,7 @@ def points_attributes(cloud, index0=0, prefix="", definition=None, notes=None):
         skip.append(color.name)
     return read_attributes(
         cloud, "pts", index0=index0, skip=skip,
-        prefix=prefix, definition=definition,
+        prefix=prefix, definition=definition, part=part,
     )
 
 
@@ -840,7 +845,7 @@ CURVE_TYPE_BEZIER = 2
 CURVE_TYPE_NURBS = 3
 
 
-def geometry_set_to_sections(geometry, as_subd=False, notes=None):
+def geometry_set_to_sections(geometry, as_subd=False, notes=None, blocks_2=True):
     """Protocol sections and attribute descriptors for an evaluated
     ``GeometrySet`` (a stage's prefix). Returns ``(sections, attributes,
     definitions)``. ``notes`` collects user-visible conversion losses.
@@ -854,6 +859,13 @@ def geometry_set_to_sections(geometry, as_subd=False, notes=None):
     rows become ``inst.ref_def`` / ``inst.transforms``. A referenced geometry set
     that itself holds instances recurses into the same flat table.
 
+    A definition with more than one part is emitted as ``parts: N`` and one
+    ``idef.<i>.<part>.`` namespace per part. ``blocks_2`` is the peer's
+    ``blocks/2`` capability (§8): without it the definition is split into one
+    single-part definition per part and ``notes`` names the fallback, because an
+    old peer ignores both the `parts` field and the part namespaces and would
+    otherwise lose every part but one.
+
     Curves components carry their ``CURVE`` and ``POINT`` attributes (the same
     per-curve/per-point mapping used for wire-mesh edges). A Curve datablock
     used as a stage helper cannot store attributes on the way back; that return
@@ -866,7 +878,8 @@ def geometry_set_to_sections(geometry, as_subd=False, notes=None):
         geometry, sections, attributes, prefix="", as_subd=as_subd, notes=notes
     )
     rows = _serialize_instances(
-        geometry, sections, attributes, definitions, depth=0, notes=notes
+        geometry, sections, attributes, definitions, depth=0, notes=notes,
+        blocks_2=blocks_2,
     )
     if rows is not None:
         ref_def, transforms = rows
@@ -874,7 +887,23 @@ def geometry_set_to_sections(geometry, as_subd=False, notes=None):
         sections.append(
             ("inst.transforms", "f32", np.asarray(transforms, dtype=np.float32).reshape(-1))
         )
+    _reject_duplicate_sections(sections)
     return sections, attributes, definitions
+
+
+def _reject_duplicate_sections(sections):
+    """Fail visibly on two sections with one name.
+
+    A duplicate name means two geometry pools were written into one namespace:
+    a codec keeps only one of them, so the other is silent loss. Instances give
+    every part and definition its own prefix; this guard is what keeps a future
+    serialization change from reintroducing the collapse.
+    """
+    seen = set()
+    for name, _dtype, _values in sections:
+        if name in seen:
+            raise GeometryIOError("duplicate section name %r" % name)
+        seen.add(name)
 
 
 # The recursion guard for instance nesting. Blender cannot evaluate a cyclic
@@ -891,9 +920,12 @@ _IDENTITY = (
 
 
 def _serialize_geometry(geometry, sections, attributes, prefix="", as_subd=False,
-                        definition=None, notes=None):
+                        definition=None, part=None, notes=None):
     """Append one GeometrySet's geometry (mesh, curves, point cloud) to
-    ``sections`` / ``attributes``, under an optional definition prefix."""
+    ``sections`` / ``attributes``, under an optional definition prefix.
+
+    ``part`` is the part index of a multi-part definition (§5.2); it is ``None``
+    for the frame's own geometry and for a single-part definition."""
     mesh = geometry.mesh
     if mesh is not None and len(mesh.vertices):
         if not as_subd and len(mesh.polygons) == 0:
@@ -901,7 +933,7 @@ def _serialize_geometry(geometry, sections, attributes, prefix="", as_subd=False
             # its isolated vertices as points instead of an empty mesh.
             wire_sections, wire_attrs = wire_mesh_to_sections(
                 mesh, index0=len(attributes), prefix=prefix, definition=definition,
-                notes=notes,
+                part=part, notes=notes,
             )
             sections += wire_sections
             attributes += wire_attrs
@@ -911,7 +943,7 @@ def _serialize_geometry(geometry, sections, attributes, prefix="", as_subd=False
             )
             attribute_sections, mesh_attributes_ = mesh_attributes(
                 mesh, as_subd=as_subd, index0=len(attributes),
-                prefix=prefix, definition=definition,
+                prefix=prefix, definition=definition, part=part,
             )
             sections += attribute_sections
             attributes += mesh_attributes_
@@ -920,7 +952,7 @@ def _serialize_geometry(geometry, sections, attributes, prefix="", as_subd=False
                 # own curves/points so they are not silently dropped.
                 wire_sections, wire_attrs = wire_mesh_to_sections(
                     mesh, index0=len(attributes), prefix=prefix, definition=definition,
-                    notes=notes,
+                    part=part, notes=notes,
                 )
                 sections += wire_sections
                 attributes += wire_attrs
@@ -928,7 +960,7 @@ def _serialize_geometry(geometry, sections, attributes, prefix="", as_subd=False
     if curves is not None and len(curves.points):
         curve_sections, curve_attrs = curves_component_to_sections(
             curves, index0=len(attributes), prefix=prefix, definition=definition,
-            notes=notes,
+            part=part, notes=notes,
         )
         sections += curve_sections
         attributes += curve_attrs
@@ -937,7 +969,7 @@ def _serialize_geometry(geometry, sections, attributes, prefix="", as_subd=False
         sections += points_to_sections(cloud, prefix=prefix, notes=notes)
         attribute_sections, point_attributes_ = points_attributes(
             cloud, index0=len(attributes), prefix=prefix, definition=definition,
-            notes=notes,
+            part=part, notes=notes,
         )
         sections += attribute_sections
         attributes += point_attributes_
@@ -1148,64 +1180,160 @@ def _is_identity(matrix):
     return all(float(matrix[i]) == _IDENTITY[i] for i in range(16))
 
 
-def _serialize_definition(reference, sections, attributes, definitions, depth, notes=None):
-    """Serialize one definition into the flat table. Returns its index.
+def _definition_prefix(index, part=None):
+    """The §5.2 namespace of one definition or one of its parts."""
+    if part is None:
+        return "idef.%d." % index
+    return "idef.%d.%d." % (index, part)
+
+
+def _append_definition_rows(sections, prefix, ref_def, transforms):
+    """Append one definition's ``inst.*`` row pair, all-or-nothing."""
+    if not ref_def:
+        return
+    sections.append((prefix + "inst.ref_def", "u32", np.asarray(ref_def, dtype=np.uint32)))
+    sections.append(
+        (prefix + "inst.transforms", "f32",
+         np.asarray(transforms, dtype=np.float32).reshape(-1))
+    )
+
+
+def _serialize_definition(reference, sections, attributes, definitions, depth,
+                          notes=None, blocks_2=True):
+    """Serialize one definition into the flat table. Returns its indices.
+
+    A definition with one unit (or none) keeps the original single-part
+    namespace ``idef.<i>.*`` and no ``parts`` field. A definition with more than
+    one unit emits ``parts: N`` and one ``idef.<i>.<part>.`` namespace per part.
+    When the peer cannot read multi-part definitions (``blocks_2`` is false),
+    each part becomes its own single-part definition and the returned list names
+    all of them in part order, so every row that referenced the original one
+    fans out to the same placements instead of losing a part.
 
     Rows come from two sources, resolved through one dictionary so a child
     reached twice lands once: the definition's nested placements, and every
     unit's own instances — an object member whose geometry carries instances of
-    its own (a cube whose modifier instances a sphere, say).
+    its own (a cube whose modifier instances a sphere, say). Nested rows stay at
+    definition level (``idef.<i>.inst.*``) in every form. In a fallback split
+    they belong to the first part, which keeps the nested content drawn once.
     """
-    index = len(definitions)
-    definitions.append({"name": _reference_name(reference)})
-    prefix = "idef.%d." % index
+    name = _reference_name(reference)
     if depth >= MAX_INSTANCE_DEPTH:
+        index = len(definitions)
+        definitions.append({"name": name})
         message = "instance nesting deeper than %d was skipped" % MAX_INSTANCE_DEPTH
         prefs.log("[stageloom] " + message, flush=True)
         _note(notes, message)
-        return index
+        return [index]
 
     units, nested = _definition_parts(reference, depth, notes=notes)
+    parts = len(units)
+    split = parts > 1 and not blocks_2
     resolved = {}
-    ref_def = []
-    transforms = []
 
     def resolve(child_reference, matrix):
-        child = resolved.get(id(child_reference))
-        if child is None:
-            child = _serialize_definition(
+        children = resolved.get(id(child_reference))
+        if children is None:
+            children = _serialize_definition(
                 child_reference, sections, attributes, definitions, depth + 1,
-                notes=notes,
+                notes=notes, blocks_2=blocks_2,
             )
-            resolved[id(child_reference)] = child
-        ref_def.append(child)
-        transforms.extend(matrix)
+            resolved[id(child_reference)] = children
+        for child in children:
+            ref_def.append(child)
+            transforms.extend(matrix)
 
-    for unit in units:
+    if parts <= 1:
+        index = len(definitions)
+        definitions.append({"name": name})
+        ref_def = []
+        transforms = []
+        for unit in units:
+            _serialize_geometry(
+                unit, sections, attributes, prefix=_definition_prefix(index),
+                definition=index, notes=notes,
+            )
+            for child_reference, matrix in (_instance_rows(unit, notes=notes) or []):
+                resolve(child_reference, matrix)
+        for child_reference, matrix in nested:
+            resolve(child_reference, matrix)
+        _append_definition_rows(
+            sections, _definition_prefix(index), ref_def, transforms
+        )
+        return [index]
+
+    indices = []
+    if not split:
+        index = len(definitions)
+        definitions.append({"name": name, "parts": parts})
+        indices.append(index)
+        ref_def = []
+        transforms = []
+        for part, unit in enumerate(units):
+            _serialize_geometry(
+                unit, sections, attributes, prefix=_definition_prefix(index, part),
+                definition=index, part=part, notes=notes,
+            )
+            for child_reference, matrix in (_instance_rows(unit, notes=notes) or []):
+                resolve(child_reference, matrix)
+        for child_reference, matrix in nested:
+            resolve(child_reference, matrix)
+        _append_definition_rows(
+            sections, _definition_prefix(index), ref_def, transforms
+        )
+        return indices
+
+    # No `blocks/2` on the peer: one single-part definition per part. An old
+    # peer ignores `parts` and the part namespaces, so emitting them anyway
+    # would collapse the definition silently (§8).
+    for part, unit in enumerate(units):
+        index = len(definitions)
+        definitions.append({"name": _split_part_name(name, part, parts)})
+        indices.append(index)
+        ref_def = []
+        transforms = []
         _serialize_geometry(
-            unit, sections, attributes, prefix=prefix, definition=index, notes=notes
+            unit, sections, attributes, prefix=_definition_prefix(index),
+            definition=index, notes=notes,
         )
         for child_reference, matrix in (_instance_rows(unit, notes=notes) or []):
             resolve(child_reference, matrix)
-    for child_reference, matrix in nested:
-        resolve(child_reference, matrix)
-
-    if ref_def:
-        sections.append((prefix + "inst.ref_def", "u32", np.asarray(ref_def, dtype=np.uint32)))
-        sections.append(
-            (prefix + "inst.transforms", "f32",
-             np.asarray(transforms, dtype=np.float32).reshape(-1))
+        if part == 0:
+            for child_reference, matrix in nested:
+                resolve(child_reference, matrix)
+        _append_definition_rows(
+            sections, _definition_prefix(index), ref_def, transforms
         )
-    return index
+    _note(
+        notes,
+        "definition %r has %d parts; Grasshopper does not advertise blocks/2, "
+        "so it was split into %d single-part definitions" % (name or "?", parts, parts),
+    )
+    return indices
 
 
-def _serialize_instances(geometry, sections, attributes, definitions, depth, notes=None):
+def _split_part_name(name, part, parts):
+    """The display name of one part of a fallback split.
+
+    Names are display-only (§5.2), but distinct names keep an old peer's block
+    table from colliding two parts into one block name. An unnamed definition
+    stays unnamed rather than inventing a name.
+    """
+    if not name:
+        return ""
+    return "%s [part %d/%d]" % (name, part, parts)
+
+
+def _serialize_instances(geometry, sections, attributes, definitions, depth,
+                         notes=None, blocks_2=True):
     """Serialize a GeometrySet's instances component.
 
     Returns ``(ref_def, transforms)`` — the definition index per row and the
     flat row-major matrices — or None when the set has no instances. The
     definitions the rows reference are appended to the shared flat table
     (``definitions``); a definition that holds instances of its own recurses.
+    A fallback-split definition returns several indices, so its row fans out to
+    one row per part at the same placement.
     """
     rows = _instance_rows(geometry, notes=notes)
     if not rows:
@@ -1220,15 +1348,16 @@ def _serialize_instances(geometry, sections, attributes, definitions, depth, not
     ref_def = []
     transforms = []
     for reference, matrix in rows:
-        index = local.get(id(reference))
-        if index is None:
-            index = _serialize_definition(
+        indices = local.get(id(reference))
+        if indices is None:
+            indices = _serialize_definition(
                 reference, sections, attributes, definitions, depth + 1,
-                notes=notes,
+                notes=notes, blocks_2=blocks_2,
             )
-            local[id(reference)] = index
-        ref_def.append(index)
-        transforms.extend(matrix)
+            local[id(reference)] = indices
+        for index in indices:
+            ref_def.append(index)
+            transforms.extend(matrix)
     return ref_def, transforms
 
 
@@ -1240,7 +1369,7 @@ def _reference_name(reference):
 
 
 def curves_component_to_sections(curves, index0=0, prefix="", definition=None,
-                                 notes=None):
+                                 part=None, notes=None):
     """Read a GeometrySet's curve component into ``crv.*`` sections and attributes.
 
     The component is the new Curves type: per-curve attributes carry the kind
@@ -1396,13 +1525,15 @@ def curves_component_to_sections(curves, index0=0, prefix="", definition=None,
     ]
     attribute_sections, attributes = curves_component_attributes(
         curves, curve_indices, point_indices, has_bezier,
-        index0=index0, prefix=prefix, definition=definition, notes=notes,
+        index0=index0, prefix=prefix, definition=definition, part=part,
+        notes=notes,
     )
     return sections + attribute_sections, attributes
 
 
 def curves_component_attributes(curves, curve_indices, point_indices, has_bezier,
-                                index0=0, prefix="", definition=None, notes=None):
+                                index0=0, prefix="", definition=None, part=None,
+                                notes=None):
     """Reindex a Curves component's user attributes onto the emitted curves.
 
     Per-curve values become domain ``CURVE``; per-point values become domain
@@ -1433,7 +1564,7 @@ def curves_component_attributes(curves, curve_indices, point_indices, has_bezier
             index = index0 + len(descriptors)
             attribute_sections, descriptor = _emit_attribute(
                 "crv", name, "CURVE", type_name, mapped, index,
-                prefix=prefix, definition=definition,
+                prefix=prefix, definition=definition, part=part,
             )
             sections += attribute_sections
             descriptors.append(descriptor)
@@ -1454,7 +1585,7 @@ def curves_component_attributes(curves, curve_indices, point_indices, has_bezier
             index = index0 + len(descriptors)
             attribute_sections, descriptor = _emit_attribute(
                 "crv", name, "POINT", type_name, mapped, index,
-                prefix=prefix, definition=definition,
+                prefix=prefix, definition=definition, part=part,
             )
             sections += attribute_sections
             descriptors.append(descriptor)

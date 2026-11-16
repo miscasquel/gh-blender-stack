@@ -44,9 +44,9 @@ def _helper_has_data(helper, kind):
     return len(data.points) > 0
 
 
-def _definition_helper(obj, stage, index, kind):
+def _definition_helper(obj, stage, index, kind, part=None):
     return engine.bpy.data.objects.get(
-        engine.helpers.definition_name(obj, stage.key, index, kind)
+        engine.helpers.definition_name(obj, stage.key, index, kind, part=part)
     )
 
 
@@ -64,11 +64,12 @@ def _payload_missing(obj, stage, sections):
     """Whether a frame names geometry that an empty helper is not displaying.
 
     Each section group is checked against the helper it writes: base geometry,
-    `idef.<i>.*` and `inst.*` rows separately. A cleared helper must be repaired
-    even when the applied hash still matches.
+    `idef.<i>.*`, a multi-part `idef.<i>.<p>.*` part and `inst.*` rows
+    separately. A cleared helper must be repaired even when the applied hash
+    still matches.
     """
     for name in sections:
-        index, rest = engine._definition_split(name)
+        index, part, rest = engine._definition_split(name)
         if index is None:
             if rest.startswith("inst."):
                 refs = sections.get("inst.ref_def")
@@ -85,17 +86,20 @@ def _payload_missing(obj, stage, sections):
                     return True
             continue
 
-        prefix = "idef.%d." % index
-        if rest.startswith("inst."):
-            refs = sections.get(prefix + "inst.ref_def")
+        if part is None and rest.startswith("inst."):
+            refs = sections.get("idef.%d.inst.ref_def" % index)
             if refs is not None and len(refs):
                 if not engine._cloud_has_rows(obj, stage, index, nested=True):
                     return True
             continue
+        prefix = (
+            "idef.%d." % index if part is None
+            else "idef.%d.%d." % (index, part)
+        )
         kind = engine._kind_of(rest)
         if kind is not None and engine._group_has_geometry(sections, prefix, kind):
             if not engine._helper_has_data(
-                engine._definition_helper(obj, stage, index, kind), kind
+                engine._definition_helper(obj, stage, index, kind, part=part), kind
             ):
                 return True
     return False
@@ -128,7 +132,10 @@ def _invalidate_prefix_batch(obj, stage):
         engine._prefix_batch.pop((pointer, candidate.key), None)
 
 
-def _apply(obj, stage, sections, attributes=None):
+_LEGACY_DEFINITIONS = object()
+
+
+def _apply(obj, stage, sections, attributes=None, definitions=_LEGACY_DEFINITIONS):
     """Write the response geometry into the stage's helpers, one per kind, then
     its attributes into the helpers that can hold them.
 
@@ -143,7 +150,23 @@ def _apply(obj, stage, sections, attributes=None):
     `inst.*` rows fill each definition's row cloud, and a definition's own
     `idef.<i>.inst.*` rows fill its nested placement cloud, which the node
     group instances from.
+
+    A multi-part definition (`definitions[i].parts > 1`) is one namespace per
+    part: `idef.<i>.<p>.*`, with one per-kind helper per part inside the same
+    definition collection. The whole frame is validated before anything is
+    written, so a mixed namespace or a part outside `0..N-1` rejects the frame
+    instead of pairing one part's vertices with another part's faces.
     """
+    # Resolve and validate the definition table first: a bad entry must reject
+    # the frame before any helper is touched (atomicity), and legacy direct
+    # callers that omit the table infer single-part definitions from names.
+    table, strict = _definition_table(definitions, sections)
+    _validate_attribute_descriptors(attributes, table)
+    top_rows = engine._rows_of(sections, "")
+    nested_rows = engine._nested_rows_of(sections)
+    if strict:
+        _validate_row_targets(table, top_rows, nested_rows)
+
     # A prefix batch built earlier in this pass evaluated the helpers before
     # this write. Only the entries *downstream* of this stage in the modifier
     # stack are stale: an upstream prefix cannot contain this stage's output,
@@ -159,16 +182,19 @@ def _apply(obj, stage, sections, attributes=None):
     engine._bump_id(stage)
 
     base = {"mesh": [], "curves": [], "points": []}
-    definitions = {}
+    groups = {}
 
     for name, values in sections.items():
-        index, rest = engine._definition_split(name)
+        index, part, rest = engine._definition_split(name)
         if index is not None:
-            if rest.startswith("inst."):
+            if part is None and rest.startswith("inst."):
                 continue  # handled with the other row pairs below
             bucket = engine._kind_of(rest)
             if bucket is not None:
-                entry = definitions.setdefault(index, {"mesh": [], "curves": [], "points": []})
+                entry = groups.setdefault(
+                    (index, part if part is not None else 0),
+                    {"mesh": [], "curves": [], "points": []},
+                )
                 entry[bucket].append((rest, values))
             continue
         if name.startswith("inst."):
@@ -177,14 +203,12 @@ def _apply(obj, stage, sections, attributes=None):
         if bucket is not None:
             base[bucket].append((name, values))
 
-    top_rows = engine._rows_of(sections, "")
-    nested_rows = engine._nested_rows_of(sections)
-    keep = set(definitions) | set(nested_rows)
+    keep = set(table) | set(nested_rows)
     for index, _matrix in top_rows:
         keep.add(index)
     for index in sorted(nested_rows):
         for target, _matrix in nested_rows[index]:
-            if target in definitions or target in nested_rows:
+            if target in table or target in nested_rows:
                 keep.add(target)
             else:
                 # The response names a nested placement whose definition group
@@ -194,8 +218,7 @@ def _apply(obj, stage, sections, attributes=None):
                     % (stage.key, index, target),
                     flush=True,
                 )
-    for index in keep:
-        definitions.setdefault(index, {"mesh": [], "curves": [], "points": []})
+    parts_by_index = {index: table.get(index, 1) for index in keep}
 
     # Definitions the response no longer carries go away whole: collection,
     # helpers, nested empties and row cloud.
@@ -204,17 +227,23 @@ def _apply(obj, stage, sections, attributes=None):
             engine.helpers.remove_definition(obj, stage.key, index)
 
     # Data first, wiring after: the node group reads the final definition set.
-    for index in sorted(definitions):
-        _collection, objects = engine.helpers.ensure_definition(obj, stage.key, index)
-        engine._apply_mesh(objects["mesh"], definitions[index]["mesh"])
-        engine._apply_curves(objects["curves"], definitions[index]["curves"])
-        engine._apply_points(objects["points"], definitions[index]["points"])
+    for index in sorted(keep):
+        _collection, part_objects = engine.helpers.ensure_definition_parts(
+            obj, stage.key, index, parts_by_index[index]
+        )
+        for part, objects in enumerate(part_objects):
+            entry = groups.get((index, part))
+            if entry is None:
+                entry = {"mesh": [], "curves": [], "points": []}
+            engine._apply_mesh(objects["mesh"], entry["mesh"])
+            engine._apply_curves(objects["curves"], entry["curves"])
+            engine._apply_points(objects["points"], entry["points"])
 
     engine._apply_mesh(engine.helpers.ensure_helper(obj, stage.key, "mesh"), base["mesh"])
     engine._apply_curves(engine.helpers.ensure_helper(obj, stage.key, "curves"), base["curves"])
     engine._apply_points(engine.helpers.ensure_helper(obj, stage.key, "points"), base["points"])
-    engine._apply_attributes(obj, stage, sections, attributes)
-    engine._apply_instance_rows(obj, stage, definitions, top_rows, nested_rows)
+    engine._apply_attributes(obj, stage, sections, attributes, parts_by_index)
+    engine._apply_instance_rows(obj, stage, keep, top_rows, nested_rows)
 
     engine.nodes.ensure_group(obj, stage.key, nested_rows)
     # The frame is fully on screen: the heartbeat's "applied" stamp. Written
@@ -222,15 +251,253 @@ def _apply(obj, stage, sections, attributes=None):
     engine._heartbeat["applied_at"] = engine.time.monotonic()
 
 
+# A part count is an object-allocation factor on the apply side: a malformed
+# frame naming billions of empty parts must be rejected, not looped over.
+MAX_DEFINITION_PARTS = 4096
+
+_DEFINITION_GEOMETRY_GROUPS = ("mesh", "subd", "crv", "pts")
+
+
 def _definition_split(name):
-    """``(index, rest)`` when a section name is inside a definition group
-    (``idef.<i>.mesh.verts``), else ``(None, name)``."""
-    if not name.startswith("idef."):
-        return None, name
+    """``(index, part, rest)`` when a section name is inside a definition
+    group, else ``(None, None, name)``.
+
+    ``idef.<i>.mesh.verts`` is a single-part fragment: ``part`` is None.
+    ``idef.<i>.<p>.mesh.verts`` is a part fragment. ``rest`` is the remainder
+    after the namespace, so a definition-level ``inst.*`` row of a multi-part
+    definition keeps ``part`` None (§5.2).
+    """
+    if not isinstance(name, str) or not name.startswith("idef."):
+        return None, None, name
     parts = name.split(".", 2)
-    if len(parts) != 3 or not parts[1].isdigit():
-        return None, name
-    return int(parts[1]), parts[2]
+    if len(parts) != 3 or not parts[1].isascii() or not parts[1].isdigit():
+        return None, None, name
+    index = int(parts[1])
+    rest = parts[2]
+    head, separator, inner = rest.partition(".")
+    if separator and inner and head.isascii() and head.isdigit():
+        return index, int(head), inner
+    return index, None, rest
+
+
+def _definition_table(definitions, sections):
+    """Validate and return ``(parts by index, strict)``.
+
+    ``_LEGACY_DEFINITIONS`` is the legacy direct-apply form (and a
+    pre-instances caller): single-part definitions are inferred from the
+    section names, as the path did before multi-part definitions. A list is
+    authoritative: every `idef.*` section must fit it, and an entry's `parts`
+    must be a positive integer. ``None`` is not a table and rejects the frame.
+
+    Raises :class:`GeometryIOError` on anything the apply path must not guess:
+    a malformed entry, a definition index outside the table, a part outside
+    ``0..N-1``, or a section that mixes the single- and multi-part namespaces.
+    """
+    if definitions is _LEGACY_DEFINITIONS:
+        table = {}
+        for name in sections:
+            index, part, rest = _definition_split(name)
+            if index is None:
+                _reject_unparsed_definition_name(name)
+                continue
+            if part is not None:
+                raise engine.geometry_io.GeometryIOError(
+                    "section %r uses a part namespace but the frame has no definitions table"
+                    % (name,)
+                )
+            _validate_definition_rest(name, rest, multi=False, definition_level=True)
+            table[index] = 1
+        return table, False
+
+    if not isinstance(definitions, list):
+        raise engine.geometry_io.GeometryIOError("definitions is not an array")
+    table = {}
+    for index, entry in enumerate(definitions):
+        if not isinstance(entry, dict):
+            raise engine.geometry_io.GeometryIOError(
+                "definitions[%d] is not an object" % index
+            )
+        if not isinstance(entry.get("name", ""), str):
+            raise engine.geometry_io.GeometryIOError(
+                "definitions[%d].name is not a string" % index
+            )
+        parts = entry.get("parts", 1)
+        if isinstance(parts, bool) or not isinstance(parts, int) or parts < 1:
+            raise engine.geometry_io.GeometryIOError(
+                "definitions[%d].parts is not a positive integer" % index
+            )
+        if parts > MAX_DEFINITION_PARTS:
+            raise engine.geometry_io.GeometryIOError(
+                "definitions[%d].parts is %d, over the %d-part cap"
+                % (index, parts, MAX_DEFINITION_PARTS)
+            )
+        table[index] = parts
+
+    for name in sections:
+        index, part, rest = _definition_split(name)
+        if index is None:
+            _reject_unparsed_definition_name(name)
+            continue
+        if index >= len(table):
+            raise engine.geometry_io.GeometryIOError(
+                "section %r names definition %d outside the definitions table"
+                % (name, index)
+            )
+        parts = table[index]
+        if part is not None:
+            if parts == 1:
+                raise engine.geometry_io.GeometryIOError(
+                    "section %r uses the multi-part namespace on single-part definition %d"
+                    % (name, index)
+                )
+            if part >= parts:
+                raise engine.geometry_io.GeometryIOError(
+                    "section %r names part %d outside 0..%d"
+                    % (name, part, parts - 1)
+                )
+        elif parts > 1 and not rest.startswith("inst."):
+            raise engine.geometry_io.GeometryIOError(
+                "section %r is definition-level in multi-part definition %d"
+                % (name, index)
+            )
+        _validate_definition_rest(
+            name, rest, multi=parts > 1, definition_level=part is None
+        )
+    return table, True
+
+
+def _reject_unparsed_definition_name(name):
+    """A name in the `idef.` namespace that does not parse is not skipped.
+
+    `_definition_split` returns no index both for a base section and for a
+    malformed `idef.` name; only the latter is an error here.
+    """
+    if isinstance(name, str) and name.startswith("idef."):
+        raise engine.geometry_io.GeometryIOError(
+            "section %r does not parse as a definition section" % (name,)
+        )
+
+
+def _validate_definition_rest(name, rest, multi, definition_level):
+    """Reject a definition section outside the §5.2 namespaces.
+
+    Single-part definitions accept every geometry group, `attr.*` and `inst.*`.
+    Multi-part definitions only accept a definition-level `inst.*` pair; their
+    geometry and attributes live under a part. An unparsed name is rejected
+    rather than silently ignored.
+    """
+    head, separator, _inner = rest.partition(".")
+    if definition_level:
+        allowed = ("inst",) if multi else (
+            _DEFINITION_GEOMETRY_GROUPS + ("attr", "inst")
+        )
+    else:
+        # A part holds geometry and attributes; nested rows stay at definition
+        # level, so `idef.<i>.<p>.inst.*` is never legal (§5.2).
+        allowed = _DEFINITION_GEOMETRY_GROUPS + ("attr",)
+    if not separator or head not in allowed:
+        where = "multi-part" if multi else "single-part"
+        raise engine.geometry_io.GeometryIOError(
+            "section %r does not parse as a %s definition section" % (name, where)
+        )
+
+
+def _validate_attribute_descriptors(attributes, table):
+    """Check every descriptor's ``definition``/``part`` against the table and
+    the section it names (§5.2). A descriptor is part of the frame's meaning,
+    so a mismatch rejects the frame instead of writing one part's values onto
+    another part's helper."""
+    for position, descriptor in enumerate(attributes or []):
+        if not isinstance(descriptor, dict):
+            raise engine.geometry_io.GeometryIOError(
+                "attribute descriptor %d is not an object" % position
+            )
+        definition = descriptor.get("definition")
+        part = descriptor.get("part")
+        if definition is None:
+            if part is not None:
+                raise engine.geometry_io.GeometryIOError(
+                    "attribute descriptor %d has a part but no definition" % position
+                )
+            section = descriptor.get("section")
+            if isinstance(section, str) and section.startswith("idef."):
+                raise engine.geometry_io.GeometryIOError(
+                    "attribute descriptor %d names definition section %r without "
+                    "a definition index" % (position, section)
+                )
+            offsets = descriptor.get("offsets")
+            if isinstance(offsets, str) and offsets.startswith("idef."):
+                raise engine.geometry_io.GeometryIOError(
+                    "attribute descriptor %d names definition offsets %r without "
+                    "a definition index" % (position, offsets)
+                )
+            continue
+        if (
+            isinstance(definition, bool)
+            or not isinstance(definition, int)
+            or definition not in table
+        ):
+            raise engine.geometry_io.GeometryIOError(
+                "attribute descriptor %d names definition %r outside the table"
+                % (position, definition)
+            )
+        parts = table[definition]
+        if parts == 1:
+            if part is not None:
+                raise engine.geometry_io.GeometryIOError(
+                    "attribute descriptor %d has a part on single-part definition %d"
+                    % (position, definition)
+                )
+        elif (
+            isinstance(part, bool)
+            or not isinstance(part, int)
+            or part < 0
+            or part >= parts
+        ):
+            raise engine.geometry_io.GeometryIOError(
+                "attribute descriptor %d names part %r outside 0..%d"
+                % (position, part, parts - 1)
+            )
+        section = descriptor.get("section")
+        if not isinstance(section, str):
+            raise engine.geometry_io.GeometryIOError(
+                "attribute descriptor %d has no section name" % position
+            )
+        index, section_part, _rest = _definition_split(section)
+        expected_part = None if parts == 1 else part
+        if index != definition or section_part != expected_part:
+            raise engine.geometry_io.GeometryIOError(
+                "attribute descriptor %d section %r does not match definition %d part %r"
+                % (position, section, definition, expected_part)
+            )
+        offsets = descriptor.get("offsets")
+        if offsets is not None:
+            offset_index, offset_part, _offset_rest = _definition_split(offsets)
+            if offset_index != definition or offset_part != expected_part:
+                raise engine.geometry_io.GeometryIOError(
+                    "attribute descriptor %d offsets %r do not match its definition/part"
+                    % (position, offsets)
+                )
+
+
+def _validate_row_targets(table, top_rows, nested_rows):
+    """Every row target must index the definition table (§5.2)."""
+    for target, _matrix in top_rows:
+        if target not in table:
+            raise engine.geometry_io.GeometryIOError(
+                "instance row references definition %d outside the table" % target
+            )
+    for scope, rows in nested_rows.items():
+        if scope not in table:
+            raise engine.geometry_io.GeometryIOError(
+                "nested row scope names definition %d outside the table" % scope
+            )
+        for target, _matrix in rows:
+            if target not in table:
+                raise engine.geometry_io.GeometryIOError(
+                    "definition %d nests definition %d outside the table"
+                    % (scope, target)
+                )
 
 
 def _nested_rows_of(sections):
@@ -240,8 +507,8 @@ def _nested_rows_of(sections):
     (a frame already applied still has to be able to rebuild the node group)."""
     scopes = {}
     for name in sections:
-        index, rest = engine._definition_split(name)
-        if index is not None and rest.startswith("inst."):
+        index, part, rest = engine._definition_split(name)
+        if index is not None and part is None and rest.startswith("inst."):
             scopes.setdefault(index, None)
     return {index: engine._rows_of(sections, "idef.%d." % index) for index in scopes}
 
@@ -256,14 +523,20 @@ def _kind_of(name):
     return None
 
 
-def _selected_mesh_group(sections, definition=None):
+def _selected_mesh_group(sections, definition=None, part=None, parts=1):
     """The topology group the frame selects for one scope, or None.
 
     The attribute path uses the same ``select_mesh_group`` owner as the mesh
     writer, so attributes can never be attached from the group whose vertices
-    and faces were not written.
+    and faces were not written. A multi-part definition's scope is its part
+    prefix, never the whole definition.
     """
-    prefix = "" if definition is None else "idef.%d." % int(definition)
+    if definition is None:
+        prefix = ""
+    elif parts > 1:
+        prefix = "idef.%d.%d." % (int(definition), int(part))
+    else:
+        prefix = "idef.%d." % int(definition)
     by_name = {
         name[len(prefix):]: values
         for name, values in sections.items()
@@ -314,7 +587,11 @@ def _apply_instance_rows(obj, stage, definitions, top_rows, nested_rows):
     # Earlier builds used an Empty with a collection instance for a nested
     # placement; the node graph carries it now, so remove any such object.
     for index in sorted(definitions):
-        collection, _objects = engine.helpers.ensure_definition(obj, stage.key, index)
+        collection = engine.bpy.data.collections.get(
+            engine.helpers.definition_collection_name(obj, stage.key, index)
+        )
+        if collection is None:
+            continue
         for child in list(collection.objects):
             if child.type == "EMPTY":
                 engine.bpy.data.collections[collection.name].objects.unlink(child)
@@ -420,14 +697,15 @@ def _has_generic_attributes(owner):
     return False
 
 
-def _apply_attributes(obj, stage, sections, attributes):
+def _apply_attributes(obj, stage, sections, attributes, parts_by_index):
     """Reconcile the frame's attribute sections with the helpers they belong to.
 
     mesh and subd share the mesh helper (a SubD cage is a mesh); points go to
     the point cloud helper. A descriptor with a ``definition`` index targets
-    that definition's helper instead (protocol §5.2). Curve attributes are not
-    transferred yet: Blender's curve helper is a Curve datablock, which cannot
-    store attributes.
+    that definition's helper instead (protocol §5.2), and for a multi-part
+    definition its ``part`` selects that part's helper inside the same
+    collection. Curve attributes are not transferred yet: Blender's curve
+    helper is a Curve datablock, which cannot store attributes.
 
     Absent means none: a helper the frame gives no descriptors is pruned of
     its previous generic attributes. The native colour channel is handled by
@@ -444,38 +722,55 @@ def _apply_attributes(obj, stage, sections, attributes):
             continue
         offsets = sections.get(descriptor.get("offsets")) if descriptor.get("offsets") else None
         definition = descriptor.get("definition")
-        grouped.setdefault((definition, kind), []).append((descriptor, values, offsets))
+        part = descriptor.get("part")
+        grouped.setdefault((definition, part, kind), []).append(
+            (descriptor, values, offsets)
+        )
 
-    targets = {(None, "mesh"), (None, "points")}
-    for index in engine.helpers.definition_collections(obj, stage.key):
-        targets.add((int(index), "mesh"))
-        targets.add((int(index), "points"))
+    targets = {(None, None, "mesh"), (None, None, "points")}
+    for index, parts in sorted(parts_by_index.items()):
+        for part in range(parts):
+            key_part = part if parts > 1 else None
+            targets.add((int(index), key_part, "mesh"))
+            targets.add((int(index), key_part, "points"))
     targets.update(grouped)
 
     def order(target):
-        definition, kind = target
-        return (definition is not None, -1 if definition is None else int(definition), kind)
+        definition, part, kind = target
+        if definition is None:
+            return (0, -1, -1, kind)
+        return (
+            1,
+            int(definition),
+            -1 if part is None else int(part),
+            kind,
+        )
 
     selected_mesh = {}
 
-    def selected_group(definition):
-        if definition not in selected_mesh:
-            selected_mesh[definition] = _selected_mesh_group(sections, definition)
-        return selected_mesh[definition]
+    def selected_group(definition, part):
+        key = (definition, part)
+        if key not in selected_mesh:
+            parts = parts_by_index.get(int(definition), 1) if definition is not None else 1
+            selected_mesh[key] = _selected_mesh_group(
+                sections, definition, part=part, parts=parts
+            )
+        return selected_mesh[key]
 
-    for definition, kind in sorted(targets, key=order):
+    for definition, part, kind in sorted(targets, key=order):
         if definition is None:
             helper = engine.helpers.helper_for(obj, stage.key, kind)
         else:
-            _collection, objects = engine.helpers.ensure_definition(
-                obj, stage.key, int(definition)
+            parts = parts_by_index.get(int(definition), 1)
+            _collection, part_objects = engine.helpers.ensure_definition_parts(
+                obj, stage.key, int(definition), parts
             )
-            helper = objects[kind]
+            helper = part_objects[part if part is not None else 0][kind]
         if helper is None:
             continue
-        entries = grouped.get((definition, kind), [])
+        entries = grouped.get((definition, part, kind), [])
         if kind == "mesh" and entries:
-            chosen = selected_group(definition)
+            chosen = selected_group(definition, part)
             if chosen is not None:
                 entries = [
                     entry

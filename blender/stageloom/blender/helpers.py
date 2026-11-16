@@ -137,9 +137,22 @@ def definition_collection_name(stack_obj, stage_key, index):
     return "%s%s.%s.def%d" % (HELPER_PREFIX, stack_obj.name, stage_key, index)
 
 
-def definition_name(stack_obj, stage_key, index, kind="mesh"):
-    """The per-kind helper inside a definition's collection."""
+# The number of parts a definition's collection holds (protocol §5.2). Written
+# by the apply path and read back by the node builder; a collection from an
+# older session has no value and is one part.
+DEFINITION_PARTS_KEY = "gh_stack_parts"
+
+
+def definition_name(stack_obj, stage_key, index, kind="mesh", part=None):
+    """The per-kind helper inside a definition's collection.
+
+    ``part`` selects one part of a multi-part definition: part helpers carry a
+    ``.part<p>`` suffix (``...def3.part1`` for mesh, ``...def3.part1.curves``
+    for the rest). A single-part definition keeps its original names.
+    """
     base = definition_collection_name(stack_obj, stage_key, index)
+    if part is not None:
+        base = "%s.part%d" % (base, int(part))
     return base if kind == "mesh" else "%s.%s" % (base, kind)
 
 
@@ -154,14 +167,8 @@ def nested_name(stack_obj, stage_key, index):
     return "%s%s.%s.nest%d" % (HELPER_PREFIX, stack_obj.name, stage_key, index)
 
 
-def ensure_definition(stack_obj, stage_key, index):
-    """One definition's prototype collection plus its per-kind helper objects.
-    Returns ``(collection, {kind: object})``.
-
-    The collection lives in the stage scene (hidden by flag, never excluded
-    from a view layer: an excluded collection is not evaluated, and Collection
-    Info once read them as empty).
-    """
+def _definition_collection(stack_obj, stage_key, index):
+    """One definition's prototype collection, created and adopted on first use."""
     coll_name = definition_collection_name(stack_obj, stage_key, index)
     coll = bpy.data.collections.get(coll_name)
     if coll is None:
@@ -173,18 +180,95 @@ def ensure_definition(stack_obj, stage_key, index):
         coll.hide_viewport = True
     if not coll.hide_render:
         coll.hide_render = True
-    objects = {}
-    for kind in KINDS:
-        name = definition_name(stack_obj, stage_key, index, kind)
-        obj = bpy.data.objects.get(name)
-        if obj is None:
-            obj = bpy.data.objects.new(name, _new_data(name, kind))
-            coll.objects.link(obj)
-        elif obj.name not in coll.objects:
-            coll.objects.link(obj)
-        _hide(obj)
-        objects[kind] = obj
+    return coll
+
+
+def ensure_definition(stack_obj, stage_key, index):
+    """One definition's prototype collection plus its per-kind helper objects.
+    Returns ``(collection, {kind: object})`` — the original single-part shape.
+
+    The collection lives in the stage scene (hidden by flag, never excluded
+    from a view layer: an excluded collection is not evaluated, and Collection
+    Info once read them as empty).
+    """
+    coll, parts = ensure_definition_parts(stack_obj, stage_key, index, 1)
+    return coll, parts[0]
+
+
+def ensure_definition_parts(stack_obj, stage_key, index, parts):
+    """One definition's collection plus one per-kind helper per part.
+
+    Returns ``(collection, [{kind: object}, ...])`` in part order. A one-part
+    definition keeps the original helper names; a multi-part one uses the
+    ``.part<p>`` names. Helpers left over from another shape (a definition that
+    was single-part and is now multi-part, or a part that went away) are removed,
+    so a namespace change never leaves ghost geometry in the prototype.
+    """
+    parts = max(1, int(parts))
+    coll = _definition_collection(stack_obj, stage_key, index)
+    if coll.get(DEFINITION_PARTS_KEY) != parts:
+        coll[DEFINITION_PARTS_KEY] = parts
+    objects = []
+    expected = set()
+    for part in range(parts):
+        part_index = part if parts > 1 else None
+        part_objects = {}
+        for kind in KINDS:
+            name = definition_name(stack_obj, stage_key, index, kind, part=part_index)
+            expected.add(name)
+            obj = bpy.data.objects.get(name)
+            if obj is None:
+                obj = bpy.data.objects.new(name, _new_data(name, kind))
+                coll.objects.link(obj)
+            elif obj.name not in coll.objects:
+                coll.objects.link(obj)
+            _hide(obj)
+            part_objects[kind] = obj
+        objects.append(part_objects)
+    _remove_stale_definition_helpers(coll, expected)
     return coll, objects
+
+
+def _remove_stale_definition_helpers(coll, expected):
+    """Remove helper objects this definition no longer has a name for.
+
+    Only objects under the definition's own helper base are touched: the
+    collection is owned plumbing, and an unexpected object of another kind is
+    left alone.
+    """
+    base = coll.name
+    for obj in list(coll.objects):
+        if obj.name in expected or not obj.name.startswith(base):
+            continue
+        data = obj.data
+        coll.objects.unlink(obj)
+        bpy.data.objects.remove(obj, do_unlink=True)
+        if data is not None and data.users == 0:
+            _remove_data(data)
+
+
+def definition_parts_count(stack_obj, stage_key, index):
+    """How many parts a definition's collection holds, at least 1."""
+    coll = bpy.data.collections.get(definition_collection_name(stack_obj, stage_key, index))
+    if coll is None:
+        return 1
+    parts = coll.get(DEFINITION_PARTS_KEY, 1)
+    if isinstance(parts, bool) or not isinstance(parts, int) or parts < 1:
+        return 1
+    return parts
+
+
+def ensure_definition_layout(stack_obj, stage_key, index):
+    """Ensure a definition's collection has the parts it was last given.
+
+    The apply path writes the part count; the node builder reads it back (a
+    group rebuild after a load must wire the same helpers). Returns
+    ``(collection, [{kind: object}, ...])``.
+    """
+    return ensure_definition_parts(
+        stack_obj, stage_key, index,
+        definition_parts_count(stack_obj, stage_key, index),
+    )
 
 
 def ensure_instance_cloud(stack_obj, stage_key, index):

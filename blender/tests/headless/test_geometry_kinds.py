@@ -679,8 +679,8 @@ class InputWarningsEngineTests(unittest.TestCase):
         module = self.engine.geometry_io
         real = module.geometry_set_to_sections
 
-        def with_notes(geometry, as_subd=False, notes=None):
-            result = real(geometry, as_subd=as_subd, notes=notes)
+        def with_notes(geometry, as_subd=False, notes=None, **kwargs):
+            result = real(geometry, as_subd=as_subd, notes=notes, **kwargs)
             if notes is not None:
                 notes.extend(appended_notes)
             return result

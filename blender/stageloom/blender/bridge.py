@@ -21,6 +21,11 @@ state = {
     "clients": 0,
     "doc": "",
     "connected_at": 0.0,
+    # The `caps` list from the peer's last `hello` (protocol §8). Absent means
+    # no capabilities, never the newest; the sender falls back to one
+    # single-part definition per part rather than emitting a multi-part frame
+    # an old peer cannot read.
+    "caps": [],
     "error": "",
     "notice": "",
 }
@@ -52,6 +57,9 @@ def set_connected(doc):
 def set_disconnected(reason=""):
     state["connected"] = False
     state["doc"] = ""
+    # The next peer negotiates its own capabilities; keeping this client's
+    # would let a later send claim a capability nobody advertised.
+    state["caps"] = []
     if reason:
         state["error"] = reason
 

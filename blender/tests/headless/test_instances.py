@@ -50,10 +50,13 @@ def _points(name, positions, rotations=None, scales=None):
     return obj
 
 
-def _instance_holder(name, points_obj, source, source_kind="collection"):
+def _instance_holder(name, points_obj, source, source_kind="collection",
+                     separate_children=False):
     """An empty object whose GN modifier instances ``source`` at ``points_obj``'s
     points. ``source_kind`` selects the reference shape: a Collection (the
-    Collection Info shape) or an Object (an Object Info shape)."""
+    Collection Info shape) or an Object (an Object Info shape).
+    ``separate_children`` turns on the Collection Info mode that emits one
+    instance per member (protocol §5.2 multi-part definitions)."""
     group = bpy.data.node_groups.new(name, "GeometryNodeTree")
     group.interface.new_socket(
         "Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry"
@@ -69,7 +72,7 @@ def _instance_holder(name, points_obj, source, source_kind="collection"):
     if source_kind == "collection":
         source_node = group.nodes.new("GeometryNodeCollectionInfo")
         source_node.inputs["Collection"].default_value = source
-        source_node.inputs["Separate Children"].default_value = False
+        source_node.inputs["Separate Children"].default_value = separate_children
         source_node.inputs["Reset Children"].default_value = False
         group.links.new(source_node.outputs["Instances"], iono.inputs["Instance"])
     else:
@@ -98,15 +101,57 @@ def _instance_holder(name, points_obj, source, source_kind="collection"):
     return holder
 
 
-def _serialize(holder):
+def _object_instance_group(name, target, points_obj):
+    """A GN group that instances one object at another object's points."""
+    group = bpy.data.node_groups.new(name, "GeometryNodeTree")
+    group.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    group.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    source = group.nodes.new("NodeGroupInput")
+    output = group.nodes.new("NodeGroupOutput")
+    iono = group.nodes.new("GeometryNodeInstanceOnPoints")
+    join = group.nodes.new("GeometryNodeJoinGeometry")
+    instance_info = group.nodes.new("GeometryNodeObjectInfo")
+    instance_info.inputs["Object"].default_value = target
+    instance_info.transform_space = "ORIGINAL"
+    points_info = group.nodes.new("GeometryNodeObjectInfo")
+    points_info.inputs["Object"].default_value = points_obj
+    points_info.transform_space = "ORIGINAL"
+    group.links.new(instance_info.outputs["Geometry"], iono.inputs["Instance"])
+    group.links.new(points_info.outputs["Geometry"], iono.inputs["Points"])
+    group.links.new(source.outputs["Geometry"], join.inputs["Geometry"])
+    group.links.new(iono.outputs["Instances"], join.inputs["Geometry"])
+    group.links.new(join.outputs["Geometry"], output.inputs["Geometry"])
+    return group
+
+
+def _serialize(holder, **kwargs):
     bpy.context.view_layer.update()
     depsgraph = bpy.context.evaluated_depsgraph_get()
     geometry = holder.evaluated_get(depsgraph).evaluated_geometry()
-    return geometry_io.geometry_set_to_sections(geometry)
+    return geometry_io.geometry_set_to_sections(geometry, **kwargs)
 
 
 def _by_name(sections):
     return {name: np.asarray(values) for name, _dtype, values in sections}
+
+
+def _section_names(sections):
+    return [name for name, _dtype, _values in sections]
+
+
+def _assert_unique_section_names(case, sections):
+    names = _section_names(sections)
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    case.assertEqual(duplicates, [], "duplicate section names: %r" % duplicates)
+
+
+def _offset_mesh(obj, x):
+    """Move a member's authored vertices inside its mesh, not its object: a
+    member transform would ride an instance row and stop the definition from
+    hoisting into parts."""
+    for vertex in obj.data.vertices:
+        vertex.co.x += x
+    obj.data.update()
 
 
 class InstanceReadTests(unittest.TestCase):
@@ -185,6 +230,264 @@ class InstanceReadTests(unittest.TestCase):
         self.assertEqual(list(by_name["idef.0.inst.ref_def"]), [1, 2])
         rows = by_name["idef.0.inst.transforms"].reshape(-1, 16)
         self.assertEqual([rows[1][3], rows[1][7], rows[1][11]], [10.0, 0.0, 0.0])
+
+    def test_separate_children_with_two_members_emits_parts(self):
+        # The audit's failing case: two members hoisted into one definition
+        # used to write two `idef.0.mesh.verts` sections and collapse to one.
+        first = _quad("parts-a")
+        second = _quad("parts-b")
+        _offset_mesh(second, 10.0)
+        coll = _collection("PartsColl", first, second)
+        points = _points("PartsPts", [(0, 0, 0), (3, 0, 0)])
+        holder = _instance_holder(
+            "PartsHolder", points, coll, separate_children=True
+        )
+
+        sections, _attributes, definitions = _serialize(holder)
+        by_name = _by_name(sections)
+
+        self.assertEqual(definitions, [{"name": "PartsColl", "parts": 2}])
+        # The same reference on two rows is still one definition (§5.2).
+        self.assertEqual(list(by_name["inst.ref_def"]), [0, 0])
+        self.assertEqual(by_name["inst.transforms"].reshape(-1, 16).shape, (2, 16))
+        self.assertEqual(
+            sorted(
+                name.split(".")[2]
+                for name in by_name
+                if name.startswith("idef.0.") and name.endswith(".mesh.verts")
+            ),
+            ["0", "1"],
+        )
+        self.assertIn("idef.0.0.mesh.face_counts", by_name)
+        self.assertIn("idef.0.1.mesh.face_indices", by_name)
+        self.assertFalse(
+            any(name.startswith("idef.0.mesh.") for name in by_name),
+            "a multi-part definition must not also use the single-part namespace",
+        )
+        # Each part carries its own member's vertices: the mesh offset inside
+        # the second member shows up only in part 1.
+        spans = sorted(
+            float(by_name["idef.0.%d.mesh.verts" % part][:, 0].max())
+            for part in (0, 1)
+        )
+        self.assertEqual(spans, [1.0, 11.0])
+        _assert_unique_section_names(self, sections)
+
+    def test_separate_children_mixes_an_object_and_a_child_collection(self):
+        # One direct object member plus one child collection: the object is the
+        # definition's geometry and the collection's content is a nested row,
+        # so this stays single-part with no duplicate names.
+        cube = _quad("mixed-cube")
+        _offset_mesh(cube, 4.0)
+        child = bpy.data.collections.new("MixedChild")
+        bpy.context.scene.collection.children.link(child)
+        child.objects.link(cube)
+        outer = bpy.data.collections.new("MixedOuter")
+        bpy.context.scene.collection.children.link(outer)
+        outer.objects.link(_quad("mixed-quad"))
+        outer.children.link(child)
+        points = _points("MixedPts", [(0, 0, 0)])
+        holder = _instance_holder(
+            "MixedHolder", points, outer, separate_children=True
+        )
+
+        sections, _attributes, definitions = _serialize(holder)
+        by_name = _by_name(sections)
+
+        self.assertEqual(
+            [entry["name"] for entry in definitions],
+            ["MixedOuter", "mixed-cube"],
+        )
+        self.assertNotIn("parts", definitions[0])
+        self.assertIn("idef.0.mesh.verts", by_name)
+        self.assertIn("idef.1.mesh.verts", by_name)
+        self.assertEqual(list(by_name["idef.0.inst.ref_def"]), [1])
+        np.testing.assert_allclose(
+            by_name["idef.0.inst.transforms"].reshape(4, 4), np.eye(4), atol=1e-6
+        )
+        _assert_unique_section_names(self, sections)
+
+    def test_separate_children_keeps_two_levels_of_nesting_in_a_part(self):
+        # A hoisted two-member definition whose first member instances another
+        # object: the parts stay at definition level and the member's own
+        # placements are the definition's `idef.<i>.inst.*` rows (§5.2).
+        sphere = _quad("deep-sphere")
+        inner_points = _points("deep-points", [(0, 0, 0), (2, 0, 0)])
+        cube = _quad("deep-cube")
+        cube.modifiers.new("GN", "NODES").node_group = _object_instance_group(
+            "deep-group", sphere, inner_points
+        )
+        coll = _collection("DeepColl", cube, _quad("deep-plain"))
+        points = _points("DeepPts", [(0, 0, 0)])
+        holder = _instance_holder(
+            "DeepHolder", points, coll, separate_children=True
+        )
+
+        sections, _attributes, definitions = _serialize(holder)
+        by_name = _by_name(sections)
+
+        self.assertEqual(definitions[0], {"name": "DeepColl", "parts": 2})
+        self.assertEqual(
+            [entry["name"] for entry in definitions[1:]], ["deep-sphere"]
+        )
+        self.assertIn("idef.0.0.mesh.verts", by_name)
+        self.assertIn("idef.0.1.mesh.verts", by_name)
+        self.assertNotIn("idef.0.0.inst.ref_def", by_name)
+        self.assertEqual(list(by_name["idef.0.inst.ref_def"]), [1, 1])
+        nested = by_name["idef.0.inst.transforms"].reshape(-1, 16)
+        self.assertEqual([nested[0][3], nested[1][3]], [0.0, 2.0])
+        _assert_unique_section_names(self, sections)
+
+    def test_separate_children_keeps_an_empty_part(self):
+        empty = bpy.data.objects.new("empty-part", bpy.data.meshes.new("empty-part-mesh"))
+        bpy.context.scene.collection.objects.link(empty)
+        filled = _quad("filled-part")
+        coll = _collection("EmptyPartColl", empty, filled)
+        points = _points("EmptyPartPts", [(0, 0, 0)])
+        holder = _instance_holder(
+            "EmptyPartHolder", points, coll, separate_children=True
+        )
+
+        sections, _attributes, definitions = _serialize(holder)
+        by_name = _by_name(sections)
+
+        # The empty member is still a part: the count is two and the index
+        # sequence is complete even though one part carries no geometry.
+        self.assertEqual(definitions, [{"name": "EmptyPartColl", "parts": 2}])
+        with_geometry = [
+            part
+            for part in (0, 1)
+            if "idef.0.%d.mesh.verts" % part in by_name
+        ]
+        self.assertEqual(len(with_geometry), 1)
+        self.assertEqual(list(by_name["inst.ref_def"]), [0])
+        _assert_unique_section_names(self, sections)
+
+    def test_a_part_attribute_carries_its_definition_and_part(self):
+        first = _quad("part-attr-a")
+        second = _quad("part-attr-b")
+        _offset_mesh(second, 10.0)
+        load = second.data.attributes.new("load", "FLOAT", "POINT")
+        load.data.foreach_set(
+            "value", np.array([5.0, 6.0, 7.0, 8.0], dtype=np.float32)
+        )
+        coll = _collection("PartAttrColl", first, second)
+        points = _points("PartAttrPts", [(0, 0, 0)])
+        holder = _instance_holder(
+            "PartAttrHolder", points, coll, separate_children=True
+        )
+
+        sections, attributes, definitions = _serialize(holder)
+        by_name = _by_name(sections)
+        found = [entry for entry in attributes if entry["name"] == "load"]
+
+        self.assertEqual(definitions, [{"name": "PartAttrColl", "parts": 2}])
+        self.assertEqual(len(found), 1)
+        descriptor = found[0]
+        self.assertEqual(descriptor["definition"], 0)
+        self.assertIn(descriptor["part"], (0, 1))
+        prefix = "idef.0.%d." % descriptor["part"]
+        self.assertTrue(descriptor["section"].startswith(prefix + "attr."))
+        np.testing.assert_allclose(
+            by_name[descriptor["section"]], [5.0, 6.0, 7.0, 8.0]
+        )
+        # The descriptor names the part that owns the marked member's vertices.
+        self.assertEqual(float(by_name[prefix + "mesh.verts"][:, 0].max()), 11.0)
+        _assert_unique_section_names(self, sections)
+
+    def test_parts_keep_their_geometry_kinds(self):
+        # The part namespace is a complete §5 group: a definition can hold a
+        # mesh part and a point-cloud part without either kind leaking into the
+        # other's namespace.
+        quad = _quad("kind-quad")
+        cloud = _points("kind-cloud", [(0, 0, 0), (1, 0, 0)])
+        coll = _collection("KindColl", quad, cloud)
+        points = _points("KindPts", [(0, 0, 0)])
+        holder = _instance_holder(
+            "KindHolder", points, coll, separate_children=True
+        )
+
+        sections, _attributes, definitions = _serialize(holder)
+        by_name = _by_name(sections)
+        names = _section_names(sections)
+
+        self.assertEqual(definitions, [{"name": "KindColl", "parts": 2}])
+        parts = {}
+        for name in names:
+            if name.startswith("idef.0.") and name.endswith(".mesh.verts"):
+                parts["mesh"] = name.split(".")[2]
+            if name.startswith("idef.0.") and name.endswith(".pts.positions"):
+                parts["points"] = name.split(".")[2]
+        self.assertEqual(sorted(parts.values()), ["0", "1"])
+        self.assertIn("idef.0.%s.mesh.verts" % parts["mesh"], by_name)
+        self.assertEqual(
+            by_name["idef.0.%s.pts.positions" % parts["points"]].shape, (2, 3)
+        )
+        self.assertNotIn("idef.0.%s.pts.positions" % parts["mesh"], by_name)
+        _assert_unique_section_names(self, sections)
+
+    def test_without_blocks_2_a_multipart_definition_splits(self):
+        # §8: without the peer's `blocks/2`, the sender emits one single-part
+        # definition per part and says so; an old peer would silently ignore
+        # the part namespaces.
+        first = _quad("fallback-a")
+        second = _quad("fallback-b")
+        _offset_mesh(second, 10.0)
+        coll = _collection("FallbackColl", first, second)
+        points = _points("FallbackPts", [(0, 0, 0), (3, 0, 0)])
+        holder = _instance_holder(
+            "FallbackHolder", points, coll, separate_children=True
+        )
+
+        notes = []
+        sections, _attributes, definitions = _serialize(
+            holder, notes=notes, blocks_2=False
+        )
+        by_name = _by_name(sections)
+        names = _section_names(sections)
+
+        self.assertEqual(len(definitions), 2)
+        self.assertTrue(all("parts" not in entry for entry in definitions))
+        self.assertEqual(
+            [entry["name"] for entry in definitions],
+            ["FallbackColl [part 0/2]", "FallbackColl [part 1/2]"],
+        )
+        self.assertIn("idef.0.mesh.verts", by_name)
+        self.assertIn("idef.1.mesh.verts", by_name)
+        self.assertFalse(any(name.startswith("idef.0.0.") for name in names))
+        # Each top-level reference fans out to one row per part, at the same
+        # placement, so neither part is lost; the two points stay two placements.
+        self.assertEqual(list(by_name["inst.ref_def"]), [0, 1, 0, 1])
+        transforms = by_name["inst.transforms"].reshape(-1, 16)
+        self.assertEqual(transforms.shape, (4, 16))
+        np.testing.assert_allclose(transforms[0], transforms[1], atol=1e-6)
+        np.testing.assert_allclose(transforms[2], transforms[3], atol=1e-6)
+        self.assertAlmostEqual(float(transforms[2][3]), 3.0, places=6)
+        self.assertTrue(
+            any("blocks/2" in note for note in notes), "fallback was silent: %r" % notes
+        )
+        _assert_unique_section_names(self, sections)
+
+    def test_a_single_part_definition_keeps_its_namespace(self):
+        quad = _quad("single-part")
+        coll = _collection("SinglePartColl", quad)
+        points = _points("SinglePartPts", [(0, 0, 0)])
+        holder = _instance_holder("SinglePartHolder", points, coll)
+
+        sections, _attributes, definitions = _serialize(holder)
+        names = _section_names(sections)
+
+        # A one-member collection keeps the original single-part shape: the
+        # collection is definition 0, its nested row names the member's own
+        # single-part definition, and no entry gains a `parts` field.
+        self.assertEqual(
+            definitions, [{"name": "SinglePartColl"}, {"name": "single-part"}]
+        )
+        self.assertTrue(all("parts" not in entry for entry in definitions))
+        self.assertIn("idef.1.mesh.verts", names)
+        self.assertEqual(list(_by_name(sections)["idef.0.inst.ref_def"]), [1])
+        self.assertFalse(any(name.startswith("idef.1.0.") for name in names))
+        _assert_unique_section_names(self, sections)
 
     def test_a_member_with_its_own_instances_carries_them(self):
         # The live shape: a cube whose own modifier instances a sphere, kept as
@@ -494,6 +797,301 @@ class InstanceApplyTests(unittest.TestCase):
             self.assertEqual(len(mesh.polygons), 2)
             xs = sorted(round(v.co.x, 3) for v in mesh.vertices)
             self.assertIn(5.0, xs)
+        finally:
+            evaluated.to_mesh_clear()
+
+    def test_apply_builds_one_helper_per_part(self):
+        from stageloom.blender import engine, helpers
+
+        obj, stage = self._stage()
+        sections = {}
+        sections.update(self._quad_sections("idef.0.0."))
+        sections.update(self._quad_sections("idef.0.1."))
+        part_one = sections["idef.0.1.mesh.verts"].reshape(-1, 3).copy()
+        part_one[:, 0] += 5.0
+        sections["idef.0.1.mesh.verts"] = part_one.reshape(-1)
+        sections["idef.0.0.attr.0.values"] = np.array(
+            [1.0, 2.0, 3.0, 4.0], dtype=np.float32
+        )
+        sections["inst.ref_def"] = np.array([0], dtype=np.uint32)
+        sections["inst.transforms"] = self._wire_transform((0, 0, 0))
+        attributes = [{
+            "group": "mesh",
+            "name": "load",
+            "domain": "POINT",
+            "type": "FLOAT",
+            "components": 1,
+            "count": 4,
+            "section": "idef.0.0.attr.0.values",
+            "definition": 0,
+            "part": 0,
+        }]
+        definitions = [{"name": "Parts", "parts": 2}]
+
+        engine._apply(obj, stage, sections, attributes, definitions)
+
+        part_zero = bpy.data.objects[
+            helpers.definition_name(obj, stage.key, 0, "mesh", part=0)
+        ]
+        part_one = bpy.data.objects[
+            helpers.definition_name(obj, stage.key, 0, "mesh", part=1)
+        ]
+        self.assertEqual(len(part_zero.data.vertices), 4)
+        self.assertEqual(len(part_one.data.vertices), 4)
+        self.assertEqual(helpers.definition_parts_count(obj, stage.key, 0), 2)
+        self.assertIsNotNone(part_zero.data.attributes.get("load"))
+        self.assertIsNone(part_one.data.attributes.get("load"))
+        self.assertAlmostEqual(float(part_one.data.vertices[0].co.x), 5.0, places=5)
+        # The old single-part helper name is not left behind as ghost geometry.
+        self.assertNotIn(
+            helpers.definition_name(obj, stage.key, 0, "mesh"), bpy.data.objects
+        )
+
+        evaluated, mesh = self._realized_mesh(obj)
+        try:
+            self.assertEqual(len(mesh.vertices), 8)
+            self.assertEqual(len(mesh.polygons), 2)
+            xs = sorted(round(vertex.co.x, 3) for vertex in mesh.vertices)
+            self.assertIn(5.0, xs)
+            self.assertIn(6.0, xs)
+        finally:
+            evaluated.to_mesh_clear()
+
+    def test_apply_draws_a_multi_part_definition_with_nested_rows(self):
+        from stageloom.blender import engine, helpers
+
+        obj, stage = self._stage()
+        sections = {}
+        sections.update(self._quad_sections("idef.0.0."))
+        sections.update(self._quad_sections("idef.0.1."))
+        child = self._quad_sections("idef.1.")
+        child_verts = child["idef.1.mesh.verts"].reshape(-1, 3).copy()
+        child_verts[:, 0] += 10.0
+        child["idef.1.mesh.verts"] = child_verts.reshape(-1)
+        sections.update(child)
+        # Nested rows stay at definition level, never under a part (§5.2).
+        sections["idef.0.inst.ref_def"] = np.array([1], dtype=np.uint32)
+        sections["idef.0.inst.transforms"] = self._wire_transform((0, 0, 0))
+        sections["inst.ref_def"] = np.array([0], dtype=np.uint32)
+        sections["inst.transforms"] = self._wire_transform((0, 0, 0))
+        definitions = [{"name": "Block", "parts": 2}, {"name": "Child"}]
+
+        engine._apply(obj, stage, sections, None, definitions)
+
+        nested = helpers.nested_clouds(obj, stage.key)
+        self.assertEqual(sorted(nested), [0])
+        self.assertEqual(len(nested[0].data.points), 1)
+        self.assertEqual(nested[0].data.attributes["child"].data[0].value, 1)
+        self.assertEqual(
+            sorted(helpers.definition_collections(obj, stage.key)), [0, 1]
+        )
+
+        evaluated, mesh = self._realized_mesh(obj)
+        try:
+            self.assertEqual(len(mesh.vertices), 12)
+            self.assertEqual(len(mesh.polygons), 3)
+            xs = sorted(round(vertex.co.x, 3) for vertex in mesh.vertices)
+            self.assertIn(10.0, xs)
+            self.assertIn(11.0, xs)
+        finally:
+            evaluated.to_mesh_clear()
+
+    def test_apply_reads_a_single_part_definitions_table(self):
+        from stageloom.blender import engine, helpers
+
+        obj, stage = self._stage()
+        sections = dict(self._quad_sections("idef.0."))
+        sections["inst.ref_def"] = np.array([0], dtype=np.uint32)
+        sections["inst.transforms"] = self._wire_transform((0, 0, 0))
+
+        engine._apply(obj, stage, sections, None, [{"name": "Single"}])
+
+        helper = bpy.data.objects[
+            helpers.definition_name(obj, stage.key, 0, "mesh")
+        ]
+        self.assertEqual(len(helper.data.vertices), 4)
+        self.assertEqual(helpers.definition_parts_count(obj, stage.key, 0), 1)
+        self.assertNotIn(
+            helpers.definition_name(obj, stage.key, 0, "mesh", part=0),
+            bpy.data.objects,
+        )
+
+    def test_apply_rejects_a_multipart_frame_that_does_not_resolve(self):
+        from stageloom.blender import engine, helpers
+
+        obj, stage = self._stage()
+        quad = self._quad_sections("idef.0.0.")
+        cases = {
+            "parts is zero": ([{"name": "Bad", "parts": 0}], quad),
+            "parts is a boolean": ([{"name": "Bad", "parts": True}], quad),
+            "part outside the count": (
+                [{"name": "Bad", "parts": 2}],
+                self._quad_sections("idef.0.2."),
+            ),
+            "part on a single-part definition": (
+                [{"name": "One"}],
+                quad,
+            ),
+            "definition outside the table": (
+                [{"name": "One"}],
+                self._quad_sections("idef.1."),
+            ),
+            "definition-level geometry in a multi-part definition": (
+                [{"name": "Bad", "parts": 2}],
+                self._quad_sections("idef.0."),
+            ),
+            "unparsed definition name": (
+                [{"name": "One"}],
+                {"idef.x.mesh.verts": np.zeros((4, 3), dtype=np.float32)},
+            ),
+            "nested rows under a part": (
+                [{"name": "Bad", "parts": 2}],
+                {"idef.0.0.inst.ref_def": np.array([0], dtype=np.uint32)},
+            ),
+        }
+        for label, (definitions, sections) in cases.items():
+            with self.subTest(label):
+                with self.assertRaises(engine.geometry_io.GeometryIOError):
+                    engine._apply(obj, stage, sections, None, definitions)
+                self.assertEqual(
+                    helpers.definition_collections(obj, stage.key), {},
+                    "a rejected frame created helpers",
+                )
+
+    def test_apply_rejects_a_descriptor_from_another_part(self):
+        from stageloom.blender import engine
+
+        obj, stage = self._stage()
+        sections = {}
+        sections.update(self._quad_sections("idef.0.0."))
+        sections.update(self._quad_sections("idef.0.1."))
+        sections["idef.0.0.attr.0.values"] = np.array(
+            [1.0, 2.0, 3.0, 4.0], dtype=np.float32
+        )
+        sections["inst.ref_def"] = np.array([0], dtype=np.uint32)
+        sections["inst.transforms"] = self._wire_transform((0, 0, 0))
+        attributes = [{
+            "group": "mesh",
+            "name": "load",
+            "domain": "POINT",
+            "type": "FLOAT",
+            "components": 1,
+            "count": 4,
+            "section": "idef.0.0.attr.0.values",
+            "definition": 0,
+            "part": 1,
+        }]
+
+        with self.assertRaises(engine.geometry_io.GeometryIOError):
+            engine._apply(
+                obj, stage, sections, attributes, [{"name": "Parts", "parts": 2}]
+            )
+
+    def test_a_multipart_frame_round_trips_through_the_codec_into_helpers(self):
+        from stageloom.blender import engine, helpers
+
+        obj, stage = self._stage()
+        sections = {}
+        sections.update(self._quad_sections("idef.0.0."))
+        sections.update(self._quad_sections("idef.0.1."))
+        sections["idef.0.0.attr.0.values"] = np.array(
+            [1.0, 2.0, 3.0, 4.0], dtype=np.float32
+        )
+        sections["inst.ref_def"] = np.array([0], dtype=np.uint32)
+        sections["inst.transforms"] = self._wire_transform((0, 0, 0))
+        attributes = [{
+            "group": "mesh",
+            "name": "load",
+            "domain": "POINT",
+            "type": "FLOAT",
+            "components": 1,
+            "count": 4,
+            "section": "idef.0.0.attr.0.values",
+            "definition": 0,
+            "part": 0,
+        }]
+        definitions = [{"name": "Parts", "parts": 2}]
+        encoded = [
+            (
+                name,
+                "u32"
+                if name.endswith(("face_counts", "face_indices", "ref_def"))
+                else "f32",
+                values,
+            )
+            for name, values in sections.items()
+        ]
+        frame = codec.encode_frame(
+            {
+                "type": "response",
+                "stage": stage.key,
+                "rid": "sha256:" + "0" * 64,
+                "status": "ok",
+                "out_hash": "multipart-round-trip",
+                "definitions": definitions,
+                "attributes": attributes,
+            },
+            encoded,
+        )
+        header, decoded = codec.decode_frame(frame)
+
+        engine._apply(
+            obj, stage, decoded, header.get("attributes"),
+            header.get("definitions"),
+        )
+
+        self.assertEqual(header["definitions"], definitions)
+        part_zero = bpy.data.objects[
+            helpers.definition_name(obj, stage.key, 0, "mesh", part=0)
+        ]
+        part_one = bpy.data.objects[
+            helpers.definition_name(obj, stage.key, 0, "mesh", part=1)
+        ]
+        self.assertEqual(len(part_zero.data.vertices), 4)
+        self.assertEqual(len(part_one.data.vertices), 4)
+        loaded = np.empty(4, dtype=np.float32)
+        part_zero.data.attributes["load"].data.foreach_get("value", loaded)
+        np.testing.assert_allclose(loaded, [1.0, 2.0, 3.0, 4.0])
+        self.assertIsNone(part_one.data.attributes.get("load"))
+
+    def test_the_multipart_fixture_applies_to_its_helpers(self):
+        # The Q10a golden response is the contract's own two-part frame: part 0
+        # with a face attribute, part 1, and a definition-level nested row.
+        from stageloom.blender import engine, helpers
+
+        path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "..",
+            "protocol", "fixtures", "response-instances-multipart", "frame.bin",
+        )
+        with open(path, "rb") as stream:
+            header, sections = codec.decode_frame(stream.read())
+        obj, stage = self._stage()
+
+        engine._apply(
+            obj, stage, sections, header.get("attributes"),
+            header.get("definitions"),
+        )
+
+        self.assertEqual(helpers.definition_parts_count(obj, stage.key, 0), 2)
+        part_zero = bpy.data.objects[
+            helpers.definition_name(obj, stage.key, 0, "mesh", part=0)
+        ]
+        part_one = bpy.data.objects[
+            helpers.definition_name(obj, stage.key, 0, "mesh", part=1)
+        ]
+        self.assertEqual(len(part_zero.data.vertices), 4)
+        self.assertEqual(len(part_one.data.vertices), 3)
+        panel = part_zero.data.attributes["panel_id"]
+        self.assertEqual(panel.data[0].value, 7)
+        self.assertIsNone(part_one.data.attributes.get("panel_id"))
+        nested = helpers.nested_clouds(obj, stage.key)[0]
+        self.assertEqual(len(nested.data.points), 1)
+        self.assertEqual(nested.data.attributes["child"].data[0].value, 1)
+
+        evaluated, mesh = self._realized_mesh(obj)
+        try:
+            self.assertEqual(len(mesh.vertices), 10)
+            self.assertEqual(len(mesh.polygons), 3)
         finally:
             evaluated.to_mesh_clear()
 
@@ -1144,6 +1742,39 @@ class EnginePrefixTests(unittest.TestCase):
         stage = holder.gh_stack.stages[-1]
         return holder, stage, group, modifier, stack_mod
 
+    def _multipart_scene(self):
+        from stageloom.blender import stack as stack_mod
+
+        first = _quad("multi-source-a")
+        second = _quad("multi-source-b")
+        _offset_mesh(second, 10.0)
+        coll = _collection("multi-sources", first, second)
+        points = _points("multi-points", [(0, 0, 0)])
+        holder = _quad("multi-holder")
+        group = bpy.data.node_groups.new("multi-IoP", "GeometryNodeTree")
+        group.interface.new_socket(
+            "Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry"
+        )
+        output = group.nodes.new("NodeGroupOutput")
+        iono = group.nodes.new("GeometryNodeInstanceOnPoints")
+        cinfo = group.nodes.new("GeometryNodeCollectionInfo")
+        cinfo.inputs["Collection"].default_value = coll
+        cinfo.inputs["Separate Children"].default_value = True
+        cinfo.inputs["Reset Children"].default_value = False
+        pinfo = group.nodes.new("GeometryNodeObjectInfo")
+        pinfo.inputs["Object"].default_value = points
+        pinfo.transform_space = "ORIGINAL"
+        group.links.new(cinfo.outputs["Instances"], iono.inputs["Instance"])
+        group.links.new(pinfo.outputs["Geometry"], iono.inputs["Points"])
+        group.links.new(iono.outputs["Instances"], output.inputs["Geometry"])
+        modifier = holder.modifiers.new("GN", "NODES")
+        modifier.node_group = group
+        bpy.context.view_layer.objects.active = holder
+        holder.modifiers.active = modifier
+        bpy.ops.stageloom.add_stage(label="Multi")
+        stage = holder.gh_stack.stages[-1]
+        return holder, stage, stack_mod
+
     @staticmethod
     def _prefix(holder, stage, stack_mod):
         # The add-on's module copy, not `blender.stageloom`: the registered
@@ -1161,6 +1792,49 @@ class EnginePrefixTests(unittest.TestCase):
         self.assertIn("idef.0.mesh.verts", names)
         self.assertIn("inst.ref_def", names)
         self.assertEqual(list(dict((n, v) for n, _d, v in sections)["inst.ref_def"]), [0, 0])
+
+    def test_a_peer_without_blocks_2_gets_split_definitions_and_a_warning(self):
+        # §8: the capability is retained from the peer's `hello`; without it a
+        # multi-part definition is shipped as one single-part definition per
+        # part with a visible note, never as a frame an old peer would collapse.
+        from stageloom.blender import engine
+
+        holder, stage, stack_mod = self._multipart_scene()
+        engine.bridge.state["caps"] = []
+        engine._prefix_memo.clear()
+        engine._prefix_batch.clear()
+        engine._prefix_batch_built = False
+        try:
+            sections, _hash, _attributes, definitions = self._prefix(
+                holder, stage, stack_mod
+            )
+            names = [name for name, _dtype, _values in sections]
+            self.assertEqual(len(definitions), 2)
+            self.assertTrue(all("parts" not in entry for entry in definitions))
+            self.assertIn("idef.0.mesh.verts", names)
+            self.assertIn("idef.1.mesh.verts", names)
+            self.assertFalse(any(name.startswith("idef.0.0.") for name in names))
+            self.assertIn("blocks/2", stage.input_warnings)
+            self.assertEqual(
+                list(dict((n, v) for n, _d, v in sections)["inst.ref_def"]), [0, 1]
+            )
+
+            # A peer that does advertise it gets the native two-part frame and
+            # the warning goes away.
+            engine.bridge.state["caps"] = ["blocks/2"]
+            engine._prefix_memo.clear()
+            engine._prefix_batch.clear()
+            engine._prefix_batch_built = False
+            sections, _hash, _attributes, definitions = self._prefix(
+                holder, stage, stack_mod
+            )
+            names = [name for name, _dtype, _values in sections]
+            self.assertEqual(definitions[0].get("parts"), 2)
+            self.assertIn("idef.0.0.mesh.verts", names)
+            self.assertIn("idef.0.1.mesh.verts", names)
+            self.assertEqual(stage.input_warnings, "")
+        finally:
+            engine.bridge.state["caps"] = []
 
     def test_stage_before_the_instance_modifier_ships_none(self):
         holder, stage, _group, _modifier, stack_mod = self._scene()
