@@ -144,12 +144,16 @@ IEEE-754 rounding.
 | `roundtrip.ref.settle_ms` | parameter-only (`ref`) request |
 | `multistage.dirty_pass_ms` | dirty engine pass |
 | `multistage.settle_ms` | full three-stage chain settle |
-| `multistage.idle_pass_ms` | idle timer pass (amortized over 1000 ticks) |
 
 `pipeline.100k.total_ms` is one timed operation that reads, hashes, encodes,
 decodes and applies in sequence; it is not a sum of independently warmed phase
-timings. The idle pass times 1000 ticks and divides, because one tick is about
-three microseconds and a single-tick timer cannot resolve 5%.
+timings.
+
+The idle pass is not gated. It times 1000 timer ticks and divides, but even the
+amortized value is about 3 µs; 5% of that is below the timer/scheduler noise
+floor (a p95-only run produced a +13% swing with no code change). `bench.py`
+keeps the hard 2 ms idle-pass budget. The value is still stored in the baseline
+with that reason.
 
 The baseline also records the remaining diagnostics, but does not gate them:
 
@@ -162,6 +166,9 @@ The baseline also records the remaining diagnostics, but does not gate them:
   is `pipeline.1m.apply_inplace_ms`, which is gated.
 - `instances.13x.apply_first_ms` has one sample per run (first definition
   build); the repeated apply is the gated path.
+- `multistage.idle_pass_ms` is an amortized timer tick of about 3 µs; 5% is
+  below the timer/scheduler noise floor and flaked +13% on an unrelated run.
+  The hard 2 ms budget remains in `bench.py`.
 - `roundtrip.*.prefix_ms/encode_ms/rtt_ms/apply_ms` are component diagnostics
   inside the full/ref settle gates. `rtt_ms` includes the fake client's own
   decode, scale, encode and hash.

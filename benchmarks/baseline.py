@@ -179,7 +179,9 @@ METRICS = (
          lambda report: _scenario_samples(report, "multistage", "dirty_pass_ms")),
     _m("multistage.settle_ms", "multistage", "ms", True, "",
        lambda report: _scenario_samples(report, "multistage", "settle_ms")),
-    _m("multistage.idle_pass_ms", "multistage", "ms", True, "",
+    _m("multistage.idle_pass_ms", "multistage", "ms", False,
+         "amortized idle tick (~0.003 ms); 5% is below the timer/scheduler noise floor; "
+         "bench.py keeps a hard 2 ms budget",
          lambda report: _scenario_samples(report, "multistage", "idle_pass_ms")),
 
     _m("pipeline.100k.hash_ms", "pipeline", "ms", False,

@@ -122,7 +122,8 @@ floor.
 - Returning curve attributes to Blender (the legacy Curve helper cannot store
   them).
 - Native B-rep/surface transfer; Breps remain a warned, lossy mesh conversion.
-- Grasshopper 2 / Rhino 9 support; see [`plan-gh2.md`](plan-gh2.md).
+- Grasshopper 2 / Rhino 9 support; out of scope through 1.0, with no separate
+  plan carried in this repository.
 - A custom frame cache or any second offline cache; Freeze and the native Bake
   node are the offline path. A simulation-zone cache stays later R&D.
 
@@ -385,8 +386,7 @@ The old A1–A10 remain the functional core. Add the release gates that the
 
 - [`protocol.md`](protocol.md) — wire protocol v2.
 - [`decisions/`](decisions/) — architecture decisions, including live-only
-  stages (0016) and the native bake.
-- [`plan-gh2.md`](plan-gh2.md) — separate Grasshopper 2 / Rhino 9 target.
+  stages (0016), compatibility shims (0017) and the official wheel (0018).
 - [`extensions-compliance.md`](extensions-compliance.md) — current platform
   compliance record.
 - [`../README.md`](../README.md) — product overview and supported requirements.

@@ -1,8 +1,9 @@
 # Stageloom 0.7.0 / 0.8.0 — quality plan (rev. 2)
 
-**Status:** 0.7.0 complete, 2026-11-16; 0.8.0 remains planned. W7 (architecture
-seams) and W8 (performance) have **not** been done and remain the 0.8.0 work,
-with the remaining W9/W10 items.
+**Status:** 0.7.0 complete, 2026-11-16. 0.8.0 is in progress: T1 (baseline,
+performance gate, code health) and T2 (subtraction before refactor) are complete
+and recorded below. W7 (architecture seams) and W8 (performance) have **not**
+been done and remain the 0.8.0 work, with the remaining W9/W10 items.
 **Baseline:** v0.6.0 plus the 2026-11-15 audit (seven module reviews), plus the
 post-audit bake/upstream work (`102f9c8..254d796`). That was the starting point:
 305 Blender headless tests in ~86 s, 57 core tests, C# and extension suites
@@ -13,6 +14,23 @@ recorded in §2.
 **Authority:** `plan.md` remains the 1.0 roadmap, `protocol.md` the wire
 contract, ADRs the decision log. This document owns the 0.7/0.8 quality work and
 records where those documents must change.
+
+**0.8.0 completion record so far (2026-11-16).** T1 added the three-run median
+p50/p95 baseline and `scripts/check-all` gate, the C# parameter/schema
+microbenchmark and the generated code-health inventory. T2 removed the
+`spikes/` evidence tree, the stale planning handoff, the archived Grasshopper 2
+plan, the unused C# build script, the 21k-line vendored `websockets` tree, dead
+parameter/attribute exports, test-only C# aliases and unused icons; it also
+wrote the shim inventory ([ADR 0017](decisions/0017-compatibility-shims.md)) and
+the official-wheel decision ([ADR 0018](decisions/0018-official-wheel-only.md)).
+No production behavior changed. Production is **24,946 physical lines** across
+49 files (from 25,096); the tracked tree is **82,866 lines / 231 files** (from
+112,513 / 380). The full gate passed alone in **175.8 s** with the baseline
+enforced: 123 core tests, 427 Blender headless tests plus the offline gate,
+fourteen golden fixtures, the seven C# console suites and the installed
+extension round trip. The measured values are in the T2 section of
+[`performance-ledger.md`](performance-ledger.md) and the regenerated
+[`code-health.md`](code-health.md).
 
 **0.7.0 completion record (2026-11-16).** Q1–Q19 are complete; Q5 was merged
 into Q4 (the cache and the `Live` toggle were one removal). The release was
@@ -95,7 +113,7 @@ as accepted ADRs rather than open findings.
 | D4 | **Bake only the selected stage. Compute the full downstream dependency closure, trigger each dependent once, and freeze it when its answer lands. Clear Bake touches only that stage's bake and the freeze markers it created.** | New W5. Supersedes ADR 0014's "downstream stays live" decision with ADR 0015. No chain-wide Clear Bake; no downstream native bakes. |
 | D5 | **Stage labels are editable; the stage key stays immutable.** | W6. Modifier and helper naming derive from the label; keys, caches and requests use the key. |
 | D6 | **No breaking protocol redesign.** | Clarifies rev. 1's "no protocol v3": see §2.2. |
-| D7 | **Blender extension compliance is a first-class constraint.** | W9. The add-on stays pure Python + official wheel; evaluate dropping the vendored tree; validate the artifact. |
+| D7 | **Blender extension compliance is a first-class constraint.** | W9. The add-on stays pure Python + official wheel; T2 deleted the vendored tree and kept the wheel as the only source (ADR 0018); validate the artifact. |
 
 ### 2.1 What a compatibility shim is (D3)
 
@@ -157,8 +175,8 @@ no alternative framework that improves extension compliance. Keep pure Python,
 the official `websockets` wheel, `blender_manifest.toml`, permissions, and no
 `sys.path` manipulation in shipped code. The compliance work is packaging and
 architecture, not a new framework:
-- make the **wheel** the only `websockets` source (evaluate deleting the 21k-line
-  `vendor/` tree; dev install can install the wheel or the extension);
+- the **official wheel** is the only `websockets` source (0.8.0 T2 deleted the
+  21k-line vendored tree; the dev install extracts the same wheel; ADR 0018);
 - validate the manifest and the built zip in CI;
 - 0.8.0 build artifact reproducible and traceable to a tag.
 
@@ -243,7 +261,7 @@ review.
 - CI: core (3.13 and 3.14), Blender 5.3 headless, C# codec, bench baseline,
   extension build validation. Pin versions, cache downloads, set timeouts and
   least-privilege permissions.
-- Static checks: correct ruff vendor path, shellcheck, C# warnings-as-errors.
+- Static checks: correct ruff scope, shellcheck, C# warnings-as-errors.
 
 **Exit:** `check-all` green; CI runs it; no test depends on another module's
 side effects; no fixed ports or unbounded waits in the harness.
@@ -618,17 +636,18 @@ accepted offsetting gain; no unbounded growth in a 10k-touch/1k-frame soak;
 - **Docs truth pass:** Python 3.13; `MiniWsClient` transport; ADR 0006/0008 data
   root and cache removal; ADR 0009/0014/0015 bake semantics; ADR 0010 status;
   ADR 0003 configurable-vs-fixed deviation; unsupported §8.8; fixture list;
-  `__init__`/`DEMO` "v0"; ruff vendor path; `.gitignore` duplicates.
-- **Archive:** move `spikes/` to `docs/evidence/` with curated results and a
-  short index, or remove runnable pre-rebrand scripts from the 1.0 tree; archive
-  `plan-gh2.md` and the 2026-11-13 handoff, or mark them historical.
+  `__init__`/`DEMO` "v0"; the ruff scope after the wheel move; `.gitignore`
+  duplicates.
+- **Archive (done in T2):** the `spikes/` evidence tree, the archived
+  Grasshopper 2 plan and the 2026-11-13 handoff are removed; the history stays in
+  git and in `CHANGELOG.md`, not in the current tree.
 - **Build:** reproducible extension zip (fixed mtimes, sorted entries, recorded
   SHA-256); deploy script derives the wine user; install-addon stops deleting a
   shared package; `test-gha --require-all` fails on skipped suites; version
   extracted in one helper.
-- **Extension/vendor:** evaluate making the official wheel the only
-  `websockets` source and deleting `vendor/`; if kept, it is dev-only and
-  license-complete. Validate manifest and zip in CI.
+- **Extension/wheel (done in T2):** the official wheel is the only `websockets`
+  source; the vendored tree is deleted and the wheel digest stays pinned (ADR
+  0018). Validate manifest and zip in CI.
 - **Framework spike (D7):** run the `net48`/`net7.0-windows` spike; adopt
   transport/JSON migration only with a documented go decision; otherwise record
   the no-go and harden C# 5.
@@ -651,7 +670,7 @@ recorded.
 - **Conformance corpus:** Python↔C# frames, number formatting, hashes,
   attributes, empty geometry, multi-part/nested blocks; both suites consume it.
 - **Coverage:** core 90%, engine/geometry 80%, GH core 80%; explicit exclude
-  list for vendored/bpy glue.
+  list for bpy glue.
 - **Scale/soak:** 200 stages, 100k triangles, 10k instances, 1-hour churn,
   bake/cascade churn.
 - **Docs checks:** links, version/port/path consistency, ADR status, fixture
@@ -776,6 +795,22 @@ acceptance criteria, then committed before the next starts.
 | Q17 | W6b props ranges, migrations, ids | min-only/max-only/max-zero; int↔float and all type migrations; by_id order; tests | Done |
 | Q18 | W6c UI purity, labels, operators | no draw writes; editable labels; correct undo flags/polls; panel tests draw params | Done |
 | Q19 | W10/docs/0.7 release prep | blocked regressions fixed; docs/plan/README/ADRs true; full gate; version/changelog | Done |
+
+### 0.8.0 execution order (subagent tasks)
+
+| ID | Task | Acceptance | Status |
+|---|---|---|---|
+| T1 | Baseline, performance gate, code health | three-run median baseline; `--check-baseline` fails a +6% regression; ledger and code-health inventory; no production behavior change | Done 2026-11-16 (`c2ed250`) |
+| T2 | Subtraction before refactor | dead material/aliases/vendored tree removed; shim ADR and wheel ADR; no behavior change; full gate green; production and total tree smaller | Done 2026-11-16 |
+| T3 | Characterization tests for the seams | tests pin `geometry_io`, the engine hub, `GhLink` and `Instances`; no production edits | Pending |
+| T4 | `geometry_io` package split | one responsibility per module; no production net growth; full gate; in-place benchmarks within 5% | Pending |
+| T5 | Blender engine object | explicit `Engine`/runtime records; no package-global hub; lifecycle/playback/bake tests unchanged | Pending |
+| T6 | `GhLink` split | registry/connection/scheduler/protocol/publication/slots split; document isolation and threading preserved | Pending |
+| T7 | `Instances` split and table-driven conversion | single-part/multi-part/nested/attribute round trips unchanged; production LOC down or flat | Pending |
+| T8 | Performance follow-through | playback resolved or traded; p50/p95 within 5%; each fixed path measured | Pending |
+| T9 | Lean/docs/CI/build/framework | protocol tables generated; docs/ADR truth pass; reproducible artifacts; framework go/no-go | Pending |
+| T10 | Verification | fuzz, coverage, scale and 1-hour soak green | Pending |
+| T11 | 0.8.0 release | version/changelog/artifacts match the tagged commit | Pending |
 
 **Commit rule:** a task is committed only after its acceptance tests plus
 `scripts/test-core` and the relevant Blender/C# suite pass, and the audit finds

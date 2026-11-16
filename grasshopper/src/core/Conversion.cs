@@ -1605,56 +1605,5 @@ namespace Stageloom.Core
             return result;
         }
 
-        // ------------------------------------------------- text-only warnings
-
-        // The live checks compile against these overloads and only print a
-        // warning line. The plugin uses the WireWarning overloads above.
-
-        /// <summary>Text-only view of SectionsFromCurves' warnings.</summary>
-        public static List<Section> SectionsFromCurves(
-            IList<Curve> curves, double scale, List<string> warnings, out int approximated)
-        {
-            var rich = new List<WireWarning>();
-            List<Section> sections = SectionsFromCurves(curves, scale, rich, out approximated);
-            CopyMessages(rich, warnings);
-            return sections;
-        }
-
-        /// <summary>Text-only view of SubDFromSections' warnings.</summary>
-        public static SubD SubDFromSections(DecodedFrame frame, double scale, List<string> warnings)
-        {
-            var rich = new List<WireWarning>();
-            SubD subd = SubDFromSections(frame, scale, rich);
-            CopyMessages(rich, warnings);
-            return subd;
-        }
-
-        /// <summary>Text-only view of SectionsFromSubD's warnings.</summary>
-        public static List<Section> SectionsFromSubD(SubD subd, double scale, List<string> warnings)
-        {
-            var rich = new List<WireWarning>();
-            List<Section> sections = SectionsFromSubD(subd, scale, rich);
-            CopyMessages(rich, warnings);
-            return sections;
-        }
-
-        /// <summary>Text-only view of SectionsFromGeometry's warnings.</summary>
-        public static List<Section> SectionsFromGeometry(
-            IList<Mesh> meshes, IList<Curve> curves, IList<Point3d> points, IList<SubD> subds,
-            IList<Brep> breps, double scale, List<string> warnings, out Dictionary<string, object> counts)
-        {
-            var rich = new List<WireWarning>();
-            List<Section> sections = SectionsFromGeometry(
-                meshes, curves, points, subds, breps, scale, rich, out counts);
-            CopyMessages(rich, warnings);
-            return sections;
-        }
-
-        private static void CopyMessages(List<WireWarning> source, List<string> target)
-        {
-            if (target == null) return;
-            foreach (WireWarning warning in source)
-                target.Add(warning.Message);
-        }
     }
 }

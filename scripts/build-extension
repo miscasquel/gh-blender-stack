@@ -50,14 +50,13 @@ fi
 # The manifest, its wheel, and the add-on code must validate before building.
 run_blender --command extension validate "$SOURCE"
 
-# Stage without the vendored websockets copy or caches: the extension declares
-# the official pure-Python wheel instead (manifest `wheels`), so the zip stays
-# platform-neutral and does not carry a Linux-only speedups build.
+# Stage without caches: the extension declares the official pure-Python wheel
+# (manifest `wheels`), so the zip stays platform-neutral and there is no
+# vendored tree to exclude.
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE"
 tar -C "$SOURCE" \
-  --exclude './vendor' \
   --exclude '__pycache__' \
   --exclude '*.pyc' \
   --exclude '*.pyo' \
@@ -85,7 +84,7 @@ fi
 run_blender --command extension validate "$ZIP"
 
 # Nothing platform-specific or dev-only may ride inside the zip.
-BAD="$(unzip -Z1 "$ZIP" | grep -E '(^|/)vendor/|(^|/)__pycache__/|\.so$|\.exe$|\.pyc$|\.pyo$|\.zip$' || true)"
+BAD="$(unzip -Z1 "$ZIP" | grep -E '(^|/)__pycache__/|\.so$|\.exe$|\.pyc$|\.pyo$|\.zip$' || true)"
 if [ -n "$BAD" ]; then
   echo "zip carries files that must not ship:" >&2
   echo "$BAD" >&2

@@ -341,16 +341,6 @@ class ParamsTests(unittest.TestCase):
         self.assertEqual(out.index('"aaa"'), out.index('"aaa"'))
         self.assertNotIn(", ", out)
 
-    def test_clamp(self):
-        schema = [{"id": "x", "label": "R", "type": "float", "default": 1.0, "min": 0.0, "max": 10.0}]
-        self.assertEqual(params.clamp(schema[0], 50.0), 10.0)
-        self.assertEqual(params.clamp(schema[0], -5.0), 0.0)
-        self.assertEqual(params.clamp(schema[0], 4.0), 4.0)
-
-    def test_text_not_animatable(self):
-        self.assertNotIn("text", params.ANIMATABLE)
-        self.assertIn("float", params.ANIMATABLE)
-
     def test_default_for_unknown_type(self):
         with self.assertRaises(params.SchemaError):
             params.default_for("nonsense")

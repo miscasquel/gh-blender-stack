@@ -8,14 +8,15 @@ No Blender, no network, and only the Python standard library: the checks are
 deterministic and run anywhere.
 
 The contract is intentionally narrow: current claims that have drifted before
-(version, Python runtime, transport, fixture inventory, vendor path) and the
+(version, Python runtime, transport, fixture inventory, the wheel pin) and the
 stale paths that must not return to the current docs. Historical ADR bodies and
-the 2026-11-13 handoff are excluded; they describe the past on purpose.
+CHANGELOG release notes are excluded; they describe the past on purpose.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -37,9 +38,18 @@ STALE_PATTERNS = (
     (re.compile(r"/home/miquel(?:/|\b)"), "machine-specific /home/miquel path"),
     (re.compile(r"blender/gh_stack\b"), "stale blender/gh_stack path"),
     (re.compile(r"(?:^|[^A-Za-z0-9_])gh_stack/"), "stale gh_stack/ path"),
+    (re.compile(r"\]\([^)]*plan-gh2\.md"), "link to the deleted plan-gh2.md"),
+    (
+        re.compile(r"\]\([^)]*handoff-2026-11-13"),
+        "link to the deleted 2026-11-13 handoff",
+    ),
+    (re.compile(r"\]\([^)]*\bspikes/"), "link to the deleted spikes/ tree"),
+    (re.compile(r"\]\([^)]*build-core\.sh"), "link to the deleted build-core.sh"),
+    (re.compile(r"blender/stageloom/vendor"), "deleted vendored-tree path"),
 )
 
-VENDOR_IGNORE = "blender/stageloom/vendor/**"
+WHEEL_PATH = "blender/stageloom/wheels/websockets-17.2-py3-none-any.whl"
+WHEEL_DECLARATION = "./wheels/websockets-17.2-py3-none-any.whl"
 
 
 class Checker:
@@ -227,25 +237,53 @@ def check_fixture_inventory(check: Checker) -> None:
         )
 
 
-def check_vendor_path(check: Checker) -> None:
-    rel = "ruff.toml"
-    entries: list[tuple[int, str, str]] = []
-    for number, _line, match in check.find(rel, r'^\s*"([^"]*vendor[^"]*)"\s*='):
-        entries.append((number, match.group(1), match.group(0)))
+def check_wheel_pin(check: Checker) -> None:
+    """The official wheel is the only websockets source: it must be declared,
+    present, and match the SHA-256 pin the build enforces."""
+    manifest = "blender/stageloom/blender_manifest.toml"
+    declared = False
+    for _number, _line, match in check.find(manifest, r"^wheels\s*=\s*\[(.*)\]\s*$"):
+        if WHEEL_DECLARATION in match.group(1):
+            declared = True
+    if not declared:
+        check.fail(
+            manifest,
+            1,
+            f"manifest does not declare the pinned wheel {WHEEL_DECLARATION}",
+        )
 
-    if not entries:
-        check.fail(rel, 1, "no per-file vendor ignore")
-    for number, path, _line in entries:
-        if path != VENDOR_IGNORE:
+    wheel = check.root / WHEEL_PATH
+    if not wheel.is_file():
+        check.fail(WHEEL_PATH, 1, "the declared websockets wheel is missing")
+        return
+
+    pin = None
+    for number, _line, match in check.find(
+        "scripts/build-extension", r'^WHEEL_SHA256="([0-9a-f]{64})"'
+    ):
+        pin = match.group(1)
+        pin_line = number
+        break
+    if pin is None:
+        check.fail("scripts/build-extension", 1, "no WHEEL_SHA256 pin")
+    else:
+        actual = hashlib.sha256(wheel.read_bytes()).hexdigest()
+        if actual != pin:
             check.fail(
-                rel,
-                number,
-                f"vendor ignore is {path!r}; the current tree is {VENDOR_IGNORE!r}",
+                "scripts/build-extension",
+                pin_line,
+                f"wheel digest is {actual}; the build pins {pin}",
             )
-    if not (check.root / "blender" / "stageloom" / "vendor").is_dir():
-        check.fail(rel, 1, "blender/stageloom/vendor is missing from the tree")
-    for number, _line, _match in check.find(rel, r"blender/gh_stack\b"):
-        check.fail(rel, number, "stale blender/gh_stack path in the vendor ignore")
+
+    # The vendored tree and the spike scripts are gone; ruff must not keep a
+    # path or an exclusion that claims they are still in the tree.
+    for number, line in enumerate(check.lines("ruff.toml") or [], 1):
+        if "vendor" in line or "spikes" in line:
+            check.fail(
+                "ruff.toml",
+                number,
+                "ruff scope references a deleted tree (vendor or spikes)",
+            )
 
 
 def check_current_docs_paths(check: Checker) -> None:
@@ -271,7 +309,7 @@ def main() -> int:
     check_python_claim(check)
     check_protocol_transport(check)
     check_fixture_inventory(check)
-    check_vendor_path(check)
+    check_wheel_pin(check)
     check_current_docs_paths(check)
 
     if check.failures:
@@ -281,7 +319,8 @@ def main() -> int:
         return 1
 
     print(
-        "check-docs: ok (version, Python runtime, transport, fixtures, vendor path, stale paths)"
+        "check-docs: ok (version, Python runtime, transport, fixtures, wheel pin, "
+        "ruff scope, stale paths)"
     )
     return 0
 

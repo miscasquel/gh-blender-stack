@@ -151,8 +151,8 @@ class BaselineGateTests(unittest.TestCase):
             "roundtrip.full.settle_ms",
             "roundtrip.ref.settle_ms",
             "multistage.dirty_pass_ms",
-            "multistage.idle_pass_ms",
         }
+        self.assertNotIn("multistage.idle_pass_ms", baseline.GATED_IDS)
         self.assertLessEqual(required, set(baseline.GATED_IDS))
         for metric in baseline.METRICS:
             if not metric.gated:

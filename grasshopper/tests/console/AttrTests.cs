@@ -34,6 +34,7 @@ namespace Stageloom.Tests.Console
             CheckMixedTypesKeepTheirTypes();
             CheckPrefixNamesStayDistinct();
             CheckEveryTypeRoundTrips();
+            CheckLegacyRootKey();
             CheckLabelsMatchBlender();
             CheckDefinitionAttributes();
             CheckCurveAttributes();
@@ -201,6 +202,14 @@ namespace Stageloom.Tests.Console
                 if (firstDiff != null) break;
             }
             Check("every type: section bytes survive", firstDiff == null, firstDiff ?? "");
+        }
+
+        /// <summary>Geometry saved before the rebrand stores attributes under
+        /// this literal. Renaming the constant would silently hide them.</summary>
+        private static void CheckLegacyRootKey()
+        {
+            Check("legacy: the persisted root key is the pre-rebrand literal",
+                AttributeStore.RootKey == "GHStack.Attributes", AttributeStore.RootKey);
         }
 
         private static void CheckLabelsMatchBlender()

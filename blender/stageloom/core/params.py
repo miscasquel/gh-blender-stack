@@ -18,21 +18,6 @@ PARAM_COLOR = "color"
 PARAM_VALUE_LIST = "value_list"
 PARAM_TEXT = "text"
 
-PARAM_TYPES = (
-    PARAM_FLOAT,
-    PARAM_INT,
-    PARAM_BOOL,
-    PARAM_VECTOR3,
-    PARAM_COLOR,
-    PARAM_VALUE_LIST,
-    PARAM_TEXT,
-)
-
-# Which of them may be keyframed. Text is documented as not animatable.
-ANIMATABLE = frozenset(
-    (PARAM_FLOAT, PARAM_INT, PARAM_BOOL, PARAM_VECTOR3, PARAM_COLOR, PARAM_VALUE_LIST)
-)
-
 
 class SchemaError(Exception):
     """A schema is malformed."""
@@ -104,28 +89,6 @@ def cast_params(schema, values):
         else:
             out[pid] = default_for(ptype)
     return out
-
-
-def clamp(param, value):
-    """Clamp a cast value to the schema range, if one is declared.
-
-    Vectors and colours are clamped component-wise. Returns the value unchanged
-    when the schema declares no range.
-    """
-    if param.get("min") is None and param.get("max") is None:
-        return value
-    lo, hi = param.get("min"), param.get("max")
-    if param["type"] in (PARAM_VECTOR3, PARAM_COLOR):
-        return tuple(_clamp_one(v, lo, hi) for v in value)
-    return _clamp_one(value, lo, hi)
-
-
-def _clamp_one(v, lo, hi):
-    if lo is not None and v < lo:
-        return float(lo)
-    if hi is not None and v > hi:
-        return float(hi)
-    return v
 
 
 def canonical_param_json(schema, values):

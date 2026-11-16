@@ -111,7 +111,7 @@ def main():
     import websockets
 
     ws_file = os.path.abspath(websockets.__file__)
-    check("websockets from the extension wheel (not vendor)", "_libs" in ws_file or "site-packages" in ws_file, ws_file)
+    check("websockets from the extension wheel", "_libs" in ws_file or "site-packages" in ws_file, ws_file)
 
     engine.start_server(PORT)
     time.sleep(0.5)
@@ -135,7 +135,18 @@ def main():
         ],
         env=dict(
             os.environ,
-            PYTHONPATH=os.pathsep.join([os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]),
+            PYTHONPATH=os.pathsep.join(
+                [
+                    os.path.join(
+                        REPO,
+                        "blender",
+                        "stageloom",
+                        "wheels",
+                        "websockets-17.2-py3-none-any.whl",
+                    ),
+                    REPO,
+                ]
+            ),
         ),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

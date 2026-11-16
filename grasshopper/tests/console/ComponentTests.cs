@@ -51,6 +51,7 @@ namespace Stageloom.Tests.Console
                 RunStageInSuccess(server, stageIn);
                 RunStageInFailure(server, stageIn);
                 RunStageInProtocolError(stageIn);
+                RunStageInLegacyOutputs(stageIn);
                 RunStageInLateWrite(server);
                 RunStageOutNoRequest(server, stageOut);
                 RunStageOutDependentAnswer(server, stageOut);
@@ -164,6 +165,44 @@ namespace Stageloom.Tests.Console
             Check("a protocol error keeps its message",
                 Output(da, "Message") == "bad_frame: keep me",
                 "message=" + Output(da, "Message"));
+        }
+
+        /// <summary>A document saved before the Attributes output existed loads
+        /// with the file's own parameter list. Solving it must not write the
+        /// missing output (GH throws when a named parameter does not exist).</summary>
+        private static void RunStageInLegacyOutputs(StageInHarness registered)
+        {
+            const string key = "component-in-legacy-outputs";
+            StageSlot slot = GhLink.Slot(key);
+            slot.InStatus = "waiting";
+            slot.InMessage = "";
+
+            var legacy = new StageInHarness();
+            IGH_Param attributes = null;
+            foreach (IGH_Param output in legacy.Params.Output)
+                if (output.Name == "Attributes") attributes = output;
+            Check("legacy harness starts with the Attributes output", attributes != null, "");
+            if (attributes == null) return;
+            legacy.Params.UnregisterOutputParameter(attributes);
+
+            var da = new FakeDa(legacy);
+            da.Inputs["Key"] = key;
+            da.Inputs["Enabled"] = true;
+            legacy.Run(da);
+
+            Check("a legacy Stage In without Attributes still solves",
+                Output(da, "Status") == "waiting", "status=" + Output(da, "Status"));
+            Check("a legacy Stage In does not write the missing output",
+                !da.Outputs.ContainsKey("Attributes"), "");
+
+            // The registered component still writes it; the guard is per
+            // instance, not a global capability switch.
+            var current = new FakeDa(registered);
+            current.Inputs["Key"] = key;
+            current.Inputs["Enabled"] = true;
+            registered.Run(current);
+            Check("the registered Stage In still writes Attributes",
+                current.Outputs.ContainsKey("Attributes"), "");
         }
 
         private static void RunStageInLateWrite(FakeServer server)

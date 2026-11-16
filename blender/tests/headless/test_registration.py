@@ -51,6 +51,27 @@ class RegistrationOrderTests(unittest.TestCase):
         finally:
             settings.port = original
 
+    def test_saved_old_data_root_is_migrated(self):
+        """A preference saved on the pre-rebrand path moves to the extension
+        data directory; a deliberate root is left alone."""
+        from stageloom.blender import prefs as prefs_mod
+
+        settings = bpy.context.preferences.addons["stageloom"].preferences
+        original = settings.data_root
+        try:
+            settings.data_root = prefs_mod.OLD_DATA_ROOT
+            prefs_mod._migrate_old_data_root()
+            self.assertEqual(settings.data_root, prefs_mod.DEFAULT_DATA_ROOT)
+            settings.data_root = os.path.join(tempfile.gettempdir(), "stageloom-root")
+            prefs_mod._migrate_old_data_root()
+            self.assertEqual(
+                settings.data_root,
+                os.path.join(tempfile.gettempdir(), "stageloom-root"),
+                "a deliberate data root was moved",
+            )
+        finally:
+            settings.data_root = original
+
     def test_the_server_follows_the_preference(self):
         import stageloom.blender.engine as engine
         from stageloom.blender import server as server_mod

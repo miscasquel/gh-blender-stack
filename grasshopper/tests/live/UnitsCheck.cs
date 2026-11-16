@@ -92,7 +92,13 @@ public static class UnitsCheckScript
             new Point3d(2 * scale, 3 * scale, 0),
         });
         var curves = new List<Curve> { curve };
-        var warnings = new List<string>();
+        Type warningType = assembly.GetType("Stageloom.Core.WireWarning");
+        if (warningType == null)
+        {
+            Fail("Stageloom.Core.WireWarning is missing");
+            return;
+        }
+        object warnings = Activator.CreateInstance(typeof(List<>).MakeGenericType(warningType));
         object[] curveArgs = { curves, scale, warnings, 0 };
         object curveSections = Invoke(assembly, "Stageloom.Core.Conversion", "SectionsFromCurves",
             curveArgs);

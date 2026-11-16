@@ -96,8 +96,8 @@ Blender                                          Rhino / Grasshopper (wine)
   manual freeze are untouched. A packed bake is kept when the `.blend` is saved.
 - **Tests.** `scripts/check-all` is the local gate: docs, core, Blender headless
   (plus the offline gate), benchmarks, the installed extension round trip and
-  the C# suites, with per-step timing. The current tree is checked by 125
-  core tests, 423 Blender headless tests, fourteen golden fixtures and the C#
+  the C# suites, with per-step timing. The current tree is checked by 123
+  core tests, 427 Blender headless tests, fourteen golden fixtures and the C#
   console suites. `scripts/test-core` (standard library only),
   `scripts/test-blender` (Blender headless against `tools/fake_gh`),
   `scripts/test-gha` (the C# codec against the golden fixtures, plus the
@@ -191,8 +191,8 @@ live until the copy *and* the restart have both happened; `scripts/test-gha`
 prints the same warning when the deployed plugin is stale.
 
 Development path: `scripts/install-addon` symlinks the working tree into
-Blender's user scripts (no wheel; the vendored copy under `vendor/` is used).
-Both installs appear as **Stageloom** in Preferences > Add-ons.
+Blender's user scripts and unpacks the same declared `websockets` wheel beside
+it. Both installs appear as **Stageloom** in Preferences > Add-ons.
 
 Then follow [DEMO.md](DEMO.md). The server listens on port 59130 (configurable in
 the add-on preferences).
@@ -262,6 +262,7 @@ Issues and support: <https://github.com/miscasquel/gh-blender-stack/issues>.
 blender/            Blender add-on (extension support) and its tests
   stageloom/core/    pure Python: codec, hashing, params (no bpy)
   stageloom/blender/ the bpy layer: server, engine, stack, geometry, UI
+  stageloom/wheels/  the pinned official websockets wheel (the only source)
   tests/core/       layer A tests
   tests/headless/   layer B tests
 grasshopper/        Grasshopper plugin (C#, built with wine csc.exe)
@@ -270,7 +271,6 @@ grasshopper/        Grasshopper plugin (C#, built with wine csc.exe)
 protocol/fixtures/  golden frames shared by both codecs
 tools/fake_gh/      Python stand-in for the GH side, used in Blender tests
 benchmarks/         reference performance matrix and recorded baselines
-spikes/             feasibility scripts and their results behind the plan
 scripts/            test, benchmark and build entry points
 docs/
   plan.md           the project plan (authoritative, roadmap)

@@ -52,10 +52,10 @@ import numpy as np
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
-VENDOR = REPO / "blender" / "stageloom" / "vendor"
+WHEEL = REPO / "blender" / "stageloom" / "wheels" / "websockets-17.2-py3-none-any.whl"
 BLENDER_PKG = REPO / "blender"
 
-for path in (str(HERE), str(REPO), str(BLENDER_PKG), str(VENDOR)):
+for path in (str(HERE), str(REPO), str(BLENDER_PKG), str(WHEEL)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
@@ -320,7 +320,7 @@ def free_port():
 def start_fake(stage_key, port, report, *extra):
     env = dict(
         os.environ,
-        PYTHONPATH=os.pathsep.join([str(VENDOR), str(REPO)]),
+        PYTHONPATH=os.pathsep.join([str(WHEEL), str(REPO)]),
     )
     command = [
         sys.executable,

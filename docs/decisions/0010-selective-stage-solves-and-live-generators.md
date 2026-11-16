@@ -5,7 +5,9 @@ still pending; this record is promoted to Accepted when the reference file
 shows one Kangaroo step per Blender frame and no cross-stage answers. Amended by
 [0016](0016-live-only-stages.md), 2026-11-16: the `live` flag and the frame-cache
 half of section 6 are removed; every stage follows the live rules, and the
-generator/one-way decisions stand.
+generator/one-way decisions stand. Amended by
+[0017](0017-compatibility-shims.md), 2026-11-16: the test-only `PublishStage`
+alias is removed; `PublishStageOut` is the only name.
 
 ## Context
 
@@ -40,8 +42,8 @@ frame cache cannot be replayed in arbitrary order without advancing the solver.
 ### 1. Stage claims carry a role and publish Stage In presence
 
 `GhLink.Claims` gains a role (`Input`, `Output`, `Param`). `PublishStageIn`
-registers a Stage In; `PublishStageOut` (with `PublishStage` kept as a
-compatibility alias) registers a Stage Out. `ReconcileOwnership` already rebuilds
+registers a Stage In; `PublishStageOut` registers a Stage Out.
+`ReconcileOwnership` already rebuilds
 ownership from claims; it also derives whether each stage key has a Stage In.
 
 `hello.stages[]` gains an optional `has_stage_in` boolean. Blender uses it to

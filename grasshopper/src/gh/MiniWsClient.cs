@@ -9,8 +9,7 @@
 // its payload is allocated.
 //
 // This file has no Grasshopper references, so it can be built and run headlessly
-// (spikes/s1/build-wstest.sh and the MiniWs console suite) without Rhino.
-// Findings about Mono and ClientWebSocket are recorded in StageloomSpike.cs.
+// (the MiniWs console suite) without Rhino.
 
 using System;
 using System.Collections.Generic;

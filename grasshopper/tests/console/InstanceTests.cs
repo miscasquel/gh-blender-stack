@@ -54,6 +54,7 @@ namespace Stageloom.Tests.Console
             {
                 CheckNativeBuild(root);
                 CheckNativeEmit();
+                CheckLegacyRootKey();
             }
             else
             {
@@ -1585,6 +1586,27 @@ namespace Stageloom.Tests.Console
                 definitions.Count == 1 && cycleNoted
                 && Find(sections, "idef.0.inst.ref_def") == null,
                 Notes(WireNotes(warnings)));
+        }
+
+        /// <summary>Attributes saved before the rebrand live under the literal
+        /// old key. The store must still read them so an upgraded plugin does
+        /// not silently lose a canvas's attributes.</summary>
+        private static void CheckLegacyRootKey()
+        {
+            var mesh = new Mesh();
+            var oldRoot = new ArchivableDictionary();
+            AttributeStore.Set(oldRoot, "legacy", "FLOAT", "POINT", new double[] { 3.0 });
+            mesh.UserDictionary.Set("GHStack.Attributes", oldRoot);
+
+            string type, domain;
+            object values;
+            bool read = AttributeStore.TryGet(mesh, "legacy", out type, out domain, out values);
+            Check("native: attributes saved before the rebrand still read",
+                read && type == "FLOAT" && domain == "POINT"
+                && values is double[] && ((double[])values).Length == 1
+                && ((double[])values)[0] == 3.0,
+                read ? type + "/" + domain : "missing");
+            Check("native: the legacy root counts as attributes", AttributeStore.Has(mesh), "");
         }
 
         private static Mesh NativeQuad(double offset)

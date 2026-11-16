@@ -74,8 +74,8 @@ grasshopper/build/build-gha.sh # builds Stageloom.gha
 grasshopper/deploy/deploy.sh   # installs it into the Grasshopper Libraries
 ```
 
-For development, `scripts/install-addon` symlinks the working tree instead (no
-wheel; the vendored websockets copy is used). The add-on appears as **Stageloom**
+For development, `scripts/install-addon` symlinks the working tree instead and
+unpacks the declared `websockets` wheel beside it. The add-on appears as **Stageloom**
 in Blender's Preferences > Add-ons. The panel is in the 3D viewport sidebar
 (**N**) under the **Stageloom** tab. The server starts with the add-on on port
 59130 (add-on preferences; 9130 through 0.2.2, where BlenderKit sits).

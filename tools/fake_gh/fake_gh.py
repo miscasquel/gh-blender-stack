@@ -1,7 +1,10 @@
 """A Python stand-in for the Grasshopper side, for layer B tests.
 
-    PYTHONPATH=blender/stageloom/vendor python3 tools/fake_gh/fake_gh.py \
+    python3 tools/fake_gh/fake_gh.py \
         --port 59130 --stage <key> [--scale 2.0] [--report /tmp/report.json]
+
+The runner puts the pinned official wheel on ``sys.path`` itself; no checkout
+setup or vendored tree is needed.
 
 It speaks protocol v2: sends `hello` and one `schema` (a float parameter), then
 answers every `request`. The "definition" is deliberately trivial and visible:
@@ -20,7 +23,10 @@ import os
 import sys
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-for path in (os.path.join(REPO_ROOT, "blender", "stageloom", "vendor"), REPO_ROOT):
+WHEEL = os.path.join(
+    REPO_ROOT, "blender", "stageloom", "wheels", "websockets-17.2-py3-none-any.whl"
+)
+for path in (WHEEL, REPO_ROOT):
     if path not in sys.path:
         sys.path.insert(0, path)
 

@@ -800,6 +800,23 @@ class InstanceApplyTests(unittest.TestCase):
         finally:
             evaluated.to_mesh_clear()
 
+    def test_a_definition_collection_without_the_parts_key_is_one_part(self):
+        """A definition saved before multi-part namespaces has no parts key;
+        it must read as one part, and a malformed value must not invent more."""
+        from stageloom.blender import helpers
+
+        obj, stage = self._stage()
+        name = helpers.definition_collection_name(obj, stage.key, 0)
+        coll = bpy.data.collections.new(name)
+        try:
+            self.assertEqual(helpers.definition_parts_count(obj, stage.key, 0), 1)
+            coll[helpers.DEFINITION_PARTS_KEY] = "two"
+            self.assertEqual(helpers.definition_parts_count(obj, stage.key, 0), 1)
+            coll[helpers.DEFINITION_PARTS_KEY] = 2
+            self.assertEqual(helpers.definition_parts_count(obj, stage.key, 0), 2)
+        finally:
+            bpy.data.collections.remove(coll)
+
     def test_apply_builds_one_helper_per_part(self):
         from stageloom.blender import engine, helpers
 

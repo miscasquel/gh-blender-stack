@@ -44,7 +44,7 @@ namespace Stageloom
             }
             catch (Exception ex)
             {
-                error = "cannot read the Stageloom endpoint setting: " + FirstLine(ex);
+                error = "cannot read the Stageloom endpoint setting: " + ErrorText.FirstLine(ex);
                 return false;
             }
         }
@@ -65,7 +65,7 @@ namespace Stageloom
             }
             catch (Exception ex)
             {
-                error = "cannot save the Stageloom endpoint setting: " + FirstLine(ex);
+                error = "cannot save the Stageloom endpoint setting: " + ErrorText.FirstLine(ex);
                 return false;
             }
         }
@@ -84,12 +84,17 @@ namespace Stageloom
             }
             catch (Exception ex)
             {
-                error = "cannot clear the Stageloom endpoint setting: " + FirstLine(ex);
+                error = "cannot clear the Stageloom endpoint setting: " + ErrorText.FirstLine(ex);
                 return false;
             }
         }
 
-        private static string FirstLine(Exception ex)
+    }
+
+    /// <summary>One-line exception text for runtime notes and console suites.</summary>
+    internal static class ErrorText
+    {
+        internal static string FirstLine(Exception ex)
         {
             string message = ex.Message;
             if (string.IsNullOrEmpty(message)) return ex.GetType().Name;

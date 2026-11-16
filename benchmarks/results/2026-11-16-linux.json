@@ -2446,8 +2446,8 @@
     "multistage.idle_pass_ms": {
       "scenario": "multistage",
       "unit": "ms",
-      "gated": true,
-      "reason": "",
+      "gated": false,
+      "reason": "amortized idle tick (~0.003 ms); 5% is below the timer/scheduler noise floor; bench.py keeps a hard 2 ms budget",
       "p50": 0.0031955419999576407,
       "p95": 0.003223471552155388,
       "p50_runs": [

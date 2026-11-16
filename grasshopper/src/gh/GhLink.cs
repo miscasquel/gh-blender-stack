@@ -581,13 +581,6 @@ namespace Stageloom
             PublishStageClaim(owner, key, enabled, ClaimRole.Output);
         }
 
-        /// <summary>Compatibility alias for older scripted components. New
-        /// code should use <see cref="PublishStageOut"/>.</summary>
-        public static void PublishStage(GH_Component owner, string key, bool enabled)
-        {
-            PublishStageOut(owner, key, enabled);
-        }
-
         private static void PublishStageClaim(GH_Component owner, string key, bool enabled, ClaimRole role)
         {
             if (string.IsNullOrEmpty(key)) return;
@@ -875,13 +868,6 @@ namespace Stageloom
             }
         }
 
-        /// <summary>Compatibility alias for older scripted components. New code
-        /// should use <see cref="SetOutStatus"/>.</summary>
-        public static void SetSlotStatus(StageSlot slot, string status, string message)
-        {
-            SetOutStatus(slot, status, message);
-        }
-
         // -------------------------------------------------------------- socket
 
         public static void Start()
@@ -1104,7 +1090,7 @@ namespace Stageloom
                 }
                 catch (Exception ex)
                 {
-                    Note("connect failed: " + FirstLine(ex));
+                    Note("connect failed: " + ErrorText.FirstLine(ex));
                 }
                 finally
                 {
@@ -1177,7 +1163,7 @@ namespace Stageloom
                     // healthy connection — Loop's outer catch would dispose the
                     // client and reconnect. Anything reaching here is a decoder
                     // gap; note it and keep reading.
-                    Note("bad frame (" + ex.GetType().Name + "): " + FirstLine(ex));
+                    Note("bad frame (" + ex.GetType().Name + "): " + ErrorText.FirstLine(ex));
                     continue;
                 }
                 Handle(decoded, worker);
@@ -1531,7 +1517,7 @@ namespace Stageloom
             catch (Exception ex)
             {
                 ReleaseQueuedSolve(solveWorker);
-                Note("ScheduleSolution failed: " + FirstLine(ex));
+                Note("ScheduleSolution failed: " + ErrorText.FirstLine(ex));
             }
         }
 
@@ -1615,7 +1601,7 @@ namespace Stageloom
             foreach (GH_Component component in expire)
             {
                 try { component.ExpireSolution(false); }
-                catch (Exception ex) { Note("ExpireSolution failed: " + FirstLine(ex)); }
+                catch (Exception ex) { Note("ExpireSolution failed: " + ErrorText.FirstLine(ex)); }
             }
         }
 
@@ -2370,7 +2356,7 @@ namespace Stageloom
                 }
                 catch (Exception ex)
                 {
-                    Note("send failed: " + FirstLine(ex));
+                    Note("send failed: " + ErrorText.FirstLine(ex));
                     return;
                 }
             }
@@ -2652,12 +2638,5 @@ namespace Stageloom
             return DocumentScale();
         }
 
-        private static string FirstLine(Exception ex)
-        {
-            string m = ex.Message;
-            if (string.IsNullOrEmpty(m)) return ex.GetType().Name;
-            int i = m.IndexOf('\n');
-            return i > 0 ? m.Substring(0, i) : m;
-        }
     }
 }

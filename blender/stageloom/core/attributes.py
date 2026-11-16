@@ -36,9 +36,6 @@ WIRE_TYPES = {
     "STRING": ("u8", 1),
 }
 
-# The geometry pools attributes can belong to (protocol §5 group names).
-GROUPS = ("mesh", "subd", "crv", "pts")
-
 # Attribute names that are not data: the position is the geometry itself, and
 # leading-dot names are Blender's internal attributes.
 SKIP_NAMES = ("position",)

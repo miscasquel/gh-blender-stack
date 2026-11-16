@@ -13,12 +13,8 @@ venv/
 # Grasshopper / Rhino build output
 *.gha
 *.pdb
-grasshopper/build/out/
-
-# Spike scratch
-spikes/s1/GhStackSpike.gha
-spikes/results/s6-run.txt
 *.exe
+grasshopper/build/out/
 
 # Packaging
 *.zip
@@ -30,4 +26,3 @@ spikes/results/s6-run.txt
 
 # OS
 .DS_Store
-spikes/results/*-run.txt

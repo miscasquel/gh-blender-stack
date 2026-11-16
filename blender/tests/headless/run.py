@@ -19,11 +19,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 # One owner for the test import path (W0a). REPO/blender makes `import
 # stageloom` resolve to the working tree, including before `addon_enable`;
-# REPO makes the `blender.stageloom` imports work; VENDOR supplies websockets
-# in the tree. The shipped add-on never manipulates sys.path (Add-on
-# Guidelines, G2): this is test infrastructure.
+# REPO makes the `blender.stageloom` imports work; the declared wheel supplies
+# websockets as a zipimport path. The shipped add-on never manipulates sys.path
+# (Add-on Guidelines, G2): this is test infrastructure.
+WHEEL = os.path.join(
+    REPO, "blender", "stageloom", "wheels", "websockets-17.2-py3-none-any.whl"
+)
 for _path in (
-    os.path.join(REPO, "blender", "stageloom", "vendor"),
+    WHEEL,
     os.path.join(REPO, "blender"),
     REPO,
 ):

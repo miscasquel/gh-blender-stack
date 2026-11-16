@@ -17,7 +17,10 @@ import bpy
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 # A second Blender process: provide the paths the headless runner sets up.
-for path in (REPO, os.path.join(REPO, "blender"), os.path.join(REPO, "blender", "stageloom", "vendor")):
+WHEEL = os.path.join(
+    REPO, "blender", "stageloom", "wheels", "websockets-17.2-py3-none-any.whl"
+)
+for path in (REPO, os.path.join(REPO, "blender"), WHEEL):
     if path not in sys.path:
         sys.path.insert(0, path)
 

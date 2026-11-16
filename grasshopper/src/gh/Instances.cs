@@ -1290,22 +1290,6 @@ namespace Stageloom
         /// given, gains `definitions` and `instances` so a reader can tell an
         /// instanced response from a plain one without scanning sections.
         ///
-        /// This overload assumes the peer cannot read multi-part definitions
-        /// (`blocks/2`, protocol §8): a definition with more than one part is
-        /// split into one single-part definition per part, with a stage
-        /// warning. Stage Out passes the negotiated capability to the overload
-        /// below; conservative is the only safe default for other callers.</summary>
-        public static void Emit(IList<GH_InstanceReference> instances, double scale,
-                                List<Section> sections,
-                                List<Dictionary<string, object>> attributes,
-                                List<Dictionary<string, object>> definitions,
-                                List<WireWarning> warnings,
-                                Dictionary<string, object> counts = null)
-        {
-            Emit(instances, scale, sections, attributes, definitions, warnings, false, counts);
-        }
-
-        /// <summary>Emit with the peer's `blocks/2` capability made explicit.
         /// A multi-part definition is written as one table entry with `parts`
         /// and part namespaces only when <paramref name="peerSupportsParts"/> is
         /// true; otherwise every part becomes its own single-part definition and
@@ -1350,32 +1334,6 @@ namespace Stageloom
                 counts["definitions"] = (long)definitions.Count;
                 counts["instances"] = (long)refDef.Count;
             }
-        }
-
-        /// <summary>Text-only view of Emit's warnings.</summary>
-        public static void Emit(IList<GH_InstanceReference> instances, double scale,
-                                List<Section> sections,
-                                List<Dictionary<string, object>> attributes,
-                                List<Dictionary<string, object>> definitions,
-                                List<string> warnings)
-        {
-            Emit(instances, scale, sections, attributes, definitions, warnings, false);
-        }
-
-        /// <summary>Text-only view of Emit's warnings with the peer's
-        /// `blocks/2` capability made explicit.</summary>
-        public static void Emit(IList<GH_InstanceReference> instances, double scale,
-                                List<Section> sections,
-                                List<Dictionary<string, object>> attributes,
-                                List<Dictionary<string, object>> definitions,
-                                List<string> warnings,
-                                bool peerSupportsParts)
-        {
-            var rich = new List<WireWarning>();
-            Emit(instances, scale, sections, attributes, definitions, rich, peerSupportsParts);
-            if (warnings == null) return;
-            foreach (WireWarning warning in rich)
-                warnings.Add(warning.Message);
         }
 
         /// <summary>Whether a definition carries anything the wire can name.

@@ -93,9 +93,9 @@ namespace Stageloom.Tests.Console
                 // 3. components register and publish; hello follows.
                 var stage = new TestComponent();
                 GhLink.Register(stage);
-                // PublishStage is the compatibility alias; it claims a Stage
-                // Out, so this key has no Stage In yet.
-                GhLink.PublishStage(stage, "k1", true);
+                // PublishStageOut claims a Stage Out, so this key has no Stage
+                // In yet.
+                GhLink.PublishStageOut(stage, "k1", true);
                 GhLink.Publish(null);
                 hello = ReadUntil(server, "hello");
                 var stages = (List<object>)Json.Get(hello, "stages");
@@ -363,7 +363,7 @@ namespace Stageloom.Tests.Console
                 //     reconcile, so the refusal actually goes out.
                 var other = new TestComponent();
                 GhLink.Register(other);
-                GhLink.PublishStage(other, "k-other", true);
+                GhLink.PublishStageOut(other, "k-other", true);
                 GhLink.Publish(null);
                 ReadUntil(server, "hello");
 
@@ -506,14 +506,14 @@ namespace Stageloom.Tests.Console
                 "in=" + epochSlot.InStatus + " message=" + epochSlot.InMessage);
 
             // L3: saved script components call the old public name.
-            GhLink.SetSlotStatus(split, "idle", "alias");
-            Check("SetSlotStatus alias reaches the out half",
-                split.OutStatus == "idle" && split.OutMessage == "alias",
+            GhLink.SetOutStatus(split, "idle", "out-only");
+            Check("SetOutStatus reaches the out half",
+                split.OutStatus == "idle" && split.OutMessage == "out-only",
                 "out=" + split.OutStatus + " message=" + split.OutMessage);
-            Check("SetSlotStatus alias updates the aggregate",
-                split.Status == "idle" && split.Message == "alias",
+            Check("SetOutStatus updates the aggregate",
+                split.Status == "idle" && split.Message == "out-only",
                 "status=" + split.Status + " message=" + split.Message);
-            Check("SetSlotStatus alias leaves the in half alone",
+            Check("SetOutStatus leaves the in half alone",
                 split.InStatus == "waiting" && split.InMessage == "",
                 "in=" + split.InStatus + " message=" + split.InMessage);
         }
@@ -684,7 +684,7 @@ namespace Stageloom.Tests.Console
                 ReadUntil(server, "hello");
 
                 GhLink.Register(component);
-                GhLink.PublishStage(component, "units-snapshot", true);
+                GhLink.PublishStageOut(component, "units-snapshot", true);
                 GhLink.Publish(null);
                 ReadUntil(server, "hello");
 
@@ -747,7 +747,7 @@ namespace Stageloom.Tests.Console
                 GhLink.Configure("127.0.0.1", stalled.Port, false);
                 GhLink.Start();
                 GhLink.Register(component);
-                GhLink.PublishStage(component, "stop-handshake", true);
+                GhLink.PublishStageOut(component, "stop-handshake", true);
                 stalled.AcceptHandshakeOnly();
                 Thread.Sleep(150);
 
@@ -786,7 +786,7 @@ namespace Stageloom.Tests.Console
                     stalled.DrainClosed(3000), "");
 
                 // The new session's outbox is intact: a new claim republishes.
-                GhLink.PublishStage(component, "stop-handshake-2", true);
+                GhLink.PublishStageOut(component, "stop-handshake-2", true);
                 GhLink.Publish(null);
                 hello = ReadUntil(live, "hello");
                 Check("the new link still publishes after the stale connect",

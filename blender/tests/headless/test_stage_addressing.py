@@ -297,6 +297,22 @@ class SurfaceStageRejectionTests(unittest.TestCase):
             "the refused add created a Geometry Nodes modifier",
         )
 
+    def test_02_surface_object_sections_still_mesh_for_an_old_document(self):
+        """A document saved before 0.4.1 can hold a stage on a surface. The
+        read path meshes that surface rather than dropping it; the refusal is
+        only for adding a new stage."""
+        from stageloom.blender import geometry_io
+
+        bpy.ops.surface.primitive_nurbs_surface_sphere_add(radius=1.0)
+        obj = bpy.context.object
+        self.assertEqual(obj.type, "SURFACE")
+
+        notes = []
+        sections, _attributes = geometry_io.object_to_sections(obj, notes=notes)
+        names = [section[0] for section in sections]
+        self.assertTrue(any(name.startswith("mesh.") for name in names), names)
+        self.assertTrue(any("surface was meshed" in note for note in notes), notes)
+
 
 class _FakeGroup(object):
     def __init__(self, name):

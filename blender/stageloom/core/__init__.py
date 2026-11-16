@@ -4,7 +4,7 @@ Covers the protocol codec, hashing and request IDs. Everything here is testable
 without Blender or Grasshopper.
 """
 
-PROTOCOL_VERSION = 2
+from .codec import PROTOCOL_VERSION as PROTOCOL_VERSION
 
 # Optional `caps` vocabulary (protocol §4.1/§4.3, §8). `blocks/2` means the peer
 # reads multi-part definition entries (`definitions[i].parts > 1`) and their

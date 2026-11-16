@@ -116,7 +116,16 @@ def start_fake(stage_key, report, *extra, port=None):
         env=dict(
             os.environ,
             PYTHONPATH=os.pathsep.join(
-                [os.path.join(REPO, "blender", "stageloom", "vendor"), REPO]
+                [
+                    os.path.join(
+                        REPO,
+                        "blender",
+                        "stageloom",
+                        "wheels",
+                        "websockets-17.2-py3-none-any.whl",
+                    ),
+                    REPO,
+                ]
             ),
         ),
         stdout=subprocess.DEVNULL,

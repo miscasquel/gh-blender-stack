@@ -2,6 +2,9 @@
 
 **Status:** Accepted, 2026-10-10. Data-root scope amended by
 [0016](0016-live-only-stages.md), 2026-11-16: the custom frame cache is gone.
+The `vendor/` fallback below is decided against by
+[0018](0018-official-wheel-only.md), 2026-11-16: the official wheel is the only
+`websockets` source.
 
 These decisions were settled earlier in the planning discussion. They are recorded here so the reasons travel with the code.
 
@@ -23,7 +26,7 @@ The project is licensed under GPL-3.0. Portal's Apache-2.0 code is compatible wi
 
 ## Blender extension packaging
 
-The add-on ships as a Blender extension (`blender_manifest.toml`). `websockets` is pure Python, so one package covers Linux and Windows. Fallback: a plain `vendor/` directory, as Portal does.
+The add-on ships as a Blender extension (`blender_manifest.toml`). `websockets` is pure Python, so one package covers Linux and Windows. The original fallback was a plain vendored directory, as Portal does; [0018](0018-official-wheel-only.md) decides against it.
 
 ## Data root
 
