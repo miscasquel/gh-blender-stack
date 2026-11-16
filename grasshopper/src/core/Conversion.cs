@@ -38,6 +38,7 @@ namespace Stageloom.Core
         public const string CurveApproximated = "curve_approximated";
         public const string CurveDeviation = "curve_deviation";
         public const string CurveSampled = "curve_sampled";
+        public const string CurveSkipped = "curve_skipped";
         public const string SubdCreases = "subd_creases";
         public const string SubdJoined = "subd_joined";
         public const string BrepMeshed = "brep_meshed";
@@ -50,14 +51,92 @@ namespace Stageloom.Core
         // ------------------------------------------------------- sections -> mesh
 
         /// <summary>Build a Rhino mesh from mesh.* or subd.* sections.
-        /// Returns null when the frame carries no mesh. ``prefix`` namespaces a
-        /// definition group (``idef.&lt;i&gt;.``, protocol §5.2).</summary>
+        /// Returns null when the frame carries no mesh. A frame may carry both
+        /// groups; the complete mesh group wins here, while
+        /// <see cref="SubdCageFromSections"/> stays subd-only.
+        /// ``prefix`` namespaces a definition group (``idef.&lt;i&gt;.``,
+        /// protocol §5.2).</summary>
         public static Mesh MeshFromSections(DecodedFrame frame, double scale, string prefix = "")
         {
-            Section verts = frame.Find(prefix + "mesh.verts") ?? frame.Find(prefix + "subd.verts");
-            Section counts = frame.Find(prefix + "mesh.face_counts") ?? frame.Find(prefix + "subd.face_counts");
-            Section indices = frame.Find(prefix + "mesh.face_indices") ?? frame.Find(prefix + "subd.face_indices");
-            return BuildMesh(verts, counts, indices, frame.Find(prefix + "mesh.colors"), scale);
+            MeshGroup group = SelectMeshGroup(frame, prefix);
+            if (group == null) return null;
+            return BuildMesh(group, scale);
+        }
+
+        /// <summary>One complete mesh or subd cage group, already chosen as a
+        /// unit. A section set is never assembled from both kinds.</summary>
+        internal sealed class MeshGroup
+        {
+            public readonly string Kind;
+            public readonly Section Verts;
+            public readonly Section Counts;
+            public readonly Section Indices;
+            public readonly Section Colors;
+
+            public MeshGroup(string kind, Section verts, Section counts, Section indices,
+                             Section colors)
+            {
+                Kind = kind;
+                Verts = verts;
+                Counts = counts;
+                Indices = indices;
+                Colors = colors;
+            }
+        }
+
+        /// <summary>Select one complete topology group. If mesh.* and subd.*
+        /// are both complete the mesh group wins; a partial group is rejected
+        /// even when the other group is complete. ``prefix`` namespaces a
+        /// definition group (protocol §5.2).</summary>
+        internal static MeshGroup SelectMeshGroup(DecodedFrame frame, string prefix)
+        {
+            Section mverts = frame.Find(prefix + "mesh.verts");
+            Section mcounts = frame.Find(prefix + "mesh.face_counts");
+            Section mindices = frame.Find(prefix + "mesh.face_indices");
+            Section mcolors = frame.Find(prefix + "mesh.colors");
+            Section sverts = frame.Find(prefix + "subd.verts");
+            Section scounts = frame.Find(prefix + "subd.face_counts");
+            Section sindices = frame.Find(prefix + "subd.face_indices");
+
+            bool meshAny = mverts != null || mcounts != null || mindices != null || mcolors != null;
+            bool meshComplete = mverts != null && mcounts != null && mindices != null;
+            bool subdAny = sverts != null || scounts != null || sindices != null;
+            bool subdComplete = sverts != null && scounts != null && sindices != null;
+
+            // A half group is not completed from the other kind: the two
+            // topology sets describe different geometry and their indices are
+            // not interchangeable.
+            if (meshAny && !meshComplete)
+                throw new FrameException("bad_frame", "mesh group is incomplete: "
+                    + MissingSections(mverts, mcounts, mindices, prefix + "mesh."));
+            if (subdAny && !subdComplete)
+                throw new FrameException("bad_frame", "subd group is incomplete: "
+                    + MissingSections(sverts, scounts, sindices, prefix + "subd."));
+
+            if (meshComplete) return new MeshGroup("mesh", mverts, mcounts, mindices, mcolors);
+            if (subdComplete) return new MeshGroup("subd", sverts, scounts, sindices, null);
+            return null;
+        }
+
+        internal static MeshGroup SelectSubdGroup(DecodedFrame frame)
+        {
+            Section verts = frame.Find("subd.verts");
+            Section counts = frame.Find("subd.face_counts");
+            Section indices = frame.Find("subd.face_indices");
+            if (verts == null && counts == null && indices == null) return null;
+            if (verts == null || counts == null || indices == null)
+                throw new FrameException("bad_frame", "subd group is incomplete: "
+                    + MissingSections(verts, counts, indices, "subd."));
+            return new MeshGroup("subd", verts, counts, indices, null);
+        }
+
+        private static string MissingSections(Section verts, Section counts, Section indices, string prefix)
+        {
+            var missing = new List<string>();
+            if (verts == null) missing.Add(prefix + "verts");
+            if (counts == null) missing.Add(prefix + "face_counts");
+            if (indices == null) missing.Add(prefix + "face_indices");
+            return string.Join(", ", missing.ToArray());
         }
 
         /// <summary>The cage of a subd.* group, never falling back to mesh.*:
@@ -65,30 +144,87 @@ namespace Stageloom.Core
         /// its own cage, not the mesh beside it.</summary>
         private static Mesh SubdCageFromSections(DecodedFrame frame, double scale)
         {
-            return BuildMesh(frame.Find("subd.verts"), frame.Find("subd.face_counts"),
-                             frame.Find("subd.face_indices"), null, scale);
+            MeshGroup group = SelectSubdGroup(frame);
+            if (group == null) return null;
+            return BuildMesh(group, scale);
         }
 
-        private static Mesh BuildMesh(Section verts, Section counts, Section indices,
-                                      Section colors, double scale)
+        /// <summary>A validated mesh group in wire coordinates. The face table
+        /// is produced only by <see cref="ReadMeshData"/>; the encoder writes
+        /// the same shape back.</summary>
+        internal sealed class MeshData
         {
-            if (verts == null || counts == null || indices == null) return null;
+            public readonly float[] Positions;
+            public readonly int[] FaceSizes;
+            public readonly int[] FaceIndices;
+            public readonly byte[] Colors;
+
+            public MeshData(float[] positions, int[] faceSizes, int[] faceIndices, byte[] colors)
+            {
+                Positions = positions;
+                FaceSizes = faceSizes;
+                FaceIndices = faceIndices;
+                Colors = colors;
+            }
+        }
+
+        /// <summary>Validate every mesh section and return wire-level data
+        /// before a Mesh is allocated or any vertex/face index is used. The
+        /// result is empty only when the sections describe an empty mesh.</summary>
+        internal static MeshData ReadMeshData(MeshGroup group)
+        {
+            float[] positions = ReadFloats(group.Verts, group.Verts.Name);
+            if (positions.Length % 3 != 0)
+                throw new FrameException("bad_frame", group.Verts.Name + " has " + positions.Length
+                    + " floats; positions are xyz triples");
+            int vertexCount = positions.Length / 3;
+
+            uint[] rawCounts = ReadU32(group.Counts, group.Counts.Name);
+            uint[] rawIndices = ReadU32(group.Indices, group.Indices.Name);
+            FaceTable faces = ValidateFaces(rawCounts, rawIndices, vertexCount,
+                                            group.Counts.Name, group.Indices.Name);
+            byte[] colors = group.Colors == null ? null : ReadMeshColorBytes(group.Colors, vertexCount);
+
+            return new MeshData(positions, faces.Sizes, faces.Indices, colors);
+        }
+
+        /// <summary>The wire sections for validated mesh data. Both the
+        /// encoder and the decoder tests use this one shape.</summary>
+        internal static List<Section> MeshDataSections(MeshData data, string prefix)
+        {
+            var sections = new List<Section>();
+            sections.Add(Section.Floats(prefix + ".verts", data.Positions));
+
+            var counts = new uint[data.FaceSizes.Length];
+            for (int i = 0; i < counts.Length; i++) counts[i] = (uint)data.FaceSizes[i];
+            var indices = new uint[data.FaceIndices.Length];
+            for (int i = 0; i < indices.Length; i++) indices[i] = (uint)data.FaceIndices[i];
+            sections.Add(Section.U32(prefix + ".face_counts", counts));
+            sections.Add(Section.U32(prefix + ".face_indices", indices));
+
+            if (data.Colors != null) sections.Add(Section.Bytes(prefix + ".colors", data.Colors));
+            return sections;
+        }
+
+        private static Mesh BuildMesh(MeshGroup group, double scale)
+        {
+            MeshData data = ReadMeshData(group);
 
             var mesh = new Mesh();
-            float[] positions = verts.ToFloats();
             // Vertices.AddVertices(IEnumerable<Point3f>) does not resolve with the
             // Mono profile mcs compiles against (its metadata mentions
             // IReadOnlyList, absent from the 4.0-api mscorlib mcs loads), so the
             // loop is deliberate; the benchmarks measure its cost.
-            for (int i = 0; i < positions.Length; i += 3)
+            for (int i = 0; i < data.Positions.Length; i += 3)
             {
-                Point3d point = FromWire(positions[i], positions[i + 1], positions[i + 2], scale);
+                Point3d point = FromWire(data.Positions[i], data.Positions[i + 1],
+                                         data.Positions[i + 2], scale);
                 mesh.Vertices.Add((float)point.X, (float)point.Y, (float)point.Z);
             }
 
-            AddFaces(mesh, counts.ToU32(), indices.ToU32());
+            AddFaces(mesh, new FaceTable(data.FaceSizes, data.FaceIndices));
 
-            if (colors != null) SetMeshColors(mesh, colors);
+            if (data.Colors != null) SetMeshColors(mesh, data.Colors);
 
             mesh.Normals.ComputeNormals();
             // Compact removes unreferenced vertices. A face-less mesh has no
@@ -99,49 +235,156 @@ namespace Stageloom.Core
             return mesh;
         }
 
-        private static void AddFaces(Mesh mesh, uint[] counts, uint[] indices)
+        /// <summary>The validated face stream: vertex indices and per-face
+        /// vertex counts, both plain ints so no u32 cast can overflow during
+        /// construction.</summary>
+        private sealed class FaceTable
         {
-            int at = 0;
-            for (int f = 0; f < counts.Length; f++)
+            public readonly int[] Sizes;
+            public readonly int[] Indices;
+
+            public FaceTable(int[] sizes, int[] indices)
             {
-                int n = (int)counts[f];
-                if (n == 3)
-                {
-                    mesh.Faces.AddFace((int)indices[at], (int)indices[at + 1], (int)indices[at + 2]);
-                }
-                else if (n == 4)
-                {
-                    mesh.Faces.AddFace((int)indices[at], (int)indices[at + 1],
-                                       (int)indices[at + 2], (int)indices[at + 3]);
-                }
-                else if (n > 4)
-                {
-                    // Rhino keeps n-gons as a boundary over triangles. Fan the
-                    // boundary, remember those face indexes, then register the
-                    // ngon over them.
-                    var boundary = new List<int>();
-                    var fan = new List<int>();
-                    for (int k = 0; k < n; k++) boundary.Add((int)indices[at + k]);
-                    for (int k = 1; k + 1 < n; k++)
-                    {
-                        int faceIndex = mesh.Faces.Count;
-                        mesh.Faces.AddFace(boundary[0], boundary[k], boundary[k + 1]);
-                        fan.Add(faceIndex);
-                    }
-                    MeshNgon ngon = MeshNgon.Create(boundary, fan);
-                    mesh.Ngons.AddNgon(ngon);
-                }
-                else
-                {
-                    throw new FrameException("bad_frame", "face with " + n + " vertices");
-                }
-                at += n;
+                Sizes = sizes;
+                Indices = indices;
             }
         }
 
-        private static void SetMeshColors(Mesh mesh, Section colors)
+        /// <summary>The single owner of face-array validation: counts and
+        /// indices must describe exactly the vertex stream, every face has at
+        /// least three vertices, and every index lies inside the vertex list.
+        /// Only a table produced here reaches <see cref="AddFaces"/>.</summary>
+        private static FaceTable ValidateFaces(uint[] counts, uint[] indices, int vertexCount,
+                                               string countsName, string indicesName)
         {
-            byte[] rgba = colors.Raw;
+            long total = 0;
+            var sizes = new int[counts.Length];
+            for (int f = 0; f < counts.Length; f++)
+            {
+                uint raw = counts[f];
+                if (raw < 3)
+                    throw new FrameException("bad_frame",
+                        countsName + "[" + f + "] is " + raw + "; faces need at least 3 vertices");
+                if (raw > int.MaxValue)
+                    throw new FrameException("bad_frame",
+                        countsName + "[" + f + "] is " + raw + ", above the supported vertex count");
+                sizes[f] = (int)raw;
+                total += raw;
+            }
+            if (total != indices.Length)
+                throw new FrameException("bad_frame", countsName + " sums to " + total
+                    + " vertex references but " + indicesName + " carries " + indices.Length);
+
+            for (int i = 0; i < indices.Length; i++)
+            {
+                if (indices[i] >= (uint)vertexCount)
+                    throw new FrameException("bad_frame", indicesName + "[" + i + "] is "
+                        + indices[i] + " but the mesh has " + vertexCount + " vertices");
+            }
+
+            // A face that names one vertex twice is degenerate; RhinoCommon
+            // rejects some of these with ArgumentException, so classify them
+            // here instead of letting construction fail.
+            int faceStart = 0;
+            for (int f = 0; f < sizes.Length; f++)
+            {
+                int n = sizes[f];
+                if (n <= 4)
+                {
+                    for (int a = 0; a < n; a++)
+                        for (int b = a + 1; b < n; b++)
+                            if (indices[faceStart + a] == indices[faceStart + b])
+                                throw new FrameException("bad_frame", countsName + "[" + f
+                                    + "] repeats vertex " + indices[faceStart + a]);
+                }
+                else
+                {
+                    var seen = new HashSet<uint>();
+                    for (int k = 0; k < n; k++)
+                    {
+                        if (!seen.Add(indices[faceStart + k]))
+                            throw new FrameException("bad_frame", countsName + "[" + f
+                                + "] repeats vertex " + indices[faceStart + k]);
+                    }
+                }
+                faceStart += n;
+            }
+
+            var vertexIndices = new int[indices.Length];
+            for (int i = 0; i < indices.Length; i++) vertexIndices[i] = (int)indices[i];
+            return new FaceTable(sizes, vertexIndices);
+        }
+
+        /// <summary>Add faces from a validated table. The table's sizes sum to
+        /// its index list and every index is in range, so every read below is
+        /// inside the arrays.</summary>
+        private static void AddFaces(Mesh mesh, FaceTable faces)
+        {
+            if (faces == null)
+                throw new FrameException("bad_frame", "faces were not validated");
+
+            int[] sizes = faces.Sizes;
+            int[] indices = faces.Indices;
+            int at = 0;
+            try
+            {
+                for (int f = 0; f < sizes.Length; f++)
+                {
+                    int n = sizes[f];
+                    if (n == 3)
+                    {
+                        mesh.Faces.AddFace(indices[at], indices[at + 1], indices[at + 2]);
+                    }
+                    else if (n == 4)
+                    {
+                        mesh.Faces.AddFace(indices[at], indices[at + 1],
+                                           indices[at + 2], indices[at + 3]);
+                    }
+                    else
+                    {
+                        // Rhino keeps n-gons as a boundary over triangles. Fan the
+                        // boundary, remember those face indexes, then register the
+                        // ngon over them.
+                        var boundary = new List<int>();
+                        var fan = new List<int>();
+                        for (int k = 0; k < n; k++) boundary.Add(indices[at + k]);
+                        for (int k = 1; k + 1 < n; k++)
+                        {
+                            int faceIndex = mesh.Faces.Count;
+                            mesh.Faces.AddFace(boundary[0], boundary[k], boundary[k + 1]);
+                            fan.Add(faceIndex);
+                        }
+                        MeshNgon ngon = MeshNgon.Create(boundary, fan);
+                        if (ngon == null)
+                            throw new FrameException("bad_frame",
+                                "face " + f + " could not be registered as an n-gon");
+                        mesh.Ngons.AddNgon(ngon);
+                    }
+                    at += n;
+                }
+            }
+            catch (ArgumentException ex)
+            {
+                throw new FrameException("bad_frame",
+                    "mesh face geometry was rejected: " + ex.Message);
+            }
+        }
+
+        private static byte[] ReadMeshColorBytes(Section colors, int vertexCount)
+        {
+            byte[] rgba = ReadBytes(colors, colors.Name);
+            if (rgba.Length % 4 != 0)
+                throw new FrameException("bad_frame", colors.Name + " length " + rgba.Length
+                    + " is not a whole number of RGBA entries");
+            int count = rgba.Length / 4;
+            if (count != vertexCount)
+                throw new FrameException("bad_frame",
+                    colors.Name + " has " + count + " entries for " + vertexCount + " vertices");
+            return rgba;
+        }
+
+        private static void SetMeshColors(Mesh mesh, byte[] rgba)
+        {
             int count = rgba.Length / 4;
             if (count != mesh.Vertices.Count)
                 throw new FrameException("bad_frame",
@@ -153,6 +396,44 @@ namespace Stageloom.Core
                 list[i] = Color.FromArgb(rgba[i * 4 + 3], rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]);
             }
             mesh.VertexColors.SetColors(list);
+        }
+
+        /// <summary>The section-type gate for every decoded geometry array: the
+        /// declared dtype must match the wire contract and the byte length must
+        /// be whole elements before any cast allocates or indexes.</summary>
+        private static float[] ReadFloats(Section section, string name)
+        {
+            RequireDtype(section, name, "f32");
+            if (section.Raw.Length % 4 != 0)
+                throw new FrameException("bad_frame", name + " length " + section.Raw.Length
+                    + " is not a whole number of f32 values");
+            return section.ToFloats();
+        }
+
+        private static uint[] ReadU32(Section section, string name)
+        {
+            RequireDtype(section, name, "u32");
+            if (section.Raw.Length % 4 != 0)
+                throw new FrameException("bad_frame", name + " length " + section.Raw.Length
+                    + " is not a whole number of u32 values");
+            return section.ToU32();
+        }
+
+        private static byte[] ReadBytes(Section section, string name)
+        {
+            RequireDtype(section, name, "u8");
+            return section.Raw;
+        }
+
+        private static void RequireDtype(Section section, string name, string expected)
+        {
+            if (section == null)
+                throw new FrameException("bad_frame", name + " is missing");
+            if (section.Raw == null)
+                throw new FrameException("bad_frame", name + " has no bytes");
+            if (section.Dtype != expected)
+                throw new FrameException("bad_frame", name + " must be " + expected
+                    + ", not " + (section.Dtype ?? "(missing)"));
         }
 
         // ------------------------------------------------------- mesh -> sections
@@ -180,16 +461,13 @@ namespace Stageloom.Core
         private static List<Section> MeshSections(Mesh mesh, double scale, string prefix,
                                                   bool includeColors, List<WireWarning> warnings)
         {
-            var sections = new List<Section>();
-
             Point3f[] points = mesh.Vertices.ToPoint3fArray();
             var positions = new float[points.Length * 3];
             for (int i = 0; i < points.Length; i++)
                 WriteWire(positions, i * 3, new Point3d(points[i]), scale);
-            sections.Add(Section.Floats(prefix + ".verts", positions));
 
-            var counts = new List<uint>();
-            var indices = new List<uint>();
+            var counts = new List<int>();
+            var indices = new List<int>();
             // An n-gon that cannot be represented as one wire polygon is not
             // masked out: its fan faces travel as ordinary faces below.
             bool[] flatten = NgonFallbackMask(mesh);
@@ -198,11 +476,11 @@ namespace Stageloom.Core
             {
                 if (inNgon[f]) continue;
                 MeshFace face = mesh.Faces[f];
-                counts.Add(face.IsQuad ? 4u : 3u);
-                indices.Add((uint)face.A);
-                indices.Add((uint)face.B);
-                indices.Add((uint)face.C);
-                if (face.IsQuad) indices.Add((uint)face.D);
+                counts.Add(face.IsQuad ? 4 : 3);
+                indices.Add(face.A);
+                indices.Add(face.B);
+                indices.Add(face.C);
+                if (face.IsQuad) indices.Add(face.D);
             }
             for (int i = 0; i < mesh.Ngons.Count; i++)
             {
@@ -215,11 +493,26 @@ namespace Stageloom.Core
                 if (boundary == null)
                     throw new FrameException("bad_frame",
                         "n-gon boundary could not be resolved from its fan faces");
-                counts.Add((uint)boundary.Length);
-                foreach (int v in boundary) indices.Add((uint)v);
+                counts.Add(boundary.Length);
+                foreach (int v in boundary) indices.Add(v);
             }
-            sections.Add(Section.U32(prefix + ".face_counts", counts.ToArray()));
-            sections.Add(Section.U32(prefix + ".face_indices", indices.ToArray()));
+
+            byte[] rgba = null;
+            if (includeColors && mesh.VertexColors.Count == mesh.Vertices.Count && mesh.Vertices.Count > 0)
+            {
+                rgba = new byte[mesh.Vertices.Count * 4];
+                for (int i = 0; i < mesh.Vertices.Count; i++)
+                {
+                    Color c = mesh.VertexColors[i];
+                    rgba[i * 4] = c.R;
+                    rgba[i * 4 + 1] = c.G;
+                    rgba[i * 4 + 2] = c.B;
+                    rgba[i * 4 + 3] = c.A;
+                }
+            }
+
+            List<Section> sections = MeshDataSections(
+                new MeshData(positions, counts.ToArray(), indices.ToArray(), rgba), prefix);
 
             int flattened = 0;
             foreach (bool value in flatten)
@@ -232,20 +525,6 @@ namespace Stageloom.Core
                 if (warnings == null)
                     throw new FrameException("bad_frame", message);
                 warnings.Add(new WireWarning(WarningCodes.NgonHoles, message));
-            }
-
-            if (includeColors && mesh.VertexColors.Count == mesh.Vertices.Count && mesh.Vertices.Count > 0)
-            {
-                var rgba = new byte[mesh.Vertices.Count * 4];
-                for (int i = 0; i < mesh.Vertices.Count; i++)
-                {
-                    Color c = mesh.VertexColors[i];
-                    rgba[i * 4] = c.R;
-                    rgba[i * 4 + 1] = c.G;
-                    rgba[i * 4 + 2] = c.B;
-                    rgba[i * 4 + 3] = c.A;
-                }
-                sections.Add(Section.Bytes(prefix + ".colors", rgba));
             }
 
             return sections;
@@ -319,7 +598,11 @@ namespace Stageloom.Core
         ///
         /// Only curves that defeat both (degree above 5, non-uniform knots,
         /// degenerate weights) are fitted with cubic Beziers inside the
-        /// deviation budget, and only those are counted as approximated (D3).</summary>
+        /// deviation budget, and only those are counted as approximated (D3).
+        ///
+        /// A null curve, or a curve with no polyline and no NURBS
+        /// representation, is skipped and reported as curve_skipped; only a
+        /// curve actually sent as a sampled polyline counts as curve_sampled.</summary>
         public static List<Section> SectionsFromCurves(
             IList<Curve> curves, double scale, List<WireWarning> warnings, out int approximated)
         {
@@ -331,18 +614,24 @@ namespace Stageloom.Core
             var modes = new List<byte>();
             var cyclic = new List<byte>();
             int sampled = 0;
+            int nullCurves = 0;
+            int unrepresentable = 0;
             double maxDeviation = 0.0;
 
             foreach (Curve curve in curves)
             {
-                if (curve == null) continue;
+                if (curve == null)
+                {
+                    nullCurves++;
+                    continue;
+                }
 
                 Polyline poly;
                 if (curve.TryGetPolyline(out poly) && poly.Count >= 2)
                 {
                     var list = new List<Point3d>(poly);
                     bool closed = list[0].DistanceTo(list[list.Count - 1]) < 1e-9;
-                    if (closed) list.RemoveAt(list.Count - 1);
+                    if (closed && list.Count > 2) list.RemoveAt(list.Count - 1);
                     AppendCurveSection(list, null, 0, 0, 0, closed, scale,
                         pts, counts, types, orders, modes, cyclic);
                     continue;
@@ -351,7 +640,9 @@ namespace Stageloom.Core
                 NurbsCurve nurbs = curve.ToNurbsCurve();
                 if (nurbs == null)
                 {
-                    sampled++;
+                    // Nothing to send: this is a dropped curve, not a sampled
+                    // one. Reporting it under curve_sampled hid the loss.
+                    unrepresentable++;
                     continue;
                 }
 
@@ -385,24 +676,32 @@ namespace Stageloom.Core
 
                 // Fallback for what the span decomposition cannot carry: fit
                 // non-rational cubic Beziers within the deviation budget. This is
-                // the approximation D3 warns about.
+                // the approximation D3 warns about. A curve made of disjoint
+                // pieces becomes one wire Bezier net per connected piece; a
+                // single 3k+1 net cannot describe them.
                 BezierCurve[] beziers = BezierCurve.CreateCubicBeziers(
                     nurbs, FitTolerance(nurbs, scale), KinkTolerance);
-                List<Point3d> net = CubicBezierNet(beziers);
-                if (net == null || net.Count < 4)
+                List<List<Point3d>> nets = CubicBezierNets(beziers);
+                var fittedNets = new List<NurbsCurve>();
+                foreach (List<Point3d> net in nets)
+                {
+                    NurbsCurve fitted = BuildBezier(net);
+                    if (fitted == null) break;
+                    fittedNets.Add(fitted);
+                }
+                if (nets.Count == 0 || fittedNets.Count != nets.Count)
                 {
                     AppendSampled(curve, scale, pts, counts, types, orders, modes, cyclic);
                     sampled++;
                     continue;
                 }
-                NurbsCurve fitted = BuildBezier(net);
-                if (fitted != null)
+                for (int i = 0; i < nets.Count; i++)
                 {
-                    double deviation = SpanDeviation(nurbs, fitted, 24);
+                    double deviation = SpanDeviation(nurbs, fittedNets[i], 24);
                     if (deviation > maxDeviation) maxDeviation = deviation;
+                    AppendCurveSection(nets[i], null, 2, 4, 2, false, scale,
+                        pts, counts, types, orders, modes, cyclic);
                 }
-                AppendCurveSection(net, null, 2, 4, 2, false, scale,
-                    pts, counts, types, orders, modes, cyclic);
                 approximated++;
             }
 
@@ -421,16 +720,18 @@ namespace Stageloom.Core
             if (sampled > 0)
                 warnings.Add(new WireWarning(WarningCodes.CurveSampled,
                     sampled + " curve(s) sampled to polylines; no exact representation was available"));
+            if (nullCurves > 0 || unrepresentable > 0)
+            {
+                var parts = new List<string>();
+                if (nullCurves > 0) parts.Add(nullCurves + " null curve(s)");
+                if (unrepresentable > 0)
+                    parts.Add(unrepresentable + " curve(s) without a polyline or NURBS representation");
+                warnings.Add(new WireWarning(WarningCodes.CurveSkipped,
+                    string.Join(" and ", parts.ToArray()) + " were skipped"));
+            }
 
-            var sections = new List<Section>();
-            if (counts.Count == 0) return sections;
-            sections.Add(Section.Floats("crv.points", pts.ToArray()));
-            sections.Add(Section.U32("crv.counts", counts.ToArray()));
-            sections.Add(Section.Bytes("crv.types", types.ToArray()));
-            sections.Add(Section.Bytes("crv.orders", orders.ToArray()));
-            sections.Add(Section.Bytes("crv.knots_mode", modes.ToArray()));
-            sections.Add(Section.Bytes("crv.cyclic", cyclic.ToArray()));
-            return sections;
+            return CurveDataSections(new CurveData(pts.ToArray(), counts.ToArray(),
+                types.ToArray(), orders.ToArray(), modes.ToArray(), cyclic.ToArray()));
         }
 
         private static void AppendCurveSection(
@@ -617,28 +918,32 @@ namespace Stageloom.Core
             return Math.Max(tolerance, RhinoMath.SqrtEpsilon);
         }
 
-        /// <summary>The Blender Bezier net (co0, hr0, hl1, co1, ...) of a chain of
-        /// cubic Beziers, sharing the endpoints between consecutive segments.</summary>
-        private static List<Point3d> CubicBezierNet(BezierCurve[] beziers)
+        /// <summary>The Blender Bezier nets (co0, hr0, hl1, co1, ...) of a
+        /// chain of cubic Beziers: one net per connected piece, sharing the
+        /// endpoints between consecutive segments. Every net is 3k+1 points.</summary>
+        private static List<List<Point3d>> CubicBezierNets(BezierCurve[] beziers)
         {
-            if (beziers == null || beziers.Length == 0) return null;
-            var net = new List<Point3d>();
+            var nets = new List<List<Point3d>>();
+            if (beziers == null) return nets;
+            List<Point3d> current = null;
             foreach (BezierCurve bezier in beziers)
             {
                 if (bezier == null || bezier.ControlVertexCount < 4) continue;
                 Point3d v0 = bezier.GetControlVertex3d(0);
-                if (net.Count > 0 && net[net.Count - 1].DistanceTo(v0) < 1e-9)
+                if (current != null && current[current.Count - 1].DistanceTo(v0) < 1e-9)
                 {
-                    net.Add(bezier.GetControlVertex3d(1));
-                    net.Add(bezier.GetControlVertex3d(2));
-                    net.Add(bezier.GetControlVertex3d(3));
+                    current.Add(bezier.GetControlVertex3d(1));
+                    current.Add(bezier.GetControlVertex3d(2));
+                    current.Add(bezier.GetControlVertex3d(3));
                 }
                 else
                 {
-                    for (int i = 0; i < 4; i++) net.Add(bezier.GetControlVertex3d(i));
+                    current = new List<Point3d>();
+                    for (int i = 0; i < 4; i++) current.Add(bezier.GetControlVertex3d(i));
+                    nets.Add(current);
                 }
             }
-            return net;
+            return nets;
         }
 
         /// <summary>Largest distance from samples on the approximation back to
@@ -667,46 +972,196 @@ namespace Stageloom.Core
         // ------------------------------------------------------- wire -> curves
 
         /// <summary>Rebuild curves from crv.* sections. ``prefix`` namespaces a
-        /// definition group (protocol §5.2).</summary>
+        /// definition group (protocol §5.2).
+        ///
+        /// The whole group is validated before any curve is built: section
+        /// dtypes and lengths, the points/counts sum, per-curve type, order,
+        /// knot mode and weights. A malformed group is a ``bad_frame``; it is
+        /// never truncated to the curves that happened to fit.</summary>
         public static List<Curve> CurvesFromSections(DecodedFrame frame, double scale, string prefix = "")
         {
             var curves = new List<Curve>();
-            Section points = frame.Find(prefix + "crv.points");
-            Section counts = frame.Find(prefix + "crv.counts");
-            if (points == null || counts == null) return curves;
-
-            float[] raw = points.ToFloats();
-            uint[] cnt = counts.ToU32();
-            byte[] types = BytesOf(frame.Find(prefix + "crv.types"));
-            byte[] orders = BytesOf(frame.Find(prefix + "crv.orders"));
-            byte[] modes = BytesOf(frame.Find(prefix + "crv.knots_mode"));
-            byte[] cyclic = BytesOf(frame.Find(prefix + "crv.cyclic"));
+            CurveData data = ReadCurveData(frame, prefix);
+            if (data == null) return curves;
 
             int at = 0;
-            for (int i = 0; i < cnt.Length; i++)
+            for (int i = 0; i < data.Counts.Length; i++)
             {
-                int n = (int)cnt[i];
-                if (n < 2 || at + n > raw.Length / 4) break;
+                int n = (int)data.Counts[i];
                 var ps = new List<Point3d>();
                 var ws = new List<double>();
                 for (int k = 0; k < n; k++)
                 {
                     int baseIndex = (at + k) * 4;
-                    ps.Add(FromWire(raw[baseIndex], raw[baseIndex + 1], raw[baseIndex + 2], scale));
-                    double w = raw[baseIndex + 3];
-                    ws.Add(w == 0 ? 1.0 : w);
+                    ps.Add(FromWire(data.Points[baseIndex], data.Points[baseIndex + 1],
+                                    data.Points[baseIndex + 2], scale));
+                    ws.Add(data.Points[baseIndex + 3]);
                 }
                 at += n;
 
-                byte type = ByteAt(types, i, 2);
-                byte mode = ByteAt(modes, i, 0);
-                byte order = ByteAt(orders, i, 0);
-                bool isCyclic = ByteAt(cyclic, i, 0) != 0;
-
-                Curve curve = BuildCurve(ps, ws, type, mode, order, isCyclic);
-                if (curve != null) curves.Add(curve);
+                Curve curve;
+                try
+                {
+                    curve = BuildCurve(ps, ws, data.Types[i], data.Modes[i],
+                                       data.Orders[i], data.Cyclic[i] != 0);
+                }
+                catch (ArgumentException ex)
+                {
+                    throw new FrameException("bad_frame",
+                        "curve " + i + " was rejected by RhinoCommon: " + ex.Message);
+                }
+                if (curve == null)
+                    throw new FrameException("bad_frame",
+                        "curve " + i + " could not be built as a valid curve");
+                curves.Add(curve);
             }
             return curves;
+        }
+
+        /// <summary>A validated crv.* group in wire coordinates.</summary>
+        internal sealed class CurveData
+        {
+            public readonly float[] Points;
+            public readonly uint[] Counts;
+            public readonly byte[] Types;
+            public readonly byte[] Orders;
+            public readonly byte[] Modes;
+            public readonly byte[] Cyclic;
+
+            public CurveData(float[] points, uint[] counts, byte[] types, byte[] orders,
+                             byte[] modes, byte[] cyclic)
+            {
+                Points = points;
+                Counts = counts;
+                Types = types;
+                Orders = orders;
+                Modes = modes;
+                Cyclic = cyclic;
+            }
+        }
+
+        /// <summary>The single owner of curve-group validation. Every section
+        /// length, the points/counts sum, per-curve type, order, knot mode and
+        /// weight is checked here before any curve is built. Returns null when
+        /// the frame carries no curve group.</summary>
+        internal static CurveData ReadCurveData(DecodedFrame frame, string prefix)
+        {
+            Section pointSection = frame.Find(prefix + "crv.points");
+            Section countSection = frame.Find(prefix + "crv.counts");
+            Section typeSection = frame.Find(prefix + "crv.types");
+            Section orderSection = frame.Find(prefix + "crv.orders");
+            Section modeSection = frame.Find(prefix + "crv.knots_mode");
+            Section cyclicSection = frame.Find(prefix + "crv.cyclic");
+
+            bool any = pointSection != null || countSection != null || typeSection != null
+                || orderSection != null || modeSection != null || cyclicSection != null;
+            if (!any) return null;
+            if (pointSection == null || countSection == null)
+                throw new FrameException("bad_frame", "curve group is incomplete: "
+                    + (pointSection == null ? prefix + "crv.points is missing" : prefix + "crv.counts is missing"));
+
+            float[] raw = ReadFloats(pointSection, pointSection.Name);
+            if (raw.Length % 4 != 0)
+                throw new FrameException("bad_frame", pointSection.Name + " has " + raw.Length
+                    + " floats; each curve point is xyz plus weight");
+            int pointCount = raw.Length / 4;
+
+            uint[] cnt = ReadU32(countSection, countSection.Name);
+            byte[] types = ReadCurveBytes(typeSection, prefix + "crv.types", cnt.Length);
+            byte[] orders = ReadCurveBytes(orderSection, prefix + "crv.orders", cnt.Length);
+            byte[] modes = ReadCurveBytes(modeSection, prefix + "crv.knots_mode", cnt.Length);
+            byte[] cyc = ReadCurveBytes(cyclicSection, prefix + "crv.cyclic", cnt.Length);
+
+            long total = 0;
+            for (int i = 0; i < cnt.Length; i++) total += cnt[i];
+            if (total != pointCount)
+                throw new FrameException("bad_frame", countSection.Name + " sums to " + total
+                    + " points but " + pointSection.Name + " carries " + pointCount);
+
+            // Validate every curve before constructing any Rhino geometry, so
+            // a bad tail cannot return a partial result.
+            int at = 0;
+            for (int i = 0; i < cnt.Length; i++)
+            {
+                uint rawCount = cnt[i];
+                if (rawCount < 2)
+                    throw new FrameException("bad_frame",
+                        "curve " + i + " has " + rawCount + " points; at least 2 are required");
+                if (rawCount > int.MaxValue)
+                    throw new FrameException("bad_frame",
+                        "curve " + i + " has " + rawCount + " points, above the supported count");
+                int n = (int)rawCount;
+
+                byte type = types[i];
+                byte mode = modes[i];
+                byte order = orders[i];
+                if (type > 2)
+                    throw new FrameException("bad_frame", "curve " + i + " has type " + type);
+                if (mode > 2)
+                    throw new FrameException("bad_frame", "curve " + i + " has knot mode " + mode);
+                if (cyc[i] > 1)
+                    throw new FrameException("bad_frame", "curve " + i + " cyclic flag is " + cyc[i]);
+
+                bool bezier = type == 1 || (type == 2 && mode == 2);
+                if (bezier)
+                {
+                    // A Bezier curve travels as a co0,hr0,hl1,co1... net:
+                    // 3k+1 points for k spans.
+                    if (n < 4 || (n - 1) % 3 != 0)
+                        throw new FrameException("bad_frame", "curve " + i
+                            + " is a Bezier net with " + n + " points; expected 3k+1");
+                }
+                else if (type == 2)
+                {
+                    if (order < 2 || order > 6)
+                        throw new FrameException("bad_frame",
+                            "curve " + i + " NURBS order is " + order + "; expected 2..6");
+                    if (order > n)
+                        throw new FrameException("bad_frame", "curve " + i + " NURBS order "
+                            + order + " exceeds its " + n + " control points");
+                }
+
+                for (int k = 0; k < n; k++)
+                {
+                    float w = raw[(at + k) * 4 + 3];
+                    if (!(w > 0.0f) || float.IsInfinity(w))
+                        throw new FrameException("bad_frame",
+                            "curve " + i + " point " + k + " has weight " + w
+                            + "; weights must be finite and positive");
+                }
+                at += n;
+            }
+
+            return new CurveData(raw, cnt, types, orders, modes, cyc);
+        }
+
+        /// <summary>The wire sections for validated curve data; the encoder
+        /// and the decoder tests share this shape.</summary>
+        internal static List<Section> CurveDataSections(CurveData data)
+        {
+            var sections = new List<Section>();
+            if (data.Counts.Length == 0) return sections;
+            sections.Add(Section.Floats("crv.points", data.Points));
+            sections.Add(Section.U32("crv.counts", data.Counts));
+            sections.Add(Section.Bytes("crv.types", data.Types));
+            sections.Add(Section.Bytes("crv.orders", data.Orders));
+            sections.Add(Section.Bytes("crv.knots_mode", data.Modes));
+            sections.Add(Section.Bytes("crv.cyclic", data.Cyclic));
+            return sections;
+        }
+
+        private static byte[] ReadCurveBytes(Section section, string name, int count)
+        {
+            if (section == null)
+            {
+                if (count == 0) return new byte[0];
+                throw new FrameException("bad_frame", name + " is missing for " + count + " curves");
+            }
+            byte[] values = ReadBytes(section, name);
+            if (values.Length != count)
+                throw new FrameException("bad_frame", name + " has " + values.Length
+                    + " entries for " + count + " curves");
+            return values;
         }
 
         private static Curve BuildCurve(
@@ -722,12 +1177,11 @@ namespace Stageloom.Core
                 return new PolylineCurve(poly);
             }
 
-            if (mode == 2 || type == 1)
-            {
-                NurbsCurve bezier = BuildBezier(ps);
-                if (bezier != null) return bezier;
-            }
-            return BuildNurbs(ps, ws, order == 0 ? 4 : order, mode == 1, cyclic);
+            // Types 1 and knots_mode 2 are the Bezier-net route. Their shape
+            // was validated above, so a rejected net is malformed rather than
+            // a reason to silently fall back to a different curve.
+            if (type == 1 || mode == 2) return BuildBezier(ps);
+            return BuildNurbs(ps, ws, order, mode == 1, cyclic);
         }
 
         /// <summary>A degree-3 curve with Bezier spans from a co0,hr0,hl1,co1...
@@ -760,7 +1214,7 @@ namespace Stageloom.Core
             List<Point3d> ps, List<double> ws, int order, bool endpoint, bool cyclic)
         {
             int n = ps.Count;
-            int ord = Math.Max(2, Math.Min(order, n));
+            int ord = order;
             bool rational = false;
             foreach (double w in ws)
                 if (Math.Abs(w - 1.0) > 1e-12) { rational = true; break; }
@@ -768,7 +1222,7 @@ namespace Stageloom.Core
             if (cyclic)
             {
                 NurbsCurve periodic = NurbsCurve.Create(true, ord - 1, ps);
-                if (periodic != null)
+                if (periodic != null && periodic.IsValid)
                 {
                     if (!rational) return periodic;
                     // The wire carries Euclidean points + weight. `SetWeight`
@@ -782,7 +1236,7 @@ namespace Stageloom.Core
                     {
                         for (int i = 0; i < periodic.Points.Count; i++)
                             periodic.Points.SetPoint(i, ps[i % n], ws[i % n]);
-                        return periodic;
+                        if (periodic.IsValid) return periodic;
                     }
                     // MakeRational refused (unexpected): fall through to the
                     // uniform open construction below, which keeps the weights.
@@ -816,17 +1270,7 @@ namespace Stageloom.Core
             {
                 for (int i = 0; i < count; i++) curve.Knots[i] = i;
             }
-            return curve;
-        }
-
-        private static byte[] BytesOf(Section section)
-        {
-            return section == null ? null : section.Raw;
-        }
-
-        private static byte ByteAt(byte[] values, int index, byte fallback)
-        {
-            return values != null && index < values.Length ? values[index] : fallback;
+            return curve.IsValid ? curve : null;
         }
 
         // ------------------------------------------------------ point scaling
@@ -1080,9 +1524,10 @@ namespace Stageloom.Core
         }
 
         /// <summary>Curves actually written, not the input goo count:
-        /// SectionsFromCurves drops null curves and curves that defeat every
-        /// representation, and the header's counts describe the frame.
-        /// The fixture's `counts.curves` is the emitted count.</summary>
+        /// SectionsFromCurves skips null curves and curves that defeat every
+        /// representation (both reported as curve_skipped), and the header's
+        /// counts describe the frame. The fixture's `counts.curves` is the
+        /// emitted count.</summary>
         private static int EmittedCurveCount(List<Section> sections)
         {
             foreach (Section s in sections)

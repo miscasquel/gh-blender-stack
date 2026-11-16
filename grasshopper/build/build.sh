@@ -57,6 +57,28 @@ else
   echo "note: no RhinoCommon.dll under the prefix; attribute tests not built" >&2
 fi
 
+# The conversion boundary tests use RhinoCommon's managed Section-side types
+# (and, when the process can load RhinoCore, the real Mesh/Curve types). They
+# are built wherever RhinoCommon exists; the wine harness runs the
+# section-boundary half.
+CONV_OUT="$OUT_DIR/StageloomConversionTests.exe"
+if [ -f "$RC_DLL" ]; then
+  cp -f "$RC_DLL" "$OUT_DIR/"
+  rm -f "$CONV_OUT"
+  run_csc \
+    /nologo /target:exe \
+    /out:"$(win_path "$CONV_OUT")" \
+    /r:"$(win_path "$RC_DLL")" /r:System.Drawing.dll /r:System.Numerics.dll \
+    "$(win_path "$REPO/grasshopper/src/core/Json.cs")" \
+    "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
+    "$(win_path "$REPO/grasshopper/src/core/Conversion.cs")" \
+    "$(win_path "$REPO/grasshopper/tests/console/ConversionTests.cs")"
+  [ -f "$CONV_OUT" ] || { echo "build failed: $CONV_OUT not produced" >&2; exit 1; }
+  echo "built $CONV_OUT ($(stat -c%s "$CONV_OUT") bytes)"
+else
+  echo "note: no RhinoCommon.dll under the prefix; conversion tests not built" >&2
+fi
+
 # The link round trip drives the real GhLink over a fake WebSocket server. It
 # needs Grasshopper.dll (GH_Component is a Grasshopper type) and RhinoCommon,
 # but no Rhino process: an unattached component's OnPingDocument() returns

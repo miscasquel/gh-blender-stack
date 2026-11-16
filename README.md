@@ -92,7 +92,8 @@ Blender                                          Rhino / Grasshopper (wine)
   (plus the offline gate), benchmarks, the installed extension round trip and
   the C# suites, with per-step timing. `scripts/test-core` (standard library
   only), `scripts/test-blender` (Blender headless against `tools/fake_gh`),
-  `scripts/test-gha` (the C# codec against the golden fixtures, under wine) and
+  `scripts/test-gha` (the C# codec against the golden fixtures, plus the
+  conversion, attribute, link and component suites, under wine) and
   `scripts/test-extension` (installed extension round trip) are its steps.
 
 ## What is deliberately not here yet
@@ -219,7 +220,7 @@ scripts/check-all          # the gate: docs, core, Blender, bench, extension, C#
 scripts/check-all --quick  # inner loop: docs, core and ruff only
 scripts/test-core        # layer A: pure Python core, no Blender needed
 scripts/test-blender     # layer B: Blender headless, against tools/fake_gh
-scripts/test-gha         # layer C: the C# codec under wine, the same golden fixtures
+scripts/test-gha         # layer C: the C# codec and conversion suites under wine
 scripts/test-extension   # layer D-lite: builds, installs into a throwaway config, round trip
 scripts/bench            # reference performance matrix and its budgets (not a test layer)
 

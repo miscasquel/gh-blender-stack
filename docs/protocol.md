@@ -118,6 +118,7 @@ Sent after `hello`, and again whenever a Param component's declaration changes.
 - `attributes` (optional) lists the attribute sections the response carries (§5.1), exactly like a request's.
 - `warnings` carries every loss or approximation, each with a code and a message. Blender shows them in the stage status and logs them.
 - An n-gon with holes or slits cannot travel as one wire polygon; the sender emits its underlying faces and reports an `ngon_holes` warning instead of dropping the inner boundary.
+- A sender skips a null curve, or a curve with neither a polyline nor a NURBS representation, and reports it as `curve_skipped`; `curve_sampled` is only for a curve that was actually sent as a sampled polyline.
 
 ### 4.5 `ping` / `pong`
 

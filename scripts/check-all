@@ -185,7 +185,7 @@ else
   if [ "$CI" -eq 1 ]; then
     skip_step \
       "test-gha" \
-      "csharp: local gate (no Rhino in CI) — skipped scripts/test-gha. It needs wine with Mono's csc, and its attribute/link/component halves need Rhino 8's managed assemblies; a stock GitHub runner has neither. This gate does not claim C# coverage. The full local gate covers it. A stock-runner codec job is owned by the C# tasks (Q7/Q8)."
+      "csharp: local gate (no Rhino in CI) — skipped scripts/test-gha. It needs wine with Mono's csc, and its conversion/attribute/link/component halves need Rhino 8's managed assemblies; a stock GitHub runner has neither. This gate does not claim C# coverage. The full local gate covers it. A stock-runner codec job is owned by the C# tasks (Q7/Q8)."
   else
     run_step "test-gha" "$CAP_GHA" scripts/test-gha
   fi
