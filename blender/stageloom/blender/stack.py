@@ -127,9 +127,13 @@ class StageloomParam(bpy.types.PropertyGroup):
     type: StringProperty(name="Type", default="float")
     group: StringProperty(name="Group", default="")
     default: StringProperty(name="Default", default="")
+    # A range may declare either side independently. The numeric fields hold
+    # the declared value only while their `has_*` flag is set; an absent side
+    # is reported as None to the core and uses the type's extreme in the UI.
     min: FloatProperty(name="Min", default=0.0)
-    max: FloatProperty(name="Max", default=1.0)
-    has_range: BoolProperty(name="Has range", default=False)
+    max: FloatProperty(name="Max", default=0.0)
+    has_min: BoolProperty(name="Has min", default=False)
+    has_max: BoolProperty(name="Has max", default=False)
     step: FloatProperty(name="Step", default=0.01)
     values: StringProperty(name="Values", default="")  # newline separated
     # A view of the custom property, so the panel can draw a dropdown.

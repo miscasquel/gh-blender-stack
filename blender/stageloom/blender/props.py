@@ -5,8 +5,56 @@ keyframed and driven. Ranges go through ``id_properties_ui``. The schema itself
 (types, labels, value lists) is kept in the stage's parameter collection for the UI.
 """
 
+import json
+import math
+
 from ..core import params as core_params
 from . import bridge, prefs, stack as stack_mod
+
+# `id_properties_ui` clears a range with the type's own extremes; passing None
+# does not clear it. The int bounds are Blender's ID-property int32 limits.
+INT_MIN = -(2 ** 31)
+INT_MAX = 2 ** 31 - 1
+FLOAT_MIN = -3.4e38
+FLOAT_MAX = 3.4e38
+INT_TYPES = ("int", "value_list")
+FLOAT_TYPES = ("float", "vector3", "color")
+RANGE_TYPES = INT_TYPES + FLOAT_TYPES
+
+
+def _schema_bound(param, key):
+    """A finite declared bound, or ``(None, True)`` when it is unusable."""
+    raw = param.get(key)
+    if raw is None:
+        return None, False
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None, True
+    if not math.isfinite(value):
+        return None, True
+    return value, False
+
+
+def _signature_bound(param, key):
+    value, _bad = _schema_bound(param, key)
+    if value is None:
+        return None
+    return round(value, 6)
+
+
+def _schema_step(param):
+    raw = param.get("step")
+    if raw is None:
+        return 0.01
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 0.01
+    if not math.isfinite(value):
+        return 0.01
+    return value
+
 
 def schema_of(stage):
     """The stage's schema as the plain dicts the core expects."""
@@ -19,8 +67,8 @@ def schema_of(stage):
                 "type": entry.type,
                 "group": entry.group,
                 "default": _typed_default(entry),
-                "min": entry.min if entry.has_range else None,
-                "max": entry.max if entry.has_range else None,
+                "min": entry.min if entry.has_min else None,
+                "max": entry.max if entry.has_max else None,
                 "step": entry.step,
                 "values": [c for c in entry.values.split("\n") if c] if entry.values else [],
             }
@@ -29,14 +77,16 @@ def schema_of(stage):
 
 
 def _typed_default(entry):
-    import json
-
     raw = entry.default
     if entry.type in ("vector3", "color"):
         try:
-            return json.loads(raw) if raw else (0.0, 0.0, 0.0)
-        except ValueError:
+            value = json.loads(raw) if raw else (0.0, 0.0, 0.0)
+            parts = tuple(float(c) for c in value)
+        except (TypeError, ValueError):
             return (0.0, 0.0, 0.0)
+        if len(parts) != 3 or not all(math.isfinite(c) for c in parts):
+            return (0.0, 0.0, 0.0)
+        return parts
     if entry.type in ("int", "value_list"):
         try:
             return int(float(raw)) if raw else 0
@@ -63,31 +113,85 @@ def schema_signature(stage):
     because those are real declaration changes.
     """
     return [
-        (e.param_id, e.label, e.type, e.group, e.has_range,
-         round(e.min, 6), round(e.max, 6), round(e.step, 6), e.values)
+        (
+            e.param_id,
+            e.label,
+            e.type,
+            e.group,
+            e.has_min,
+            round(e.min, 6) if e.has_min else None,
+            e.has_max,
+            round(e.max, 6) if e.has_max else None,
+            round(e.step, 6),
+            e.values,
+        )
         for e in stage.params
     ]
+
+
+def _unique_params(params):
+    """One declaration per id, keeping the first position and the last value.
+
+    A duplicate id names one property, so the schema must contain one entry for
+    it. Last declaration wins, matching a dict of the message's entries.
+    """
+    by_id = {}
+    order = []
+    for param in params:
+        pid = param.get("id", "")
+        if pid not in by_id:
+            order.append(pid)
+        by_id[pid] = param
+    return [by_id[pid] for pid in order]
 
 
 def incoming_signature(params):
     """The same shape, built from a schema message, without the default."""
     out = []
-    for param in params:
+    for param in _unique_params(params):
         values = param.get("values") or []
+        min_value = _signature_bound(param, "min")
+        max_value = _signature_bound(param, "max")
         out.append(
             (
                 param.get("id", ""),
                 param.get("label") or param.get("id", ""),
                 param.get("type", "float"),
                 param.get("group") or "",
-                param.get("min") is not None or param.get("max") is not None,
-                round(float(param.get("min") or 0.0), 6),
-                round(float(param.get("max") or 1.0), 6),
-                round(float(param.get("step") or 0.01), 6),
+                min_value is not None,
+                min_value,
+                max_value is not None,
+                max_value,
+                round(_schema_step(param), 6),
                 "\n".join(str(c) for c in values),
             )
         )
     return out
+
+
+def _apply_bounds(entry, stage_key, param):
+    """Store each declared side independently; an absent side stays absent."""
+    for key in ("min", "max"):
+        value, malformed = _schema_bound(param, key)
+        if malformed:
+            prefs.log(
+                "[stageloom] schema %s/%s has an unusable %s %r; ignoring it"
+                % (stage_key, param.get("id", ""), key, param.get(key)),
+                flush=True,
+            )
+        setattr(entry, "has_" + key, value is not None)
+        if value is None:
+            setattr(entry, key, 0.0)
+            continue
+        stored = value
+        if value < FLOAT_MIN or value > FLOAT_MAX:
+            stored = max(FLOAT_MIN, min(FLOAT_MAX, value))
+            prefs.log(
+                "[stageloom] schema %s/%s %s %r is outside Blender's float range; using %r"
+                % (stage_key, param.get("id", ""), key, value, stored),
+                flush=True,
+            )
+        setattr(entry, key, stored)
 
 
 def apply_schema(obj, stage, params):
@@ -100,46 +204,41 @@ def apply_schema(obj, stage, params):
     re-publishes its schema on a heartbeat, and rebuilding the collection under
     an open UI (a dropdown, a dragged slider) is what made the panel feel
     unstable."""
-    wanted = [param.get("id", "") for param in params]
+    params = _unique_params(params)
+    wanted = {param.get("id", "") for param in params}
+    seen = set()
     for index in range(len(stage.params) - 1, -1, -1):
-        if stage.params[index].param_id not in wanted:
+        entry = stage.params[index]
+        if entry.param_id not in wanted or entry.param_id in seen:
             stage.params.remove(index)
+        else:
+            seen.add(entry.param_id)
     by_id = {entry.param_id: entry for entry in stage.params}
 
     for param in params:
-        entry = by_id.get(param.get("id", ""))
+        pid = param.get("id", "")
+        entry = by_id.get(pid)
         if entry is None:
             entry = stage.params.add()
-            by_id[entry.param_id] = entry
-        entry.param_id = param.get("id", "")
+            # Index only after the id is set: a new entry starts with an empty
+            # id, and a duplicate id must resolve to this same entry, not add a
+            # second one that targets the same custom property.
+            entry.param_id = pid
+            by_id[pid] = entry
+        entry.param_id = pid
         entry.stage_key = stage.key
         entry.label = param.get("label") or entry.param_id
         entry.type = param.get("type", "float")
         entry.group = param.get("group") or ""
         entry.default = _default_text(param)
-        entry.has_range = param.get("min") is not None or param.get("max") is not None
-        entry.min = float(param.get("min") or 0.0)
-        entry.max = float(param.get("max") or 1.0)
-        entry.step = float(param.get("step") or 0.01)
+        _apply_bounds(entry, stage.key, param)
+        entry.step = _schema_step(param)
         values = param.get("values") or []
         entry.values = "\n".join(str(c) for c in values)
 
         name = stack_mod.param_prop_name(stage.key, entry.param_id)
-        if name in obj and not _matches_type(obj[name], entry.type):
-            # The GH side changed the parameter's type. The old value cannot be
-            # reinterpreted (a float is not a vector), and neither can its
-            # keyframes or drivers, so they are removed with the property and the
-            # user is told. A rename does not do this: the GUID keeps the keys.
-            keys = _remove_animation(obj, name)
-            del obj[name]
-            notice = "%s changed type to %s; its value was reset" % (entry.label, entry.type)
-            if keys:
-                notice += " and %d keyframe(s)/driver(s) were removed" % keys
-            bridge.state["notice"] = notice
-            prefs.log("[stageloom] " + notice, flush=True)
-        if name not in obj:
-            obj[name] = _initial_value(entry)
-        elif entry.type == "value_list":
+        _migrate_property_type(obj, name, entry)
+        if entry.type == "value_list":
             # A stale index (from a changed value list) would break the dropdown
             # and send an index GH cannot use; clamp it.
             labels = [c for c in entry.values.split("\n") if c]
@@ -148,6 +247,30 @@ def apply_schema(obj, stage, params):
                 if index < 0 or index >= len(labels):
                     obj[name] = max(0, min(index, len(labels) - 1))
         _set_ui(obj, name, entry)
+
+
+def _migrate_property_type(obj, name, entry):
+    """Replace a property whose stored type cannot hold the declared type.
+
+    Blender would coerce an int into a float (or a bool into an int) silently,
+    which leaves a stale declaration and, worse, a property the request caster
+    still accepts as the old type. A real storage-type change removes the old
+    property with its keyframes and drivers and starts from the new default;
+    the user is told because that animation cannot be reinterpreted.
+    """
+    if name not in obj:
+        obj[name] = _initial_value(entry)
+        return
+    if _matches_type(obj[name], entry.type):
+        return
+    keys = _remove_animation(obj, name)
+    del obj[name]
+    notice = "%s changed type to %s; its value was reset" % (entry.label, entry.type)
+    if keys:
+        notice += " and %d keyframe(s)/driver(s) were removed" % keys
+    bridge.state["notice"] = notice
+    prefs.log("[stageloom] " + notice, flush=True)
+    obj[name] = _initial_value(entry)
 
 
 def _fcurve_slots(obj):
@@ -308,12 +431,18 @@ def purge_orphans(obj, stage):
 
 
 def _matches_type(value, param_type):
-    """Whether an existing custom property can hold this parameter type."""
+    """Whether an existing custom property can hold this parameter type.
+
+    The check is on the stored type, not on what Blender can coerce. An int
+    value accepted as a float would look compatible forever and turn a real
+    int→float declaration change into a silent no-op.
+    """
     if param_type in ("vector3", "color"):
         try:
-            return len(value) == 3
+            parts = list(value)
         except TypeError:
             return False
+        return len(parts) == 3 and all(isinstance(part, float) for part in parts)
     if param_type == "text":
         return isinstance(value, str)
     if param_type == "bool":
@@ -321,13 +450,11 @@ def _matches_type(value, param_type):
     if param_type in ("int", "value_list"):
         return isinstance(value, int) and not isinstance(value, bool)
     if param_type == "float":
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
+        return isinstance(value, float)
     return False
 
 
 def _default_text(param):
-    import json
-
     value = param.get("default")
     if value is None:
         return ""
@@ -344,42 +471,115 @@ def _default_text(param):
 def _initial_value(entry):
     value = _typed_default(entry)
     if entry.type in ("vector3", "color"):
-        return list(value)
+        # Force float components: an IDPropertyArray built from ints is an int
+        # array, which would look like a different storage type on the next
+        # schema heartbeat.
+        return [float(part) for part in value]
     return value
+
+
+def _type_extremes(param_type):
+    if param_type in INT_TYPES:
+        return INT_MIN, INT_MAX
+    return FLOAT_MIN, FLOAT_MAX
+
+
+def _ui_bound(value, param_type, lower):
+    """A declared bound in the numeric domain of the property's UI."""
+    number = float(value)
+    if not math.isfinite(number):
+        extremes = _type_extremes(param_type)
+        return extremes[0 if lower else 1]
+    if param_type in INT_TYPES:
+        number = math.ceil(number) if lower else math.floor(number)
+        number = max(INT_MIN, min(INT_MAX, number))
+        return int(number)
+    return max(FLOAT_MIN, min(FLOAT_MAX, number))
+
+
+def _ui_bounds(entry):
+    """The two UI limits: declared sides, type extremes for absent ones."""
+    low, high = _type_extremes(entry.type)
+    if entry.has_min:
+        low = _ui_bound(entry.min, entry.type, True)
+    if entry.has_max:
+        high = _ui_bound(entry.max, entry.type, False)
+    if entry.has_min and entry.has_max and low > high:
+        prefs.log(
+            "[stageloom] %s declares min %r above max %r; leaving it unconstrained"
+            % (entry.param_id, entry.min, entry.max),
+            flush=True,
+        )
+        return _type_extremes(entry.type)
+    return low, high
+
+
+def _ui_step(entry):
+    try:
+        step = float(entry.step)
+    except (TypeError, ValueError):
+        return 0.01
+    if not math.isfinite(step) or step <= 0.0:
+        return 0.01
+    return step
+
+
+def _update_ui(ui, name, kwargs, fallback=None):
+    """Apply one UI group, reporting a rejection instead of swallowing it."""
+    try:
+        ui.update(**kwargs)
+        return True
+    except (TypeError, ValueError, OverflowError) as exc:
+        prefs.log(
+            "[stageloom] UI settings for %s were rejected (%s: %s)"
+            % (name, type(exc).__name__, exc),
+            flush=True,
+        )
+        if fallback is not None:
+            try:
+                ui.update(**fallback)
+            except (TypeError, ValueError, OverflowError) as fallback_exc:
+                prefs.log(
+                    "[stageloom] could not reset the UI for %s (%s: %s)"
+                    % (name, type(fallback_exc).__name__, fallback_exc),
+                    flush=True,
+                )
+        return False
 
 
 def _set_ui(obj, name, entry):
     try:
         ui = obj.id_properties_ui(name)
-    except TypeError:
+    except (KeyError, TypeError) as exc:
+        prefs.log(
+            "[stageloom] no UI settings for %s (%s: %s)"
+            % (name, type(exc).__name__, exc),
+            flush=True,
+        )
         return
-    try:
-        kwargs = {"description": entry.label}
-        if entry.has_range:
-            if entry.type == "int":
-                kwargs["min"] = int(entry.min)
-                kwargs["max"] = int(entry.max)
-            else:
-                kwargs["min"] = float(entry.min)
-                kwargs["max"] = float(entry.max)
-        else:
-            # No range declared: clear any range a previous schema set.
-            # update(min=None) does not clear it; the type's extremes do.
-            if entry.type in ("int", "value_list"):
-                kwargs["min"] = -(2 ** 31)
-                kwargs["max"] = 2 ** 31 - 1
-            elif entry.type in ("float", "vector3", "color"):
-                kwargs["min"] = -3.4e38
-                kwargs["max"] = 3.4e38
-        if entry.type in ("float", "vector3", "color"):
-            kwargs["step"] = float(entry.step or 0.01)
-        if entry.type == "color":
-            kwargs["subtype"] = "COLOR"
-        elif entry.type == "vector3":
-            kwargs["subtype"] = "XYZ"
-        ui.update(**kwargs)
-    except (TypeError, ValueError):
-        pass
+    if entry.type in RANGE_TYPES:
+        low, high = _ui_bounds(entry)
+        low_default, high_default = _type_extremes(entry.type)
+        # Both sides are always written: the declared one, and the type extreme
+        # that clears a side a previous schema set. update(min=None) does not.
+        _update_ui(
+            ui,
+            name,
+            {"description": entry.label, "min": low, "max": high},
+            fallback={
+                "description": entry.label,
+                "min": low_default,
+                "max": high_default,
+            },
+        )
+    else:
+        _update_ui(ui, name, {"description": entry.label})
+    if entry.type in FLOAT_TYPES:
+        _update_ui(ui, name, {"step": _ui_step(entry)})
+    if entry.type == "color":
+        _update_ui(ui, name, {"subtype": "COLOR"})
+    elif entry.type == "vector3":
+        _update_ui(ui, name, {"subtype": "XYZ"})
 
 
 def read_values(obj, stage):
