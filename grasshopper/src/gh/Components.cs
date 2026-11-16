@@ -19,7 +19,7 @@ namespace Stageloom
 {
     // ------------------------------------------------------------------ Stage In
 
-    public class StageInComponent : GH_Component
+    public class StageInComponent : StageloomComponentBase
     {
         public StageInComponent()
             : base("Stage In", "Stage In",
@@ -85,9 +85,7 @@ namespace Stageloom
             bool enabled = true;
             da.GetData("Key", ref key);
             da.GetData("Enabled", ref enabled);
-            GhLink.Register(this);
-            foreach (string note in GhLink.TakeNotes())
-                AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, note);
+            ReportLinkNotes();
             if (string.IsNullOrEmpty(key))
             {
                 // Unconfigured components stay quiet: no key, nothing to do.
@@ -190,23 +188,11 @@ namespace Stageloom
                 Message = Message + " · " + blocks + (blocks == 1 ? " block" : " blocks");
             GhLink.Publish(OnPingDocument());
         }
-
-        public override void AddedToDocument(GH_Document document)
-        {
-            base.AddedToDocument(document);
-            GhLink.Register(this);
-        }
-
-        public override void RemovedFromDocument(GH_Document document)
-        {
-            base.RemovedFromDocument(document);
-            GhLink.Unregister(this);
-        }
     }
 
     // ----------------------------------------------------------------- Stage Out
 
-    public class StageOutComponent : GH_Component
+    public class StageOutComponent : StageloomComponentBase
     {
         public StageOutComponent()
             : base("Stage Out", "Stage Out",
@@ -252,9 +238,7 @@ namespace Stageloom
             da.GetData("Key", ref key);
             da.GetData("Enabled", ref enabled);
             da.GetDataList("Geometry", goos);
-            GhLink.Register(this);
-            foreach (string note in GhLink.TakeNotes())
-                AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, note);
+            ReportLinkNotes();
             if (string.IsNullOrEmpty(key))
             {
                 GhLink.Forget(this);
@@ -425,18 +409,6 @@ namespace Stageloom
             da.SetData("Status", status);
             Message = GhLink.Connected ? status : "disconnected";
             GhLink.Publish(OnPingDocument());
-        }
-
-        public override void AddedToDocument(GH_Document document)
-        {
-            base.AddedToDocument(document);
-            GhLink.Register(this);
-        }
-
-        public override void RemovedFromDocument(GH_Document document)
-        {
-            base.RemovedFromDocument(document);
-            GhLink.Unregister(this);
         }
     }
 

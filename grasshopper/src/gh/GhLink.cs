@@ -286,6 +286,28 @@ namespace Stageloom
             }
         }
 
+        // Diagnostics: live registry sizes. Internal rather than public plugin
+        // API, matching ActiveSenders/RetryRequests; the console suites assert
+        // that a removed component leaves no entry behind.
+        internal static int ComponentCount
+        {
+            get { lock (Gate) { return Components.Count; } }
+        }
+
+        internal static int ClaimCount
+        {
+            get { lock (Gate) { return Claims.Count; } }
+        }
+
+        internal static int StageParamCount(string key)
+        {
+            lock (Gate)
+            {
+                List<Dictionary<string, object>> list;
+                return StageParams.TryGetValue(key ?? "", out list) ? list.Count : 0;
+            }
+        }
+
         // ------------------------------------------------------------- registry
 
         public static void Register(GH_Component component)
@@ -354,6 +376,7 @@ namespace Stageloom
             lock (Gate)
             {
                 Claim claim = ClaimForLocked(owner);
+                if (claim == null) return;
                 claim.Role = role;
                 claim.StageKey = key;
                 claim.ParamKey = null;
@@ -375,6 +398,7 @@ namespace Stageloom
             lock (Gate)
             {
                 Claim claim = ClaimForLocked(owner);
+                if (claim == null) return;
                 string id = Json.GetString(declaration, "id");
                 claim.Role = ClaimRole.Param;
                 claim.StageKey = null;
@@ -1234,6 +1258,13 @@ namespace Stageloom
             var refused = new List<KeyValuePair<string, string>>();
             lock (Gate)
             {
+                // A claim belongs to a registered owner. Unregister removes both
+                // entries under one lock; this sweep also covers a late publish
+                // from a component that has already left, so the registry cannot
+                // keep a claim nothing can serve or remove.
+                for (int i = Claims.Count - 1; i >= 0; i--)
+                    if (!IsRegisteredLocked(Claims[i].Owner)) Claims.RemoveAt(i);
+
                 var stageKeys = new HashSet<string>();
                 var stageInKeys = new HashSet<string>();
                 var stageOutKeys = new HashSet<string>();
@@ -1306,12 +1337,24 @@ namespace Stageloom
 
         private static Claim ClaimForLocked(GH_Component owner)
         {
+            // Only a registered owner may own a claim. A component that has
+            // left the document may still run one last solve; do not resurrect
+            // a claim for it, because no live owner would publish or remove it
+            // afterwards.
+            if (!IsRegisteredLocked(owner)) return null;
             foreach (Claim claim in Claims)
                 if (object.ReferenceEquals(claim.Owner, owner)) return claim;
             var fresh = new Claim();
             fresh.Owner = owner;
             Claims.Add(fresh);
             return fresh;
+        }
+
+        private static bool IsRegisteredLocked(GH_Component owner)
+        {
+            foreach (GH_Component component in Components)
+                if (object.ReferenceEquals(component, owner)) return true;
+            return false;
         }
 
         private static void RemoveClaimLocked(GH_Component owner)

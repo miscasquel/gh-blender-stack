@@ -56,6 +56,7 @@ namespace Stageloom.Tests.Console
                 RunStageOutDependentAnswer(server, stageOut);
                 RunUnitTransforms();
                 RunParamVisibilityTests();
+                RunLifecycleTests(server, stageIn, stageOut);
                 RunConnectionComponent();
             }
             catch (Exception ex)
@@ -444,6 +445,193 @@ namespace Stageloom.Tests.Console
                 loaded.Params.Input.Count == 9, InputNames(loaded));
         }
 
+        // ------------------------------------------------------------ lifecycle
+
+        /// <summary>Registration and deregistration are one pair. A removed
+        /// Param drops its claim, schema declaration, slot and component entry;
+        /// a remaining Stage In still answers. Removing the last component stops
+        /// the worker and clears the slots; the next add starts it again.
+        ///
+        /// The console suite has no Rhino process, so the document is null:
+        /// GH_Component's lifecycle hook tolerates it, exactly as
+        /// OnPingDocument() returns null throughout these tests.</summary>
+        private static void RunLifecycleTests(FakeServer server, StageInHarness stageIn,
+                                              StageOutHarness stageOut)
+        {
+            System.Console.WriteLine();
+            System.Console.WriteLine("component lifecycle");
+
+            // The earlier cases registered these two directly; start from an
+            // empty registry so the counts below describe only this case.
+            GhLink.Unregister(stageIn);
+            GhLink.Unregister(stageOut);
+            Check("the last earlier unregister leaves an empty registry",
+                GhLink.ComponentCount == 0 && GhLink.ClaimCount == 0 && !GhLink.Running,
+                "components=" + GhLink.ComponentCount + " claims=" + GhLink.ClaimCount
+                + " running=" + GhLink.Running);
+
+            const string inKey = "lifecycle-in";
+            const string outKey = "lifecycle-out";
+            const string paramKey = "lifecycle-param";
+
+            var inComponent = new StageInHarness();
+            var outComponent = new StageOutHarness();
+            // The last unregister stopped the worker; the next register starts a
+            // fresh connection, so the scripted server accepts it again.
+            server.ResetClient();
+            inComponent.Add(null);
+            outComponent.Add(null);
+            server.Accept();
+            ReadUntil(server, "hello");
+            Check("AddedToDocument registers each stage component once",
+                GhLink.ComponentCount == 2, "components=" + GhLink.ComponentCount);
+
+            GhLink.Note("lifecycle note");
+            inComponent.ClearRuntimeMessages();
+            inComponent.Run(StageInData(inComponent, inKey));
+            Check("the base drains link notes into runtime remarks",
+                RuntimeText(inComponent, GH_RuntimeMessageLevel.Remark).Contains("lifecycle note"),
+                RuntimeText(inComponent, GH_RuntimeMessageLevel.Remark));
+            outComponent.Run(StageOutData(outComponent, outKey));
+            Check("each stage component publishes one claim",
+                GhLink.ClaimCount == 2, "claims=" + GhLink.ClaimCount);
+
+            var param = new ParamHarness();
+            param.Add(null);
+            Check("adding a Param registers it",
+                GhLink.ComponentCount == 3, "components=" + GhLink.ComponentCount);
+            param.Run(ParamData(param, paramKey));
+            Check("the Param publishes its declaration",
+                GhLink.ClaimCount == 3 && GhLink.StageParamCount(paramKey) == 1,
+                "claims=" + GhLink.ClaimCount + " params=" + GhLink.StageParamCount(paramKey));
+
+            param.Remove(null);
+            Check("removing the Param drops its component entry",
+                GhLink.ComponentCount == 2, "components=" + GhLink.ComponentCount);
+            Check("removing the Param drops its claim",
+                GhLink.ClaimCount == 2, "claims=" + GhLink.ClaimCount);
+            Check("removing the Param drops its schema declaration",
+                GhLink.StageParamCount(paramKey) == 0,
+                "params=" + GhLink.StageParamCount(paramKey));
+            Check("removing the Param drops its slot",
+                GhLink.FindSlot(paramKey) == null, "slot still exists");
+
+            // A late publish from the removed component must not resurrect a
+            // claim nothing can serve or remove. PublishParam is the exact path
+            // SolveInstance uses; no slot is involved here.
+            var stale = new Dictionary<string, object>();
+            stale["id"] = Guid.NewGuid().ToString();
+            stale["label"] = "late";
+            stale["type"] = "float";
+            stale["default"] = 1.0;
+            stale["values"] = new List<object>();
+            GhLink.PublishParam(param, paramKey, stale);
+            Check("a late publish from a removed component leaves no claim",
+                GhLink.ClaimCount == 2 && GhLink.StageParamCount(paramKey) == 0,
+                "claims=" + GhLink.ClaimCount + " params=" + GhLink.StageParamCount(paramKey));
+
+            // The remaining Stage In still works after the Param goes.
+            const string inRid = "sha256:lifecycle-in";
+            SendRequest(server, inKey, inRid, new List<Section>
+            {
+                Section.U32("test.unknown", new uint[] { 1 }),
+            });
+            StageSlot inSlot = WaitSlot(inKey, inRid);
+            FakeDa inDa = StageInData(inComponent, inKey);
+            inComponent.Run(inDa);
+            Check("the remaining Stage In still answers",
+                Output(inDa, "Status") == "ok", "status=" + Output(inDa, "Status"));
+            Quiet(inSlot);
+
+            outComponent.Remove(null);
+            Check("removing a Stage Out leaves the other component registered",
+                GhLink.ComponentCount == 1 && GhLink.ClaimCount == 1,
+                "components=" + GhLink.ComponentCount + " claims=" + GhLink.ClaimCount);
+            Check("removing a Stage Out clears its slot",
+                GhLink.FindSlot(outKey) == null, "slot still exists");
+
+            inComponent.Remove(null);
+            Check("removing the last component clears the registry",
+                GhLink.ComponentCount == 0 && GhLink.ClaimCount == 0,
+                "components=" + GhLink.ComponentCount + " claims=" + GhLink.ClaimCount);
+            Check("removing the last component clears its slot",
+                GhLink.FindSlot(inKey) == null, "slot still exists");
+            Check("removing the last component stops the worker",
+                !GhLink.Running && !GhLink.Connected,
+                "running=" + GhLink.Running + " connected=" + GhLink.Connected);
+
+            // The next add starts a fresh worker and can claim again.
+            server.ResetClient();
+            var restarted = new StageInHarness();
+            restarted.Add(null);
+            Check("a later add restarts the worker",
+                GhLink.ComponentCount == 1 && GhLink.Running,
+                "components=" + GhLink.ComponentCount + " running=" + GhLink.Running);
+            server.Accept();
+            ReadUntil(server, "hello");
+
+            const string restartKey = "lifecycle-restart";
+            const string restartRid = "sha256:lifecycle-restart";
+            SendRequest(server, restartKey, restartRid, new List<Section>
+            {
+                Section.U32("test.unknown", new uint[] { 1 }),
+            });
+            StageSlot restartSlot = WaitSlot(restartKey, restartRid);
+            FakeDa restartDa = StageInData(restarted, restartKey);
+            restarted.Run(restartDa);
+            Check("the restarted component answers and claims again",
+                Output(restartDa, "Status") == "ok" && GhLink.ClaimCount == 1,
+                "status=" + Output(restartDa, "Status") + " claims=" + GhLink.ClaimCount);
+            Quiet(restartSlot);
+
+            // The original defect: a Param removed while it is the last
+            // component must still unregister and stop the worker.
+            restarted.Remove(null);
+            const string lastParamKey = "lifecycle-param-last";
+            var lastParam = new ParamHarness();
+            lastParam.Add(null);
+            lastParam.Run(ParamData(lastParam, lastParamKey));
+            Check("a Param can be the only registered component",
+                GhLink.ComponentCount == 1 && GhLink.StageParamCount(lastParamKey) == 1,
+                "components=" + GhLink.ComponentCount
+                + " params=" + GhLink.StageParamCount(lastParamKey));
+            lastParam.Remove(null);
+            Check("a removed last Param leaves nothing behind",
+                GhLink.ComponentCount == 0 && GhLink.ClaimCount == 0
+                && GhLink.StageParamCount(lastParamKey) == 0
+                && GhLink.FindSlot(lastParamKey) == null && !GhLink.Running,
+                "components=" + GhLink.ComponentCount + " claims=" + GhLink.ClaimCount
+                + " params=" + GhLink.StageParamCount(lastParamKey)
+                + " slot=" + (GhLink.FindSlot(lastParamKey) == null ? "gone" : "present")
+                + " running=" + GhLink.Running);
+        }
+
+        private static FakeDa StageInData(StageInHarness component, string key)
+        {
+            var da = new FakeDa(component);
+            da.Inputs["Key"] = key;
+            da.Inputs["Enabled"] = true;
+            return da;
+        }
+
+        private static FakeDa StageOutData(StageOutHarness component, string key)
+        {
+            var da = new FakeDa(component);
+            da.Inputs["Key"] = key;
+            da.Inputs["Enabled"] = true;
+            da.Inputs["Geometry"] = new List<IGH_Goo>();
+            return da;
+        }
+
+        private static FakeDa ParamData(ParamHarness component, string key)
+        {
+            var da = new FakeDa(component);
+            da.Inputs["Key"] = key;
+            da.Inputs["Label"] = "Radius";
+            da.Inputs["Type"] = 0;
+            return da;
+        }
+
         // ------------------------------------------------------ connection node
 
         /// <summary>The Stageloom Connection component: bad input is a runtime
@@ -675,11 +863,22 @@ namespace Stageloom.Tests.Console
         private sealed class StageInHarness : StageInComponent
         {
             public void Run(IGH_DataAccess da) { SolveInstance(da); }
+            public void Add(GH_Document document) { AddedToDocument(document); }
+            public void Remove(GH_Document document) { RemovedFromDocument(document); }
         }
 
         private sealed class StageOutHarness : StageOutComponent
         {
             public void Run(IGH_DataAccess da) { SolveInstance(da); }
+            public void Add(GH_Document document) { AddedToDocument(document); }
+            public void Remove(GH_Document document) { RemovedFromDocument(document); }
+        }
+
+        private sealed class ParamHarness : ParamComponent
+        {
+            public void Run(IGH_DataAccess da) { SolveInstance(da); }
+            public void Add(GH_Document document) { AddedToDocument(document); }
+            public void Remove(GH_Document document) { RemovedFromDocument(document); }
         }
 
         private sealed class ConnectionHarness : ConnectionComponent

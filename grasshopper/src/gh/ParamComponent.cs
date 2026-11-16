@@ -17,7 +17,7 @@ using Stageloom.Core;
 
 namespace Stageloom
 {
-    public class ParamComponent : GH_Component, IGH_VariableParameterComponent
+    public class ParamComponent : StageloomComponentBase, IGH_VariableParameterComponent
     {
         private const int FirstOptional = 3;
         private const int InputCount = 9;
@@ -119,8 +119,6 @@ namespace Stageloom
             string group = "";
             if (HasInput("Group")) da.GetData("Group", ref group);
 
-            GhLink.Register(this);
-
             if (string.IsNullOrEmpty(key))
             {
                 GhLink.Forget(this);
@@ -169,10 +167,8 @@ namespace Stageloom
             GhLink.Publish(OnPingDocument());
         }
 
-        public override void AddedToDocument(GH_Document document)
+        protected override void OnAddedToDocument(GH_Document document)
         {
-            base.AddedToDocument(document);
-            GhLink.Register(this);
             ApplyInitialVisibility();
         }
 
