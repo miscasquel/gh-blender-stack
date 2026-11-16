@@ -134,6 +134,31 @@ else
   echo "note: no Grasshopper/RhinoCommon under the prefix; component tests not built" >&2
 fi
 
+# The inbound instance grammar: the definition table, the single- and
+# multi-part namespaces, part attribute filters, row pairs and the content hash.
+# It needs Grasshopper/RhinoCommon types but no Rhino process; the native build
+# half is guarded inside the suite.
+INSTANCE_OUT="$OUT_DIR/StageloomInstanceTests.exe"
+if [ -f "$GH_DLL" ] && [ -f "$GHIO_DLL" ] && [ -f "$RC_DLL" ]; then
+  cp -f "$RC_DLL" "$GH_DLL" "$GHIO_DLL" "$OUT_DIR/"
+  rm -f "$INSTANCE_OUT"
+  run_csc \
+    /nologo /target:exe \
+    /out:"$(win_path "$INSTANCE_OUT")" \
+    /r:"$(win_path "$GH_DLL")" /r:"$(win_path "$GHIO_DLL")" /r:"$(win_path "$RC_DLL")" \
+    /r:System.Drawing.dll /r:System.Numerics.dll \
+    "$(win_path "$REPO/grasshopper/src/core/Json.cs")" \
+    "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
+    "$(win_path "$REPO/grasshopper/src/core/Conversion.cs")" \
+    "$(win_path "$REPO/grasshopper/src/core/Attributes.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/Instances.cs")" \
+    "$(win_path "$REPO/grasshopper/tests/console/InstanceTests.cs")"
+  [ -f "$INSTANCE_OUT" ] || { echo "build failed: $INSTANCE_OUT not produced" >&2; exit 1; }
+  echo "built $INSTANCE_OUT ($(stat -c%s "$INSTANCE_OUT") bytes)"
+else
+  echo "note: no Grasshopper/RhinoCommon under the prefix; instance tests not built" >&2
+fi
+
 # Stage In's build guard. It has no Rhino types, so it builds and runs without
 # a Rhino process; the same guard wraps the real conversion in the component.
 STAGE_OUT="$OUT_DIR/StageloomStageTests.exe"

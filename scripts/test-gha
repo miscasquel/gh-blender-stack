@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Layer C: build the C# suites and run them under wine.
 #
-#     scripts/test-gha               # full suite: codec, conversion, attributes, link, components, stage guard
+#     scripts/test-gha               # full suite: codec, conversion, attributes, instances, link, components, stage guard
 #     scripts/test-gha --codec-only  # only StageloomCoreTests.exe; no Rhino managed assemblies
 #
 # The full suite requires wine with Mono's csc *and* Rhino 8's managed
@@ -40,6 +40,7 @@ FULL=(
   "$CORE"
   "$OUT_DIR/StageloomConversionTests.exe"
   "$OUT_DIR/StageloomAttrTests.exe"
+  "$OUT_DIR/StageloomInstanceTests.exe"
   "$OUT_DIR/StageloomLinkTests.exe"
   "$OUT_DIR/StageloomComponentTests.exe"
   "$OUT_DIR/StageloomStageTests.exe"
@@ -106,6 +107,12 @@ else
   # ArchivableDictionary; no Rhino process is involved.
   run_wine \
     "$(win_path "$OUT_DIR/StageloomAttrTests.exe")" >>"$LOG" 2>&1
+  CODE=$(( CODE | $? ))
+  # The inbound instance grammar: definition table, part namespaces,
+  # descriptors, rows and content hash (the native build half is guarded).
+  run_wine \
+    "$(win_path "$OUT_DIR/StageloomInstanceTests.exe")" \
+    "$(win_path "$PWD/protocol/fixtures")" >>"$LOG" 2>&1
   CODE=$(( CODE | $? ))
   # The link half: the real GhLink against a scripted fake server (the socket
   # thread, slots, notes, outbox and receive paths; no Rhino document).

@@ -300,10 +300,13 @@ namespace Stageloom.Core
         /// does not carry is skipped with a note: a truncated frame must not
         /// take the stage down. When ``definition`` is given, only that
         /// definition's descriptors attach; otherwise only the frame's own
-        /// (the ones without a definition marker).</summary>
+        /// (the ones without a definition marker). When ``part`` is given, only
+        /// descriptors carrying that part attach; a descriptor without a part
+        /// is the single-part/legacy form and never lands on a part.</summary>
         public static void Attach(ArchivableDictionary root, string group,
                                   List<Dictionary<string, object>> descriptors, List<Section> sections,
-                                  long? definition = null, Action<string> note = null)
+                                  long? definition = null, Action<string> note = null,
+                                  long? part = null)
         {
             if (root == null || descriptors == null || sections == null) return;
             Dictionary<string, Section> byName = SectionMap(sections);
@@ -332,6 +335,38 @@ namespace Stageloom.Core
                     continue;
                 }
                 if (marker != (definition ?? -1)) continue;
+
+                long descriptorPart;
+                bool hasPart;
+                string partProblem;
+                if (!TryPart(descriptor, out descriptorPart, out hasPart, out partProblem))
+                {
+                    AddNote(note, NameText(descriptor), partProblem);
+                    continue;
+                }
+                if (hasPart && !definition.HasValue)
+                {
+                    AddNote(note, NameText(descriptor),
+                        "part " + descriptorPart + " has no definition");
+                    continue;
+                }
+                if (part.HasValue)
+                {
+                    if (!hasPart)
+                    {
+                        AddNote(note, NameText(descriptor), "has no part; definition "
+                            + definition + " part " + part + " was skipped");
+                        continue;
+                    }
+                    if (descriptorPart != part.Value) continue;
+                }
+                else if (hasPart)
+                {
+                    AddNote(note, NameText(descriptor),
+                        "part " + descriptorPart + " is not valid on single-part definition "
+                        + marker);
+                    continue;
+                }
 
                 DescriptorFields fields;
                 string problem = ReadDescriptor(descriptor, out fields);
@@ -420,6 +455,27 @@ namespace Stageloom.Core
             if (raw is int) { value = (int)raw; return true; }
             value = 0;
             return false;
+        }
+
+        /// <summary>The part index of a descriptor, and whether it carries one.
+        /// Single-part definitions and the frame's own geometry omit it; a
+        /// multi-part descriptor must carry a non-negative integer (a boolean
+        /// or a fractional number is malformed).</summary>
+        private static bool TryPart(Dictionary<string, object> descriptor,
+                                    out long part, out bool hasPart, out string problem)
+        {
+            part = -1;
+            hasPart = false;
+            problem = null;
+            object raw;
+            if (!descriptor.TryGetValue("part", out raw)) return true;
+            hasPart = true;
+            if (raw == null || !TryInteger(raw, out part) || part < 0)
+            {
+                problem = "part must be a non-negative integer";
+                return false;
+            }
+            return true;
         }
 
         /// <summary>Read the descriptor fields that follow the group and
@@ -794,11 +850,12 @@ namespace Stageloom.Core
 
         public static void Attach(GeometryBase geometry, string group,
                                   List<Dictionary<string, object>> descriptors, List<Section> sections,
-                                  long? definition = null, Action<string> note = null)
+                                  long? definition = null, Action<string> note = null,
+                                  long? part = null)
         {
             ArchivableDictionary existing = Root(geometry, false);
             if (existing == null && (descriptors == null || descriptors.Count == 0)) return;
-            Attach(Root(geometry, true), group, descriptors, sections, definition, note);
+            Attach(Root(geometry, true), group, descriptors, sections, definition, note, part);
         }
 
         /// <summary>Attach a frame's crv-group attributes to each curve.
@@ -813,21 +870,23 @@ namespace Stageloom.Core
         public static void AttachCurves(IList<Curve> curves, uint[] counts,
                                         List<Dictionary<string, object>> descriptors,
                                         List<Section> sections,
-                                        long? definition = null, Action<string> note = null)
+                                        long? definition = null, Action<string> note = null,
+                                        long? part = null)
         {
             if (curves == null || curves.Count == 0) return;
             var roots = new List<ArchivableDictionary>(curves.Count);
             foreach (Curve curve in curves) roots.Add(Root(curve, true));
-            AttachCurves(roots, counts, descriptors, sections, definition, note);
+            AttachCurves(roots, counts, descriptors, sections, definition, note, part);
         }
 
-        /// <summary>The root-level half of <see cref="AttachCurves(IList{Curve}, uint[], List{Dictionary{string, object}}, List{Section}, long?, Action{string})"/>.
+        /// <summary>The root-level half of <see cref="AttachCurves(IList{Curve}, uint[], List{Dictionary{string, object}}, List{Section}, long?, Action{string}, long?)"/>.
         /// Kept separate so the slicing logic can be tested without constructing
         /// native Rhino geometry.</summary>
         internal static void AttachCurves(IList<ArchivableDictionary> roots, uint[] counts,
                                           List<Dictionary<string, object>> descriptors,
                                           List<Section> sections,
-                                          long? definition = null, Action<string> note = null)
+                                          long? definition = null, Action<string> note = null,
+                                          long? part = null)
         {
             if (roots == null || roots.Count == 0 || descriptors == null || sections == null)
                 return;
@@ -863,6 +922,38 @@ namespace Stageloom.Core
                     continue;
                 }
                 if (marker != (definition ?? -1)) continue;
+
+                long descriptorPart;
+                bool hasPart;
+                string partProblem;
+                if (!TryPart(descriptor, out descriptorPart, out hasPart, out partProblem))
+                {
+                    AddNote(note, NameText(descriptor), partProblem);
+                    continue;
+                }
+                if (hasPart && !definition.HasValue)
+                {
+                    AddNote(note, NameText(descriptor),
+                        "part " + descriptorPart + " has no definition");
+                    continue;
+                }
+                if (part.HasValue)
+                {
+                    if (!hasPart)
+                    {
+                        AddNote(note, NameText(descriptor), "has no part; definition "
+                            + definition + " part " + part + " was skipped");
+                        continue;
+                    }
+                    if (descriptorPart != part.Value) continue;
+                }
+                else if (hasPart)
+                {
+                    AddNote(note, NameText(descriptor),
+                        "part " + descriptorPart + " is not valid on single-part definition "
+                        + marker);
+                    continue;
+                }
 
                 DescriptorFields fields;
                 string problem = ReadDescriptor(descriptor, out fields);
