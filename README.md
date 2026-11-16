@@ -97,7 +97,7 @@ Blender                                          Rhino / Grasshopper (wine)
 - **Tests.** `scripts/check-all` is the local gate: docs, core, Blender headless
   (plus the offline gate), benchmarks, the installed extension round trip and
   the C# suites, with per-step timing. The current release is checked by 110
-  core tests, 413 Blender headless tests, fourteen golden fixtures and the C#
+  core tests, 423 Blender headless tests, fourteen golden fixtures and the C#
   console suites. `scripts/test-core` (standard library only),
   `scripts/test-blender` (Blender headless against `tools/fake_gh`),
   `scripts/test-gha` (the C# codec against the golden fixtures, plus the
