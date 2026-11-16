@@ -49,6 +49,7 @@ namespace Stageloom.Tests.Console
             CheckOutboundContentKey();
             CheckOutboundCycle();
             CheckOutboundAttributes();
+            CheckEmitEntryGuards();
 
             if (CanBuildRhinoGeometry())
             {
@@ -1255,6 +1256,78 @@ namespace Stageloom.Tests.Console
                 && (string)descriptors[0]["group"] == "pts"
                 && Find(sections, "idef.0.1.attr.0.values") != null,
                 Json.WriteCanonical(descriptors));
+        }
+
+        private static void CheckEmitEntryGuards()
+        {
+            System.Console.WriteLine();
+            System.Console.WriteLine("outbound entry guards");
+
+            // Emit is the Stage Out entry point T7 will split: a null or empty
+            // list is a no-op, and a null reference is a visible skip, never a
+            // zero-section frame or a phantom row.
+            var sections = new List<Section>();
+            var attributes = new List<Dictionary<string, object>>();
+            var definitions = new List<Dictionary<string, object>>();
+            var warnings = new List<WireWarning>();
+            var counts = new Dictionary<string, object>();
+            Instances.Emit(null, 1.0, sections, attributes, definitions,
+                warnings, true, counts);
+            Check("emit: a null list is a no-op",
+                sections.Count == 0 && attributes.Count == 0
+                && definitions.Count == 0 && warnings.Count == 0
+                && counts.Count == 0,
+                "sections " + sections.Count + " warnings " + warnings.Count
+                + " counts " + counts.Count);
+
+            sections = new List<Section>();
+            attributes = new List<Dictionary<string, object>>();
+            definitions = new List<Dictionary<string, object>>();
+            warnings = new List<WireWarning>();
+            counts = new Dictionary<string, object>();
+            Instances.Emit(new List<GH_InstanceReference>(), 1.0, sections,
+                attributes, definitions, warnings, true, counts);
+            Check("emit: an empty list is a no-op",
+                sections.Count == 0 && attributes.Count == 0
+                && definitions.Count == 0 && warnings.Count == 0
+                && counts.Count == 0,
+                "sections " + sections.Count + " warnings " + warnings.Count);
+
+            sections = new List<Section>();
+            attributes = new List<Dictionary<string, object>>();
+            definitions = new List<Dictionary<string, object>>();
+            warnings = new List<WireWarning>();
+            counts = new Dictionary<string, object>();
+            Instances.Emit(new List<GH_InstanceReference> { null }, 1.0, sections,
+                attributes, definitions, warnings, true, counts);
+            bool nullWarned = warnings.Count == 1
+                && warnings[0].Code == WarningCodes.InstanceSkipped
+                && warnings[0].Message.IndexOf("without a value", StringComparison.Ordinal) >= 0;
+            Check("emit: a null reference is warned and skipped",
+                sections.Count == 0 && attributes.Count == 0
+                && definitions.Count == 0 && counts.Count == 0 && nullWarned,
+                "sections " + sections.Count + "; " + Notes(WireNotes(warnings)));
+
+            // Build's own guard: a definitions table with no rows never
+            // becomes a silent empty stage; no table at all is a plain no-op.
+            var geometry = new List<IGH_Goo>();
+            var notes = new List<string>();
+            DecodedFrame tableOnly = Frame(
+                new List<object> { Def("OnlyTable") }, new List<Section>());
+            Instances.Build(tableOnly, 1.0, null, geometry,
+                delegate(string text) { notes.Add(text); });
+            Check("build: a definitions table without rows is noted",
+                geometry.Count == 0 && notes.Count == 1
+                && notes[0].IndexOf("without instance rows", StringComparison.Ordinal) >= 0,
+                "geometry " + geometry.Count + "; notes " + Notes(notes));
+
+            geometry = new List<IGH_Goo>();
+            notes = new List<string>();
+            Instances.Build(Frame(null, null), 1.0, null, geometry,
+                delegate(string text) { notes.Add(text); });
+            Check("build: no definitions table is a no-op",
+                geometry.Count == 0 && notes.Count == 0,
+                "geometry " + geometry.Count + "; notes " + Notes(notes));
         }
 
         private static List<Instances.DefinitionTableWriter.Part> OutPartsTwo()

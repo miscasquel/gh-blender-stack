@@ -186,13 +186,13 @@ Top-level public Python names and public C# type declarations with no reference 
 | Python | blender/stageloom/blender/geometry_io.py | KNOTS_NORMAL | constant | 0 | 2 | 0 | non-production consumers |
 | Python | blender/stageloom/blender/geometry_io.py | MAX_INSTANCE_DEPTH | constant | 0 | 0 | 0 | unreferenced |
 | Python | blender/stageloom/blender/geometry_io.py | POINT_RADIUS_DEFAULT | constant | 0 | 1 | 0 | non-production consumers |
-| Python | blender/stageloom/blender/geometry_io.py | curve_to_sections | function | 0 | 6 | 0 | non-production consumers |
+| Python | blender/stageloom/blender/geometry_io.py | curve_to_sections | function | 0 | 7 | 0 | non-production consumers |
 | Python | blender/stageloom/blender/geometry_io.py | curves_component_attributes | function | 0 | 0 | 0 | unreferenced |
 | Python | blender/stageloom/blender/geometry_io.py | curves_component_to_sections | function | 0 | 4 | 0 | non-production consumers |
 | Python | blender/stageloom/blender/geometry_io.py | isolated_vertex_indices | function | 0 | 0 | 0 | unreferenced |
 | Python | blender/stageloom/blender/geometry_io.py | loose_edge_indices | function | 0 | 0 | 0 | unreferenced |
 | Python | blender/stageloom/blender/geometry_io.py | mesh_attributes | function | 0 | 5 | 0 | non-production consumers |
-| Python | blender/stageloom/blender/geometry_io.py | mesh_to_sections | function | 0 | 13 | 2 | non-production consumers |
+| Python | blender/stageloom/blender/geometry_io.py | mesh_to_sections | function | 0 | 15 | 2 | non-production consumers |
 | Python | blender/stageloom/blender/geometry_io.py | points_attributes | function | 0 | 0 | 0 | unreferenced |
 | Python | blender/stageloom/blender/geometry_io.py | points_to_sections | function | 0 | 3 | 0 | non-production consumers |
 | Python | blender/stageloom/blender/geometry_io.py | read_attributes | function | 0 | 0 | 0 | unreferenced |
@@ -203,7 +203,7 @@ Top-level public Python names and public C# type declarations with no reference 
 | Python | blender/stageloom/blender/geometry_io.py | wire_attributes | function | 0 | 0 | 0 | unreferenced |
 | Python | blender/stageloom/blender/geometry_io.py | wire_mesh_to_sections | function | 0 | 0 | 0 | unreferenced |
 | Python | blender/stageloom/blender/geometry_io.py | write_colors | function | 0 | 1 | 0 | non-production consumers |
-| Python | blender/stageloom/blender/geometry_io.py | write_point_colors | function | 0 | 0 | 0 | unreferenced |
+| Python | blender/stageloom/blender/geometry_io.py | write_point_colors | function | 0 | 1 | 0 | non-production consumers |
 | Python | blender/stageloom/blender/helpers.py | DEFINITION_PARTS_KEY | constant | 0 | 2 | 0 | non-production consumers |
 | Python | blender/stageloom/blender/helpers.py | OLD_COLLECTION_NAME | constant | 0 | 0 | 0 | unreferenced |
 | Python | blender/stageloom/blender/helpers.py | OLD_HELPER_PREFIX | constant | 0 | 0 | 0 | unreferenced |
@@ -433,7 +433,9 @@ Source-derived counts; this is not a claim about how many tests a run executed. 
 | Blender headless | blender/tests/headless/test_duplicates.py | 17 | test_* functions |
 | Blender headless | blender/tests/headless/test_engine_activity.py | 3 | test_* functions |
 | Blender headless | blender/tests/headless/test_engine_demo.py | 7 | test_* functions |
+| Blender headless | blender/tests/headless/test_engine_facade.py | 8 | test_* functions |
 | Blender headless | blender/tests/headless/test_geometry_io.py | 17 | test_* functions |
+| Blender headless | blender/tests/headless/test_geometry_io_edges.py | 18 | test_* functions |
 | Blender headless | blender/tests/headless/test_geometry_kinds.py | 29 | test_* functions |
 | Blender headless | blender/tests/headless/test_instances.py | 53 | test_* functions |
 | Blender headless | blender/tests/headless/test_lifecycle.py | 7 | test_* functions |
@@ -445,7 +447,7 @@ Source-derived counts; this is not a claim about how many tests a run executed. 
 | Blender headless | blender/tests/headless/test_prefix.py | 15 | test_* functions |
 | Blender headless | blender/tests/headless/test_prefix_memo.py | 10 | test_* functions |
 | Blender headless | blender/tests/headless/test_rebrand.py | 2 | test_* functions |
-| Blender headless | blender/tests/headless/test_registration.py | 13 | test_* functions |
+| Blender headless | blender/tests/headless/test_registration.py | 14 | test_* functions |
 | Blender headless | blender/tests/headless/test_reload.py | 6 | test_* functions |
 | Blender headless | blender/tests/headless/test_request_lifecycle.py | 21 | test_* functions |
 | Blender headless | blender/tests/headless/test_runner_timeout.py | 3 | test_* functions |
@@ -461,8 +463,8 @@ Source-derived counts; this is not a claim about how many tests a run executed. 
 | C# console | grasshopper/tests/console/ComponentTests.cs | 147 | Check(...) calls |
 | C# console | grasshopper/tests/console/ConversionTests.cs | 37 | Check(...) calls |
 | C# console | grasshopper/tests/console/FakeServer.cs | 0 | Check(...) calls |
-| C# console | grasshopper/tests/console/InstanceTests.cs | 109 | Check(...) calls |
-| C# console | grasshopper/tests/console/LinkTests.cs | 129 | Check(...) calls |
+| C# console | grasshopper/tests/console/InstanceTests.cs | 114 | Check(...) calls |
+| C# console | grasshopper/tests/console/LinkTests.cs | 138 | Check(...) calls |
 | C# console | grasshopper/tests/console/MiniWsTests.cs | 57 | Check(...) calls |
 | C# console | grasshopper/tests/console/Program.cs | 0 | Check(...) calls |
 | C# console | grasshopper/tests/console/StageTests.cs | 2 | Check(...) calls |

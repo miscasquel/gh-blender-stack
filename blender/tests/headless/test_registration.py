@@ -1,6 +1,7 @@
 """Layer B: registration order, reports and preference migration."""
 
 import os
+import socket
 import tempfile
 import threading
 import time
@@ -193,6 +194,70 @@ class ServerStopTests(unittest.TestCase):
             self.assertFalse(server.running)
         finally:
             stop_fake(fake)
+
+
+class ServerBindFailureTests(unittest.TestCase):
+    """A taken port is a visible failure, and a later start recovers."""
+
+    @classmethod
+    def setUpClass(cls):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        bpy.ops.preferences.addon_enable(module="stageloom")
+        import stageloom.blender.engine as engine
+        from stageloom.blender import server as server_mod
+
+        cls.engine = engine
+        cls.server_mod = server_mod
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server_mod.SERVER.stop()
+        # Leave the add-on's normal server running for the next class/module.
+        cls.engine.start_server()
+        bpy.ops.preferences.addon_disable(module="stageloom")
+
+    def test_a_taken_port_is_visible_and_a_later_start_recovers(self):
+        from stageloom.blender import bridge
+
+        server = self.server_mod.SERVER
+        server.stop()
+        # start() failure must set this; a leftover stop message would make
+        # the visibility check pass without a real bind attempt.
+        bridge.state["error"] = ""
+        blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            blocker.bind(("127.0.0.1", 0))
+            blocker.listen(1)
+            port = blocker.getsockname()[1]
+
+            # start_server returns once the worker thread exists; the bind is
+            # what fails. Known finding (docs/seams-0.8.md): the worker's exit
+            # path currently replaces the bind error with "server stopped", so
+            # this asserts visibility and recovery, not the exact text.
+            self.engine.start_server(port)
+            deadline = time.time() + 5.0
+            while time.time() < deadline and (
+                server.running or not bridge.state["error"]
+            ):
+                time.sleep(0.02)
+            self.assertFalse(server.running, "the server claimed a taken port")
+            self.assertTrue(bridge.state["error"], "a bind failure was silent")
+        finally:
+            blocker.close()
+
+        self.engine.start_server(port)
+        deadline = time.time() + 5.0
+        while time.time() < deadline and not (
+            server.running and server.port == port
+        ):
+            time.sleep(0.02)
+        self.assertTrue(server.running, "the server never bound the freed port")
+        self.assertEqual(server.port, port)
+
+        deadline = time.time() + 2.0
+        while time.time() < deadline and bridge.state["error"]:
+            time.sleep(0.02)
+        self.assertEqual(bridge.state["error"], "", "a successful bind kept the old error")
 
 
 class DataRootTests(unittest.TestCase):

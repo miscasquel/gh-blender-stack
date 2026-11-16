@@ -17,6 +17,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using Grasshopper.Kernel;
@@ -413,6 +414,7 @@ namespace Stageloom.Tests.Console
             RunStopDuringHandshake();
             RunSolveRetry();
             RunRequestContext();
+            RunTransportGuards();
             RunSlotStatus();
             RunDefinitionContentGuard();
 
@@ -424,6 +426,83 @@ namespace Stageloom.Tests.Console
             }
             System.Console.WriteLine("RESULT: link round-trip FAIL (" + _failures + ")");
             return 1;
+        }
+
+        /// <summary>Public guards around the link entry points: null snapshots,
+        /// empty-frame semantics, configure validation, the outbox cap and
+        /// idempotent Stop. The link is stopped, so nothing here races a
+        /// sender.</summary>
+        private static void RunTransportGuards()
+        {
+            System.Console.WriteLine("link transport guards");
+
+            // A missing slot/frame is an empty snapshot, not an exception. A
+            // real zero-section frame is not the sentinel: only the shared
+            // HeldFrame.Empty means "no frame" (protocol §8.8).
+            int epoch;
+            HeldFrame noFrame = GhLink.ReadFrame(null, out epoch);
+            Check("a null slot reads as the empty frame",
+                object.ReferenceEquals(noFrame, HeldFrame.Empty) && epoch == 0,
+                "frame=" + (noFrame == null ? "null" : "set") + " epoch=" + epoch);
+            Check("a null slot has no answer rid",
+                GhLink.AnswerRid(null) == "", "rid was not empty");
+            bool nullWriterThrew = false;
+            try { GhLink.SetInStatus(null, null, 0, "ok", ""); }
+            catch (Exception) { nullWriterThrew = true; }
+            Check("a null slot is not written by the in-status writer",
+                !nullWriterThrew, "threw");
+            Check("the empty sentinel is not confused with an empty full frame",
+                !GhLink.HasFrame(null) && !GhLink.HasFrame(HeldFrame.Empty)
+                && GhLink.HasFrame(new HeldFrame("sha256:empty",
+                    new List<Section>(), new List<Dictionary<string, object>>(),
+                    new List<object>(), "sha256:h")),
+                "empty full frame and no frame collapsed");
+
+            // Configure validates before it moves a live endpoint.
+            GhLink.Stop();
+            string error;
+            int beforePort = GhLink.Port;
+            Check("configure rejects an out-of-range port",
+                !GhLink.Configure("127.0.0.1", 70000, false, out error)
+                && !string.IsNullOrEmpty(error), "error=" + (error ?? ""));
+            Check("a rejected port keeps the endpoint",
+                GhLink.Port == beforePort, "port=" + GhLink.Port);
+
+            // The outbox cap is private and has no public drain observer while
+            // disconnected. Reflection is the only deterministic way to prove
+            // the drop-oldest policy; T6 moves these fields into Publication
+            // and this test moves with them (see docs/seams-0.8.md).
+            FieldInfo maxField = typeof(GhLink).GetField("MaxOutboxBytes",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            FieldInfo bytesField = typeof(GhLink).GetField("OutboxBytes",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            FieldInfo outboxField = typeof(GhLink).GetField("Outbox",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            bool fieldsPresent = maxField != null && bytesField != null && outboxField != null;
+            Check("the outbox cap has a deterministic observer", fieldsPresent,
+                "field missing");
+            if (fieldsPresent)
+            {
+                long cap = Convert.ToInt64(maxField.GetRawConstantValue());
+                Queue<byte[]> outbox = outboxField.GetValue(null) as Queue<byte[]>;
+                bytesField.SetValue(null, cap);
+                byte[] oldest = new byte[] { 1, 2, 3 };
+                byte[] newest = new byte[] { 4, 5, 6 };
+                GhLink.Enqueue(oldest);
+                GhLink.Enqueue(newest);
+                Check("the outbox drops the oldest frame over its byte cap",
+                    outbox != null && outbox.Count == 1
+                    && object.ReferenceEquals(outbox.Peek(), newest),
+                    "count=" + (outbox == null ? "null" : outbox.Count.ToString()));
+                if (outbox != null) outbox.Clear();
+                bytesField.SetValue(null, 0L);
+            }
+
+            GhLink.Stop();
+            GhLink.Stop();
+            Check("Stop is idempotent",
+                !GhLink.Running && !GhLink.Connected,
+                "running=" + GhLink.Running + " connected=" + GhLink.Connected);
         }
 
         private static void RunSlotStatus()

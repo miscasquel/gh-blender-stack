@@ -30,7 +30,12 @@ enforced: 123 core tests, 427 Blender headless tests plus the offline gate,
 fourteen golden fixtures, the seven C# console suites and the installed
 extension round trip. The measured values are in the T2 section of
 [`performance-ledger.md`](performance-ledger.md) and the regenerated
-[`code-health.md`](code-health.md).
+[`code-health.md`](code-health.md). T3 then added the characterization suites
+and the seam map [`seams-0.8.md`](seams-0.8.md) with **no production change**;
+the full gate passed alone in **174.0 s** with 454 Blender headless tests and
+681 C# checks, and the local harness explicitly skips the native Rhino halves
+under wine. T3 is complete; the measured values are in the T3 section of the ledger and
+code-health.
 
 **0.7.0 completion record (2026-11-16).** Q1–Q19 are complete; Q5 was merged
 into Q4 (the cache and the `Live` toggle were one removal). The release was
@@ -802,7 +807,7 @@ acceptance criteria, then committed before the next starts.
 |---|---|---|---|
 | T1 | Baseline, performance gate, code health | three-run median baseline; `--check-baseline` fails a +6% regression; ledger and code-health inventory; no production behavior change | Done 2026-11-16 (`c2ed250`) |
 | T2 | Subtraction before refactor | dead material/aliases/vendored tree removed; shim ADR and wheel ADR; no behavior change; full gate green; production and total tree smaller | Done 2026-11-16 |
-| T3 | Characterization tests for the seams | tests pin `geometry_io`, the engine hub, `GhLink` and `Instances`; no production edits | Pending |
+| T3 | Characterization tests for the seams | tests pin `geometry_io`, the engine hub, `GhLink` and `Instances`; no production edits | Done 2026-11-16 |
 | T4 | `geometry_io` package split | one responsibility per module; no production net growth; full gate; in-place benchmarks within 5% | Pending |
 | T5 | Blender engine object | explicit `Engine`/runtime records; no package-global hub; lifecycle/playback/bake tests unchanged | Pending |
 | T6 | `GhLink` split | registry/connection/scheduler/protocol/publication/slots split; document isolation and threading preserved | Pending |

@@ -1,7 +1,8 @@
 # Performance ledger
 
-**Status: T1 baseline measured and green; T2 subtraction verified.** The
-2026-11-16 baseline was captured
+**Status: T1 baseline measured and green; T2 subtraction verified; T3
+characterization landed without a production change.** The 2026-11-16 baseline
+was captured
 on a quiet host from three solo runs and is stored as the **median of the three**
 per-run p50/p95 values. The fresh three-run median gate passed all 26 p50/p95
 checks (13 gated metrics). The full `scripts/check-all` gate passed in
@@ -72,7 +73,7 @@ noise; its 2 ms hard budget remains in `bench.py`.
 | T1 | `multistage.dirty_pass_ms` | 6.7953 / 7.1480 | 6.7672 / 7.0538 | -0.41% / -1.32% | none needed | accepted |
 | T1 | `multistage.settle_ms` | 79.7700 / 82.3715 | 79.7043 / 82.0213 | -0.08% / -0.43% | none needed | accepted |
 | T2 | no production hot-path change | — | — | — | production physical LOC 25,096 → 24,946 (−150); tracked tree 112,513 → 82,866 lines (−29,647) incl. the vendored wheel/spikes | accepted |
-| T3 | pending | — | — | — | — | pending |
+| T3 | no production hot-path change | — | — | — | no metric regressed; the worst delta was **-0.79%** (`pipeline.100k.extract_ms` p50, an improvement), baseline gate PASS 26/26 | accepted |
 | T4 | pending | — | — | — | — | pending |
 | T5 | pending | — | — | — | — | pending |
 | T6 | pending | — | — | — | — | pending |
@@ -119,6 +120,24 @@ passed. The largest positive delta was **+3.98%** on
 No production decode/apply/playback code changed, and the 0.8 ledger accepts
 that measurement noise against the quantified offsetting gain: production is
 150 physical lines smaller and the tracked tree is 29,647 lines smaller.
+
+### T3 verification
+
+T3 added characterization tests and the seam map (`docs/seams-0.8.md`); it did
+not touch production. The accepted full `scripts/check-all` gate ran alone and
+passed in **174.0 s**: docs, ruff, core (123 tests), bench (60.6 s, **baseline
+enforced**), Blender headless (454 tests + offline gate, 87.2 s), extension
+(2.7 s) and the full C# local suite (21.7 s, 681 passing checks; native Rhino
+halves explicitly skipped). The 26 p50/p95 checks across 13 gated metrics
+passed; no metric regressed and the worst delta was **-0.79%**
+(`pipeline.100k.extract_ms` p50, an improvement).
+
+One earlier solo run of the same unchanged tree flaked on a single p95:
+`pipeline.100k.extract_ms` p95 **+7.45%** while its p50 was **-0.10%** and every
+other metric improved. The immediate rerun passed 26/26 with that metric at
+p95 **-3.90%**. This is the known tail noise on the extract p95, not a code
+change: T3 changes only tests/docs and no production file. The threshold was
+not widened and no metric was excluded.
 
 ## C# parameter/schema baseline (ungated)
 
