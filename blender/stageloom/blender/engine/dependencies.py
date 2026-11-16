@@ -1,18 +1,20 @@
-"""Upstream stage dependencies: what a stage reads before it runs.
+"""Stage dependencies: what a stage reads, and what reads it.
 
-The graph direction is upstream only. A stage depends on the stages before it
-on its own object and, transitively, on the stages of any object or collection
-its prefix reads. Downstream consumers are never part of the answer: they read
-the selected stage, so they cannot change what it evaluated.
+The upstream walker answers what a stage needs before it runs: the stages
+before it on its own object and, transitively, the stages of any object or
+collection its prefix reads. The downstream walker is its reverse: the later
+stages on the same object and the stages of objects whose prefix reads this
+object, transitively. Both are read-only graphs; they build no memo, freeze
+nothing and do not run a pass.
 
-This is a read-only walk. It builds no memo, freezes nothing and does not run a
-pass; the Bake operator computes the set once per bake (W2.1).
+The Bake operator uses both once per bake: upstream for the stable input set,
+downstream for the dependents it must trigger and freeze (W5, ADR 0015).
 """
 
 import bpy
 
 from .. import helpers, nodes, stack as stack_mod
-from .lifecycle import _ordered_stages
+from .lifecycle import _all_stack_objects, _ordered_stages
 from .request import _modifier_index
 
 
@@ -85,6 +87,83 @@ def stage_dependencies(obj, stage):
                 break
     _collect_references(_prefix_modifiers(obj, stage))
     return found
+
+
+def stage_dependents(obj, stage):
+    """The transitive downstream stages that read ``stage`` on ``obj``.
+
+    Returns ``[(object, stage)]`` in dependency order: a stage appears after
+    every other returned stage it reads, so triggering and freezing the list in
+    order means each dependent sees the previous dependent's answer. A stage
+    the selected stage does not feed is absent, as is the selected stage
+    itself. Stages are deduplicated by object pointer and stage key, and a
+    cycle is visited once rather than hanging the walk.
+
+    The graph is built by reversing :func:`stage_dependencies` over every stack
+    object. That is intentionally O(S²) for S stages: this walk runs once per
+    bake, not per pass, so the simple definition is worth more than an index
+    that would have to stay in step with prefix evaluation.
+    """
+    nodes = _all_nodes()
+    dependencies = {}
+    reverse = {}
+    for owner, candidate in nodes:
+        key = _node_key(owner, candidate)
+        deps = []
+        for dep_owner, dep_stage in stage_dependencies(owner, candidate):
+            dep_key = _node_key(dep_owner, dep_stage)
+            deps.append(dep_key)
+            reverse.setdefault(dep_key, []).append((owner, candidate))
+        dependencies[key] = deps
+
+    root = _node_key(obj, stage)
+    closure = []
+    seen = {root}
+    pending = [root]
+    while pending:
+        for dependent in reverse.get(pending.pop(), ()):
+            key = _node_key(*dependent)
+            if key in seen:
+                continue
+            seen.add(key)
+            closure.append(dependent)
+            pending.append(key)
+
+    # Kahn's algorithm over the closure, with the walk order as the stable
+    # tie-break. A cycle has no dependency order; take the first remaining
+    # stage so the walk still terminates and returns every stage once.
+    remaining = list(closure)
+    ordered = []
+    emitted = {root}
+    while remaining:
+        chosen = None
+        for position, (owner, candidate) in enumerate(remaining):
+            deps = dependencies.get(_node_key(owner, candidate), ())
+            if all(dep in emitted or dep not in seen for dep in deps):
+                chosen = position
+                break
+        if chosen is None:
+            chosen = 0
+        owner, candidate = remaining.pop(chosen)
+        emitted.add(_node_key(owner, candidate))
+        ordered.append((owner, candidate))
+    return ordered
+
+
+def _all_nodes():
+    """Every stage of every stack object, in deterministic walk order."""
+    nodes = []
+    for owner in _all_stack_objects():
+        record = stack_mod.stack_of(owner)
+        if record is None or not record.stages:
+            continue
+        for candidate in _ordered_stages(owner, record):
+            nodes.append((owner, candidate))
+    return nodes
+
+
+def _node_key(owner, stage):
+    return (owner.as_pointer(), stage.key)
 
 
 def _prefix_modifiers(obj, stage):

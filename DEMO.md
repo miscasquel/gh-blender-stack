@@ -24,8 +24,11 @@ Blender                                     Rhino / Grasshopper (wine)
   the Diagnostics section.
 - Every stage is live: playing or scrubbing asks Grasshopper again, and a
   disconnected stage keeps its last output. For offline frames, **Bake stage**
-  writes the output into the stage's native Geometry Nodes Bake node; **Clear
-  Bake** returns the stage to live Grasshopper.
+  writes the selected stage's output into its native Geometry Nodes Bake node,
+  freezes its upstream chain and triggers plus freezes each downstream
+  dependent on its one-frame answer; only the selected stage gets bake data.
+  **Clear Bake** deletes only that stage's bake and releases the freezes it
+  created, returning them to live Grasshopper.
 - The `Param` component takes a **Key** input, which ties the parameter to its
   stage.
 - Text parameters have a plain field (not animatable, by design). A value-list

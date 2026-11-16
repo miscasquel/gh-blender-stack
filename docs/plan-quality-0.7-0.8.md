@@ -852,7 +852,7 @@ invariant it strengthens.
 | T38 | CI runs only 57 core tests | major | W0/W10 |
 | CACHE1 | Custom frame cache, Live toggle, cache-based request paths | removed | W4 |
 | CACHE2 | Cache/P7–P10, E3, E8 defects | removed | W4 |
-| BAKE1 | Bake freezes upstream only; downstream stays live | changed | W5 (trigger + freeze downstream, bake only the selected stage) |
+| BAKE1 | Bake froze upstream only; downstream stayed live | fixed in W5 | W5: bake the selected stage, trigger + freeze each downstream dependent once, Clear Bake scoped to its token (ADR 0015) |
 | FW1 | Hand-rolled MiniWs/JSON on C# 5 | spike | W9 |
 | UI6/U10–U14, P12–P19, G7–G13, E13–E20, C14–C18, C22–C28, C31–C33, H25–H34, H37–H39, H45, T3, T5–T10, T12–T17, T19–T23, T26–T37 | Minor/nit sweep | minor | W6–W9 |
 

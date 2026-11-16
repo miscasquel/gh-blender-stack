@@ -1,13 +1,15 @@
-"""Layer B: upstream stage dependencies, and later the chain bake.
+"""Layer B: stage dependencies upstream and downstream, and the chain bake.
 
 Run with:
 
     scripts/test-blender
 
-W2.2: a stage depends on the stages before it on its own object and on the
-stages of objects or collections its prefix reads, transitively. A downstream
-consumer is not an upstream dependency, even when it reads the selected stage.
-The bake tests (W2.1) and the offline render acceptance (W2.3) extend this file.
+A stage depends on the stages before it on its own object and on the stages of
+objects or collections its prefix reads, transitively. Its dependents are the
+later stages on its object and the stages of objects whose prefix reads its
+object, transitively. Bake uses both: upstream stages are frozen for a stable
+input, downstream stages are triggered once with the baked output and frozen,
+but only the selected stage gets native bake data (ADR 0015).
 """
 
 import hashlib
@@ -26,12 +28,16 @@ from harness import (
     isolate_data_root,
     keyframe_scale,
     pump,
+    report_of,
     requests_of,
     start_fake,
     stop_fake,
 )
 from test_duplicates import enable, make_stack  # noqa: E402
-from stageloom.blender.engine.dependencies import stage_dependencies  # noqa: E402
+from stageloom.blender.engine.dependencies import (  # noqa: E402
+    stage_dependencies,
+    stage_dependents,
+)
 
 
 def _cube(name, calc_uvs=True):
@@ -368,6 +374,80 @@ class DependencyTests(unittest.TestCase):
             stage_dependencies(holder, holder_stage), [(source, source_stage)]
         )
 
+    def test_15_same_object_dependents_follow_stack_order(self):
+        obj = _cube("Chain")
+        stage_a = _add_stage(obj, "A")
+        obj.modifiers.active = obj.modifiers.new("MidBevel1", "BEVEL")
+        stage_b = _add_stage(obj, "B")
+        obj.modifiers.active = obj.modifiers.new("MidBevel2", "BEVEL")
+        stage_c = _add_stage(obj, "C")
+
+        self._assert_stages(
+            stage_dependents(obj, stage_a), [(obj, stage_b), (obj, stage_c)]
+        )
+        self._assert_stages(stage_dependents(obj, stage_b), [(obj, stage_c)])
+        self.assertEqual(
+            stage_dependents(obj, stage_c),
+            [],
+            "the last stage returned a downstream dependent",
+        )
+
+    def test_16_cross_object_and_transitive_dependents_are_walked(self):
+        source, source_stage = make_stack("Source", "Source", params=None)
+        middle = _cube("Middle")
+        _read_before(middle, "ReadsSource", source)
+        middle_stage = _add_stage(middle, "Middle")
+        holder = _cube("Holder")
+        _read_before(holder, "ReadsMiddle", middle)
+        holder_stage = _add_stage(holder, "Holder")
+
+        self._assert_stages(
+            stage_dependents(source, source_stage),
+            [(middle, middle_stage), (holder, holder_stage)],
+        )
+        self._assert_stages(
+            stage_dependents(middle, middle_stage), [(holder, holder_stage)]
+        )
+
+    def test_17_a_self_object_reference_does_not_return_the_stage_itself(self):
+        obj = _cube("SelfReader")
+        _read_before(obj, "ReadsSelf", obj)
+        stage = _add_stage(obj, "Self")
+        obj.modifiers.active = obj.modifiers.new("After", "BEVEL")
+        later = _add_stage(obj, "Later")
+
+        self._assert_stages(stage_dependents(obj, stage), [(obj, later)])
+
+    def test_18_a_dependent_cycle_terminates_and_returns_each_stage_once(self):
+        first = _cube("First")
+        second = _cube("Second")
+        _read_before(first, "ReadsSecond", second)
+        first_stage = _add_stage(first, "First")
+        _read_before(second, "ReadsFirst", first)
+        second_stage = _add_stage(second, "Second")
+
+        first_dependents = stage_dependents(first, first_stage)
+        second_dependents = stage_dependents(second, second_stage)
+        self._assert_stages(first_dependents, [(second, second_stage)])
+        self._assert_stages(second_dependents, [(first, first_stage)])
+        self.assertEqual(
+            len(first_dependents),
+            len(set((owner.as_pointer(), stage.key) for owner, stage in first_dependents)),
+            "the cycle returned a stage twice",
+        )
+
+    def test_19_a_generator_does_not_read_the_prefix_before_it(self):
+        obj = _cube("GeneratorStack")
+        stage_a = _add_stage(obj, "A")
+        generator = _add_stage(obj, "Generator")
+        generator.input_mode = self.stack_mod.INPUT_GENERATOR
+
+        self.assertEqual(
+            stage_dependents(obj, stage_a),
+            [],
+            "a generator stage was reported as a prefix dependent",
+        )
+
 
 class _BakeFixture(unittest.TestCase):
     """The real operator, native Bake node and add-on server, one fake client
@@ -469,6 +549,14 @@ class _BakeFixture(unittest.TestCase):
         stage_b = _add_stage(obj, "B")
         return obj, stage_a, stage_b
 
+    def _three_stage_chain(self):
+        obj, stage_a, stage_b = self._same_object_chain()
+        bevel = obj.modifiers.new("BakeBevel2", "BEVEL")
+        bevel.width = 0.1
+        obj.modifiers.active = bevel
+        stage_c = _add_stage(obj, "C")
+        return obj, stage_a, stage_b, stage_c
+
     def _bake(self, obj, index):
         bpy.context.view_layer.objects.active = obj
         obj.select_set(True)
@@ -547,20 +635,29 @@ class BakeFreezeTests(_BakeFixture):
         self.assertEqual(source_stage.frozen_by_bake, "")
         self.assertEqual(holder_stage.bake_token, "")
 
-    def test_03_a_downstream_stage_stays_live(self):
+    def test_03_a_downstream_stage_is_triggered_and_frozen(self):
         obj, stage_a, stage_b = self._same_object_chain()
         self._start_fake(stage_a)
         self._start_fake(stage_b)
         self._wait_clients(2)
         self._settle(stage_a, stage_b)
+        before = requests_of(self.reports[stage_b.key])
         self._save()
 
         self.assertEqual(self._bake(obj, 0), {"FINISHED"})
+        token = stage_a.bake_token
         self.assertTrue(stage_a.baked)
         self.assertTrue(stage_a.frozen)
         self.assertFalse(stage_b.baked, "the downstream stage was baked")
-        self.assertFalse(stage_b.frozen, "the downstream stage was frozen")
-        self.assertEqual(stage_b.frozen_by_bake, "")
+        self.assertTrue(stage_b.frozen, "the downstream stage stayed live")
+        self.assertEqual(
+            stage_b.frozen_by_bake, token, "the downstream stage carries another token"
+        )
+        self.assertGreater(
+            requests_of(self.reports[stage_b.key]),
+            before,
+            "the downstream stage was not asked to see the baked output",
+        )
 
     def test_04_a_pre_frozen_upstream_stays_frozen_and_unmarked(self):
         obj, stage_a, stage_b = self._same_object_chain()
@@ -699,6 +796,321 @@ class BakeFreezeTests(_BakeFixture):
         self.assertEqual(stage_a.bake_token, "", "a split kept the old bake token")
         self.assertEqual(
             stage_a.frozen_by_bake, "", "a split kept the old freeze marker"
+        )
+
+    def _trace_count(self, text):
+        return sum(1 for line in self.engine._trace if text in line)
+
+    def test_09_baking_the_middle_triggers_and_freezes_its_dependents(self):
+        obj, stage_a, stage_b, stage_c = self._three_stage_chain()
+        for stage in (stage_a, stage_b, stage_c):
+            self._start_fake(stage)
+        self._wait_clients(3)
+        self._settle(stage_a, stage_b, stage_c)
+        self.assertTrue(
+            pump(
+                seconds=10.0,
+                until=lambda: any(param.param_id == SCALE for param in stage_b.params),
+            ),
+            "the fake never published the middle stage's parameter",
+        )
+        keyframe_scale(obj, stage_b, [1.0, 2.0, 3.0])
+        bpy.context.scene.frame_set(1)
+        self._save()
+        before_c = requests_of(self.reports[stage_c.key])
+
+        self.assertEqual(self._bake(obj, 1), {"FINISHED"})
+        token = stage_b.bake_token
+        self.assertEqual(len(token), 16, "the bake did not mint a token")
+        self.assertTrue(stage_b.baked, "the selected stage is not baked")
+        self.assertTrue(stage_b.frozen, "the selected stage is not frozen")
+        for stage in (stage_a, stage_c):
+            self.assertTrue(stage.frozen, "a chain stage was not frozen")
+            self.assertEqual(
+                stage.frozen_by_bake, token, "a chain stage carries another token"
+            )
+            self.assertFalse(stage.baked, "a dependent or upstream stage was baked")
+        self.assertGreater(
+            requests_of(self.reports[stage_c.key]),
+            before_c,
+            "the downstream dependent was not asked to see the baked output",
+        )
+        self.assertEqual(
+            self._trace_count(
+                "bake: triggered dependent %s/%s" % (obj.name, stage_c.key)
+            ),
+            1,
+            "the dependent was not triggered exactly once: %r"
+            % (list(self.engine._trace),),
+        )
+        # The bake ended at frame 1. C's last live answer during the bake was
+        # frame 3 (scale 3); the forced request must carry the baked frame 1
+        # (scale 1), not leave C on the bake's last frame.
+        self.assertAlmostEqual(
+            report_of(self.reports[stage_c.key]).get("received_max", 0.0),
+            1.0,
+            places=2,
+            msg="the dependent did not receive the baked input",
+        )
+        self.assertAlmostEqual(
+            self._helper_geometry(obj, stage_c)[2],
+            1.0,
+            places=2,
+            msg="the frozen dependent does not hold the baked input frame",
+        )
+
+        # Frozen stages must not ask again when the playhead moves.
+        sends = self.engine.stats["sends"]
+        frozen_helper = self._helper_geometry(obj, stage_c)
+        for frame in (2, 3, 1):
+            bpy.context.scene.frame_set(frame)
+            self.engine._timer()
+            self.assertEqual(sends, self.engine.stats["sends"], "a scrub sent a request")
+            self.assertEqual(
+                frozen_helper,
+                self._helper_geometry(obj, stage_c),
+                "the frozen dependent changed on a scrub",
+            )
+
+        self.assertEqual(self._clear(obj, 1), {"FINISHED"})
+        self.assertFalse(stage_b.baked)
+        self.assertFalse(stage_b.frozen)
+        self.assertFalse(stage_a.frozen, "Clear Bake left the upstream frozen")
+        self.assertFalse(stage_c.frozen, "Clear Bake left the dependent frozen")
+        self.assertEqual(stage_a.frozen_by_bake, "")
+        self.assertEqual(stage_c.frozen_by_bake, "")
+
+    def test_10_a_cross_object_dependent_is_triggered_and_frozen(self):
+        source, source_stage = make_stack("Source", "Source", params=None)
+        holder = _cube("Holder", calc_uvs=False)
+        _read_before(holder, "ReadsSource", source, join=True)
+        holder_stage = _add_stage(holder, "Holder")
+        self._start_fake(source_stage)
+        self._start_fake(holder_stage)
+        self._wait_clients(2)
+        self._settle(source_stage, holder_stage)
+        before = requests_of(self.reports[holder_stage.key])
+        self._save()
+
+        self.assertEqual(self._bake(source, 0), {"FINISHED"})
+        token = source_stage.bake_token
+        self.assertTrue(source_stage.baked)
+        self.assertTrue(holder_stage.frozen, "the reader stage was not frozen")
+        self.assertEqual(holder_stage.frozen_by_bake, token)
+        self.assertFalse(holder_stage.baked, "the reader stage was baked")
+        self.assertGreater(
+            requests_of(self.reports[holder_stage.key]),
+            before,
+            "the cross-object dependent was not asked again",
+        )
+
+        self.assertEqual(self._clear(source, 0), {"FINISHED"})
+        self.assertFalse(source_stage.baked)
+        self.assertFalse(holder_stage.frozen, "Clear Bake left the reader frozen")
+        self.assertEqual(holder_stage.frozen_by_bake, "")
+
+    def test_11_clear_bake_leaves_a_dependents_own_bake_alone(self):
+        obj, stage_a, stage_b, stage_c = self._three_stage_chain()
+        for stage in (stage_a, stage_b, stage_c):
+            self._start_fake(stage)
+        self._wait_clients(3)
+        self._settle(stage_a, stage_b, stage_c)
+        self._save()
+
+        self.assertEqual(self._bake(obj, 1), {"FINISHED"})
+        old_token = stage_b.bake_token
+        self.assertEqual(stage_c.frozen_by_bake, old_token)
+
+        # Bake the dependent in turn. It owns its bake now, so the marker from
+        # the middle bake must not survive to make Clear Bake unfreeze it.
+        self.assertEqual(self._bake(obj, 2), {"FINISHED"})
+        self.assertTrue(stage_c.baked, "the dependent did not get its own bake")
+        self.assertFalse(stage_c.frozen_by_bake, "its own bake kept the old marker")
+        own_token = stage_c.bake_token
+        self.assertNotEqual(own_token, old_token)
+
+        # A marker saved by an older flow (or restored by undo) must still not
+        # let the other bake's Clear Bake touch this stage.
+        stage_c.frozen_by_bake = old_token
+
+        self.assertEqual(self._clear(obj, 1), {"FINISHED"})
+        self.assertFalse(stage_b.baked)
+        self.assertFalse(stage_b.frozen)
+        self.assertFalse(stage_a.frozen, "Clear Bake left the upstream frozen")
+        self.assertTrue(stage_c.baked, "Clear Bake deleted another stage's bake")
+        self.assertTrue(stage_c.frozen, "Clear Bake unfroze a stage with its own bake")
+        self.assertEqual(stage_c.bake_token, own_token)
+        self.assertEqual(stage_c.frozen_by_bake, "")
+        self.assertEqual(stage_a.frozen_by_bake, "")
+
+    def test_12_a_pre_frozen_dependent_is_asked_once_and_stays_frozen(self):
+        obj, stage_a, stage_b, stage_c = self._three_stage_chain()
+        for stage in (stage_a, stage_b, stage_c):
+            self._start_fake(stage)
+        self._wait_clients(3)
+        self._settle(stage_a, stage_b, stage_c)
+        stage_c.frozen = True
+        self.engine.freeze(obj, stage_c)
+        before = requests_of(self.reports[stage_c.key])
+        self._save()
+
+        self.assertEqual(self._bake(obj, 1), {"FINISHED"})
+        token = stage_b.bake_token
+        self.assertTrue(stage_a.frozen)
+        self.assertEqual(stage_a.frozen_by_bake, token)
+        self.assertTrue(stage_c.frozen, "the user's freeze was lost")
+        self.assertEqual(
+            stage_c.frozen_by_bake, "", "a pre-frozen stage was marked by the bake"
+        )
+        self.assertFalse(stage_c.baked)
+        self.assertEqual(
+            requests_of(self.reports[stage_c.key]),
+            before + 1,
+            "a pre-frozen dependent was asked more than once",
+        )
+
+        self.assertEqual(self._clear(obj, 1), {"FINISHED"})
+        self.assertFalse(stage_a.frozen, "Clear Bake left the upstream frozen")
+        self.assertTrue(stage_c.frozen, "Clear Bake unfroze a pre-frozen stage")
+        self.assertEqual(stage_c.frozen_by_bake, "")
+
+    def test_13_a_failed_dependent_rolls_back_the_bake(self):
+        obj, stage_a, stage_b, stage_c = self._three_stage_chain()
+        self._start_fake(stage_a)
+        self._start_fake(stage_b)
+        self._start_fake(stage_c, "--fail-after", "2")
+        self._wait_clients(3)
+        self._settle(stage_a, stage_b, stage_c)
+        stage_c.frozen = True
+        self.engine.freeze(obj, stage_c)
+        self._save()
+
+        with self.assertRaises(RuntimeError) as caught:
+            self._bake(obj, 1)
+        self.assertIn("bake failed: dependent", str(caught.exception))
+        self.assertIn(stage_c.key, str(caught.exception))
+        self.assertIn("frame 1", str(caught.exception))
+        self.assertFalse(stage_b.baked, "a failed dependent bake left the target baked")
+        self.assertFalse(stage_b.frozen, "a failed dependent bake left the target frozen")
+        self.assertEqual(stage_b.bake_token, "", "a failed bake left a token")
+        self.assertFalse(stage_a.frozen, "a failed bake left the upstream frozen")
+        self.assertEqual(stage_a.frozen_by_bake, "")
+        self.assertTrue(stage_c.frozen, "the user's freeze was lost on rollback")
+        self.assertEqual(stage_c.frozen_by_bake, "")
+        self.assertFalse(stage_c.baked)
+        self.assertTrue(
+            any(
+                line.startswith("bake:") and "fake solve failure" in line
+                for line in self.engine._trace
+            ),
+            "the failed dependent left no visible error: %r"
+            % (list(self.engine._trace),),
+        )
+
+    def test_14_a_one_way_dependent_is_skipped_with_a_warning(self):
+        obj, stage_a, stage_b, stage_c = self._three_stage_chain()
+        self._start_fake(stage_a)
+        self._start_fake(stage_b)
+        self._start_fake(stage_c, "--no-stage-out")
+        self._wait_clients(3)
+        self._settle(stage_a, stage_b)
+        self.assertTrue(
+            pump(seconds=10.0, until=lambda: not stage_c.has_stage_out),
+            "the one-way fake never published its Stage In-only status",
+        )
+        self._save()
+
+        self.assertEqual(self._bake(obj, 1), {"FINISHED"})
+        token = stage_b.bake_token
+        self.assertTrue(stage_b.baked)
+        self.assertTrue(stage_a.frozen)
+        self.assertEqual(stage_a.frozen_by_bake, token)
+        self.assertFalse(stage_c.frozen, "a one-way dependent was frozen")
+        self.assertEqual(stage_c.frozen_by_bake, "")
+        self.assertFalse(stage_c.baked)
+        self.assertTrue(
+            any(
+                "skipped dependent" in line and "one-way" in line
+                for line in self.engine._trace
+            ),
+            "the one-way dependent was skipped silently: %r"
+            % (list(self.engine._trace),),
+        )
+
+    def test_15_save_reload_preserves_the_bake_and_its_markers(self):
+        obj, stage_a, stage_b, stage_c = self._three_stage_chain()
+        for stage in (stage_a, stage_b, stage_c):
+            self._start_fake(stage)
+        self._wait_clients(3)
+        self._settle(stage_a, stage_b, stage_c)
+        modifier = self.nodes.modifier_of(obj, stage_b)
+        self.assertIsNotNone(modifier)
+        modifier.bake_target = "PACKED"
+        self._save()
+
+        self.assertEqual(self._bake(obj, 1), {"FINISHED"})
+        token = stage_b.bake_token
+        keys = (stage_a.key, stage_b.key, stage_c.key)
+        self._save()
+        blend = os.path.join(self.blend_dir, "bake.blend")
+        self._stop_fakes()
+
+        bpy.ops.wm.open_mainfile(filepath=blend)
+        obj = bpy.data.objects["BakeChain"]
+        stages = [
+            next((item for item in obj.gh_stack.stages if item.key == key), None)
+            for key in keys
+        ]
+        self.assertNotIn(None, stages, "a stage is missing after the reload")
+        stage_a, stage_b, stage_c = stages
+        modifier = self.nodes.modifier_of(obj, stage_b)
+        self.assertIsNotNone(modifier, "the reload lost the middle stage modifier")
+        self.assertTrue(stage_b.baked, "the reload lost the baked marker")
+        self.assertTrue(stage_b.frozen, "the reload lost the target freeze")
+        self.assertEqual(stage_b.bake_token, token, "the reload lost the bake token")
+        for stage in (stage_a, stage_c):
+            self.assertTrue(stage.frozen, "the reload lost a freeze")
+            self.assertEqual(
+                stage.frozen_by_bake, token, "the reload lost a freeze marker"
+            )
+            self.assertFalse(stage.baked)
+        entry = next(
+            (
+                item
+                for item in modifier.bakes
+                if item.node is not None
+                and item.node.bl_idname == "GeometryNodeBake"
+            ),
+            None,
+        )
+        self.assertIsNotNone(entry, "the reload lost the native bake entry")
+        self.assertEqual(
+            getattr(entry, "directory", ""),
+            "",
+            "the packed bake became a disk bake across the reload",
+        )
+
+    def test_16_clear_bake_leaves_manual_and_unrelated_freezes_alone(self):
+        obj, stage_a, stage_b = self._same_object_chain()
+        self._start_fake(stage_a)
+        self._start_fake(stage_b)
+        self._wait_clients(2)
+        self._settle(stage_a, stage_b)
+        stage_a.frozen = True
+        self.engine.freeze(obj, stage_a)
+        stage_b.frozen = True
+        stage_b.frozen_by_bake = "another-bake"
+        self.engine.freeze(obj, stage_b)
+        self._save()
+
+        self.assertEqual(self._clear(obj, 0), {"FINISHED"})
+        self.assertTrue(stage_a.frozen, "Clear Bake unfroze a manual freeze")
+        self.assertEqual(stage_a.frozen_by_bake, "")
+        self.assertTrue(stage_b.frozen, "Clear Bake unfroze another bake's stage")
+        self.assertEqual(
+            stage_b.frozen_by_bake,
+            "another-bake",
+            "Clear Bake cleared an unrelated token",
         )
 
 

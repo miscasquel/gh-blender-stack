@@ -11,7 +11,8 @@ import bpy
 from bpy.props import IntProperty, StringProperty
 
 from . import bridge, engine, helpers, nodes, props, stack as stack_mod
-from .engine.dependencies import stage_dependencies
+from .engine import bake as bake_mod
+from .engine.dependencies import stage_dependencies, stage_dependents
 
 STACK_TYPES = {"MESH", "CURVE", "POINTCLOUD"}
 # States a bake may start from for the selected stage and its upstream chain.
@@ -219,25 +220,11 @@ def _unfreeze_bake_token(token):
     """Unfreeze exactly the stages this bake token froze; return the count.
 
     The marker is the only proof that the bake froze a stage: a stage the user
-    had frozen before the bake carries no marker and is left alone. A missing
-    stage or object simply has no marker to match, so it is skipped.
+    had frozen before the bake carries no marker and is left alone. A stage
+    that has since gained its own bake keeps that bake and stays frozen; only
+    the marker from this token is dropped.
     """
-    if not token:
-        return 0
-    count = 0
-    for candidate in bpy.data.objects:
-        record = stack_mod.stack_of(candidate)
-        if record is None:
-            continue
-        for stage in record.stages:
-            if stage.frozen_by_bake != token:
-                continue
-            stage.frozen_by_bake = ""
-            if stage.frozen:
-                stage.frozen = False
-                engine.unfreeze(candidate, stage)
-                count += 1
-    return count
+    return bake_mod.release_token(token)
 
 
 def _delete_native_bake(context, obj, modifier, entry):
@@ -259,15 +246,114 @@ def _delete_native_bake(context, obj, modifier, entry):
     return None
 
 
+def _dependent_skip_reason(obj, stage, token):
+    """Why a downstream stage cannot be triggered, or None when it can.
+
+    A baked or disabled stage is already settled by something else, and a
+    one-way stage (no Stage Out) has no answer to wait for. A stage frozen by
+    another bake belongs to that bake: triggering it would change an output
+    that bake promised to hold. A stage the user froze manually is not skipped:
+    its Pull refreshes one frame and its freeze, without a marker, is kept.
+    """
+    if stage.baked:
+        return "already baked"
+    if not stage.enabled:
+        return "disabled"
+    modifier = nodes.modifier_of(obj, stage)
+    if modifier is None or not nodes.modifier_active(modifier):
+        return "disabled"
+    if not stage.has_stage_out:
+        return "one-way (no Stage Out)"
+    marker = stage.frozen_by_bake
+    if marker and marker != token:
+        return "frozen by another bake"
+    return None
+
+
+def _trigger_dependents(pairs, token, frame):
+    """Ask each downstream stage once, in dependency order, and freeze it.
+
+    Returns ``(triggered, newly_frozen, skipped, failure)``. ``skipped`` is a
+    list of ``(object, stage, reason)`` strings for the report and trace;
+    ``failure`` is ``(object, stage, reason, frame)`` for the first dependent
+    that could not answer, which the caller turns into a rollback. A
+    user-frozen stage stays frozen and gets no marker; it is still asked so the
+    frozen frame it keeps is the one that follows the target bake.
+    """
+    triggered = 0
+    newly_frozen = 0
+    skipped = []
+    for dep_obj, dep_stage in pairs:
+        reason = _dependent_skip_reason(dep_obj, dep_stage, token)
+        if reason is not None:
+            skipped.append((dep_obj, dep_stage, reason))
+            line = "bake: skipped dependent %s/%s (%s)" % (
+                dep_obj.name,
+                dep_stage.key,
+                reason,
+            )
+            if not engine._trace or engine._trace[-1] != line:
+                engine._trace.append(line)
+            continue
+        user_frozen = bool(dep_stage.frozen)
+        ok, why = bake_mod.trigger_once(dep_obj, dep_stage)
+        if not ok:
+            reason_text = why or "no answer"
+            record = stack_mod.stack_of(dep_obj)
+            if record is not None:
+                engine._forget(record.stack_id, dep_stage.key)
+                engine._clear_pull((record.stack_id, dep_stage.key))
+            # A user-frozen stage stays frozen with the failure visible; any
+            # other dependent lands in error. Rollback below unfreezes the
+            # stages this bake froze, so no dependent is left half-asked.
+            engine._set(
+                dep_stage,
+                "state",
+                engine.stack_mod.STATE_FROZEN
+                if dep_stage.frozen
+                else engine.stack_mod.STATE_ERROR,
+            )
+            engine._set(dep_stage, "error", reason_text)
+            line = "bake: dependent %s/%s failed at frame %s: %s" % (
+                dep_obj.name,
+                dep_stage.key,
+                frame,
+                reason_text,
+            )
+            engine._trace.append(line)
+            return triggered, newly_frozen, skipped, (
+                dep_obj,
+                dep_stage,
+                reason_text,
+                frame,
+            )
+        bake_mod.freeze_stage(dep_obj, dep_stage, token, mark=not user_frozen)
+        if not user_frozen:
+            newly_frozen += 1
+        triggered += 1
+        engine._trace.append(
+            "bake: triggered dependent %s/%s at frame %s%s"
+            % (
+                dep_obj.name,
+                dep_stage.key,
+                frame,
+                " (kept the user's freeze)" if user_frozen else "",
+            )
+        )
+    return triggered, newly_frozen, skipped, None
+
+
 class STAGELOOM_OT_bake(bpy.types.Operator):
     bl_idname = "stageloom.bake"
     bl_label = "Bake Stage"
     bl_description = (
         "Bake this stage's output into its native Geometry Nodes Bake node over "
-        "the scene frame range, then freeze the stage and every upstream stage "
-        "it depends on so the baked inputs cannot change. The per-frame gate "
-        "waits for Grasshopper during the bake, so a stateful definition is "
-        "stepped in order; downstream stages stay live and renders read the bake"
+        "the scene frame range, freeze the stage and every upstream stage it "
+        "depends on, then trigger each downstream dependent once and freeze "
+        "its single frame. Only this stage gets bake data; a dependent that "
+        "needs offline animation is baked in turn. The per-frame gate waits "
+        "for Grasshopper during the bake, so a stateful definition is stepped "
+        "in order; the frozen chain renders without a Grasshopper request"
     )
     bl_options = {"REGISTER"}
 
@@ -343,9 +429,12 @@ class STAGELOOM_OT_bake(bpy.types.Operator):
         entry.frame_end = int(scene.frame_end)
 
         # A rebake replaces this stage's freeze set. Release the old set first:
-        # those upstream stages must be live again for this bake, and must not
-        # stay frozen under a token nothing owns.
+        # those stages must be live again for this bake, and must not stay
+        # frozen under a token nothing owns. The marker on this stage belongs to
+        # another stage's bake; it is dropped only once this bake succeeds,
+        # because until then that other bake still owns the freeze.
         was_frozen = bool(stage.frozen)
+        prior_marker = stage.frozen_by_bake
         if stage.bake_token:
             _unfreeze_bake_token(stage.bake_token)
             stage.bake_token = ""
@@ -429,33 +518,85 @@ class STAGELOOM_OT_bake(bpy.types.Operator):
         # The native bake is now the render source: stop asking Grasshopper
         # for every frame until the user clears the bake. Upstream stages join
         # the freeze only now, after a complete bake; a stage the user had
-        # already frozen keeps its own freeze and gets no marker.
+        # already frozen keeps its own freeze and gets no marker. This stage now
+        # owns its bake, so a marker from another bake is dropped: Clear Bake on
+        # that other stage must not unfreeze this one.
         token = secrets.token_hex(8)
         stage.baked = True
         stage.frozen = True
         stage.bake_token = token
+        stage.frozen_by_bake = ""
         engine.freeze(obj, stage)
         frozen_upstream = 0
         for upstream_obj, upstream_stage in upstream:
             if upstream_stage.frozen:
                 continue
-            upstream_stage.frozen = True
-            upstream_stage.frozen_by_bake = token
-            engine.freeze(upstream_obj, upstream_stage)
+            bake_mod.freeze_stage(upstream_obj, upstream_stage, token)
             frozen_upstream += 1
+
+        # Only this stage was baked. Every downstream consumer is asked once,
+        # in dependency order, so it sees the baked output, then frozen on its
+        # one-frame answer. It never gets native bake data of its own.
+        dependents = stage_dependents(obj, stage)
+        triggered, _frozen_downstream, skipped, dependent_failure = (
+            _trigger_dependents(dependents, token, scene.frame_current)
+        )
+        if dependent_failure is not None:
+            failure_obj, failure_stage, reason, frame = dependent_failure
+            released = _unfreeze_bake_token(token)
+            stage.baked = False
+            stage.bake_token = ""
+            stage.frozen = False
+            if was_frozen:
+                stage.frozen = True
+                stage.frozen_by_bake = prior_marker
+                engine.freeze(obj, stage)
+            deleted = _delete_native_bake(context, obj, modifier, entry)
+            tail = (
+                "; the partial native bake could not be deleted: %s" % deleted
+                if deleted is not None
+                else "; the partial native bake was deleted"
+            )
+            self.report(
+                {"ERROR"},
+                "bake failed: dependent %s/%s did not answer at frame %s: %s; "
+                "unfroze the %d stage(s) this bake froze%s"
+                % (failure_obj.name, failure_stage.key, frame, reason, released, tail),
+            )
+            return {"CANCELLED"}
+
         target = entry.bake_target
         if target == "INHERIT":
             target = modifier.bake_target
         keep = "; save the .blend to keep the packed bake" if target == "PACKED" else ""
+        skipped_note = ""
+        if skipped:
+            skipped_note = "; skipped %s" % ", ".join(
+                "%s/%s (%s)" % (skip_obj.name, skip_stage.key, why)
+                for skip_obj, skip_stage, why in skipped
+            )
+        one_way = [
+            "%s/%s" % (skip_obj.name, skip_stage.key)
+            for skip_obj, skip_stage, why in skipped
+            if why.startswith("one-way")
+        ]
+        if one_way:
+            self.report(
+                {"WARNING"},
+                "skipped one-way dependent(s) with no Stage Out: %s" % ", ".join(one_way),
+            )
         self.report(
             {"INFO"},
             "Baked %d frame(s): %d ready, %d failure(s); stage and %d upstream "
-            "stage(s) frozen%s"
+            "stage(s) frozen; triggered/frozen %d/%d dependent(s)%s%s"
             % (
                 stats["playback_frames"],
                 stats["playback_synced"],
                 stats["playback_failures"],
                 frozen_upstream,
+                triggered,
+                len(dependents),
+                skipped_note,
                 keep,
             ),
         )
@@ -467,8 +608,9 @@ class STAGELOOM_OT_bake(bpy.types.Operator):
 CLEAR_BAKE_WARNING = "Bake data cannot be undone"
 CLEAR_BAKE_CONFIRM_TITLE = "Clear Bake"
 CLEAR_BAKE_CONFIRM_MESSAGE = (
-    "Delete this stage's native bake data? It cannot be recovered; the stage "
-    "will resume live Grasshopper output"
+    "Delete this stage's native bake data? It cannot be recovered; this stage "
+    "and the stages this bake froze (upstream or downstream) resume live. "
+    "Another stage's own bake is not touched"
 )
 CLEAR_BAKE_CONFIRM_TEXT = "Delete Bake"
 
@@ -524,8 +666,10 @@ class STAGELOOM_OT_clear_bake(bpy.types.Operator):
     bl_idname = "stageloom.clear_bake"
     bl_label = "Clear Bake"
     bl_description = (
-        "Delete this stage's native Bake data and resume live Grasshopper. "
-        "The Bake node then passes the live stage output through again. "
+        "Delete only this stage's native Bake data and resume live Grasshopper. "
+        "The freeze markers this bake created are released (upstream and "
+        "downstream); another stage's own bake is never touched. The Bake node "
+        "then passes the live stage output through again. "
         + CLEAR_BAKE_WARNING + "."
     )
     bl_options = {"REGISTER"}
@@ -565,21 +709,26 @@ class STAGELOOM_OT_clear_bake(bpy.types.Operator):
             context.view_layer.update()
             entry = _native_bake_entry(modifier)
         token = stage.bake_token
+        had_bake = bool(stage.baked or token or _native_bake_has_data(entry))
         error = _delete_native_bake(context, obj, modifier, entry)
         if error is not None:
             self.report({"ERROR"}, "could not delete the native bake: %s" % error)
             return {"CANCELLED"}
 
         stage.baked = False
-        stage.frozen = False
         stage.bake_token = ""
-        engine.unfreeze(obj, stage)
+        # A stage the user froze by hand has no marker and no bake: this action
+        # must not quietly thaw it. A stage with bake data heats up again, and
+        # only this action's own freeze markers are released below.
+        if had_bake:
+            stage.frozen = False
+            engine.unfreeze(obj, stage)
         unfrozen = _unfreeze_bake_token(token)
         self.report(
             {"INFO"},
-            "Cleared the stage bake; stage and %d upstream stage(s) unfrozen; "
+            "Cleared the stage bake; %s%d stage(s) tagged by this bake unfrozen; "
             "live Grasshopper resumed; save the .blend to keep the cleared state"
-            % unfrozen,
+            % ("stage resumed live and " if had_bake else "", unfrozen),
         )
         return {"FINISHED"}
 

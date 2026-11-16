@@ -3,8 +3,9 @@
 **Status:** Accepted, 2026-11-16. Supersedes
 [0008](0008-simulation-style-frame-cache.md) and amends
 [0009](0009-playback-sync-and-native-stage-bake.md),
-[0010](0010-selective-stage-solves-and-live-generators.md) and
-[0014](0014-bake-freezes-upstream.md): the custom frame cache and the `Live`
+[0010](0010-selective-stage-solves-and-live-generators.md),
+[0014](0014-bake-freezes-upstream.md) and
+[0015](0015-bake-triggers-downstream.md): the custom frame cache and the `Live`
 toggle are removed.
 
 ## Context
@@ -37,9 +38,11 @@ solver step is wrong. The cache's complexity outweighed its value.
 - **Freeze is the manual hold.** Freeze stops requests and keeps the last
   applied output; Pull asks once while frozen. Unfreezing asks again.
 - **The native Bake node is the offline path.** Bake stage steps the scene range
-  through the same gate, writes the stage's Geometry Nodes Bake node and freezes
-  the stage plus its upstream chain. Clear Bake removes the bake and resumes live
-  output. There is no custom cache or replay.
+  through the same gate, writes the stage's Geometry Nodes Bake node, freezes
+  the stage plus its upstream chain, and triggers then freezes each downstream
+  dependent with the baked output ([0015](0015-bake-triggers-downstream.md)).
+  Clear Bake removes that stage's bake and resumes live output. There is no
+  custom cache or replay.
 - **No second cache.** A simulation-zone cache remains deferred R&D; if adopted
   it must replace the native bake rather than run beside it.
 - **Storage and identity.** The data root keeps logs only. `stack_id` remains the

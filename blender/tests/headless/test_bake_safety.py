@@ -72,12 +72,16 @@ class BakeSafetyTests(unittest.TestCase):
             "an unbaked stage would prompt",
         )
 
-    def test_03_a_no_op_clear_finishes_without_a_prompt(self):
+    def test_03_a_no_op_clear_leaves_a_manual_freeze_alone(self):
         self.stage.baked = False
         self.stage.frozen = True
         self.assertEqual(bpy.ops.stageloom.clear_bake(index=0), {"FINISHED"})
         self.assertFalse(self.stage.baked)
-        self.assertFalse(self.stage.frozen, "a no-op clear did not unfreeze the stage")
+        self.assertTrue(
+            self.stage.frozen,
+            "a no-op clear unfroze a stage it did not bake",
+        )
+        self.assertEqual(self.stage.frozen_by_bake, "")
 
     def test_04_invoke_only_confirms_when_a_bake_would_be_deleted(self):
         calls = []

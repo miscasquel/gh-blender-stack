@@ -174,8 +174,9 @@ class StageloomStage(bpy.types.PropertyGroup):
     # the stage automatically; Clear Bake removes the data and unfreezes it.
     baked: BoolProperty(name="Baked", default=False)
     # The freeze set one bake owns: the baked stage carries the token, and every
-    # upstream stage it froze carries the same token here. Clear Bake matches
-    # them, so a stage the user had frozen before the bake is left frozen.
+    # upstream or downstream stage it froze carries the same token here. Clear
+    # Bake matches them, so a stage the user had frozen before the bake is left
+    # frozen and a stage with its own bake is never unfrozen by another bake.
     bake_token: StringProperty(name="Bake token", default="")
     frozen_by_bake: StringProperty(name="Frozen by bake", default="")
     # The modifier's persistent_uid, written when the modifier is created or

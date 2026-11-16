@@ -3,7 +3,10 @@
 **Status:** Accepted, 2026-11-15. Live Rhino acceptance recorded in
 `benchmarks/results/2026-11-15-live-chain-bake.md`. Amended by
 [0016](0016-live-only-stages.md), 2026-11-16: the frame-cache alternative is
-gone; the native bake and Freeze are the offline path.
+gone; the native bake and Freeze are the offline path. Amended by
+[0015](0015-bake-triggers-downstream.md), 2026-11-16: downstream dependents are
+triggered once and frozen with the baked output instead of staying live. The
+upstream-frozen rule below is unchanged.
 
 ## Context
 
@@ -15,6 +18,11 @@ so the baked inputs no longer matched the scene. The alternative considered was
 chain. That is more UI and more bake data than the chain needs.
 
 ## Decision
+
+> **Amended by [0015](0015-bake-triggers-downstream.md):** a discriminating
+> reader should take the upstream rules from this record and the downstream
+> trigger/freeze rules from 0015. "Downstream consumers stay live" below is the
+> historical 0014 decision, not the current behavior.
 
 - **Keep the existing Bake stage operator.** There is no Bake chain button and
   no new operator. The user selects any stage and presses Bake stage. To bake a

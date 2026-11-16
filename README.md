@@ -83,12 +83,14 @@ Blender                                          Rhino / Grasshopper (wine)
   or the ten-minute backstop).
 - **Bake.** Each stage group carries a native Geometry Nodes Bake node. **Bake
   stage** steps the scene frame range through the same gate, shows cursor
-  progress, freezes the stage and every upstream stage it depends on (including
-  stages on other objects), and renders from the bake with no Grasshopper
-  request. Bake the last stage of a chain to freeze the whole upstream tree;
-  downstream stages stay live. **Clear Bake** removes the bake, unfreezes the
-  stages that bake froze and resumes live output. A packed bake is kept when
-  the `.blend` is saved.
+  progress, bakes only the selected stage, and freezes the stage with every
+  upstream stage it depends on (including stages on other objects). It then
+  triggers each downstream dependent once, so the dependent sees the baked
+  output, and freezes it on that one-frame answer. Only the selected stage has
+  per-frame bake data: a dependent that animates and needs offline playback is
+  baked in turn. Clear Bake deletes only this stage's bake and unfreezes the
+  stages this bake froze (upstream or downstream); another stage's bake and a
+  manual freeze are untouched. A packed bake is kept when the `.blend` is saved.
 - **Tests.** `scripts/check-all` is the local gate: docs, core, Blender headless
   (plus the offline gate), benchmarks, the installed extension round trip and
   the C# suites, with per-step timing. `scripts/test-core` (standard library
@@ -105,7 +107,9 @@ Blender                                          Rhino / Grasshopper (wine)
   is obviously a lossy conversion. That won't be solved without a proper surface
   kernel inside blender (surface psycho may bridge this gap)
 - There is no custom frame cache. Freeze and native **Bake stage** are the
-  offline path; a simulation-zone cache remains later R&D.
+  offline path; a simulation-zone cache remains later R&D. A bake freezes its
+  downstream dependents with one frame each; bake an animated dependent in turn
+  if it needs offline per-frame data.
 - **Clear Bake cannot be undone.** It deletes the stage's native Geometry Nodes
   bake immediately; recreating it means baking the scene range again. The panel
   asks for confirmation before deleting a bake.

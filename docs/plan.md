@@ -69,7 +69,7 @@ The v0.6.0 baseline above still describes what that release shipped.
 |---|---|
 | No native Windows Rhino acceptance run | Wine is a development environment, not the target user platform. |
 | No GH component migration | Old documents keep old parameter/output lists and never gain newer capabilities. |
-| No chain-level playback/bake proof | `Bake stage` freezes one stage; a multi-stage render is not proved Grasshopper-free. |
+| No chain-level playback/bake proof | Bake stage now freezes the upstream chain and triggers plus freezes downstream dependents (ADR 0015), but the acceptance is headless; a Windows/Rhino chain render is still missing. |
 | Release verification is manual and single-machine | A 1.0 needs a reproducible, multi-platform gate. |
 
 ---
@@ -214,23 +214,23 @@ or a checked handshake.
 
 ### D. Playback and bake at chain scale
 
-**Problem.** `Bake stage` freezes exactly one stage. The tests cover one stage.
-A multi-stage chain with a live upstream stage has no proof that a render is
-Grasshopper-free, and Play Every Frame is tested with one stage.
+**Problem.** Bake stage bakes the selected stage, freezes its upstream closure
+and triggers plus freezes its downstream dependents ([ADR 0015](decisions/0015-bake-triggers-downstream.md)),
+but the chain-scale acceptance is headless. A Windows/Rhino chain render and the
+one-frame limit of a frozen dependent still need an explicit acceptance run.
 
 **Work**
 
-- Add a multi-stage Play Every Frame test: each stage in stack order, one request
-  per frame, no skipped frames, and disconnect behavior.
-- Add a chain-level bake acceptance. Either:
-  - add **Bake all**/freeze-upstream behavior so the whole chain is independent
-    of Grasshopper, or
-  - prove the native Bake node shields the full prefix and document the required
-    bake order.
+- Keep the multi-stage Play Every Frame test: each stage in stack order, one
+  request per frame, no skipped frames, and disconnect behavior.
+- Keep the chain-level bake acceptance on the D4 shape: one native bake on the
+  selected stage, upstream frozen for a stable input, downstream asked once and
+  frozen on that answer. Do not add **Bake all**.
 - Test: bake over a scene range, render with Grasshopper closed, Clear Bake
-  resumes live output, and a packed bake survives save/reload.
-- Ensure a failed or timed-out stage cannot leave a bake half-written or the
-  stage frozen without a visible error.
+  resumes live output, and a packed bake survives save/reload. Cover a
+  downstream stage that needs its own bake for per-frame offline output.
+- Ensure a failed or timed-out dependent rolls the whole bake back and reports
+  the stage and frame; no half-frozen chain.
 
 **Exit:** a `GH → GN → GH` chain can render with Grasshopper closed from a baked
 state, and Clear Bake restores live behavior without restarting Blender.
@@ -359,7 +359,7 @@ The old A1–A10 remain the functional core. Add the release gates that the
 | Instance latency is caused by the Grasshopper document, not the bridge | Measure first; publish the reference definition and budget. If the document dominates, document the limit and keep the bridge out of the blame. |
 | Native Windows exposes compiler, path or threading differences | Make Windows a Tier 1 gate; build and run the full matrix there before 1.0. |
 | A `Read()` migration silently corrupts old definitions | Build fixture documents from older releases; test parameters, outputs and component GUIDs. |
-| Baking a chain still leaves upstream stages live | Add Bake all/freeze-upstream or prove the Bake node shields the prefix; test with Grasshopper closed. |
+| Baking a chain leaves a downstream stage live or stale | Bake stage triggers and freezes every downstream dependent on its answer (ADR 0015); only the selected stage is baked. Test the chain with Grasshopper closed. |
 | CI cannot run Rhino | Use a self-hosted Windows/Rhino runner; keep the headless Blender and C# suites in public CI. |
 | Scope creep delays 1.0 | Freeze scope at 0.8; new features wait for 1.1 or later. |
 
