@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Layer C: build the C# suites and run them under wine.
 #
-#     scripts/test-gha               # full suite: codec, conversion, attributes, instances, link, components, stage guard
+#     scripts/test-gha               # full suite: codec, transport, conversion, attributes, instances, link, components, stage guard
 #     scripts/test-gha --codec-only  # only StageloomCoreTests.exe; no Rhino managed assemblies
 #
 # The full suite requires wine with Mono's csc *and* Rhino 8's managed
@@ -38,6 +38,7 @@ OUT_DIR="$PWD/grasshopper/build/out"
 CORE="$OUT_DIR/StageloomCoreTests.exe"
 FULL=(
   "$CORE"
+  "$OUT_DIR/StageloomMiniWsTests.exe"
   "$OUT_DIR/StageloomConversionTests.exe"
   "$OUT_DIR/StageloomAttrTests.exe"
   "$OUT_DIR/StageloomInstanceTests.exe"
@@ -97,6 +98,11 @@ else
   run_wine \
     "$(win_path "$CORE")" \
     "$(win_path "$PWD/protocol/fixtures")" >"$LOG" 2>&1
+  CODE=$(( CODE | $? ))
+  # The transport: handshake verification, frame caps, fragmentation, ping/pong
+  # and close handling against an in-process scripted peer. No Rhino process.
+  run_wine \
+    "$(win_path "$OUT_DIR/StageloomMiniWsTests.exe")" >>"$LOG" 2>&1
   CODE=$(( CODE | $? ))
   # The conversion boundary: section dtypes, lengths, mesh/curve bounds and
   # the wire round trip the encoders share. No Rhino process is involved.

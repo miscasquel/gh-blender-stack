@@ -4,6 +4,7 @@ using System;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Stageloom.Tests.Console
@@ -13,6 +14,8 @@ namespace Stageloom.Tests.Console
     /// unmasked replies. Scripted by the test on the main thread.</summary>
     internal sealed class FakeServer : IDisposable
     {
+        private const string WebSocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
         private readonly TcpListener _listener;
         private TcpClient _client;
         private NetworkStream _stream;
@@ -43,16 +46,68 @@ namespace Stageloom.Tests.Console
             _stream = _client.GetStream();
         }
 
-        /// <summary>Read the HTTP upgrade and answer 101, completing a
-        /// handshake deferred by <see cref="AcceptHandshakeOnly"/>.</summary>
+        /// <summary>Read the HTTP upgrade and answer 101 with the key's accept,
+        /// completing a handshake deferred by <see cref="AcceptHandshakeOnly"/>.</summary>
         public void CompleteHandshake()
         {
+            string key = ReadHandshakeRequest();
+            WriteHandshake("HTTP/1.1 101 Switching Protocols", AcceptFor(key));
+        }
+
+        /// <summary>Read and discard the upgrade request, returning its
+        /// Sec-WebSocket-Key (or null when the client sent none).</summary>
+        public string ReadHandshakeRequest()
+        {
+            string key = null;
             string line = ReadLine();
-            while (!string.IsNullOrEmpty(line)) line = ReadLine();
-            byte[] response = Encoding.ASCII.GetBytes(
-                "HTTP/1.1 101 Switching Protocols\r\n"
-                + "Upgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
-            _stream.Write(response, 0, response.Length);
+            while (!string.IsNullOrEmpty(line))
+            {
+                int colon = line.IndexOf(':');
+                if (colon > 0)
+                {
+                    string name = line.Substring(0, colon).Trim();
+                    if (string.Equals(name, "Sec-WebSocket-Key", StringComparison.OrdinalIgnoreCase))
+                        key = line.Substring(colon + 1).Trim();
+                }
+                line = ReadLine();
+            }
+            return key;
+        }
+
+        /// <summary>The RFC 6455 accept value for a client key.</summary>
+        public static string AcceptFor(string key)
+        {
+            byte[] hash;
+            using (SHA1 sha1 = SHA1.Create())
+                hash = sha1.ComputeHash(Encoding.ASCII.GetBytes(key + WebSocketGuid));
+            return Convert.ToBase64String(hash);
+        }
+
+        /// <summary>Answer an already-read upgrade with a custom status line and
+        /// accept value (null omits the header). Extra headers are added as-is
+        /// so a test can prove case-insensitive names and extra fields work.</summary>
+        public void WriteHandshake(string statusLine, string accept)
+        {
+            WriteHandshake(statusLine, accept, null);
+        }
+
+        public void WriteHandshake(string statusLine, string accept, string extraHeaders)
+        {
+            var sb = new StringBuilder();
+            sb.Append(statusLine).Append("\r\n");
+            sb.Append("Upgrade: websocket\r\n");
+            sb.Append("Connection: Upgrade\r\n");
+            if (accept != null)
+                sb.Append("Sec-WebSocket-Accept: ").Append(accept).Append("\r\n");
+            if (extraHeaders != null)
+                sb.Append(extraHeaders);
+            sb.Append("\r\n");
+            SendRaw(Encoding.ASCII.GetBytes(sb.ToString()));
+        }
+
+        public void WriteRaw(byte[] data)
+        {
+            _stream.Write(data, 0, data.Length);
             _stream.Flush();
         }
 
@@ -72,44 +127,102 @@ namespace Stageloom.Tests.Console
 
         public void Send(byte[] payload)
         {
+            SendFrame(0x2, true, 0, false, payload.Length, payload);
+        }
+
+        public void SendRaw(byte[] data)
+        {
+            WriteRaw(data);
+        }
+
+        /// <summary>Writes one scripted frame. <paramref name="declaredLength"/>
+        /// is encoded into the header, even when no payload follows it, so a
+        /// test can declare an oversized frame without allocating one.</summary>
+        public void SendFrame(int opcode, bool fin, int rsv, bool masked,
+            long declaredLength, byte[] payload)
+        {
+            SendRaw(BuildFrame(opcode, fin, rsv, masked, declaredLength, payload));
+        }
+
+        public static byte[] BuildFrame(int opcode, bool fin, int rsv, bool masked,
+            long declaredLength, byte[] payload)
+        {
             var ms = new MemoryStream();
-            int len = payload.Length;
-            ms.WriteByte(0x82);
-            if (len < 126)
+            byte b0 = (byte)((fin ? 0x80 : 0) | ((rsv & 0x07) << 4) | (opcode & 0x0F));
+            ms.WriteByte(b0);
+            if (declaredLength < 126)
             {
-                ms.WriteByte((byte)len);
+                ms.WriteByte((byte)((masked ? 0x80 : 0) | (int)declaredLength));
             }
-            else if (len <= 0xFFFF)
+            else if (declaredLength <= 0xFFFF)
             {
-                ms.WriteByte(126);
-                ms.WriteByte((byte)((len >> 8) & 0xFF));
-                ms.WriteByte((byte)(len & 0xFF));
+                ms.WriteByte((byte)((masked ? 0x80 : 0) | 126));
+                ms.WriteByte((byte)((declaredLength >> 8) & 0xFF));
+                ms.WriteByte((byte)(declaredLength & 0xFF));
             }
             else
             {
-                ms.WriteByte(127);
-                long l = len;
-                for (int i = 7; i >= 0; i--) ms.WriteByte((byte)((l >> (8 * i)) & 0xFF));
+                ms.WriteByte((byte)((masked ? 0x80 : 0) | 127));
+                long l = declaredLength;
+                for (int i = 7; i >= 0; i--)
+                    ms.WriteByte((byte)((l >> (8 * i)) & 0xFF));
             }
-            ms.Write(payload, 0, payload.Length);
-            byte[] raw = ms.ToArray();
-            _stream.Write(raw, 0, raw.Length);
-            _stream.Flush();
+
+            byte[] body = payload ?? new byte[0];
+            if (masked)
+            {
+                byte[] mask = new byte[] { 0x11, 0x22, 0x33, 0x44 };
+                ms.Write(mask, 0, 4);
+                for (int i = 0; i < body.Length; i++)
+                    ms.WriteByte((byte)(body[i] ^ mask[i & 3]));
+            }
+            else
+            {
+                ms.Write(body, 0, body.Length);
+            }
+            return ms.ToArray();
         }
 
         /// <summary>One whole message, or null when the window passes. On
         /// EOF `closed` is true; on a quiet socket it stays false.</summary>
         public byte[] TryReadFrame(int timeoutMs, out bool closed)
         {
+            int opcode;
+            bool fin, masked;
+            byte[] body = TryReadFrameRaw(timeoutMs, out opcode, out fin, out masked, out closed);
+            if (body == null) return null;
+            if (opcode == 0x8)
+            {
+                closed = true;
+                return null;
+            }
+            if (opcode == 0x9 || opcode == 0xA) return null;
+            return body;
+        }
+
+        /// <summary>One whole client frame, including control frames, with its
+        /// opcode and mask bit. A zero-length body returns an empty array.</summary>
+        public byte[] TryReadFrameRaw(int timeoutMs, out int opcode, out bool fin,
+            out bool masked, out bool closed)
+        {
+            opcode = 0;
+            fin = false;
+            masked = false;
             closed = false;
-            if (!_client.Client.Poll(timeoutMs * 1000, SelectMode.SelectRead)) return null;
+            if (!_client.Client.Poll(timeoutMs * 1000, SelectMode.SelectRead))
+                return null;
             try
             {
                 int b0 = _stream.ReadByte();
                 int b1 = _stream.ReadByte();
-                if (b0 < 0 || b1 < 0) { closed = true; return null; }
-                int opcode = b0 & 0x0F;
-                bool masked = (b1 & 0x80) != 0;
+                if (b0 < 0 || b1 < 0)
+                {
+                    closed = true;
+                    return null;
+                }
+                fin = (b0 & 0x80) != 0;
+                opcode = b0 & 0x0F;
+                masked = (b1 & 0x80) != 0;
                 long len = b1 & 0x7F;
                 if (len == 126)
                 {
@@ -127,12 +240,14 @@ namespace Stageloom.Tests.Console
                 while (read < len)
                 {
                     int n = _stream.Read(body, read, (int)(len - read));
-                    if (n <= 0) { closed = true; return null; }
+                    if (n <= 0)
+                    {
+                        closed = true;
+                        return null;
+                    }
                     read += n;
                 }
                 if (masked) for (int i = 0; i < len; i++) body[i] ^= mask[i % 4];
-                if (opcode == 0x8) { closed = true; return null; }
-                if (opcode == 0x9) return null;  // ping: not expected from this client
                 return body;
             }
             catch (IOException)

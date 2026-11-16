@@ -34,6 +34,24 @@ run_csc \
 [ -f "$OUT" ] || { echo "build failed: $OUT not produced" >&2; exit 1; }
 echo "built $OUT ($(stat -c%s "$OUT") bytes)"
 
+# The MiniWs transport: handshake verification, frame caps, fragmentation,
+# control frames and close handling against an in-process scripted peer. The
+# transport and the frame cap live in core/Frame.cs (no Rhino types), so this
+# suite builds and runs without Rhino's managed assemblies.
+MINIWS_OUT="$OUT_DIR/StageloomMiniWsTests.exe"
+rm -f "$MINIWS_OUT"
+run_csc \
+  /nologo /target:exe \
+  /out:"$(win_path "$MINIWS_OUT")" \
+  /r:System.Numerics.dll \
+  "$(win_path "$REPO/grasshopper/src/core/Json.cs")" \
+  "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
+  "$(win_path "$REPO/grasshopper/src/gh/MiniWsClient.cs")" \
+  "$(win_path "$REPO/grasshopper/tests/console/FakeServer.cs")" \
+  "$(win_path "$REPO/grasshopper/tests/console/MiniWsTests.cs")"
+[ -f "$MINIWS_OUT" ] || { echo "build failed: $MINIWS_OUT not produced" >&2; exit 1; }
+echo "built $MINIWS_OUT ($(stat -c%s "$MINIWS_OUT") bytes)"
+
 # The attribute-store tests reference RhinoCommon (a managed assembly: the
 # ArchivableDictionary runs without a Rhino process, but the types must be
 # present). They build only where the Rhino install is; the codec tests above
