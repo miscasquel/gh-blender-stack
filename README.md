@@ -96,7 +96,7 @@ Blender                                          Rhino / Grasshopper (wine)
   manual freeze are untouched. A packed bake is kept when the `.blend` is saved.
 - **Tests.** `scripts/check-all` is the local gate: docs, core, Blender headless
   (plus the offline gate), benchmarks, the installed extension round trip and
-  the C# suites, with per-step timing. The current release is checked by 110
+  the C# suites, with per-step timing. The current tree is checked by 125
   core tests, 423 Blender headless tests, fourteen golden fixtures and the C#
   console suites. `scripts/test-core` (standard library only),
   `scripts/test-blender` (Blender headless against `tools/fake_gh`),
@@ -234,16 +234,23 @@ scripts/test-blender     # layer B: Blender headless, against tools/fake_gh
 scripts/test-gha         # layer C: the C# codec and conversion suites under wine
 scripts/test-extension   # layer D-lite: builds, installs into a throwaway config, round trip
 scripts/bench            # reference performance matrix and its budgets (not a test layer)
+scripts/bench-baseline   # 3 sequential runs, median p50/p95 vs the stored 0.8 baseline
+scripts/bench-gha        # C# parameter/schema microbenchmark (wine/Mono)
+scripts/code-health      # regenerate docs/code-health.md (not a gate)
 
 python3 scripts/make-fixtures   # regenerate protocol/fixtures after a protocol change
 ```
 
 CI runs the core layer on Python 3.13 and 3.14. A second job installs Blender
 5.3 on Ubuntu and runs `scripts/check-all --ci`: docs, core, Blender headless
-with the offline gate, benchmarks and the installed-extension round trip. That
-job names and skips the C# step because a stock runner has no wine prefix with
-Rhino 8; the C# suites run on the development machine here, and a stock-runner
-codec job remains future CI work rather than a claim.
+with the offline gate, benchmarks and the installed-extension round trip. The
+bench step runs the same three-run baseline comparison against the stored
+2026-11-16 quiet-machine baseline; because a stock runner is not the reference
+machine, it prints “NOT COMPARABLE” and the summary records the baseline as
+skipped rather than claiming a green number CI cannot measure.
+That job names and skips the C# step because a stock runner has no wine prefix
+with Rhino 8; the C# suites run on the development machine here, and a
+stock-runner codec job remains future CI work rather than a claim.
 
 ## Support
 

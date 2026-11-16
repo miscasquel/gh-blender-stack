@@ -1,8 +1,12 @@
 # What actually runs here:
 #   core     pure Python 3.13 and 3.14: ruff 0.17.2 + scripts/test-core
 #   quality  Blender 5.3.0 on Ubuntu: scripts/check-all --ci, which runs docs,
-#            ruff, core, Blender headless + offline gate, benchmarks and the
-#            installed-extension round trip
+#            ruff, core, Blender headless + offline gate, benchmarks (including
+#            the stored-baseline comparison) and the installed-extension round
+#            trip. The stored 2026-11-16 baseline is machine-specific: this
+#            runner is not the reference machine, so the bench step prints
+#            "NOT COMPARABLE" and the summary records the baseline as skipped
+#            rather than claiming a green number it cannot measure.
 #
 # C#: local/Windows gate, intentionally not a job here.
 #   scripts/test-gha needs wine with Mono's csc plus Rhino 8's managed

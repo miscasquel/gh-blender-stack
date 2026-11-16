@@ -55,10 +55,11 @@ REPO = HERE.parent
 VENDOR = REPO / "blender" / "stageloom" / "vendor"
 BLENDER_PKG = REPO / "blender"
 
-for path in (str(REPO), str(BLENDER_PKG), str(VENDOR)):
+for path in (str(HERE), str(REPO), str(BLENDER_PKG), str(VENDOR)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
+import baseline  # noqa: E402
 import stageloom  # noqa: E402
 from stageloom.blender import (  # noqa: E402
     bridge,
@@ -94,7 +95,34 @@ def parse_args():
     parser.add_argument("--repeats", type=int, default=3, help="timed repeats per measurement")
     parser.add_argument("--no-budget", action="store_true", help="measure without failing on a budget")
     parser.add_argument("--quick", action="store_true", help="skip the 1M-triangle case")
-    return parser.parse_args(argv)
+    parser.add_argument(
+        "--check-baseline",
+        nargs="?",
+        const=baseline.DEFAULT_BASELINE,
+        default="",
+        metavar="PATH",
+        help="compare this run against a stored baseline (default: %s)" % baseline.DEFAULT_BASELINE,
+    )
+    parser.add_argument(
+        "--require-baseline",
+        action="store_true",
+        help="fail when the run is not on the baseline's machine (reference-machine mode)",
+    )
+    parser.add_argument(
+        "--check-baseline-only",
+        action="store_true",
+        help="compare an existing --report; measure nothing",
+    )
+    parser.add_argument(
+        "--report",
+        action="append",
+        default=[],
+        help="existing JSON report for --check-baseline-only (repeat for 3-run median)",
+    )
+    args = parser.parse_args(argv)
+    if args.require_baseline and not args.check_baseline:
+        args.check_baseline = baseline.DEFAULT_BASELINE
+    return args
 
 
 def start_addon():
@@ -163,8 +191,21 @@ def rss_mb():
         return None
 
 
+def sample_stats(samples):
+    """p50/p95 plus the raw samples for one series of milliseconds."""
+    values = [float(value) for value in samples]
+    return {
+        "min": min(values),
+        "p50": baseline.percentile(values, 0.50),
+        "median": statistics.median(values),
+        "p95": baseline.percentile(values, 0.95),
+        "max": max(values),
+        "samples": values,
+    }
+
+
 def timed(fn, repeats=3, warmup=True):
-    """Run ``fn`` and return its last result plus min/median/max milliseconds."""
+    """Run ``fn`` and return its last result plus min/p50/p95/max milliseconds."""
     if warmup:
         fn()
     samples = []
@@ -173,12 +214,7 @@ def timed(fn, repeats=3, warmup=True):
         started = time.perf_counter()
         result = fn()
         samples.append((time.perf_counter() - started) * 1000.0)
-    return result, {
-        "min": min(samples),
-        "median": statistics.median(samples),
-        "max": max(samples),
-        "samples": samples,
-    }
+    return result, sample_stats(samples)
 
 
 def grid_arrays(triangles, size=10.0):
@@ -374,8 +410,28 @@ def scenario_pipeline(args, report):
     for triangles in (10_000, 100_000, 1_000_000):
         if args.quick and triangles >= 1_000_000:
             continue
-        repeats = 1 if triangles >= 1_000_000 else max(2, args.repeats)
-        warmup = triangles < 1_000_000
+        # The 100k path is the gated frame path, so it gets enough samples for
+        # p95 to mean something. The 1M scale case keeps its expensive phases at
+        # three repeats but samples the cheap in-place apply fifteen times.
+        if triangles >= 1_000_000:
+            repeats = max(2, args.repeats)
+            phase_repeats = repeats
+            apply_repeats = max(15, args.repeats)
+            warmup = False
+        elif triangles >= 100_000:
+            repeats = max(25, args.repeats)
+            # Extract/decode are cheap enough for 100 samples; apply is cheap
+            # enough for 200. Their p95 is then a real tail percentile, not the
+            # single worst scheduler interruption. apply_fresh stays at 25
+            # because it is ~80 ms.
+            phase_repeats = max(100, args.repeats)
+            apply_repeats = max(200, args.repeats)
+            warmup = True
+        else:
+            repeats = max(5, args.repeats)
+            phase_repeats = repeats
+            apply_repeats = repeats
+            warmup = True
         before = rss_mb()
         verts, quads, actual = grid_arrays(triangles)
         obj = mesh_object("pipeline-%d" % triangles, verts, quads)
@@ -384,14 +440,16 @@ def scenario_pipeline(args, report):
         def extract():
             return geometry_io.mesh_to_sections(mesh)
 
-        sections, extract_stats = timed(extract, repeats, warmup=warmup)
-        _, hash_stats = timed(lambda: sections_hash(sections), repeats, warmup=warmup)
+        sections, extract_stats = timed(extract, phase_repeats, warmup=warmup)
+        _, hash_stats = timed(lambda: sections_hash(sections), phase_repeats, warmup=warmup)
         frame, encode_stats = timed(
             lambda: codec.encode_frame({"type": "request", "stage": "bench"}, sections),
-            repeats,
+            phase_repeats,
             warmup=warmup,
         )
-        _, decode_stats = timed(lambda: codec.decode_frame(frame), repeats, warmup=warmup)
+        _, decode_stats = timed(
+            lambda: codec.decode_frame(frame), phase_repeats, warmup=warmup
+        )
 
         def apply_fresh():
             target = bpy.data.meshes.new("apply-target")
@@ -420,9 +478,21 @@ def scenario_pipeline(args, report):
             lambda: geometry_io.sections_to_mesh(
                 target, moved, topology=topology, previous=topology
             ),
-            repeats,
-            warmup=warmup,
+            apply_repeats,
+            warmup=True,
         )
+
+        def pipeline_once():
+            """The whole 100k path as one unit: read, hash, encode, decode, apply."""
+            fresh = geometry_io.mesh_to_sections(mesh)
+            sections_hash(fresh)
+            encoded = codec.encode_frame({"type": "request", "stage": "bench"}, fresh)
+            codec.decode_frame(encoded)
+            geometry_io.sections_to_mesh(
+                target, moved, topology=topology, previous=topology
+            )
+
+        _, total_stats = timed(pipeline_once, repeats, warmup=True)
         bpy.data.meshes.remove(target)
 
         after = rss_mb()
@@ -437,21 +507,24 @@ def scenario_pipeline(args, report):
             "decode_ms": decode_stats,
             "apply_fresh_ms": apply_fresh_stats,
             "apply_inplace_ms": apply_inplace_stats,
+            "total_ms": total_stats,
             "rss_mb_before": before,
             "rss_mb_after": after,
         }
         rows.append(row)
         print(
             "[pipeline] %7d tris: read %.1f ms, hash %.1f ms, encode %.1f ms, "
-            "decode %.1f ms, apply(fresh) %.1f ms, apply(in place) %.1f ms, frame %.1f MB"
+            "decode %.1f ms, apply(fresh) %.1f ms, apply(in place) %.1f ms, "
+            "total %.1f ms, frame %.1f MB"
             % (
                 actual,
-                extract_stats["median"],
-                hash_stats["median"],
-                encode_stats["median"],
-                decode_stats["median"],
-                apply_fresh_stats["median"],
-                apply_inplace_stats["median"],
+                extract_stats["p50"],
+                hash_stats["p50"],
+                encode_stats["p50"],
+                decode_stats["p50"],
+                apply_fresh_stats["p50"],
+                apply_inplace_stats["p50"],
+                total_stats["p50"],
                 row["frame_mb"],
             )
         )
@@ -484,9 +557,10 @@ def scenario_instances(args, report):
         index = engine._modifier_index(holder, modifier)
         return engine._clone_prefix(holder, index, bool(record.subd), stage.key)
 
-    (sections, attributes, definitions), prefix_stats = timed(
-        cold_prefix, max(2, args.repeats)
-    )
+    # The prefix and repeated apply are gated; 25 samples keep one scheduler
+    # outlier out of the p95 tail (the top 5% of 25 is the 24th value).
+    hot_repeats = max(25, args.repeats)
+    (sections, attributes, definitions), prefix_stats = timed(cold_prefix, hot_repeats)
     by_name = sections_dict(sections)
     frame, encode_stats = timed(
         lambda: codec.encode_frame(
@@ -498,7 +572,7 @@ def scenario_instances(args, report):
             },
             sections,
         ),
-        max(2, args.repeats),
+        hot_repeats,
     )
     rows = len(by_name.get("inst.ref_def", ()))
     group = bpy.data.node_groups[nodes.group_name(stage.key)]
@@ -520,9 +594,7 @@ def scenario_instances(args, report):
     # repeated applies then take the same-topology path for the definition.
     _, apply_first_stats = timed(lambda: apply_with(0.0), 1, warmup=False)
     stage.applied_topology = topology
-    _, apply_repeat_stats = timed(
-        lambda: apply_with(1.0), max(2, args.repeats), warmup=True
-    )
+    _, apply_repeat_stats = timed(lambda: apply_with(1.0), hot_repeats, warmup=True)
     rebuilt = bpy.data.node_groups[nodes.group_name(stage.key)].as_pointer() != group_id
     row = {
         "triangles_in_definition": actual,
@@ -567,10 +639,18 @@ def scenario_roundtrip(args, report):
     if not wait_for_clients(1, 15.0):
         raise RuntimeError("fake-gh did not connect")
     pump(10.0, lambda: len(stage.params) > 0)
+    # Warm the full path once. The first request after the schema exchange pays
+    # page/cache costs that a repeated frame does not; without this the p95 is
+    # one cold outlier rather than the repeat-frame tail.
+    request_full(obj, stage)
+    if not wait_for_stages(record, 30.0):
+        raise RuntimeError("round trip warmup did not settle: %s" % stage.state)
 
     full_samples = []
     ref_samples = []
-    for attempt in range(max(1, args.repeats)):
+    # Five attempts per run would make p95 the maximum; ten lets a single cold
+    # outlier fall outside the tail without turning this into a soak test.
+    for attempt in range(max(10, args.repeats)):
         request_full(obj, stage)
         started = time.monotonic()
         if not wait_for_stages(record, 30.0):
@@ -586,30 +666,34 @@ def scenario_roundtrip(args, report):
                 "apply_ms": timings.get("apply_ms"),
             }
         )
-        if attempt == 0:
-            # A parameter-only change is a ref request: no geometry sections.
-            entry = stage.params[0]
-            prop = stack_mod.param_prop_name(stage.key, entry.param_id)
-            obj[prop] = float(obj.get(prop, 1.0)) + 0.1
-            engine.request_again(obj, stage)
-            started = time.monotonic()
-            if not wait_for_stages(record, 30.0):
-                raise RuntimeError("ref round trip did not settle: %s" % stage.state)
-            elapsed = (time.monotonic() - started) * 1000.0
-            timings = engine.stage_timings(record.stack_id, stage.key)
-            ref_samples.append(
-                {
-                    "settle_ms": elapsed,
-                    "prefix_ms": timings.get("prefix_ms"),
-                    "encode_ms": timings.get("encode_ms"),
-                    "rtt_ms": timings.get("rtt_ms"),
-                    "apply_ms": timings.get("apply_ms"),
-                }
-            )
+        # A parameter-only change is a ref request: no geometry sections. Every
+        # attempt measures one so the ref settle has a p95, not a single sample.
+        entry = stage.params[0]
+        prop = stack_mod.param_prop_name(stage.key, entry.param_id)
+        obj[prop] = float(obj.get(prop, 1.0)) + 0.1
+        engine.request_again(obj, stage)
+        started = time.monotonic()
+        if not wait_for_stages(record, 30.0):
+            raise RuntimeError("ref round trip did not settle: %s" % stage.state)
+        elapsed = (time.monotonic() - started) * 1000.0
+        timings = engine.stage_timings(record.stack_id, stage.key)
+        ref_samples.append(
+            {
+                "settle_ms": elapsed,
+                "prefix_ms": timings.get("prefix_ms"),
+                "encode_ms": timings.get("encode_ms"),
+                "rtt_ms": timings.get("rtt_ms"),
+                "apply_ms": timings.get("apply_ms"),
+            }
+        )
 
     def summary(samples, field):
         values = [sample[field] for sample in samples if sample.get(field) is not None]
         return statistics.median(values) if values else None
+
+    def settle_stats(samples):
+        values = [sample["settle_ms"] for sample in samples]
+        return sample_stats(values)
 
     row = {
         "triangles": actual,
@@ -620,6 +704,7 @@ def scenario_roundtrip(args, report):
             "encode_ms": summary(full_samples, "encode_ms"),
             "rtt_ms": summary(full_samples, "rtt_ms"),
             "apply_ms": summary(full_samples, "apply_ms"),
+            "settle_stats": settle_stats(full_samples),
             "samples": full_samples,
         },
         "ref": {
@@ -629,6 +714,7 @@ def scenario_roundtrip(args, report):
             "encode_ms": summary(ref_samples, "encode_ms"),
             "rtt_ms": summary(ref_samples, "rtt_ms"),
             "apply_ms": summary(ref_samples, "apply_ms"),
+            "settle_stats": settle_stats(ref_samples),
             "samples": ref_samples,
         },
     }
@@ -643,16 +729,18 @@ def scenario_roundtrip(args, report):
     }
     report["roundtrip"] = row
     print(
-        "[roundtrip] %d tris: full settle %.1f ms (prefix %.1f, encode %.1f, "
-        "rtt %.1f, apply %.1f), ref settle %.1f ms"
+        "[roundtrip] %d tris: full settle p50 %.1f / p95 %.1f ms (prefix %.1f, "
+        "encode %.1f, rtt %.1f, apply %.1f), ref settle p50 %.1f / p95 %.1f ms"
         % (
             actual,
-            row["full"]["settle_ms"],
+            row["full"]["settle_stats"]["p50"],
+            row["full"]["settle_stats"]["p95"],
             row["full"]["prefix_ms"] or 0.0,
             row["full"]["encode_ms"] or 0.0,
             row["full"]["rtt_ms"] or 0.0,
             row["full"]["apply_ms"] or 0.0,
-            row["ref"]["settle_ms"] or 0.0,
+            row["ref"]["settle_stats"]["p50"],
+            row["ref"]["settle_stats"]["p95"],
         )
     )
 
@@ -675,7 +763,9 @@ def scenario_multistage(args, report):
 
     dirty_samples = []
     settle_samples = []
-    for _ in range(max(2, args.repeats)):
+    # 75 rounds keep a few scheduler interruptions outside the p95 tail; the
+    # chain settle is ~80 ms, so this is about six seconds of measurement.
+    for _ in range(max(75, args.repeats)):
         arr = np.empty(len(obj.data.vertices) * 3, dtype=np.float32)
         obj.data.vertices.foreach_get("co", arr)
         arr[0] += 1.0
@@ -692,31 +782,24 @@ def scenario_multistage(args, report):
         settle_samples.append((time.monotonic() - started) * 1000.0)
 
     # The idle pass: nothing dirty, no request in flight, the timer still ticks.
+    # It is only a few microseconds, so time a batch of 1000 ticks and divide:
+    # the amortized value resolves a 5% change that a single tick cannot.
     engine._dirty.clear()
     idle_samples = []
-    for _ in range(20):
+    for _ in range(200):
         started = time.monotonic()
-        engine._timer()
-        idle_samples.append((time.monotonic() - started) * 1000.0)
+        for _ in range(1000):
+            engine._timer()
+        idle_samples.append((time.monotonic() - started) * 1000.0 / 1000.0)
 
+    dirty_stats = sample_stats(dirty_samples)
+    idle_stats = sample_stats(idle_samples)
     row = {
         "triangles": actual,
         "stages": len(stages),
-        "dirty_pass_ms": {
-            "median": statistics.median(dirty_samples),
-            "max": max(dirty_samples),
-            "samples": dirty_samples,
-        },
-        "settle_ms": {
-            "median": statistics.median(settle_samples),
-            "max": max(settle_samples),
-            "samples": settle_samples,
-        },
-        "idle_pass_ms": {
-            "median": statistics.median(idle_samples),
-            "max": max(idle_samples),
-            "samples": idle_samples,
-        },
+        "dirty_pass_ms": dirty_stats,
+        "settle_ms": sample_stats(settle_samples),
+        "idle_pass_ms": idle_stats,
         "stage_timings": {
             stage.key: engine.stage_timings(record.stack_id, stage.key)
             for stage in stages
@@ -778,12 +861,7 @@ def scenario_playback(args, report):
     row = {
         "triangles": actual,
         "frames": frames,
-        "per_frame_ms": {
-            "median": statistics.median(per_frame),
-            "p95": sorted(per_frame)[max(0, int(len(per_frame) * 0.95) - 1)],
-            "max": max(per_frame),
-            "samples": per_frame,
-        },
+        "per_frame_ms": sample_stats(per_frame),
         "responses": responses,
         "echoes": fake_report.get("echoes"),
         "applies": applies,
@@ -811,13 +889,8 @@ def check(report, checks):
     pipeline = {row["requested_triangles"]: row for row in report.get("pipeline", [])}
     row = pipeline.get(100_000)
     if row is not None:
-        total = (
-            row["extract_ms"]["median"]
-            + row["hash_ms"]["median"]
-            + row["encode_ms"]["median"]
-            + row["decode_ms"]["median"]
-            + row["apply_inplace_ms"]["median"]
-        )
+        # The measured end-to-end op, not a sum of independently warmed phases.
+        total = row["total_ms"]["median"]
         checks.append(
             {
                 "name": "100k triangle Blender round trip",
@@ -933,10 +1006,36 @@ def check(report, checks):
 # ----------------------------------------------------------------------- main
 
 
+def compare_with_baseline(reports, path, require_baseline):
+    """Print the gate table and return (exit code, comparison or None)."""
+    try:
+        document = baseline.load_baseline(path)
+        comparison = baseline.compare_reports(reports, document)
+    except baseline.BaselineError as exc:
+        print("[baseline] ERROR: %s" % exc)
+        return 3, None
+    print(baseline.format_table(comparison))
+    return comparison.exit_code(require_baseline), comparison
+
+
 def main():
     args = parse_args()
+    if args.check_baseline_only:
+        if not args.report:
+            print("[baseline] ERROR: --check-baseline-only needs --report PATH", file=sys.stderr)
+            return 2
+        try:
+            reports = [baseline.load_report(path) for path in args.report]
+        except baseline.BaselineError as exc:
+            print("[baseline] ERROR: %s" % exc)
+            return 3
+        path = args.check_baseline or baseline.DEFAULT_BASELINE
+        code, _comparison = compare_with_baseline(reports, path, args.require_baseline)
+        return code
+
     scenarios = args.scenario or ["pipeline", "instances", "roundtrip", "multistage", "playback"]
     report = {
+        "format": "stageloom-bench-report/1",
         "meta": {
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "blender": bpy.app.version_string,
@@ -973,10 +1072,17 @@ def main():
         with open(args.out, "w") as handle:
             json.dump(report, handle, indent=2)
         print("[bench] wrote %s" % args.out)
+    code = 0
     if failed and not args.no_budget:
         print("[bench] %d budget(s) over" % len(failed))
-        return 1
-    return 0
+        code = 1
+    if args.check_baseline:
+        baseline_code, _comparison = compare_with_baseline(
+            [report], args.check_baseline, args.require_baseline
+        )
+        if baseline_code:
+            code = baseline_code
+    return code
 
 
 if __name__ == "__main__":

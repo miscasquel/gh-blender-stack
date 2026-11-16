@@ -5,6 +5,11 @@
 #     scripts/check-all --quick  # inner loop: docs, core, ruff only
 #     scripts/check-all --ci     # full gate, with the C# step explicitly skipped
 #
+# The bench step runs three sequential benchmarks and compares the median
+# p50/p95 of each gated metric against the stored baseline. On the reference
+# machine a >5% regression fails; on another machine (CI) it prints
+# "NOT COMPARABLE" and the summary says the baseline was skipped.
+#
 # Every step is the existing script (or command) for that layer; this file owns
 # the order, the timeout, the per-step timing and the summary, not the test
 # logic. A failing step prints its last lines and the summary still lists every
@@ -49,7 +54,8 @@ CAP_DOCS="${STAGELOOM_DOCS_TIMEOUT:-120}"
 CAP_RUFF="${STAGELOOM_RUFF_TIMEOUT:-120}"
 CAP_CORE="${STAGELOOM_CORE_TIMEOUT:-120}"
 CAP_BLENDER="${STAGELOOM_TEST_BLENDER_TIMEOUT:-900}"
-CAP_BENCH="${STAGELOOM_BENCH_TIMEOUT:-300}"
+CAP_BENCH="${STAGELOOM_BENCH_TIMEOUT:-600}"
+CAP_BASELINE="${STAGELOOM_BASELINE_TIMEOUT:-120}"
 CAP_EXTENSION="${STAGELOOM_EXTENSION_TIMEOUT:-300}"
 CAP_GHA="${STAGELOOM_GHA_TIMEOUT:-300}"
 
@@ -122,8 +128,17 @@ run_step() {
 
   if [ "$status" -eq 0 ]; then
     mode="PASS"
-    summary_add "$name" "$mode" "$seconds"
-    printf -- '-- %s: PASS (%ss)\n' "$name" "$seconds"
+    # The benchmark step says whether the stored baseline was actually
+    # enforced or skipped because this is another machine. Keep that honesty
+    # in the summary instead of printing a bare PASS.
+    local note=""
+    if grep -q '^\[baseline\] SKIP' "$log" 2>/dev/null; then
+      note="baseline skipped (machine differs)"
+    elif grep -q '^\[baseline\] PASS' "$log" 2>/dev/null; then
+      note="baseline enforced"
+    fi
+    summary_add "$name" "$mode" "$seconds" "$note"
+    printf -- '-- %s: PASS (%ss)%s\n' "$name" "$seconds" "${note:+ — $note}"
     return 0
   fi
 
@@ -179,8 +194,12 @@ else
   run_step "check-docs" "$CAP_DOCS" scripts/check-docs
   run_step "ruff" "$CAP_RUFF" "${RUFF[@]}" check --output-format=concise .
   run_step "test-core" "$CAP_CORE" scripts/test-core
+  # Measure before the long Blender suite: the stored baseline was taken on a
+  # quiet machine, and a hot/loaded machine after 85 s of tests moves the p95
+  # tail.
+  run_step "bench" "$CAP_BENCH" scripts/bench-baseline
+  run_step "bench-baseline" "$CAP_BASELINE" scripts/test-bench-baseline
   run_step "test-blender" "$CAP_BLENDER" scripts/test-blender
-  run_step "bench" "$CAP_BENCH" scripts/bench
   run_step "test-extension" "$CAP_EXTENSION" scripts/test-extension
   if [ "$CI" -eq 1 ]; then
     skip_step \

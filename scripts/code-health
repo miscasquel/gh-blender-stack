@@ -1,0 +1,836 @@
+#!/usr/bin/env python3
+"""Generate the code-health inventory in docs/code-health.md.
+
+    scripts/code-health [--out PATH] [--check]
+
+Production is exactly the shipped source: ``blender/stageloom/blender``,
+``blender/stageloom/core`` and ``grasshopper/src``. Vendor, tests, docs,
+benchmarks and scripts are not production. The report is an audit inventory:
+it names candidates for subtraction and seams, it is not a hard gate.
+
+The output is deterministic (sorted, no timestamps), so rerunning the script
+against the same tree produces the same bytes. ``--check`` verifies that the
+checked-in report is current without asserting a quality threshold.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ast
+import re
+import sys
+from collections import Counter, defaultdict
+from pathlib import Path
+
+PRODUCTION_ROOTS = (
+    "blender/stageloom/blender",
+    "blender/stageloom/core",
+    "grasshopper/src",
+)
+TEST_ROOTS = ("blender/tests", "grasshopper/tests")
+REFERENCE_ROOTS = ("benchmarks", "scripts", "tools")
+EXCLUDED_PARTS = {"__pycache__", "vendor", "dist", "build", "spikes", ".git"}
+
+KINDS = {
+    "float", "int", "bool", "vector3", "color", "value_list", "text",
+    "mesh", "subd", "crv", "pts", "curves", "points", "instances",
+    # Blender attribute types, the other per-kind vocabulary both halves map.
+    "FLOAT", "INT", "BOOLEAN", "FLOAT_VECTOR", "FLOAT2", "FLOAT4",
+    "FLOAT_COLOR", "BYTE_COLOR", "QUATERNION", "FLOAT4X4", "INT8",
+    "INT16_2D", "INT32_2D", "STRING",
+}
+C_KEYWORDS = {
+    "if", "for", "foreach", "while", "switch", "catch", "using", "lock",
+    "fixed", "return", "new", "throw", "sizeof", "typeof", "nameof", "base",
+    "this", "checked", "unchecked", "when", "case",
+}
+
+
+def _read(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SystemExit("code-health: cannot read %s: %s" % (path, exc))
+
+
+def _relative(path: Path, root: Path) -> str:
+    return path.relative_to(root).as_posix()
+
+
+def _iter_source(root: Path, bases, suffixes=(".py", ".cs")):
+    found = []
+    for base in bases:
+        start = root / base
+        if not start.exists():
+            continue
+        for path in start.rglob("*"):
+            if not path.is_file() or path.suffix not in suffixes:
+                continue
+            if any(part in EXCLUDED_PARTS for part in path.parts):
+                continue
+            found.append(path)
+    return sorted(set(found))
+
+
+def _code_lines(text: str, is_csharp: bool) -> int:
+    """Physical lines excluding blanks and full-line comments.
+
+    Python docstrings and C# attributes stay counted; those are deliberately
+    not subtracted because they are part of the shipped artifact. C# block
+    comments are handled with a small state machine.
+    """
+    count = 0
+    in_block = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if is_csharp:
+            if in_block:
+                if "*/" in stripped:
+                    in_block = False
+                continue
+            if stripped.startswith("//"):
+                continue
+            if stripped.startswith("/*"):
+                if "*/" not in stripped:
+                    in_block = True
+                continue
+        elif stripped.startswith("#"):
+            continue
+        count += 1
+    return count
+
+
+def _strip_csharp(text: str) -> str:
+    """Blank comments, strings and chars while preserving offsets/newlines."""
+    out = list(text)
+    index = 0
+    length = len(text)
+    while index < length:
+        char = text[index]
+        if char == "/" and index + 1 < length and text[index + 1] == "/":
+            while index < length and text[index] != "\n":
+                out[index] = " "
+                index += 1
+            continue
+        if char == "/" and index + 1 < length and text[index + 1] == "*":
+            out[index] = " "
+            out[index + 1] = " "
+            index += 2
+            while index < length:
+                if text[index] == "*" and index + 1 < length and text[index + 1] == "/":
+                    out[index] = " "
+                    out[index + 1] = " "
+                    index += 2
+                    break
+                if text[index] != "\n":
+                    out[index] = " "
+                index += 1
+            continue
+        if char == '"':
+            verbatim = index > 0 and text[index - 1] == "@"
+            out[index] = " "
+            index += 1
+            while index < length:
+                if not verbatim and text[index] == "\\":
+                    out[index] = " "
+                    if index + 1 < length and text[index + 1] != "\n":
+                        out[index + 1] = " "
+                    index += 2
+                    continue
+                if text[index] == '"':
+                    if verbatim and index + 1 < length and text[index + 1] == '"':
+                        out[index] = " "
+                        out[index + 1] = " "
+                        index += 2
+                        continue
+                    out[index] = " "
+                    index += 1
+                    break
+                if text[index] != "\n":
+                    out[index] = " "
+                index += 1
+            continue
+        if char == "'":
+            out[index] = " "
+            index += 1
+            while index < length:
+                if text[index] == "\\":
+                    out[index] = " "
+                    if index + 1 < length and text[index + 1] != "\n":
+                        out[index + 1] = " "
+                    index += 2
+                    continue
+                if text[index] == "'":
+                    out[index] = " "
+                    index += 1
+                    break
+                if text[index] != "\n":
+                    out[index] = " "
+                index += 1
+            continue
+        index += 1
+    return "".join(out)
+
+
+def _matching_brace(text: str, open_index: int) -> int:
+    depth = 0
+    for index in range(open_index, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
+
+
+def _line_of(text: str, index: int) -> int:
+    return text.count("\n", 0, index) + 1
+
+
+def _csharp_types(text: str):
+    stripped = _strip_csharp(text)
+    pattern = re.compile(r"\b(class|struct|interface)\s+([A-Za-z_]\w*)")
+    found = []
+    for match in pattern.finditer(stripped):
+        brace = stripped.find("{", match.end())
+        if brace < 0:
+            continue
+        close = _matching_brace(stripped, brace)
+        if close < 0:
+            continue
+        line_start = stripped.rfind("\n", 0, match.start()) + 1
+        prefix = stripped[max(0, line_start - 240):match.start()]
+        public = re.search(r"\bpublic\b", prefix) is not None
+        found.append(
+            {
+                "kind": match.group(1),
+                "name": match.group(2),
+                "start": _line_of(stripped, match.start()),
+                "end": _line_of(stripped, close),
+                "lines": _line_of(stripped, close) - _line_of(stripped, match.start()) + 1,
+                "public": public,
+            }
+        )
+    return found
+
+
+def _csharp_methods(text: str):
+    stripped = _strip_csharp(text)
+    pattern = re.compile(r"\b([A-Za-z_]\w*)\s*\(([^;{}]*)\)\s*(?=\{|=>)")
+    found = []
+    for match in pattern.finditer(stripped):
+        name = match.group(1)
+        if name in C_KEYWORDS:
+            continue
+        before = stripped[max(0, match.start() - 12):match.start()].rstrip()
+        if before.endswith("new"):
+            continue
+        brace = stripped.find("{", match.end())
+        arrow = stripped.find("=>", match.end())
+        if brace < 0 and arrow < 0:
+            continue
+        if arrow >= 0 and (brace < 0 or arrow < brace):
+            semi = stripped.find(";", arrow)
+            end = semi if semi >= 0 else arrow
+            lines = max(1, _line_of(stripped, end) - _line_of(stripped, match.start()) + 1)
+        else:
+            close = _matching_brace(stripped, brace)
+            if close < 0:
+                continue
+            lines = _line_of(stripped, close) - _line_of(stripped, match.start()) + 1
+        found.append(
+            {
+                "name": name,
+                "start": _line_of(stripped, match.start()),
+                "lines": lines,
+            }
+        )
+    return found
+
+
+def _python_functions(tree):
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            kind = "class" if isinstance(node, ast.ClassDef) else "function"
+            found.append(
+                {
+                    "kind": kind,
+                    "name": node.name,
+                    "start": node.lineno,
+                    "lines": max(1, getattr(node, "end_lineno", node.lineno) - node.lineno + 1),
+                }
+            )
+    return found
+
+
+def _python_exports(tree):
+    found = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            found.append(("function", node.name))
+        elif isinstance(node, ast.ClassDef):
+            found.append(("class", node.name))
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    found.append(("constant", target.id))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            found.append(("constant", node.target.id))
+    return [(kind, name) for kind, name in found if not name.startswith("_")]
+
+
+def _module_id(path: Path, root: Path) -> str:
+    rel = path.relative_to(root).as_posix()
+    if not rel.startswith("blender/stageloom/"):
+        return ""
+    tail = rel[len("blender/stageloom/"):]
+    if tail.endswith(".py"):
+        tail = tail[:-3]
+    if tail.endswith("/__init__"):
+        tail = tail[:-len("/__init__")]
+    return "stageloom." + tail.replace("/", ".")
+
+
+def _package_parts(path: Path, root: Path):
+    module = _module_id(path, root)
+    if not module:
+        return []
+    parts = module.split(".")
+    if path.name != "__init__.py":
+        parts = parts[:-1]
+    return parts
+
+
+def _python_import_edges(path: Path, root: Path, known_modules):
+    try:
+        tree = ast.parse(_read(path))
+    except SyntaxError:
+        return []
+    package = _package_parts(path, root)
+    edges = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                target = alias.name
+                if target in known_modules:
+                    edges.add(target)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                base = package[: len(package) - (node.level - 1)]
+            else:
+                base = (node.module or "").split(".") if node.module else []
+            if node.module and node.level:
+                base = base + node.module.split(".")
+            elif node.module and not node.level:
+                base = node.module.split(".")
+            for alias in node.names:
+                candidate = ".".join(base + [alias.name]) if base else alias.name
+                if candidate in known_modules:
+                    edges.add(candidate)
+                elif ".".join(base) in known_modules:
+                    edges.add(".".join(base))
+            if not node.names and ".".join(base) in known_modules:
+                edges.add(".".join(base))
+    return sorted(edges)
+
+
+def _csharp_usings(path: Path):
+    text = _read(path)
+    return sorted(set(re.findall(r"^\s*using\s+(Stageloom(?:\.[A-Za-z_]\w*)*)\s*;", text, re.M)))
+
+
+def _word_count(text: str, name: str) -> int:
+    return len(re.findall(r"\b" + re.escape(name) + r"\b", text))
+
+
+def _category_for(path: Path, root: Path):
+    rel = path.relative_to(root).as_posix()
+    if any(rel.startswith(base + "/") for base in PRODUCTION_ROOTS):
+        return "production"
+    if any(rel.startswith(base + "/") for base in TEST_ROOTS):
+        return "tests"
+    return "other"
+
+
+def _reference_counts(name, defining: Path, texts, root):
+    counts = Counter()
+    for path, text in texts.items():
+        if path == defining:
+            continue
+        hits = _word_count(text, name)
+        if hits:
+            counts[_category_for(path, root)] += hits
+    return counts
+
+
+def _markdown_table(headers, rows):
+    lines = ["| " + " | ".join(headers) + " |"]
+    lines.append("|" + "|".join("---" for _ in headers) + "|")
+    for row in rows:
+        lines.append("| " + " | ".join(str(value) for value in row) + " |")
+    return "\n".join(lines)
+
+
+def generate(root: Path) -> str:
+    production = _iter_source(root, PRODUCTION_ROOTS)
+    python_files = [path for path in production if path.suffix == ".py"]
+    csharp_files = [path for path in production if path.suffix == ".cs"]
+
+    texts = {}
+    for path in _iter_source(root, PRODUCTION_ROOTS + TEST_ROOTS + REFERENCE_ROOTS):
+        texts[path] = _read(path)
+
+    lines = []
+    lines.append("# Code health")
+    lines.append("")
+    lines.append(
+        "Generated by `scripts/code-health`; rerun it instead of editing this file. "
+        "Production means `blender/stageloom/blender`, `blender/stageloom/core` and "
+        "`grasshopper/src`. Vendor, tests, docs, benchmarks and scripts are excluded "
+        "from production counts. This is an audit inventory, not a hard gate."
+    )
+    lines.append("")
+
+    # ------------------------------------------------------------- production LOC
+    loc_rows = []
+    by_package = Counter()
+    physical_total = 0
+    code_total = 0
+    for path in production:
+        text = _read(path)
+        physical = len(text.splitlines())
+        code = _code_lines(text, path.suffix == ".cs")
+        rel = _relative(path, root)
+        parent = Path(rel).parent.as_posix()
+        loc_rows.append((rel, path.suffix.lstrip("."), physical, code))
+        by_package[parent] += physical
+        physical_total += physical
+        code_total += code
+    lines.append("## Production LOC by module")
+    lines.append("")
+    lines.append(
+        "`physical` is `len(splitlines())`; `code` excludes blank lines and full-line "
+        "`#`/`//` comments (C# block comments are skipped). Docstrings and attributes "
+        "remain counted because they ship."
+    )
+    lines.append("")
+    lines.append(_markdown_table(("file", "language", "physical", "code"), loc_rows))
+    lines.append("")
+    lines.append(
+        "**Total: %d physical, %d code lines across %d production files.**"
+        % (physical_total, code_total, len(production))
+    )
+    lines.append("")
+    package_rows = sorted(by_package.items())
+    lines.append(_markdown_table(("package", "physical"), package_rows))
+    lines.append("")
+
+    # --------------------------------------------------------- largest functions
+    python_symbols = []
+    python_trees = {}
+    for path in python_files:
+        text = _read(path)
+        try:
+            tree = ast.parse(text)
+        except SyntaxError as exc:
+            raise SystemExit("code-health: cannot parse %s: %s" % (path, exc))
+        python_trees[path] = tree
+        for item in _python_functions(tree):
+            python_symbols.append((item["lines"], item["kind"], _relative(path, root), item["name"]))
+    python_symbols.sort(key=lambda row: (-row[0], row[2], row[3]))
+    lines.append("## Largest Python functions and classes")
+    lines.append("")
+    lines.append(
+        "Python `ast` nodes; the span is `end_lineno - lineno + 1`, so a class "
+        "includes its methods and a function includes its nested definitions."
+    )
+    lines.append("")
+    lines.append(
+        _markdown_table(
+            ("kind", "file", "name", "lines"),
+            [(kind, file, name, size) for size, kind, file, name in python_symbols[:15]],
+        )
+    )
+    lines.append("")
+
+    csharp_types = []
+    csharp_methods = []
+    csharp_types_by_file = {}
+    for path in csharp_files:
+        text = _read(path)
+        types = _csharp_types(text)
+        csharp_types_by_file[path] = types
+        for item in types:
+            csharp_types.append(
+                (item["lines"], item["kind"], _relative(path, root), item["name"])
+            )
+        for item in _csharp_methods(text):
+            csharp_methods.append(
+                (item["lines"], "method", _relative(path, root), item["name"])
+            )
+    csharp_types.sort(key=lambda row: (-row[0], row[2], row[3]))
+    csharp_methods.sort(key=lambda row: (-row[0], row[2], row[3]))
+    lines.append("## Largest C# types and methods")
+    lines.append("")
+    lines.append(
+        "Brace-matched declarations after comments/strings are blanked. Method spans "
+        "run to the matching brace or expression-body semicolon; nested types count "
+        "inside their enclosing type. Constructors are included as methods."
+    )
+    lines.append("")
+    lines.append("### Types")
+    lines.append("")
+    lines.append(
+        _markdown_table(
+            ("kind", "file", "name", "lines"),
+            [(kind, file, name, size) for size, kind, file, name in csharp_types[:12]],
+        )
+    )
+    lines.append("")
+    lines.append("### Methods")
+    lines.append("")
+    lines.append(
+        _markdown_table(
+            ("file", "name", "lines"),
+            [(file, name, size) for size, _kind, file, name in csharp_methods[:15]],
+        )
+    )
+    lines.append("")
+
+    # ------------------------------------------------------------- dispatch inventory
+    dispatch = []
+    for path in python_files:
+        tree = python_trees.get(path) or ast.parse(_read(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            literals = []
+            for child in ast.walk(node):
+                if isinstance(child, ast.Constant) and isinstance(child.value, str):
+                    if child.value in KINDS:
+                        literals.append(child.value)
+            distinct = sorted(set(literals))
+            if len(distinct) >= 3:
+                dispatch.append(
+                    (
+                        _relative(path, root),
+                        node.name,
+                        "function",
+                        len(distinct),
+                        len(literals),
+                        ", ".join(distinct),
+                    )
+                )
+        for node in tree.body:
+            value = None
+            if isinstance(node, ast.Assign):
+                value = node.value
+                names = [target.id for target in node.targets if isinstance(target, ast.Name)]
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                value = node.value
+                names = [node.target.id]
+            else:
+                names = []
+            if value is None:
+                continue
+            literals = []
+            for child in ast.walk(value):
+                if isinstance(child, ast.Constant) and isinstance(child.value, str):
+                    if child.value in KINDS:
+                        literals.append(child.value)
+            distinct = sorted(set(literals))
+            if names and len(distinct) >= 3:
+                dispatch.append(
+                    (
+                        _relative(path, root),
+                        names[0],
+                        "table",
+                        len(distinct),
+                        len(literals),
+                        ", ".join(distinct),
+                    )
+                )
+    for path in csharp_files:
+        text = _read(path)
+        stripped = _strip_csharp(text)
+        for method in _csharp_methods(text):
+            body = stripped
+            # The method scanner gives a line span; take the lines and count the
+            # kind literals in that declaration's own text.
+            source_lines = stripped.splitlines()
+            start = method["start"] - 1
+            end = min(len(source_lines), start + method["lines"])
+            body = "\n".join(source_lines[start:end])
+            literals = re.findall(r'"([^"]*)"', body)
+            distinct = sorted({value for value in literals if value in KINDS})
+            if len(distinct) >= 3:
+                dispatch.append(
+                    (
+                        _relative(path, root),
+                        method["name"],
+                        "method",
+                        len(distinct),
+                        len([value for value in literals if value in KINDS]),
+                        ", ".join(distinct),
+                    )
+                )
+        for match in re.finditer(
+            r"(\w+)\s*=\s*new\s+Dictionary<[^>]+>\s*\{", stripped
+        ):
+            brace = stripped.find("{", match.start())
+            close = _matching_brace(stripped, brace)
+            if close < 0:
+                continue
+            body = stripped[brace:close]
+            literals = re.findall(r'"([^"]*)"', body)
+            distinct = sorted({value for value in literals if value in KINDS})
+            if len(distinct) >= 3:
+                dispatch.append(
+                    (
+                        _relative(path, root),
+                        match.group(1),
+                        "table",
+                        len(distinct),
+                        len([value for value in literals if value in KINDS]),
+                        ", ".join(distinct),
+                    )
+                )
+    dispatch.sort(key=lambda row: (-row[3], -row[4], row[0], row[1]))
+    lines.append("## Kind-dispatch inventory")
+    lines.append("")
+    lines.append(
+        "Heuristic: a function/method whose body contains three or more distinct "
+        "protocol/parameter kind literals, or a dictionary/tuple table with three or "
+        "more such keys. This names surfaces for review; it does not prove duplication."
+    )
+    lines.append("")
+    lines.append(
+        _markdown_table(
+            ("file", "symbol", "kind", "distinct kinds", "literal hits", "kinds"),
+            dispatch[:40],
+        )
+    )
+    lines.append("")
+
+    # ---------------------------------------------------------------- dead exports
+    export_rows = []
+    for path in python_files:
+        tree = python_trees[path]
+        for kind, name in _python_exports(tree):
+            counts = _reference_counts(name, path, texts, root)
+            production_refs = counts.get("production", 0)
+            if production_refs:
+                continue
+            export_rows.append(
+                (
+                    "Python",
+                    _relative(path, root),
+                    name,
+                    kind,
+                    production_refs,
+                    counts.get("tests", 0),
+                    counts.get("other", 0),
+                    "unreferenced" if not (counts.get("tests", 0) + counts.get("other", 0))
+                    else "non-production consumers",
+                )
+            )
+    for path in csharp_files:
+        for item in csharp_types_by_file[path]:
+            if not item["public"]:
+                continue
+            counts = _reference_counts(item["name"], path, texts, root)
+            production_refs = counts.get("production", 0)
+            if production_refs:
+                continue
+            export_rows.append(
+                (
+                    "C#",
+                    _relative(path, root),
+                    item["name"],
+                    "public " + item["kind"],
+                    production_refs,
+                    counts.get("tests", 0),
+                    counts.get("other", 0),
+                    "unreferenced" if not (counts.get("tests", 0) + counts.get("other", 0))
+                    else "non-production consumers",
+                )
+            )
+    export_rows.sort(key=lambda row: (row[0], row[1], row[2]))
+    lines.append("## Export inventory")
+    lines.append("")
+    lines.append(
+        "Top-level public Python names and public C# type declarations with no "
+        "reference in another production file. `tests` and `other` count references "
+        "in `blender/tests`/`grasshopper/tests` and in benchmarks/scripts/tools; a "
+        "name used only there is a test-only or tooling-only surface, not proof of "
+        "dead code. C# public methods are omitted because interface/override calls "
+        "cannot be classified reliably by a word scan."
+    )
+    lines.append("")
+    if export_rows:
+        lines.append(
+            _markdown_table(
+                ("language", "file", "name", "kind", "prod refs", "test refs", "other refs", "verdict"),
+                export_rows,
+            )
+        )
+    else:
+        lines.append("No candidates.")
+    lines.append("")
+
+    # ------------------------------------------------------------------ dependencies
+    known_modules = {_module_id(path, root): path for path in python_files}
+    known_modules.pop("", None)
+    python_edges = set()
+    for path in python_files:
+        source = _relative(path, root)
+        for target in _python_import_edges(path, root, known_modules):
+            target_path = known_modules.get(target)
+            if target_path is not None and target_path != path:
+                python_edges.add((source, _relative(target_path, root)))
+    lines.append("## Dependency edges")
+    lines.append("")
+    lines.append("### Python internal imports")
+    lines.append("")
+    lines.append(
+        "Resolved `import`/`from ... import ...` edges between production modules "
+        "(relative imports included)."
+    )
+    lines.append("")
+    lines.append(_markdown_table(("importer", "imported"), sorted(python_edges)))
+    lines.append("")
+
+    namespace_edges = set()
+    for path in csharp_files:
+        source = _relative(path, root)
+        for namespace in _csharp_usings(path):
+            namespace_edges.add((source, namespace))
+    lines.append("### C# namespace imports")
+    lines.append("")
+    lines.append("`using Stageloom...;` directives in production files.")
+    lines.append("")
+    lines.append(_markdown_table(("file", "namespace"), sorted(namespace_edges)))
+    lines.append("")
+
+    type_owner = {}
+    for path in csharp_files:
+        for item in csharp_types_by_file[path]:
+            type_owner.setdefault(item["name"], path)
+    type_edges = Counter()
+    for path in csharp_files:
+        text = _read(path)
+        for name, owner in type_owner.items():
+            if owner == path:
+                continue
+            if _word_count(text, name):
+                type_edges[(_relative(path, root), _relative(owner, root))] += 1
+    type_rows = [
+        (source, target, count)
+        for (source, target), count in sorted(
+            type_edges.items(), key=lambda item: (-item[1], item[0][0], item[0][1])
+        )
+    ]
+    lines.append("### C# cross-file type references")
+    lines.append("")
+    lines.append(
+        "Edges from a production file to the file that declares a public type it "
+        "mentions; the count is distinct types. Interface/override dispatch is not "
+        "resolved."
+    )
+    lines.append("")
+    lines.append(_markdown_table(("file", "declaring file", "types"), type_rows[:40]))
+    lines.append("")
+
+    # --------------------------------------------------------------- test inventory
+    test_rows = []
+    for path in _iter_source(root, ("blender/tests",), suffixes=(".py",)):
+        if path.name.startswith("test_"):
+            try:
+                tree = ast.parse(_read(path))
+            except SyntaxError:
+                continue
+            count = sum(
+                1
+                for node in ast.walk(tree)
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name.startswith("test_")
+            )
+            test_rows.append(("Blender headless" if "/headless/" in path.as_posix() else "core", _relative(path, root), count, "test_* functions"))
+    for path in _iter_source(root, ("grasshopper/tests/console",), suffixes=(".cs",)):
+        text = _read(path)
+        count = len(re.findall(r"\bCheck\s*\(", text))
+        if re.search(r"\bvoid\s+Check\s*\(", text):
+            count -= 1
+        test_rows.append(("C# console", _relative(path, root), max(0, count), "Check(...) calls"))
+    fixtures = root / "protocol" / "fixtures"
+    if fixtures.is_dir():
+        fixture_count = sum(1 for path in fixtures.iterdir() if path.is_dir())
+        test_rows.append(("golden fixtures", "protocol/fixtures", fixture_count, "directories"))
+    test_rows.sort(key=lambda row: (row[0], row[1]))
+    lines.append("## Test inventory")
+    lines.append("")
+    lines.append(
+        "Source-derived counts; this is not a claim about how many tests a run "
+        "executed. C# suites use a `Check(...)` helper, so the count is assertion "
+        "calls rather than methods; `Program.cs` is a fixture runner and contributes "
+        "no `Check(...)` calls."
+    )
+    lines.append("")
+    lines.append(_markdown_table(("suite", "file", "count", "unit"), test_rows))
+    lines.append("")
+
+    lines.append("## Method and limits")
+    lines.append("")
+    lines.append(
+        "- LOC is physical/code lines, not logical statements; vendor, tests, docs, "
+        "benchmarks and scripts are excluded.\n"
+        "- Largest units are source spans, so nesting is counted in the enclosing "
+        "unit. C# declarations are found by a brace matcher after comments and "
+        "strings are blanked.\n"
+        "- Dispatch candidates are literal-driven. A table generated at runtime or "
+        "a dispatch through an interface is not named here.\n"
+        "- Export candidates are word-scan results. Dynamic callers, reflection, "
+        "Blender/Grasshopper registration and interface dispatch can hide a use; "
+        "treat the table as a review queue.\n"
+        "- Test counts are derived from source. Run `scripts/check-all` for measured "
+        "counts and timings."
+    )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="scripts/code-health")
+    parser.add_argument(
+        "--out",
+        default=str(Path(__file__).resolve().parent.parent / "docs" / "code-health.md"),
+    )
+    parser.add_argument("--check", action="store_true", help="verify the checked-in report is current")
+    args = parser.parse_args()
+
+    root = Path(__file__).resolve().parent.parent
+    rendered = generate(root)
+    target = Path(args.out)
+    if args.check:
+        try:
+            existing = target.read_text(encoding="utf-8")
+        except OSError as exc:
+            print("code-health: cannot read %s: %s" % (target, exc), file=sys.stderr)
+            return 1
+        if existing != rendered:
+            print("code-health: %s is stale; rerun scripts/code-health" % target, file=sys.stderr)
+            return 1
+        print("code-health: %s is current" % target)
+        return 0
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(rendered, encoding="utf-8")
+    print("code-health: wrote %s" % target)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

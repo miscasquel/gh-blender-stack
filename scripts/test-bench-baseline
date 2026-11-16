@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# CLI proof for the stored-baseline gate.
+#
+#     scripts/test-bench-baseline
+#
+# The pure statistics are unit-tested in
+# blender/tests/core/test_bench_baseline.py. This script runs the real
+# scripts/bench --check-baseline-only path under Blender against the same
+# synthetic report shape, and proves the exit codes: identical passes, exactly
+# +5% passes, +6% fails with the metric name, and --require-baseline fails on a
+# machine mismatch. It is a correctness check, not a performance measurement:
+# no timing number from it is stored. Every mutation is made in a temporary
+# copy; the checked-in baseline is never touched.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/stageloom-baseline-test.XXXXXX")"
+trap 'rm -rf "$TMP"' EXIT
+
+RUN="$TMP/report.json"
+PYTHONPATH="$PWD/blender/tests/core:$PWD" python3 - "$RUN" <<'PY'
+import json
+import sys
+
+import test_bench_baseline
+
+with open(sys.argv[1], "w", encoding="utf-8") as handle:
+    json.dump(test_bench_baseline.make_report(), handle, indent=2)
+PY
+
+pass=0
+fail=0
+
+run_case() {
+  local expected="$1" name="$2" log="$3"
+  shift 3
+  local code
+  set +e
+  "$@" >"$log" 2>&1
+  code=$?
+  set -e
+  if [ "$code" -eq "$expected" ]; then
+    printf 'PASS %s (exit %s)\n' "$name" "$code"
+    pass=$((pass + 1))
+    return 0
+  fi
+  printf 'FAIL %s: expected exit %s, got %s\n' "$name" "$expected" "$code"
+  tail -n 20 "$log" || true
+  fail=$((fail + 1))
+}
+
+expect_text() {
+  local name="$1" text="$2" log="$3"
+  if grep -Fq "$text" "$log"; then
+    printf 'PASS %s output names %s\n' "$name" "$text"
+    pass=$((pass + 1))
+  else
+    printf 'FAIL %s: output does not contain %s\n' "$name" "$text"
+    fail=$((fail + 1))
+  fi
+}
+
+python3 benchmarks/baseline.py build \
+  --run "$RUN" --out "$TMP/self.json" --created 2026-11-16 >/dev/null
+
+run_case 0 "identical run" "$TMP/identical.log" \
+  scripts/bench --check-baseline-only \
+  --check-baseline "$TMP/self.json" --report "$RUN" --report "$RUN" --report "$RUN"
+expect_text "identical run" "[baseline] PASS" "$TMP/identical.log"
+
+# The stored baseline is a speed claim. Dividing its values by 1.05/1.06 makes
+# the unchanged current report exactly 5%/6% slower than the stored number.
+mutate() {
+  local factor="$1" source="$2" target="$3"
+  python3 - "$factor" "$source" "$target" <<'PY'
+import json
+import sys
+
+factor = float(sys.argv[1])
+source, target = sys.argv[2:4]
+document = json.load(open(source))
+metric = document["metrics"]["pipeline.100k.total_ms"]
+for stat in ("p50", "p95"):
+    metric[stat] = metric[stat] / factor
+json.dump(document, open(target, "w"), indent=2)
+PY
+}
+
+mutate 1.05 "$TMP/self.json" "$TMP/plus5.json"
+run_case 0 "exactly +5%" "$TMP/plus5.log" \
+  scripts/bench --check-baseline-only \
+  --check-baseline "$TMP/plus5.json" --report "$RUN" --report "$RUN" --report "$RUN"
+
+mutate 1.06 "$TMP/self.json" "$TMP/plus6.json"
+run_case 1 "deliberate +6%" "$TMP/plus6.log" \
+  scripts/bench --check-baseline-only \
+  --check-baseline "$TMP/plus6.json" --report "$RUN" --report "$RUN" --report "$RUN"
+expect_text "deliberate +6%" "[baseline] FAIL" "$TMP/plus6.log"
+expect_text "deliberate +6%" "pipeline.100k.total_ms" "$TMP/plus6.log"
+
+python3 - "$TMP/self.json" "$TMP/other-machine.json" <<'PY'
+import json
+import sys
+
+source, target = sys.argv[1:3]
+document = json.load(open(source))
+document["machine"]["processor"] = "A Different Reference Machine"
+json.dump(document, open(target, "w"), indent=2)
+PY
+run_case 2 "require-baseline on another machine" "$TMP/machine.log" \
+  scripts/bench --check-baseline-only --require-baseline \
+  --check-baseline "$TMP/other-machine.json" --report "$RUN" --report "$RUN" --report "$RUN"
+expect_text "require-baseline on another machine" "NOT COMPARABLE" "$TMP/machine.log"
+
+printf '\ntest-bench-baseline: %d passed, %d failed\n' "$pass" "$fail"
+[ "$fail" -eq 0 ]
