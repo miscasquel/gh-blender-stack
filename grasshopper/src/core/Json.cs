@@ -7,9 +7,9 @@
 //
 // Integers stay long and floats stay double, because Python's json module writes
 // them differently ("4" vs "4.0") and the golden fixtures compare bytes. Floats
-// are formatted as Python's repr for the ranges the protocol uses — shortest
-// round-trip text with ".0" appended to integral values, lowercase exponent —
-// with one known boundary (see FormatDouble).
+// are formatted as Python's repr for the full finite double range: shortest
+// round-trip digits, Python's fixed/scientific thresholds and exponent shape.
+// protocol/number-corpus.json pins that contract from both languages.
 //
 // A hand-written writer keeps the no-third-party rule and gives byte-stable
 // output with sorted keys.
@@ -17,6 +17,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Numerics;
 using System.Text;
 
 namespace Stageloom.Core
@@ -278,6 +279,12 @@ namespace Stageloom.Core
                 long l;
                 if (long.TryParse(token, NumberStyles.Integer, CultureInfo.InvariantCulture, out l))
                     return l;
+                // Python's json decoder carries arbitrary-precision integers,
+                // but every valid frame integer fits signed 64-bit. Falling
+                // back to double would silently round a huge token; the
+                // protocol refuses it instead (codec.py rejects the same
+                // range).
+                throw new JsonException("integer out of range at index " + start);
             }
             double value;
             // On .NET Framework and Mono an overflow may report failure rather
@@ -396,25 +403,289 @@ namespace Stageloom.Core
             sb.Append('"');
         }
 
-        /// <summary>Python-repr style float text: ".0" appended so integral
-        /// floats stay distinguishable from integers, and a lowercase exponent
-        /// (Mono's "R" writes "1E+21" where Python writes "1e+21"). Mono's "R"
-        /// and Python's repr agree byte for byte for every value whose shortest
-        /// form needs at most 15 significant digits — the protocol's practical
-        /// range, since headers carry counts, parameter values and short
-        /// decimals. A value needing 16–17 digits (Math.PI) round-trips but can
-        /// carry one extra digit versus Python's repr, so this writer is
-        /// canonical for the fixture values, not for every double in
-        /// existence. No peer hashes a header, so the difference is text
-        /// stability, not a wire contract.</summary>
+        /// <summary>Python's repr(float) text for every finite double.
+        ///
+        /// Mono's "R"/"G17"/"E16" are not a contract: they differ from Python
+        /// at 1e15 (1E+15 vs 1000000000000000.0), lose -0.0's sign, and round
+        /// some 16–17 digit values one unit too high. This formatter therefore
+        /// works from the exact decimal expansion of the IEEE 754 value,
+        /// rounds it to 1..17 significant digits, and accepts the first
+        /// precision whose decimal rounds back to the same double. That is
+        /// Python's shortest-round-trip rule; the notation then follows its
+        /// thresholds (fixed for -4 <= exponent < 16, scientific otherwise),
+        /// uses a lowercase `e` with at least two exponent digits, and keeps
+        /// ".0" on integral fixed values.
+        ///
+        /// The round-trip check compares exact rationals against the midpoints
+        /// between adjacent doubles, so it does not depend on the platform's
+        /// decimal parser either. protocol/number-corpus.json holds the
+        /// cross-language vector for this method.</summary>
         public static string FormatDouble(double d)
         {
             if (double.IsNaN(d) || double.IsInfinity(d))
                 throw new JsonException("JSON cannot carry " + d);
-            string s = d.ToString("R", CultureInfo.InvariantCulture).Replace("E", "e");
-            if (s.IndexOf('.') < 0 && s.IndexOf('e') < 0)
-                s += ".0";
-            return s;
+            if (d == 0.0)
+                return BitConverter.DoubleToInt64Bits(d) < 0 ? "-0.0" : "0.0";
+
+            bool negative = d < 0.0;
+            double magnitude = negative ? -d : d;
+
+            BigInteger exactDigits;
+            int exactExponent;
+            ExactDecimalDigits(magnitude, out exactDigits, out exactExponent);
+            int exactLength = exactDigits.ToString(CultureInfo.InvariantCulture).Length;
+
+            BigInteger digits = exactDigits;
+            int exponent = exactExponent;
+            bool found = false;
+            for (int precision = 1; precision <= 17; precision++)
+            {
+                int drop = exactLength > precision ? exactLength - precision : 0;
+                BigInteger floor = exactDigits;
+                BigInteger remainder = BigInteger.Zero;
+                BigInteger half = BigInteger.Zero;
+                if (drop > 0)
+                {
+                    BigInteger divisor = BigInteger.Pow(10, drop);
+                    floor = BigInteger.DivRem(exactDigits, divisor, out remainder);
+                    half = divisor / 2;
+                }
+
+                BigInteger lowerDigits;
+                int lowerExponent;
+                NormalizeDecimal(floor, exactExponent + drop,
+                                 out lowerDigits, out lowerExponent);
+                bool lowerWorks = RoundTripsTo(magnitude, lowerDigits, lowerExponent);
+
+                // The nearest p-digit decimal is not always the one inside the
+                // double's round-trip interval: an asymmetric interval can
+                // exclude it while admitting the neighbour on the other side.
+                // Test both and prefer the nearer one when both work.
+                bool upperWorks = false;
+                BigInteger upperDigits = BigInteger.Zero;
+                int upperExponent = 0;
+                if (drop > 0)
+                {
+                    NormalizeDecimal(floor + 1, exactExponent + drop,
+                                     out upperDigits, out upperExponent);
+                    upperWorks = RoundTripsTo(magnitude, upperDigits, upperExponent);
+                }
+                if (!lowerWorks && !upperWorks) continue;
+
+                bool useUpper;
+                if (lowerWorks && upperWorks)
+                {
+                    int compare = remainder.CompareTo(half);
+                    if (compare < 0) useUpper = false;
+                    else if (compare > 0) useUpper = true;
+                    else useUpper = !floor.IsEven;  // round half to even
+                }
+                else
+                {
+                    useUpper = upperWorks;
+                }
+                digits = useUpper ? upperDigits : lowerDigits;
+                exponent = useUpper ? upperExponent : lowerExponent;
+                found = true;
+                break;
+            }
+
+            // Seventeen significant decimal digits always identify a double, so
+            // the loop cannot exhaust for a finite value. If it does, the
+            // formatter has a bug: fail visibly instead of emitting text that
+            // is valid JSON but not Python's repr.
+            if (!found)
+                throw new JsonException("cannot format " + d + " as Python repr");
+            return FormatDecimalDigits(digits, exponent, negative);
+        }
+
+        /// <summary>The exact decimal significand of a positive finite double:
+        /// value = digits * 10^exponent. A double is m * 2^e, so a negative e
+        /// is turned into m * 5^-e with a decimal exponent of e.</summary>
+        private static void ExactDecimalDigits(double d, out BigInteger digits, out int exponent)
+        {
+            long bits = BitConverter.DoubleToInt64Bits(d);
+            int binaryExponent = (int)((bits >> 52) & 0x7FF);
+            long fraction = bits & 0xFFFFFFFFFFFFFL;
+            BigInteger significand;
+            int scale;
+            if (binaryExponent == 0)
+            {
+                significand = fraction;
+                scale = -1074;
+            }
+            else
+            {
+                significand = fraction | (1L << 52);
+                scale = binaryExponent - 1075;
+            }
+            if (scale >= 0)
+            {
+                digits = significand << scale;
+                exponent = 0;
+            }
+            else
+            {
+                int power = -scale;
+                digits = significand * BigInteger.Pow(5, power);
+                exponent = -power;
+            }
+        }
+
+        /// <summary>Strip decimal trailing zeros; the value is unchanged.</summary>
+        private static void NormalizeDecimal(BigInteger value, int exponent,
+                                             out BigInteger digits, out int resultExponent)
+        {
+            while (!value.IsZero && (value % 10).IsZero)
+            {
+                value /= 10;
+                exponent++;
+            }
+            digits = value;
+            resultExponent = exponent;
+        }
+
+        /// <summary>True when digits * 10^exponent is inside d's IEEE round-to-
+        /// nearest interval. The boundaries are exact midpoints with the
+        /// adjacent doubles; a midpoint goes to the even significand, which is
+        /// d exactly when its low bit is clear.</summary>
+        private static bool RoundTripsTo(double d, BigInteger digits, int exponent)
+        {
+            long bits = BitConverter.DoubleToInt64Bits(d);
+
+            BigInteger lower;
+            int lowerExponent;
+            Midpoint(BitConverter.Int64BitsToDouble(bits - 1), d, out lower, out lowerExponent);
+            int compare = CompareDecimalToDyadic(digits, exponent, lower, lowerExponent);
+            if (compare < 0) return false;
+            if (compare == 0 && (bits & 1L) != 0L) return false;
+
+            long nextBits = bits + 1;
+            BigInteger upper;
+            int upperExponent;
+            if (nextBits == 0x7FF0000000000000L)
+                Midpoint(d, double.PositiveInfinity, out upper, out upperExponent);
+            else
+                Midpoint(d, BitConverter.Int64BitsToDouble(nextBits), out upper, out upperExponent);
+            compare = CompareDecimalToDyadic(digits, exponent, upper, upperExponent);
+            if (compare > 0) return false;
+            if (compare == 0 && (bits & 1L) != 0L) return false;
+            return true;
+        }
+
+        /// <summary>The exact midpoint of two positive doubles, as
+        /// significand * 2^exponent. Positive infinity stands in for the value
+        /// just past the largest finite double.</summary>
+        private static void Midpoint(double a, double b,
+                                     out BigInteger significand, out int exponent)
+        {
+            BigInteger aSignificand, bSignificand;
+            int aExponent, bExponent;
+            Dyadic(a, out aSignificand, out aExponent);
+            Dyadic(b, out bSignificand, out bExponent);
+            if (aExponent == bExponent)
+            {
+                significand = aSignificand + bSignificand;
+                exponent = aExponent;
+            }
+            else if (aExponent > bExponent)
+            {
+                significand = (aSignificand << (aExponent - bExponent)) + bSignificand;
+                exponent = bExponent;
+            }
+            else
+            {
+                significand = aSignificand + (bSignificand << (bExponent - aExponent));
+                exponent = aExponent;
+            }
+            exponent -= 1;
+        }
+
+        /// <summary>A non-negative finite double (or positive infinity) as
+        /// significand * 2^exponent, exactly.</summary>
+        private static void Dyadic(double d, out BigInteger significand, out int exponent)
+        {
+            if (double.IsPositiveInfinity(d))
+            {
+                significand = BigInteger.One;
+                exponent = 1024;
+                return;
+            }
+            long bits = BitConverter.DoubleToInt64Bits(d);
+            int binaryExponent = (int)((bits >> 52) & 0x7FF);
+            long fraction = bits & 0xFFFFFFFFFFFFFL;
+            if (binaryExponent == 0)
+            {
+                significand = fraction;
+                exponent = -1074;
+            }
+            else
+            {
+                significand = fraction | (1L << 52);
+                exponent = binaryExponent - 1075;
+            }
+        }
+
+        /// <summary>Compare digits * 10^exponent with
+        /// significand * 2^binaryExponent exactly, without a floating-point
+        /// round trip.</summary>
+        private static int CompareDecimalToDyadic(BigInteger digits, int exponent,
+                                                  BigInteger significand, int binaryExponent)
+        {
+            BigInteger leftNumerator, leftDenominator, rightNumerator, rightDenominator;
+            if (exponent >= 0)
+            {
+                leftNumerator = digits * BigInteger.Pow(10, exponent);
+                leftDenominator = BigInteger.One;
+            }
+            else
+            {
+                leftNumerator = digits;
+                leftDenominator = BigInteger.Pow(10, -exponent);
+            }
+            if (binaryExponent >= 0)
+            {
+                rightNumerator = significand << binaryExponent;
+                rightDenominator = BigInteger.One;
+            }
+            else
+            {
+                rightNumerator = significand;
+                rightDenominator = BigInteger.One << -binaryExponent;
+            }
+            return (leftNumerator * rightDenominator)
+                .CompareTo(rightNumerator * leftDenominator);
+        }
+
+        /// <summary>Python's repr notation for a normalized decimal significand:
+        /// fixed for a decimal point at -3..16, scientific outside that, with
+        /// ".0" on integral fixed values and a two-digit minimum exponent.</summary>
+        private static string FormatDecimalDigits(BigInteger digits, int exponent, bool negative)
+        {
+            string text = digits.ToString(CultureInfo.InvariantCulture);
+            int decimalPoint = text.Length + exponent;
+            string body;
+            if (decimalPoint <= -4 || decimalPoint > 16)
+            {
+                body = text.Substring(0, 1);
+                if (text.Length > 1) body += "." + text.Substring(1);
+                int scientific = decimalPoint - 1;
+                body += "e" + (scientific < 0 ? "-" : "+")
+                    + Math.Abs(scientific).ToString("00", CultureInfo.InvariantCulture);
+            }
+            else if (decimalPoint <= 0)
+            {
+                body = "0." + new string('0', -decimalPoint) + text;
+            }
+            else if (decimalPoint >= text.Length)
+            {
+                body = text + new string('0', decimalPoint - text.Length) + ".0";
+            }
+            else
+            {
+                body = text.Substring(0, decimalPoint) + "." + text.Substring(decimalPoint);
+            }
+            return negative ? "-" + body : body;
         }
 
         // ------------------------------------------------------- comparison

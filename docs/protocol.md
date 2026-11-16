@@ -45,6 +45,8 @@ version bump.
 - The header is a JSON object with at least `type` and `v`. A `sections` array may be present (see §5). Each entry gives `name`, `dtype`, `shape`, and `bytes`.
 - The sum of `bytes` over all sections must equal the length of the payload after the header. Anything else is a `bad_frame` error.
 - Canonical header encoding: UTF-8, keys sorted, no insignificant whitespace (`separators=(",", ":")` in Python; the equivalent in C#). Fixtures depend on this.
+- Header numbers are JSON integers or IEEE 754 doubles. Integers are signed 64-bit; a token outside `-2^63..2^63-1` is a `bad_frame`, never a rounded double. Float text is Python's `repr` for every finite double: shortest round-trip digits, fixed notation for decimal exponents `-4..15`, scientific outside, lowercase `e` with at least two exponent digits, and `.0` on integral fixed values (`1e15` is `1000000000000000.0`, `1e16` is `1e+16`, negative zero is `-0.0`). Non-finite values are not valid in a header.
+- `protocol/number-corpus.json` is the cross-language vector for that float text. Both the Python core test and the C# console test check every entry.
 
 ## 4. Message types
 

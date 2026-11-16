@@ -4,7 +4,8 @@
 #     grasshopper/build/build-gha.sh
 #
 # Uses Mono's real csc.exe (see wine-env.sh for why wine's Framework wrapper
-# is not used). References: Grasshopper, GH_IO, RhinoCommon, System.Drawing.
+# is not used). References: Grasshopper, GH_IO, RhinoCommon, System.Drawing,
+# System.Numerics (Json's exact shortest-double formatter).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -34,7 +35,7 @@ run_csc \
   /nologo /target:library \
   /out:"$(win_path "$OUT")" \
   /r:"$(win_path "$GH_DLL")" /r:"$(win_path "$GHIO_DLL")" /r:"$(win_path "$RC_DLL")" \
-  /r:System.Drawing.dll \
+  /r:System.Drawing.dll /r:System.Numerics.dll \
   "${SOURCES[@]}" "${RESOURCES[@]}"
 
 [ -f "$OUT" ] || { echo "build failed: $OUT not produced" >&2; exit 1; }

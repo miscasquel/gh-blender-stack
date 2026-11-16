@@ -35,6 +35,13 @@ _HEADER_LEN = struct.Struct("<I")
 # exception so no caller has to infer it from message text.
 CODEC_CODES = ("proto_mismatch", "bad_frame", "too_large")
 
+# JSON integers on the wire are signed 64-bit. Python's json decoder is
+# arbitrary-precision and the C# decoder holds a long, so an out-of-range
+# integer would decode on one side and silently round on the other. Every
+# valid frame integer (version, counts, shapes, byte lengths) fits.
+INT64_MIN = -(2**63)
+INT64_MAX = 2**63 - 1
+
 
 class CodecError(Exception):
     """Raised for any frame that does not follow the protocol.
@@ -108,8 +115,11 @@ def _validate_json_tree(value, where):
     elif isinstance(value, (list, tuple)):
         for index, item in enumerate(value):
             _validate_json_tree(item, "%s[%d]" % (where, index))
-    elif value is None or isinstance(value, (bool, int)):
+    elif value is None or isinstance(value, bool):
         return
+    elif isinstance(value, int):
+        if value < INT64_MIN or value > INT64_MAX:
+            raise ValueError("%s has an integer outside the signed 64-bit range" % (where,))
     else:
         raise ValueError("%s contains %s, which JSON cannot carry" % (where, type(value).__name__))
 

@@ -27,7 +27,7 @@ done
 run_csc \
   /nologo /target:library \
   /out:"$(win_path "$OUT")" \
-  /r:"$(win_path "$RC_DLL")" /r:System.Drawing.dll \
+  /r:"$(win_path "$RC_DLL")" /r:System.Drawing.dll /r:System.Numerics.dll \
   "${SOURCES[@]}"
 
 [ -f "$OUT" ] || { echo "build failed: $OUT not produced" >&2; exit 1; }

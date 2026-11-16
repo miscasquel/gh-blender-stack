@@ -57,6 +57,8 @@ namespace Stageloom.Tests.Console
 
             CheckFloatText();
 
+            CheckNumberCorpus(root);
+
             CheckJsonWriter();
 
             CheckEndpoint();
@@ -191,6 +193,18 @@ namespace Stageloom.Tests.Console
                 problems.Add("AsDoubles did not accept the parsed JSON array");
             if (ParamValues.AsDoubles(1.04) != null)
                 problems.Add("AsDoubles accepted a scalar");
+            if (ParamValues.AsDoubles(Json.Parse("[\"2.0\", \"2.0\", \"2.0\"]")) != null)
+                problems.Add("AsDoubles accepted strings");
+            if (ParamValues.AsDoubles(Json.Parse("[true, false, true]")) != null)
+                problems.Add("AsDoubles accepted bools");
+            if (ParamValues.AsDoubles(Json.Parse("[1, null, 3]")) != null)
+                problems.Add("AsDoubles accepted null");
+            if (ParamValues.AsDoubles(new double[] { 1.0, double.NaN, 3.0 }) != null)
+                problems.Add("AsDoubles accepted a non-finite array");
+            double[] integerArray = ParamValues.AsDoubles(Json.Parse("[1, 2.5, -3]"));
+            if (integerArray == null || integerArray[0] != 1.0
+                || integerArray[1] != 2.5 || integerArray[2] != -3.0)
+                problems.Add("AsDoubles rejected a mixed integer/float array");
 
             object cast = ParamValues.Cast("vector3", parsed);
             var castArray = cast as double[];
@@ -200,6 +214,20 @@ namespace Stageloom.Tests.Console
             var fallbackArray = fallback as double[];
             if (fallbackArray == null || fallbackArray[0] != 0.0)
                 problems.Add("Cast(vector3) did not fall back to zeros");
+            var nonFiniteVector = ParamValues.Cast("vector3",
+                new double[] { 1.0, double.NaN, 3.0 }) as double[];
+            if (nonFiniteVector == null || nonFiniteVector[0] != 0.0
+                || nonFiniteVector[1] != 0.0 || nonFiniteVector[2] != 0.0)
+                problems.Add("Cast(vector3, non-finite) was not neutral");
+            var nonFiniteColor = ParamValues.Cast("color",
+                new double[] { 1.0, 0.0, double.PositiveInfinity }) as double[];
+            if (nonFiniteColor == null || nonFiniteColor[0] != 0.0
+                || nonFiniteColor[1] != 0.0 || nonFiniteColor[2] != 0.0)
+                problems.Add("Cast(color, non-finite) was not neutral");
+            var stringVector = ParamValues.Cast("vector3",
+                Json.Parse("[\"1\", \"2\", \"3\"]")) as double[];
+            if (stringVector == null || stringVector[0] != 0.0)
+                problems.Add("Cast(vector3, string array) was not neutral");
 
             object def = ParamValues.ParseDefault("vector3", "1, 2.5, 3");
             var defArray = def as double[];
@@ -209,6 +237,29 @@ namespace Stageloom.Tests.Console
                 problems.Add("ParseDefault(text, null) failed");
             if (!(bool)ParamValues.ParseDefault("bool", "true"))
                 problems.Add("ParseDefault(bool) failed");
+            if ((double)ParamValues.ParseDefault("float", "2.5") != 2.5
+                || (long)ParamValues.ParseDefault("value_list", "2.9") != 2L)
+                problems.Add("ParseDefault lost a valid default");
+
+            // A default that parses to NaN/Infinity, overflows to infinity or
+            // does not fit the target is the type's neutral value. Otherwise
+            // FormatDouble would throw while publishing the schema.
+            if ((double)ParamValues.ParseDefault("float", "NaN") != 0.0
+                || (double)ParamValues.ParseDefault("float", "Infinity") != 0.0
+                || (double)ParamValues.ParseDefault("float", "-Infinity") != 0.0
+                || (double)ParamValues.ParseDefault("float", "1e400") != 0.0)
+                problems.Add("ParseDefault(float) accepted a non-finite value");
+            if ((long)ParamValues.ParseDefault("int", "NaN") != 0L
+                || (long)ParamValues.ParseDefault("int", "Infinity") != 0L
+                || (long)ParamValues.ParseDefault("int", "1e300") != 0L)
+                problems.Add("ParseDefault(int) accepted a non-finite/overflowing value");
+            if ((long)ParamValues.ParseDefault("value_list", "-Infinity") != 0L
+                || (long)ParamValues.ParseDefault("value_list", "9223372036854775808") != 0L)
+                problems.Add("ParseDefault(value_list) accepted an out-of-range value");
+            var badVectorDefault = ParamValues.ParseDefault("vector3", "1e400, 2, 3") as double[];
+            if (badVectorDefault == null || badVectorDefault[0] != 0.0
+                || badVectorDefault[1] != 0.0 || badVectorDefault[2] != 0.0)
+                problems.Add("ParseDefault(vector3) accepted a non-finite component");
 
             // Cast must be total: a value left from another type (or a racing
             // request) never throws into SolveInstance.
@@ -216,6 +267,8 @@ namespace Stageloom.Tests.Console
                 problems.Add("Cast(float, vector string) did not fall back to a double");
             if ((double)ParamValues.Cast("float", "[0.0, 0.0, 0.0]") != 0.0)
                 problems.Add("Cast(float, vector string) was not neutral");
+            if ((double)ParamValues.Cast("float", "2.5") != 2.5)
+                problems.Add("Cast(float, numeric string) lost a valid value");
             if ((string)ParamValues.Cast("text", parsed) != "")
                 problems.Add("Cast(text, list) was not empty");
             var junk = ParamValues.Cast("vector3", "junk") as double[];
@@ -225,6 +278,40 @@ namespace Stageloom.Tests.Console
                 problems.Add("Cast(value_list, nonsense) was not neutral");
             if ((bool)ParamValues.Cast("bool", "not a bool") != false)
                 problems.Add("Cast(bool, string) was not neutral");
+
+            // Non-finite input never survives the float/vector path: JSON
+            // cannot carry it and FormatDouble would throw later.
+            if ((double)ParamValues.Cast("float", double.NaN) != 0.0
+                || (double)ParamValues.Cast("float", double.PositiveInfinity) != 0.0
+                || (double)ParamValues.Cast("float", double.NegativeInfinity) != 0.0
+                || (double)ParamValues.Cast("float", "NaN") != 0.0
+                || (double)ParamValues.Cast("float", "Infinity") != 0.0)
+                problems.Add("Cast(float) accepted a non-finite value");
+            if ((int)ParamValues.Cast("int", double.NaN) != 0
+                || (int)ParamValues.Cast("value_list", double.PositiveInfinity) != 0)
+                problems.Add("Cast(int/value_list) accepted a non-finite value");
+            if ((int)ParamValues.Cast("int", long.MaxValue) != 0)
+                problems.Add("Cast(int, 64-bit overflow) was not neutral");
+
+            // Text follows Python's str(): 2.0 keeps its ".0", ints stay
+            // integral, bools are capitalised, and non-finite floats use
+            // Python's lowercase spellings.
+            if ((string)ParamValues.Cast("text", 2.0) != "2.0")
+                problems.Add("Cast(text, 2.0) was not Python repr");
+            if ((string)ParamValues.Cast("text", 1e15) != "1000000000000000.0"
+                || (string)ParamValues.Cast("text", 1e16) != "1e+16"
+                || (string)ParamValues.Cast("text", -0.0) != "-0.0")
+                problems.Add("Cast(text, float) did not use Python repr");
+            if ((string)ParamValues.Cast("text", 2L) != "2"
+                || (string)ParamValues.Cast("text", 2) != "2")
+                problems.Add("Cast(text, int) was not integral text");
+            if ((string)ParamValues.Cast("text", true) != "True"
+                || (string)ParamValues.Cast("text", false) != "False")
+                problems.Add("Cast(text, bool) was not Python str");
+            if ((string)ParamValues.Cast("text", double.NaN) != "nan"
+                || (string)ParamValues.Cast("text", double.PositiveInfinity) != "inf"
+                || (string)ParamValues.Cast("text", double.NegativeInfinity) != "-inf")
+                problems.Add("Cast(text, non-finite) was not Python str");
 
             // The two sides' int rules read from params.py: `int` is
             // int(round(float(v))) — banker's rounding — and `value_list` is
@@ -245,6 +332,32 @@ namespace Stageloom.Tests.Console
             var jsonList = json as List<object>;
             if (jsonList == null || jsonList.Count != 3)
                 problems.Add("JsonValue(double[]) failed");
+
+            // JsonValue is the last guard before canonical JSON: a non-finite
+            // number becomes the neutral 0.0 rather than throwing in
+            // FormatDouble while the schema is published.
+            object nanJson = ParamValues.JsonValue(double.NaN);
+            if (!(nanJson is double) || (double)nanJson != 0.0)
+                problems.Add("JsonValue(NaN) was not the neutral double");
+            object infJson = ParamValues.JsonValue(double.PositiveInfinity);
+            if (!(infJson is double) || (double)infJson != 0.0)
+                problems.Add("JsonValue(Infinity) was not the neutral double");
+            var guardedVector = ParamValues.JsonValue(
+                new double[] { 1.0, double.NaN, double.PositiveInfinity }) as List<object>;
+            if (guardedVector == null || guardedVector.Count != 3
+                || (double)guardedVector[0] != 1.0
+                || (double)guardedVector[1] != 0.0
+                || (double)guardedVector[2] != 0.0)
+                problems.Add("JsonValue(double[]) did not neutralise non-finite elements");
+            if (Json.WriteCanonical(guardedVector) != "[1.0,0.0,0.0]")
+                problems.Add("guarded JsonValue did not encode canonically");
+            var withNaN = new List<object>();
+            withNaN.Add(double.NegativeInfinity);
+            withNaN.Add("x");
+            var guardedList = ParamValues.JsonValue(withNaN) as List<object>;
+            if (guardedList == null || guardedList.Count != 2
+                || (double)guardedList[0] != 0.0 || (string)guardedList[1] != "x")
+                problems.Add("JsonValue(List<object>) did not neutralise non-finite elements");
 
             if (problems.Count == 0)
             {
@@ -293,6 +406,22 @@ namespace Stageloom.Tests.Console
                 delegate { Json.Parse("1."); });
             CheckThrows<JsonException>(problems, ".5",
                 delegate { Json.Parse(".5"); });
+
+            // Integers are signed 64-bit, as on the Python side. A token one
+            // past either bound is a bad_frame, never a silently rounded
+            // double; the bounds themselves decode as long.
+            object maxLong = Json.Parse("9223372036854775807");
+            object minLong = Json.Parse("-9223372036854775808");
+            if (!(maxLong is long) || (long)maxLong != long.MaxValue)
+                problems.Add("long.MaxValue did not decode as a long");
+            if (!(minLong is long) || (long)minLong != long.MinValue)
+                problems.Add("long.MinValue did not decode as a long");
+            CheckThrows<JsonException>(problems, "integer above signed 64-bit",
+                delegate { Json.Parse("9223372036854775808"); });
+            CheckThrows<JsonException>(problems, "integer below signed 64-bit",
+                delegate { Json.Parse("-9223372036854775809"); });
+            CheckThrows<JsonException>(problems, "astronomical integer",
+                delegate { Json.Parse("1000000000000000000000000000000"); });
 
             // Duplicate keys are rejected at every nesting level, not last-wins.
             CheckThrows<JsonException>(problems, "duplicate top-level key",
@@ -393,6 +522,24 @@ namespace Stageloom.Tests.Console
                 if (!(number is double) || (double)number <= 1e307)
                     problems.Add("finite 1e308 did not decode as a double");
             }
+            DecodedFrame boundsFrame = CheckFrameAccepted(problems,
+                "signed 64-bit integer bounds",
+                FrameWithHeader("{\"type\":\"x\",\"v\":2,\"low\":-9223372036854775808,\"high\":9223372036854775807}"));
+            if (boundsFrame != null)
+            {
+                if (!(Json.Get(boundsFrame.Header, "low") is long)
+                    || (long)Json.Get(boundsFrame.Header, "low") != long.MinValue)
+                    problems.Add("long.MinValue did not reach the header as a long");
+                if (!(Json.Get(boundsFrame.Header, "high") is long)
+                    || (long)Json.Get(boundsFrame.Header, "high") != long.MaxValue)
+                    problems.Add("long.MaxValue did not reach the header as a long");
+            }
+            CheckFrameProblem(problems, "integer above signed 64-bit in header",
+                FrameWithHeader("{\"type\":\"x\",\"v\":2,\"number\":9223372036854775808}"),
+                "bad_frame");
+            CheckFrameProblem(problems, "integer below signed 64-bit in header",
+                FrameWithHeader("{\"type\":\"x\",\"v\":2,\"number\":-9223372036854775809}"),
+                "bad_frame");
 
             // The section table's field types are part of the contract: a
             // number where a name belongs, or a string where a length belongs,
@@ -868,23 +1015,34 @@ namespace Stageloom.Tests.Console
             return head.ToArray();
         }
 
-        /// <summary>FormatDouble's boundary: byte-identical to Python's
-        /// repr for every value whose shortest form needs at most 15 significant
-        /// digits — the protocol's practical range (counts, short decimals,
-        /// exponents). A 16-17-digit value round-trips but can carry one digit
-        /// more than Python (Mono Math.PI: 3.1415926535897931, Python:
-        /// 3.141592653589793), so only the round trip is pinned there.</summary>
+        /// <summary>FormatDouble's boundary cases: byte-identical to Python's
+        /// repr across the notation thresholds, -0.0, subnormals, the finite
+        /// extremes and 16–17-digit values. The full contract is the shared
+        /// number corpus below.</summary>
         private static void CheckFloatText()
         {
             var problems = new List<string>();
             CheckFloatText(problems, 1.0, "1.0");
             CheckFloatText(problems, -2.0, "-2.0");
             CheckFloatText(problems, 0.0, "0.0");
+            CheckFloatText(problems, -0.0, "-0.0");
             CheckFloatText(problems, 2.5, "2.5");
             CheckFloatText(problems, 0.1, "0.1");
+            CheckFloatText(problems, 0.2 + 0.1, "0.30000000000000004");
+            CheckFloatText(problems, 0.0001, "0.0001");
+            CheckFloatText(problems, -0.0001, "-0.0001");
+            CheckFloatText(problems, 0.00001, "1e-05");
+            CheckFloatText(problems, 1e15, "1000000000000000.0");
+            CheckFloatText(problems, -1e15, "-1000000000000000.0");
+            CheckFloatText(problems, 1e16, "1e+16");
             CheckFloatText(problems, 1e21, "1e+21");
             CheckFloatText(problems, 1.5e-7, "1.5e-07");
             CheckFloatText(problems, 1e-7, "1e-07");
+            CheckFloatText(problems, 9007199254740992.0, "9007199254740992.0");
+            CheckFloatText(problems, 12345678901234568.0, "1.2345678901234568e+16");
+            CheckFloatText(problems, Math.PI, "3.141592653589793");
+            CheckFloatText(problems, 5e-324, "5e-324");
+            CheckFloatText(problems, double.MaxValue, "1.7976931348623157e+308");
 
             double pi = Math.PI;
             double back;
@@ -899,6 +1057,8 @@ namespace Stageloom.Tests.Console
                 delegate { Json.FormatDouble(double.NaN); });
             CheckThrows<JsonException>(problems, "infinity text",
                 delegate { Json.FormatDouble(double.PositiveInfinity); });
+            CheckThrows<JsonException>(problems, "negative infinity text",
+                delegate { Json.FormatDouble(double.NegativeInfinity); });
 
             if (problems.Count == 0)
             {
@@ -907,6 +1067,86 @@ namespace Stageloom.Tests.Console
             }
             _failures += problems.Count;
             System.Console.WriteLine("FAIL float-text");
+            foreach (string p in problems) System.Console.WriteLine("     " + p);
+        }
+
+        /// <summary>The cross-language number contract: every finite double in
+        /// protocol/number-corpus.json must format — and cast to a text
+        /// parameter — as its stored Python repr.</summary>
+        private static void CheckNumberCorpus(string fixturesRoot)
+        {
+            var problems = new List<string>();
+            string path = Path.Combine(fixturesRoot, "..", "number-corpus.json");
+            if (!File.Exists(path))
+            {
+                problems.Add("missing number corpus at " + Path.GetFullPath(path));
+            }
+            else
+            {
+                var entries = Json.Parse(File.ReadAllText(path, Encoding.UTF8)) as List<object>;
+                if (entries == null)
+                {
+                    problems.Add("number corpus is not a JSON array");
+                }
+                else
+                {
+                    if (entries.Count < 100)
+                        problems.Add("number corpus has only " + entries.Count + " values");
+                    var seen = new HashSet<string>(StringComparer.Ordinal);
+                    int counted = 0;
+                    foreach (object raw in entries)
+                    {
+                        var entry = raw as Dictionary<string, object>;
+                        if (entry == null)
+                        {
+                            problems.Add("number corpus entry is not an object");
+                            continue;
+                        }
+                        string bits = Json.GetString(entry, "bits");
+                        string expected = Json.GetString(entry, "text");
+                        if (bits == null || bits.Length != 16)
+                        {
+                            problems.Add("number corpus entry has no 16-digit bits");
+                            continue;
+                        }
+                        ulong rawBits;
+                        if (!ulong.TryParse(bits, NumberStyles.HexNumber,
+                                CultureInfo.InvariantCulture, out rawBits))
+                        {
+                            problems.Add("number corpus bits are not hex: " + bits);
+                            continue;
+                        }
+                        if (!seen.Add(bits))
+                        {
+                            problems.Add("number corpus repeats " + bits);
+                            continue;
+                        }
+                        counted++;
+                        double value = BitConverter.Int64BitsToDouble(unchecked((long)rawBits));
+                        if (double.IsNaN(value) || double.IsInfinity(value))
+                        {
+                            problems.Add(bits + ": non-finite corpus value");
+                            continue;
+                        }
+                        string got = Json.FormatDouble(value);
+                        if (got != expected)
+                            problems.Add(bits + ": " + got + " != " + expected);
+                        string text = (string)ParamValues.Cast("text", value);
+                        if (text != expected)
+                            problems.Add(bits + ": text " + text + " != " + expected);
+                    }
+                    if (counted < 100)
+                        problems.Add("number corpus has only " + counted + " usable values");
+                }
+            }
+
+            if (problems.Count == 0)
+            {
+                System.Console.WriteLine("PASS number-corpus");
+                return;
+            }
+            _failures += problems.Count;
+            System.Console.WriteLine("FAIL number-corpus");
             foreach (string p in problems) System.Console.WriteLine("     " + p);
         }
 

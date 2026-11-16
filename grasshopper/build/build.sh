@@ -24,6 +24,7 @@ rm -f "$OUT"
 run_csc \
   /nologo /target:exe \
   /out:"$(win_path "$OUT")" \
+  /r:System.Numerics.dll \
   "$(win_path "$REPO/grasshopper/src/core/Json.cs")" \
   "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
   "$(win_path "$REPO/grasshopper/src/core/ParamValues.cs")" \
@@ -44,7 +45,7 @@ if [ -f "$RC_DLL" ]; then
   run_csc \
     /nologo /target:exe \
     /out:"$(win_path "$ATTR_OUT")" \
-    /r:"$(win_path "$RC_DLL")" \
+    /r:"$(win_path "$RC_DLL")" /r:System.Numerics.dll \
     "$(win_path "$REPO/grasshopper/src/core/Json.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Conversion.cs")" \
@@ -68,7 +69,7 @@ if [ -f "$GH_DLL" ] && [ -f "$GHIO_DLL" ] && [ -f "$RC_DLL" ]; then
     /nologo /target:exe \
     /out:"$(win_path "$LINK_OUT")" \
     /r:"$(win_path "$GH_DLL")" /r:"$(win_path "$GHIO_DLL")" /r:"$(win_path "$RC_DLL")" \
-    /r:System.Drawing.dll \
+    /r:System.Drawing.dll /r:System.Numerics.dll \
     "$(win_path "$REPO/grasshopper/src/core/Json.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Conversion.cs")" \
@@ -101,7 +102,7 @@ if [ -f "$GH_DLL" ] && [ -f "$GHIO_DLL" ] && [ -f "$RC_DLL" ]; then
     /nologo /target:exe \
     /out:"$(win_path "$COMP_OUT")" \
     /r:"$(win_path "$GH_DLL")" /r:"$(win_path "$GHIO_DLL")" /r:"$(win_path "$RC_DLL")" \
-    /r:System.Drawing.dll \
+    /r:System.Drawing.dll /r:System.Numerics.dll \
     "${COMP_SOURCES[@]}" \
     "$(win_path "$REPO/grasshopper/tests/console/FakeServer.cs")" \
     "$(win_path "$REPO/grasshopper/tests/console/ComponentTests.cs")"

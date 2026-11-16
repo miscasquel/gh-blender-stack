@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Regenerate protocol/number-corpus.json.
+
+The corpus is a static cross-language contract: every entry is a finite IEEE
+754 double's 16-hex-digit bit pattern and Python's repr of that double. The
+Python core test checks the file against repr(); the C# console test checks
+Json.FormatDouble against the same entries. Run this only for a deliberate
+corpus change, and commit the result:
+
+    python3 scripts/make-number-corpus
+
+The random part is splitmix64, not random.Random, so the file is reproducible
+from the seed on every Python version. Required anchors cover the notation
+thresholds, subnormals, the extremes, exact decimal ties and values where
+Mono's built-in formatter/parser diverge.
+"""
+
+import json
+import math
+import os
+import struct
+
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+OUT = os.path.join(REPO, "protocol", "number-corpus.json")
+
+TOTAL = 256
+SEED = 0x5EED_0F_5EED
+
+
+def bits_of(value):
+    return struct.unpack("<Q", struct.pack("<d", value))[0]
+
+
+def value_of(bits):
+    return struct.unpack("<d", struct.pack("<Q", bits))[0]
+
+
+ANCHORS = (
+    # Zero, one and small integers.
+    0x0000000000000000,  # 0.0
+    0x8000000000000000,  # -0.0
+    bits_of(1.0),
+    bits_of(-1.0),
+    bits_of(0.5),
+    bits_of(2.5),
+    bits_of(-2.5),
+    # Python's fixed/scientific decimal-exponent threshold at -4.
+    bits_of(1e-3),
+    bits_of(-1e-3),
+    bits_of(1e-4),
+    bits_of(-1e-4),
+    bits_of(9.999999999999999e-5),
+    bits_of(1e-5),
+    bits_of(-1e-5),
+    bits_of(1e-7),
+    # The upper threshold: 1e15 is fixed, 1e16 is scientific.
+    bits_of(1e15),
+    bits_of(-1e15),
+    bits_of(9.999999999999998e14),
+    bits_of(1e16),
+    bits_of(-1e16),
+    bits_of(1e21),
+    bits_of(-1e21),
+    bits_of(1e-300),
+    bits_of(1e300),
+    # Subnormals and the finite extremes.
+    0x0000000000000001,  # smallest positive subnormal
+    0x000FFFFFFFFFFFFF,  # largest subnormal
+    0x8010000000000000,  # smallest negative normal
+    0x0010000000000000,  # smallest positive normal
+    0x7FEFFFFFFFFFFFFF,  # largest finite double
+    0xFFEFFFFFFFFFFFFF,  # largest finite negative double
+    # 2^53, 2^63 and a 17-digit integer that needs the scientific form.
+    bits_of(9007199254740992.0),
+    bits_of(-9007199254740992.0),
+    bits_of(9223372036854775808.0),
+    0x4345EE2A2EB5A5C4,  # 12345678901234568.0
+    # Shortest digits that need 16-17 significant digits.
+    0x3FB999999999999A,  # 0.1
+    0x3FC999999999999A,  # 0.2
+    0x3FD3333333333334,  # 0.2 + 0.1
+    0x400921FB54442D18,  # Math.PI
+    0xC00921FB54442D18,  # -Math.PI
+    # Exact decimal ties and values where Mono's R/G17/E16 round one unit
+    # away from Python.
+    0x42B4171B02F0A390,  # 22089469980835.5625
+    0xC2B4171B02F0A390,  # -22089469980835.5625
+    0x65419878368A6AE5,  # 5.704152423398817e+179
+    0x429414595779A220,  # 5.5194077016085312e+12
+    0x112DF48487878EE4,  # 6.32244010278484e-226
+)
+
+
+def splitmix64(state):
+    state = (state + 0x9E3779B97F4A7C15) & 0xFFFFFFFFFFFFFFFF
+    value = state
+    value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & 0xFFFFFFFFFFFFFFFF
+    value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & 0xFFFFFFFFFFFFFFFF
+    return state, value ^ (value >> 31)
+
+
+def main():
+    chosen = set(ANCHORS)
+    state = SEED
+    while len(chosen) < TOTAL:
+        state, bits = splitmix64(state)
+        if math.isfinite(value_of(bits)):
+            chosen.add(bits)
+    if len(chosen) != TOTAL:
+        raise SystemExit("anchor set is larger than TOTAL")
+
+    entries = []
+    for bits in sorted(chosen):
+        value = value_of(bits)
+        if not math.isfinite(value):
+            raise SystemExit("non-finite value in the corpus: %016x" % bits)
+        entries.append({"bits": "%016x" % bits, "text": repr(value)})
+
+    with open(OUT, "w", encoding="utf-8") as f:
+        json.dump(entries, f, indent=2)
+        f.write("\n")
+    print("wrote %s (%d values)" % (OUT, len(entries)))
+
+
+if __name__ == "__main__":
+    main()

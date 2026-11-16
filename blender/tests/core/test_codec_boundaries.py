@@ -171,6 +171,30 @@ class DecodeHeaderValueTests(CodecBoundaryTestCase):
                 )
                 self.assert_decode_code("bad_frame", codec.HeaderError, frame)
 
+    def test_integers_are_signed_64_bit(self):
+        for literal, value in (
+            ("9223372036854775807", codec.INT64_MAX),
+            ("-9223372036854775808", codec.INT64_MIN),
+        ):
+            with self.subTest(literal=literal):
+                frame = frame_from_text(
+                    '{"type":"x","v":2,"number":%s}' % literal
+                )
+                header, _ = codec.decode_frame(frame)
+                self.assertEqual(header["number"], value)
+
+        for text in (
+            '{"type":"x","v":2,"number":9223372036854775808}',
+            '{"type":"x","v":2,"number":-9223372036854775809}',
+            '{"type":"x","v":2,"number":1000000000000000000000000000000}',
+            '{"type":"x","v":2,"items":[9223372036854775808]}',
+            '{"type":"x","v":2,"outer":{"number":-9223372036854775809}}',
+        ):
+            with self.subTest(text=text):
+                self.assert_decode_code(
+                    "bad_frame", codec.HeaderError, frame_from_text(text)
+                )
+
     def test_lone_surrogates_are_rejected(self):
         texts = (
             r'{"type":"x","v":2,"note":"\ud800"}',
@@ -460,6 +484,21 @@ class EncodeValidationTests(CodecBoundaryTestCase):
                 self.assert_encode_code(
                     "bad_frame", codec.HeaderError, {"type": "x", "v": value}
                 )
+
+    def test_integers_outside_signed_64_bit_are_rejected(self):
+        for value in (codec.INT64_MAX + 1, codec.INT64_MIN - 1, 10**30, -(10**30)):
+            with self.subTest(value=value):
+                self.assert_encode_code(
+                    "bad_frame", codec.HeaderError, {"type": "x", "number": value}
+                )
+
+    def test_signed_64_bit_bounds_encode_and_decode(self):
+        frame = codec.encode_frame(
+            {"type": "x", "high": codec.INT64_MAX, "low": codec.INT64_MIN}
+        )
+        header, _ = codec.decode_frame(frame)
+        self.assertEqual(header["high"], codec.INT64_MAX)
+        self.assertEqual(header["low"], codec.INT64_MIN)
 
     def test_lone_surrogates_are_rejected(self):
         for header in (

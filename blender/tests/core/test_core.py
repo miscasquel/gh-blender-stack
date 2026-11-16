@@ -221,6 +221,20 @@ class ParamsTests(unittest.TestCase):
         self.assertEqual(params.cast("value_list", 2), 2)
         self.assertEqual(params.cast("text", 5), "5")
 
+    def test_text_matches_python_str(self):
+        # The C# ParamValues text path follows Python's str(): repr for
+        # floats, integral text for ints and Python's capitalised bools.
+        self.assertEqual(params.cast("text", 2.0), "2.0")
+        self.assertEqual(params.cast("text", -0.0), "-0.0")
+        self.assertEqual(params.cast("text", 1e15), "1000000000000000.0")
+        self.assertEqual(params.cast("text", 1e16), "1e+16")
+        self.assertEqual(params.cast("text", 2), "2")
+        self.assertEqual(params.cast("text", True), "True")
+        self.assertEqual(params.cast("text", False), "False")
+        self.assertEqual(params.cast("text", float("nan")), "nan")
+        self.assertEqual(params.cast("text", float("inf")), "inf")
+        self.assertEqual(params.cast("text", float("-inf")), "-inf")
+
     def test_cast_rejects_short_vectors(self):
         with self.assertRaises(params.SchemaError):
             params.cast("vector3", (1, 2))

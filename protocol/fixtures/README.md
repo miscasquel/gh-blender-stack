@@ -44,8 +44,18 @@ python3 scripts/make-fixtures
 ## Float values
 
 Fixture float values are exactly representable in f32 (0.0, 0.5, 0.25, 1.0, …), so
-both codecs agree byte for byte without a rounding tolerance. Header floats are
-formatted the way Python's `repr` does for the ranges the protocol uses: shortest
-round-trip text, with `.0` appended to integral values (`2.0`, not `2`). The C#
-writer in `grasshopper/src/core/Json.cs` matches that; scientific-notation ranges
-are not exercised by the fixtures.
+both codecs agree byte for byte without a rounding tolerance.
+
+Header floats are formatted as Python's `repr` for the full finite double range:
+shortest round-trip digits, fixed notation for decimal exponents `-4..15`,
+scientific outside, a lowercase exponent with at least two digits, `.0` on
+integral fixed values, and `-0.0` for negative zero. The C# formatter derives
+the digits from the exact IEEE 754 value rather than Mono's `R`/`G17`, which
+diverge at `1e15`, `-0.0` and some 16–17-digit values.
+
+`protocol/number-corpus.json` is the static cross-language contract for this:
+an array of `{"bits": "<16 hex IEEE 754>", "text": "<Python repr>"}` entries
+covering the notation thresholds, subnormals, the finite extremes, exact
+decimal ties and deterministic random doubles. `scripts/make-number-corpus`
+regenerates it; the Python core test and the C# console test both validate every
+entry. Regenerate it only for a deliberate contract change.
