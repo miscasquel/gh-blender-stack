@@ -20,7 +20,8 @@ version bump.
 ## 2. Transport
 
 - Library on the Blender side: `websockets` 17.2 (pure Python). The server runs on a background thread. Blender's main thread reads a queue.
-- Library on the GH side: `System.Net.WebSockets.ClientWebSocket`, on a background thread.
+- Library on the GH side: the plugin's hand-rolled `MiniWsClient` over a
+  `TcpClient`, on a background thread.
 - Loopback only. No authentication in v2. Connections from non-loopback addresses are refused.
 - Maximum message size: 512 MiB. Maximum header size: 1 MiB. A frame over
   either cap is answered with `error` code `too_large` when a message can still

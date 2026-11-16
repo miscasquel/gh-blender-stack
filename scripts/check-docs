@@ -1,0 +1,290 @@
+#!/usr/bin/env python3
+"""Check the current documentation and config for factual drift.
+
+    scripts/check-docs [--root DIR]
+
+`--root` checks a copy of the tree (used to prove that a mutation fails).
+No Blender, no network, and only the Python standard library: the checks are
+deterministic and run anywhere.
+
+The contract is intentionally narrow: current claims that have drifted before
+(version, Python runtime, transport, fixture inventory, vendor path) and the
+stale paths that must not return to the current docs. Historical ADR bodies and
+the 2026-11-13 handoff are excluded; they describe the past on purpose.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+# Blender 5.3 ships CPython 3.13. Keep this a constant so the check is the same
+# on a machine with Blender, a CI runner, and a checkout without Blender.
+EXPECTED_PYTHON = "3.13"
+
+DOC_FILES = (
+    "README.md",
+    "DEMO.md",
+    "docs/plan.md",
+    "docs/protocol.md",
+    "docs/extensions-compliance.md",
+    "docs/plan-quality-0.7-0.8.md",
+)
+
+STALE_PATTERNS = (
+    (re.compile(r"/home/miquel(?:/|\b)"), "machine-specific /home/miquel path"),
+    (re.compile(r"blender/gh_stack\b"), "stale blender/gh_stack path"),
+    (re.compile(r"(?:^|[^A-Za-z0-9_])gh_stack/"), "stale gh_stack/ path"),
+)
+
+VENDOR_IGNORE = "blender/stageloom/vendor/**"
+
+
+class Checker:
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.failures: list[tuple[str, int, str]] = []
+        self._cache: dict[str, list[str] | None] = {}
+
+    def fail(self, rel: str, line: int, message: str) -> None:
+        self.failures.append((rel, line, message))
+
+    def lines(self, rel: str) -> list[str] | None:
+        if rel not in self._cache:
+            path = self.root / rel
+            try:
+                self._cache[rel] = path.read_text(encoding="utf-8").splitlines()
+            except OSError as exc:
+                self.fail(rel, 1, f"cannot read: {exc}")
+                self._cache[rel] = None
+        return self._cache[rel]
+
+    def find(self, rel: str, pattern: str, flags: int = 0):
+        """Yield (line_number, line, match) for a regex over a file."""
+        lines = self.lines(rel)
+        if lines is None:
+            return
+        regex = re.compile(pattern, flags)
+        for number, line in enumerate(lines, 1):
+            match = regex.search(line)
+            if match:
+                yield number, line, match
+
+
+def check_versions(check: Checker) -> None:
+    manifest = "blender/stageloom/blender_manifest.toml"
+    version = None
+    for number, _line, match in check.find(manifest, r'^version\s*=\s*"([^"]+)"'):
+        version = match.group(1)
+        break
+    if version is None:
+        check.fail(manifest, 1, "no top-level version = \"...\" in the add-on manifest")
+        return
+
+    release = None
+    for number, _line, match in check.find(
+        "README.md", r"https://github\.com/[^\s)]+/releases/tag/v([^\s)]+)"
+    ):
+        release = match.group(1)
+        release_line = number
+        break
+    if release is None:
+        check.fail("README.md", 1, "no GitHub release link (releases/tag/v<version>)")
+    elif release != version:
+        check.fail(
+            "README.md",
+            release_line,
+            f"release link is v{release}, manifest is {version}",
+        )
+
+    latest = None
+    for number, _line, match in check.find("CHANGELOG.md", r"^##\s*\[([^\]]+)\]"):
+        latest = match.group(1)
+        latest_line = number
+        break
+    if latest is None:
+        check.fail("CHANGELOG.md", 1, "no '## [<version>]' release heading")
+    elif latest != version:
+        check.fail(
+            "CHANGELOG.md",
+            latest_line,
+            f"latest heading is [{latest}], manifest is {version}",
+        )
+
+
+def check_python_claim(check: Checker) -> None:
+    claim = re.compile(r"Blender\s+5\.3[^\n]*?Python\s+([0-9.]+)")
+    found = False
+    for number, _line, match in check.find("README.md", claim.pattern):
+        found = True
+        claimed = match.group(1)
+        if claimed != EXPECTED_PYTHON:
+            check.fail(
+                "README.md",
+                number,
+                f"README claims Python {claimed}; Blender 5.3 runs Python {EXPECTED_PYTHON}",
+            )
+    if not found:
+        check.fail(
+            "README.md",
+            1,
+            "no 'Blender 5.3 ... Python 3.13' requirements claim found",
+        )
+    for number, _line, _match in check.find("README.md", r"Python\s+3\.14\b"):
+        check.fail(
+            "README.md",
+            number,
+            f"stale Python 3.14 claim; Blender 5.3 runs Python {EXPECTED_PYTHON}",
+        )
+
+
+def check_protocol_transport(check: Checker) -> None:
+    rel = "docs/protocol.md"
+    lines = check.lines(rel)
+    if lines is None:
+        return
+
+    start = None
+    for number, line in enumerate(lines, 1):
+        if re.match(r"^##\s+2\.\s+Transport\s*$", line):
+            start = number
+            break
+    if start is None:
+        check.fail(rel, 1, "no '## 2. Transport' section")
+        return
+
+    end = len(lines)
+    for number in range(start, len(lines)):
+        if re.match(r"^##\s+", lines[number]):
+            end = number
+            break
+
+    section = "\n".join(lines[start - 1 : end])
+    if "MiniWsClient" not in section:
+        check.fail(rel, start, "transport does not name MiniWsClient")
+    if "TcpClient" not in section:
+        check.fail(rel, start, "transport does not name TcpClient")
+    for number, _line, _match in check.find(rel, r"ClientWebSocket"):
+        check.fail(
+            rel,
+            number,
+            "protocol claims ClientWebSocket; the shipped transport is MiniWsClient/TcpClient",
+        )
+
+
+def check_fixture_inventory(check: Checker) -> None:
+    rel = "protocol/fixtures/README.md"
+    fixture_root = check.root / "protocol" / "fixtures"
+    try:
+        directories = sorted(
+            path.name for path in fixture_root.iterdir() if path.is_dir()
+        )
+    except OSError as exc:
+        check.fail(rel, 1, f"cannot list protocol/fixtures: {exc}")
+        return
+
+    rows: list[tuple[int, str]] = []
+    for number, _line, match in check.find(rel, r"^\|\s*`([^`]+)`\s*\|"):
+        rows.append((number, match.group(1)))
+
+    # Point inventory failures at the table itself, not at line 1.
+    anchor = 1
+    lines = check.lines(rel) or []
+    for number, line in enumerate(lines, 1):
+        if line.strip() == "## The fixtures":
+            anchor = number
+            break
+
+    names = [name for _number, name in rows]
+    listed = set(names)
+    actual = set(directories)
+    missing = sorted(actual - listed)
+    extra = sorted(listed - actual)
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+
+    if missing:
+        check.fail(
+            rel,
+            anchor,
+            "fixture table is missing: " + ", ".join(f"`{name}`" for name in missing),
+        )
+    if extra:
+        check.fail(
+            rel,
+            anchor,
+            "fixture table names directories that do not exist: "
+            + ", ".join(f"`{name}`" for name in extra),
+        )
+    if duplicates:
+        check.fail(rel, anchor, "fixture table repeats: " + ", ".join(duplicates))
+    if len(directories) != len(names):
+        check.fail(
+            rel,
+            anchor,
+            f"fixture table lists {len(names)} entries; the tree has {len(directories)} directories",
+        )
+
+
+def check_vendor_path(check: Checker) -> None:
+    rel = "ruff.toml"
+    entries: list[tuple[int, str, str]] = []
+    for number, _line, match in check.find(rel, r'^\s*"([^"]*vendor[^"]*)"\s*='):
+        entries.append((number, match.group(1), match.group(0)))
+
+    if not entries:
+        check.fail(rel, 1, "no per-file vendor ignore")
+    for number, path, _line in entries:
+        if path != VENDOR_IGNORE:
+            check.fail(
+                rel,
+                number,
+                f"vendor ignore is {path!r}; the current tree is {VENDOR_IGNORE!r}",
+            )
+    if not (check.root / "blender" / "stageloom" / "vendor").is_dir():
+        check.fail(rel, 1, "blender/stageloom/vendor is missing from the tree")
+    for number, _line, _match in check.find(rel, r"blender/gh_stack\b"):
+        check.fail(rel, number, "stale blender/gh_stack path in the vendor ignore")
+
+
+def check_current_docs_paths(check: Checker) -> None:
+    for rel in DOC_FILES:
+        for number, line, _match in check.find(rel, r".*"):
+            for pattern, message in STALE_PATTERNS:
+                if pattern.search(line):
+                    check.fail(rel, number, message)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="scripts/check-docs")
+    parser.add_argument(
+        "--root",
+        default=str(Path(__file__).resolve().parent.parent),
+        help="repository root to check (default: this checkout)",
+    )
+    args = parser.parse_args()
+    root = Path(args.root).resolve()
+
+    check = Checker(root)
+    check_versions(check)
+    check_python_claim(check)
+    check_protocol_transport(check)
+    check_fixture_inventory(check)
+    check_vendor_path(check)
+    check_current_docs_paths(check)
+
+    if check.failures:
+        for rel, number, message in check.failures:
+            print(f"check-docs: {rel}:{number}: {message}", file=sys.stderr)
+        print(f"check-docs: {len(check.failures)} failure(s)", file=sys.stderr)
+        return 1
+
+    print(
+        "check-docs: ok (version, Python runtime, transport, fixtures, vendor path, stale paths)"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

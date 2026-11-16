@@ -34,6 +34,7 @@ python3 scripts/make-fixtures
 | `request-ref` | a parameter-only request (`geom.mode = "ref"`, no sections) |
 | `request-mesh` | `mesh.*` sections including colours and crease edges |
 | `request-subd` | `subd.*` sections with a crease |
+| `request-instances` | block definitions and instances, including a nested placement and a per-definition point attribute |
 | `response-mesh` | a two-triangle mesh response |
 | `response-mixed` | mesh + curves + points in one response, with a warning |
 | `response-attributes` | attributes: `i32` face ids, `f32` point loads, boolean flags, an UTF-8 string tag with its offsets section |

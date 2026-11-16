@@ -1,47 +1,119 @@
 #!/usr/bin/env bash
-# Layer C, codec half: build the C# core and check it against the golden
-# fixtures under wine, then the attribute store (which references RhinoCommon's
-# managed ArchivableDictionary; no Rhino process is involved).
+# Layer C: build the C# suites and run them under wine.
+#
+#     scripts/test-gha               # full suite: codec, attributes, link, components, stage guard
+#     scripts/test-gha --codec-only  # only StageloomCoreTests.exe; no Rhino managed assemblies
+#
+# The full suite requires wine with Mono's csc *and* Rhino 8's managed
+# assemblies (RhinoCommon, Grasshopper, GH_IO). A machine with only the codec
+# dependencies must use --codec-only; the default fails with the exact missing
+# executables instead of silently running a smaller suite.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 source grasshopper/build/wine-env.sh
 
+CODEC_ONLY=0
+for arg in "$@"; do
+  case "$arg" in
+    --codec-only) CODEC_ONLY=1 ;;
+    -h|--help)
+      cat <<'EOF'
+usage: scripts/test-gha [--codec-only]
+
+  (default)     full C# suite; requires Rhino 8's managed assemblies
+  --codec-only  run only StageloomCoreTests.exe against the golden fixtures
+EOF
+      exit 0
+      ;;
+    *)
+      echo "test-gha: unknown argument: $arg" >&2
+      echo "usage: scripts/test-gha [--codec-only]" >&2
+      exit 2
+      ;;
+  esac
+done
+
+OUT_DIR="$PWD/grasshopper/build/out"
+CORE="$OUT_DIR/StageloomCoreTests.exe"
+FULL=(
+  "$CORE"
+  "$OUT_DIR/StageloomAttrTests.exe"
+  "$OUT_DIR/StageloomLinkTests.exe"
+  "$OUT_DIR/StageloomComponentTests.exe"
+  "$OUT_DIR/StageloomStageTests.exe"
+)
+
+# build.sh only builds the Rhino-dependent suites when the managed assemblies
+# exist. Remove the outputs first so an old binary from a previous environment
+# cannot make the full suite look complete after a Rhino-less build.
+if [ "$CODEC_ONLY" -eq 1 ]; then
+  rm -f "$CORE"
+else
+  rm -f "${FULL[@]}"
+fi
+
 grasshopper/build/build.sh
+
+if [ "$CODEC_ONLY" -eq 1 ]; then
+  if [ ! -f "$CORE" ]; then
+    echo "csharp: codec-only: missing $CORE after grasshopper/build/build.sh" >&2
+    exit 1
+  fi
+  echo "csharp: codec-only — running StageloomCoreTests.exe only (no Rhino managed assemblies required)"
+else
+  MISSING=()
+  for exe in "${FULL[@]}"; do
+    [ -f "$exe" ] || MISSING+=("$(basename "$exe")")
+  done
+  if [ "${#MISSING[@]}" -ne 0 ]; then
+    echo "C# suite incomplete: grasshopper/build/build.sh did not produce:" >&2
+    for name in "${MISSING[@]}"; do
+      echo "  - $name" >&2
+    done
+    echo "The missing suites require Rhino 8's managed assemblies (RhinoCommon, Grasshopper, GH_IO)." >&2
+    echo "Set RHINO/WINEPREFIX, or run scripts/test-gha --codec-only to check the codec alone." >&2
+    exit 1
+  fi
+fi
 
 # The deployed .gha is invisible to this suite, but a stale one is a live-session
 # hazard. Warn without failing: a mismatch is not a codec regression.
-scripts/check-deployed || true
+if [ "$CODEC_ONLY" -eq 0 ]; then
+  scripts/check-deployed || true
+fi
 
 LOG="$(mktemp)"
 set +e
-run_wine \
-  "$(win_path "$PWD/grasshopper/build/out/StageloomCoreTests.exe")" \
-  "$(win_path "$PWD/protocol/fixtures")" >"$LOG" 2>&1
-CODE=$?
-if [ -f grasshopper/build/out/StageloomAttrTests.exe ]; then
+if [ "$CODEC_ONLY" -eq 1 ]; then
   run_wine \
-    "$(win_path "$PWD/grasshopper/build/out/StageloomAttrTests.exe")" >>"$LOG" 2>&1
+    "$(win_path "$CORE")" \
+    "$(win_path "$PWD/protocol/fixtures")" >"$LOG" 2>&1
+  CODE=$?
+else
+  CODE=0
+  run_wine \
+    "$(win_path "$CORE")" \
+    "$(win_path "$PWD/protocol/fixtures")" >"$LOG" 2>&1
   CODE=$(( CODE | $? ))
-fi
-# The link half: the real GhLink against a scripted fake server (the socket
-# thread, slots, notes, outbox and receive paths; no Rhino document).
-if [ -f grasshopper/build/out/StageloomLinkTests.exe ]; then
+  # The attribute store references RhinoCommon's managed
+  # ArchivableDictionary; no Rhino process is involved.
   run_wine \
-    "$(win_path "$PWD/grasshopper/build/out/StageloomLinkTests.exe")" >>"$LOG" 2>&1
+    "$(win_path "$OUT_DIR/StageloomAttrTests.exe")" >>"$LOG" 2>&1
   CODE=$(( CODE | $? ))
-fi
-# The stage components' own status halves: the full plugin source set plus a
-# scripted IGH_DataAccess and WebSocket server.
-if [ -f grasshopper/build/out/StageloomComponentTests.exe ]; then
+  # The link half: the real GhLink against a scripted fake server (the socket
+  # thread, slots, notes, outbox and receive paths; no Rhino document).
   run_wine \
-    "$(win_path "$PWD/grasshopper/build/out/StageloomComponentTests.exe")" >>"$LOG" 2>&1
+    "$(win_path "$OUT_DIR/StageloomLinkTests.exe")" >>"$LOG" 2>&1
   CODE=$(( CODE | $? ))
-fi
-# Stage In's build guard, without a Grasshopper document or a solve.
-if [ -f grasshopper/build/out/StageloomStageTests.exe ]; then
+  # The stage components' own status halves: the full plugin source set plus a
+  # scripted IGH_DataAccess and WebSocket server.
   run_wine \
-    "$(win_path "$PWD/grasshopper/build/out/StageloomStageTests.exe")" >>"$LOG" 2>&1
+    "$(win_path "$OUT_DIR/StageloomComponentTests.exe")" >>"$LOG" 2>&1
+  CODE=$(( CODE | $? ))
+  # Stage In's build guard, without a Grasshopper document or a solve.
+  run_wine \
+    "$(win_path "$OUT_DIR/StageloomStageTests.exe")" >>"$LOG" 2>&1
   CODE=$(( CODE | $? ))
 fi
 set -e

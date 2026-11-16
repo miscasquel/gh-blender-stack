@@ -1,26 +1,90 @@
-# Layer A only: the pure Python core needs no Blender, no wine, and no
-# third-party packages. Layer B (Blender headless) and layer C (C# under wine
-# with Rhino installed) cannot run on GitHub runners; run those with
-# scripts/test-blender and scripts/test-gha on a machine set up for them.
-name: core tests
+# What actually runs here:
+#   core     pure Python 3.13 and 3.14: ruff 0.17.2 + scripts/test-core
+#   quality  Blender 5.3.0 on Ubuntu: scripts/check-all --ci, which runs docs,
+#            ruff, core, Blender headless + offline gate, benchmarks and the
+#            installed-extension round trip
+#
+# C#: local/Windows gate, intentionally not a job here.
+#   scripts/test-gha needs wine with Mono's csc plus Rhino 8's managed
+#   assemblies (RhinoCommon, Grasshopper, GH_IO); there is no verified
+#   stock-runner path in this repository. It runs on the development machine
+#   as part of scripts/check-all and is skipped there by `--ci` with a printed
+#   reason. The C# tasks (Q7/Q8) own adding a real stock-runner codec job; this
+#   workflow does not claim C# coverage.
+name: tests
 
 on:
   push:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   core:
-    name: pure-core (layer A)
+    name: core (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: ${{ matrix.python-version }}
+      - name: Install pinned ruff
+        run: python -m pip install --quiet ruff==0.17.2
       - name: Lint
-        run: |
-          python -m pip install --quiet ruff==0.17.2
-          ruff check --output-format=concise --ignore=E402,E741,E731 .
-      - name: Run the core tests
+        run: ruff check --output-format=concise .
+      - name: Core tests
         run: scripts/test-core
+
+  quality:
+    name: quality gate (Blender 5.3.0)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install Blender runtime libraries
+        # Blender runs headless here, but its binary still links the X11/GL and
+        # OpenMP runtime. Install the small explicit set rather than relying on
+        # whatever the runner image happens to carry.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-6 libxext6 libxi6 libxrandr2 libxinerama1 libxcursor1 \
+            libxxf86vm1 libxfixes3 libxrender1 libgl1 libegl1 \
+            libxkbcommon0 libsm6 libice6 libgomp1
+      - name: Cache Blender 5.3.0 Linux x64
+        id: cache-blender
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/blender-5.3.0-linux-x64
+          key: ${{ runner.os }}-blender-5.3.0-linux-x64
+      - name: Download and unpack Blender 5.3.0
+        if: steps.cache-blender.outputs.cache-hit != 'true'
+        run: |
+          archive="$RUNNER_TEMP/blender-5.3.0-linux-x64.tar.xz"
+          curl -fL --retry 3 --retry-delay 5 -o "$archive" \
+            https://download.blender.org/release/Blender5.3/blender-5.3.0-linux-x64.tar.xz
+          mkdir -p "$RUNNER_TEMP/blender-5.3.0-linux-x64"
+          tar -xJf "$archive" -C "$RUNNER_TEMP/blender-5.3.0-linux-x64" --strip-components=1
+          rm -f "$archive"
+      - name: Put Blender on PATH
+        run: echo "$RUNNER_TEMP/blender-5.3.0-linux-x64" >> "$GITHUB_PATH"
+      - name: Verify Blender
+        run: blender --version
+      - name: Install pinned ruff
+        run: python -m pip install --quiet ruff==0.17.2
+      - name: Run the local quality gate
+        run: scripts/check-all --ci

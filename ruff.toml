@@ -16,5 +16,5 @@ ignore = ["E402", "E741", "E731"]
 # lint are also silenced per-file: the vendored websockets wheel and the spike
 # evidence scripts, which are kept as they ran.
 [lint.per-file-ignores]
-"blender/gh_stack/vendor/**" = ["ALL"]
+"blender/stageloom/vendor/**" = ["ALL"]
 "spikes/**" = ["ALL"]

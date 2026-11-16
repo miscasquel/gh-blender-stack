@@ -88,10 +88,12 @@ Blender                                          Rhino / Grasshopper (wine)
   downstream stages stay live. **Clear Bake** removes the bake, unfreezes the
   stages that bake froze and resumes live output. A packed bake is kept when
   the `.blend` is saved.
-- **Tests.** `scripts/test-core` (standard library only), `scripts/test-blender`
-  (Blender headless against `tools/fake_gh`), `scripts/test-gha` (the C# codec
-  against the golden fixtures, under wine), `scripts/test-extension` (installed
-  extension round trip).
+- **Tests.** `scripts/check-all` is the local gate: docs, core, Blender headless
+  (plus the offline gate), benchmarks, the installed extension round trip and
+  the C# suites, with per-step timing. `scripts/test-core` (standard library
+  only), `scripts/test-blender` (Blender headless against `tools/fake_gh`),
+  `scripts/test-gha` (the C# codec against the golden fixtures, under wine) and
+  `scripts/test-extension` (installed extension round trip) are its steps.
 
 ## What is deliberately not here yet
 
@@ -113,7 +115,7 @@ The authoritative roadmap and scope are in [docs/plan.md](docs/plan.md).
 
 ## Requirements
 
-- Blender 5.2 or newer (Python 3.14); 1.0 targets Blender 5.3. The add-on
+- Blender 5.2 or newer; 1.0 targets Blender 5.3 (Python 3.13). The add-on
   declares the `network` permission — it listens on localhost — so Blender's
   **Online Access** must be on
   (Preferences > System); with it off the panel says so and nothing listens.
@@ -213,6 +215,8 @@ pointed at a remote machine.
 ## Working on it
 
 ```
+scripts/check-all          # the gate: docs, core, Blender, bench, extension, C#
+scripts/check-all --quick  # inner loop: docs, core and ruff only
 scripts/test-core        # layer A: pure Python core, no Blender needed
 scripts/test-blender     # layer B: Blender headless, against tools/fake_gh
 scripts/test-gha         # layer C: the C# codec under wine, the same golden fixtures
@@ -222,9 +226,12 @@ scripts/bench            # reference performance matrix and its budgets (not a t
 python3 scripts/make-fixtures   # regenerate protocol/fixtures after a protocol change
 ```
 
-CI runs the pure-core layer only. Layers B and C run on the development
-machine, which is Linux: Blender 5.3 headless for layer B, and a wine prefix
-with Rhino 8 installed for layer C (`scripts/test-gha`).
+CI runs the core layer on Python 3.13 and 3.14. A second job installs Blender
+5.3 on Ubuntu and runs `scripts/check-all --ci`: docs, core, Blender headless
+with the offline gate, benchmarks and the installed-extension round trip. That
+job names and skips the C# step because a stock runner has no wine prefix with
+Rhino 8; the C# suites run on the development machine here, and a stock-runner
+codec job is left to the C# tasks rather than claimed.
 
 ## Support
 
