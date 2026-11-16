@@ -736,9 +736,12 @@ namespace Stageloom.Core
         // ------------------------------------------------- dictionary -> wire
 
         /// <summary>Append every attribute under a root as wire sections plus
-        /// descriptors. The attribute index continues from the descriptor list,
-        /// so several groups can be collected into one frame. ``prefix`` and
-        /// ``definition`` namespace a definition's attributes (§5.2).
+        /// descriptors. The attribute index is ``index0`` plus the descriptor
+        /// count, so several groups can be collected into one frame. ``prefix``
+        /// and ``definition`` namespace a definition's attributes (§5.2);
+        /// ``part`` marks the part of a multi-part definition, and the caller's
+        /// ``prefix`` carries that part's ``idef.&lt;i&gt;.&lt;p&gt;.`` namespace.
+        /// A single-part definition passes no part and keeps the original names.
         ///
         /// This is the outbound boundary: a stored record whose type, domain or
         /// value array is malformed is a typed bad_attribute instead of an
@@ -746,7 +749,8 @@ namespace Stageloom.Core
         /// before.</summary>
         public static void Collect(ArchivableDictionary root, string group,
                                    List<Section> sections, List<Dictionary<string, object>> descriptors,
-                                   string prefix = "", long? definition = null)
+                                   string prefix = "", long? definition = null,
+                                   long? part = null, int index0 = 0)
         {
             if (root == null) return;
             if (sections == null || descriptors == null)
@@ -772,7 +776,7 @@ namespace Stageloom.Core
                     throw new FrameException("bad_attribute", "attribute " + name + ": " + problem);
 
                 int components = Types[type].Components;
-                int index = descriptors.Count;
+                int index = index0 + descriptors.Count;
                 string sectionName = prefix + "attr." + index + ".values";
 
                 var entry = new Dictionary<string, object>();
@@ -784,6 +788,7 @@ namespace Stageloom.Core
                 entry["count"] = (long)count;
                 entry["section"] = sectionName;
                 if (definition.HasValue) entry["definition"] = definition.Value;
+                if (part.HasValue) entry["part"] = part.Value;
 
                 string offsetsName = prefix + "attr." + index + ".offsets";
                 Section valueSection = Encode(type, values, sectionName);
@@ -1078,9 +1083,11 @@ namespace Stageloom.Core
 
         public static void Collect(GeometryBase geometry, string group,
                                    List<Section> sections, List<Dictionary<string, object>> descriptors,
-                                   string prefix = "", long? definition = null)
+                                   string prefix = "", long? definition = null,
+                                   long? part = null, int index0 = 0)
         {
-            Collect(Root(geometry, false), group, sections, descriptors, prefix, definition);
+            Collect(Root(geometry, false), group, sections, descriptors, prefix, definition,
+                    part, index0);
         }
 
         public static bool TryGet(GeometryBase geometry, string name,

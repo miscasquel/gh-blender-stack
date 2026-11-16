@@ -324,7 +324,8 @@ namespace Stageloom
                     // Emit also adds the definitions/instances counts.
                     var definitions = new List<Dictionary<string, object>>();
                     Instances.Emit(instances, GhLink.DocumentScale(), sections, attributes,
-                                   definitions, warnings, counts);
+                                   definitions, warnings,
+                                   GhLink.PeerSupports(GhLink.Blocks2Capability), counts);
                     // Present even with no blocks: a reader should not have to
                     // branch on section names to tell a plain response from an
                     // instanced one.

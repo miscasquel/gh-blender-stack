@@ -20,7 +20,12 @@
 // Stage Out: GH_InstanceReference items become the same table and rows. A
 // definition's geometry comes from its paired ModelInstanceDefinition.Objects;
 // a reference with no pairing (a document block by id) falls back to the
-// document definition table.
+// document definition table. Every non-reference object is one part, in object
+// order; a GH_InstanceReference is a definition-level nested row. A definition
+// with one part keeps the original `idef.<i>.*` namespace and no `parts`
+// field; one with more parts writes `parts: N` and `idef.<i>.<p>.*`. A peer
+// without `blocks/2` gets one single-part definition per part and a warning,
+// with every referring row fanned out at the same placement.
 //
 // Definition geometry is read and written through the same Conversion and
 // AttributeStore code as the frame's own geometry, under the `idef.<i>.`
@@ -1283,7 +1288,13 @@ namespace Stageloom
         /// rows themselves land in `inst.ref_def` / `inst.transforms`. Does
         /// nothing when the list is empty. <paramref name="counts"/>, when
         /// given, gains `definitions` and `instances` so a reader can tell an
-        /// instanced response from a plain one without scanning sections.</summary>
+        /// instanced response from a plain one without scanning sections.
+        ///
+        /// This overload assumes the peer cannot read multi-part definitions
+        /// (`blocks/2`, protocol §8): a definition with more than one part is
+        /// split into one single-part definition per part, with a stage
+        /// warning. Stage Out passes the negotiated capability to the overload
+        /// below; conservative is the only safe default for other callers.</summary>
         public static void Emit(IList<GH_InstanceReference> instances, double scale,
                                 List<Section> sections,
                                 List<Dictionary<string, object>> attributes,
@@ -1291,8 +1302,26 @@ namespace Stageloom
                                 List<WireWarning> warnings,
                                 Dictionary<string, object> counts = null)
         {
+            Emit(instances, scale, sections, attributes, definitions, warnings, false, counts);
+        }
+
+        /// <summary>Emit with the peer's `blocks/2` capability made explicit.
+        /// A multi-part definition is written as one table entry with `parts`
+        /// and part namespaces only when <paramref name="peerSupportsParts"/> is
+        /// true; otherwise every part becomes its own single-part definition and
+        /// every row that referenced the definition fans out to all of them at
+        /// the same placement (protocol §8).</summary>
+        public static void Emit(IList<GH_InstanceReference> instances, double scale,
+                                List<Section> sections,
+                                List<Dictionary<string, object>> attributes,
+                                List<Dictionary<string, object>> definitions,
+                                List<WireWarning> warnings,
+                                bool peerSupportsParts,
+                                Dictionary<string, object> counts = null)
+        {
             if (instances == null || instances.Count == 0) return;
-            var writer = new DefinitionWriter(scale, sections, attributes, definitions, warnings);
+            var writer = new DefinitionWriter(scale, sections, attributes, definitions, warnings,
+                                              peerSupportsParts);
             var refDef = new List<uint>();
             var transforms = new List<float>();
             foreach (GH_InstanceReference instance in instances)
@@ -1303,10 +1332,15 @@ namespace Stageloom
                         "An instance reference without a value was ignored"));
                     continue;
                 }
-                int index = writer.Definition(instance.InstanceDefinition, instance.Value.ParentIdefId);
-                if (index < 0) continue;
-                refDef.Add((uint)index);
-                transforms.AddRange(Conversion.TransformToWire(instance.Value.Xform, scale));
+                int[] indices = writer.Definition(instance.InstanceDefinition,
+                                                  instance.Value.ParentIdefId);
+                if (indices == null) continue;
+                foreach (int index in indices)
+                {
+                    if (index < 0) continue;
+                    refDef.Add((uint)index);
+                    transforms.AddRange(Conversion.TransformToWire(instance.Value.Xform, scale));
+                }
             }
             if (refDef.Count == 0) return;
             sections.Add(Section.U32("inst.ref_def", refDef.ToArray()));
@@ -1325,8 +1359,20 @@ namespace Stageloom
                                 List<Dictionary<string, object>> definitions,
                                 List<string> warnings)
         {
+            Emit(instances, scale, sections, attributes, definitions, warnings, false);
+        }
+
+        /// <summary>Text-only view of Emit's warnings with the peer's
+        /// `blocks/2` capability made explicit.</summary>
+        public static void Emit(IList<GH_InstanceReference> instances, double scale,
+                                List<Section> sections,
+                                List<Dictionary<string, object>> attributes,
+                                List<Dictionary<string, object>> definitions,
+                                List<string> warnings,
+                                bool peerSupportsParts)
+        {
             var rich = new List<WireWarning>();
-            Emit(instances, scale, sections, attributes, definitions, rich);
+            Emit(instances, scale, sections, attributes, definitions, rich, peerSupportsParts);
             if (warnings == null) return;
             foreach (WireWarning warning in rich)
                 warnings.Add(warning.Message);
@@ -1340,38 +1386,450 @@ namespace Stageloom
             List<Mesh> meshes, List<Curve> curves, List<Point3d> points,
             List<SubD> subds, List<Brep> breps, List<GH_InstanceReference> nested)
         {
-            if (meshes.Count > 0 || curves.Count > 0 || points.Count > 0
-                || subds.Count > 0 || breps.Count > 0)
-                return true;
+            if (HasGeometryContent(meshes, curves, points, subds, breps)) return true;
             foreach (GH_InstanceReference goo in nested)
                 if (goo != null && goo.Value != null) return true;
             return false;
         }
 
-        private class DefinitionWriter
+        private static bool HasGeometryContent(
+            List<Mesh> meshes, List<Curve> curves, List<Point3d> points,
+            List<SubD> subds, List<Brep> breps)
         {
-            private readonly double _scale;
+            return meshes.Count > 0 || curves.Count > 0 || points.Count > 0
+                || subds.Count > 0 || breps.Count > 0;
+        }
+
+        /// <summary>One definition's geometry before it is written into a part
+        /// namespace. Every non-reference ModelObject (or document RhinoObject)
+        /// is one part, in object order; a part keeps its geometry kinds
+        /// separate so a mesh, curve, point, SubD or Brep never gets flattened
+        /// into another kind.</summary>
+        private sealed class GeometryPart
+        {
+            public readonly List<Mesh> Meshes = new List<Mesh>();
+            public readonly List<Curve> Curves = new List<Curve>();
+            public readonly List<Point3d> Points = new List<Point3d>();
+            public readonly List<SubD> Subds = new List<SubD>();
+            public readonly List<Brep> Breps = new List<Brep>();
+            public readonly List<GeometryBase> Sources = new List<GeometryBase>();
+
+            public bool HasGeometry
+            {
+                get
+                {
+                    return HasGeometryContent(Meshes, Curves, Points, Subds, Breps);
+                }
+            }
+        }
+
+        /// <summary>A gathered definition: its parts in object order and its
+        /// definition-level nested rows.</summary>
+        private sealed class DefinitionContent
+        {
+            public readonly List<GeometryPart> Parts = new List<GeometryPart>();
+            public readonly List<DefinitionTableWriter.NestedRow> Nested =
+                new List<DefinitionTableWriter.NestedRow>();
+
+            public bool HasContent
+            {
+                get
+                {
+                    foreach (GeometryPart part in Parts)
+                        if (part.HasGeometry) return true;
+                    return Nested.Count > 0;
+                }
+            }
+        }
+
+        /// <summary>Owns the outbound definition table: part grouping,
+        /// deterministic content keys, deduplication, nested rows and the
+        /// `blocks/2` fallback split. It operates on already-converted parts so
+        /// the grammar can be tested without native Rhino geometry.</summary>
+        internal sealed class DefinitionTableWriter
+        {
+            /// <summary>One part's unprefixed geometry sections and neutral
+            /// descriptors (definition 0; part p for a multi-part definition,
+            /// absent for a single part). The table writer prefixes them and
+            /// fills in the real definition index.</summary>
+            internal sealed class Part
+            {
+                public readonly List<Section> Sections = new List<Section>();
+                public readonly List<Dictionary<string, object>> Descriptors =
+                    new List<Dictionary<string, object>>();
+
+                public Part()
+                {
+                }
+
+                public Part(List<Section> sections,
+                            List<Dictionary<string, object>> descriptors)
+                {
+                    if (sections != null) Sections.AddRange(sections);
+                    if (descriptors != null) Descriptors.AddRange(descriptors);
+                }
+            }
+
+            /// <summary>One definition-level nested placement. The transform is
+            /// already in wire order and units; <see cref="Signature"/> is the
+            /// child's identity for the content key, and Resolve is deferred so
+            /// a definition that dedupes writes no children.</summary>
+            internal sealed class NestedRow
+            {
+                public readonly float[] WireTransform;
+                public readonly string Signature;
+                private readonly Func<int[]> _resolve;
+
+                public NestedRow(float[] wireTransform, string signature, Func<int[]> resolve)
+                {
+                    if (wireTransform == null) wireTransform = new float[16];
+                    if (wireTransform.Length != 16)
+                        throw new FrameException("bad_frame",
+                            "a nested instance row needs 16 floats, not "
+                            + wireTransform.Length);
+                    WireTransform = wireTransform;
+                    Signature = signature ?? "";
+                    _resolve = resolve;
+                }
+
+                public int[] Resolve()
+                {
+                    return _resolve == null ? null : _resolve();
+                }
+            }
+
             private readonly List<Section> _sections;
             private readonly List<Dictionary<string, object>> _attributes;
             private readonly List<Dictionary<string, object>> _definitions;
             private readonly List<WireWarning> _warnings;
-            private readonly Dictionary<string, int> _byKey = new Dictionary<string, int>();
-            private readonly HashSet<string> _visiting = new HashSet<string>();
+            private readonly bool _peerSupportsParts;
+            private readonly Dictionary<string, int[]> _byKey =
+                new Dictionary<string, int[]>(StringComparer.Ordinal);
+            private readonly Dictionary<string, int[]> _byContent =
+                new Dictionary<string, int[]>(StringComparer.Ordinal);
+            private readonly HashSet<string> _visiting = new HashSet<string>(StringComparer.Ordinal);
+            private readonly HashSet<string> _warned = new HashSet<string>(StringComparer.Ordinal);
+            private readonly HashSet<string> _sectionNames = new HashSet<string>(StringComparer.Ordinal);
 
-            public DefinitionWriter(double scale, List<Section> sections,
-                                    List<Dictionary<string, object>> attributes,
-                                    List<Dictionary<string, object>> definitions,
-                                    List<WireWarning> warnings)
+            public DefinitionTableWriter(List<Section> sections,
+                                         List<Dictionary<string, object>> attributes,
+                                         List<Dictionary<string, object>> definitions,
+                                         List<WireWarning> warnings,
+                                         bool peerSupportsParts)
             {
-                _scale = scale;
                 _sections = sections;
                 _attributes = attributes;
                 _definitions = definitions;
                 _warnings = warnings;
+                _peerSupportsParts = peerSupportsParts;
+                if (sections != null)
+                    foreach (Section section in sections)
+                        if (section != null && section.Name != null) _sectionNames.Add(section.Name);
             }
 
-            /// <summary>The table index for one instance's definition, writing
-            /// the definition on first use.
+            /// <summary>The committed descriptor count; a single-part
+            /// definition continues the legacy global attribute indices.</summary>
+            public int AttributeCount
+            {
+                get { return _attributes.Count; }
+            }
+
+            public bool PeerSupportsParts
+            {
+                get { return _peerSupportsParts; }
+            }
+
+            public bool TryGet(string key, out int[] indices)
+            {
+                if (key != null) return _byKey.TryGetValue(key, out indices);
+                indices = null;
+                return false;
+            }
+
+            /// <summary>Write one definition and return every table index a
+            /// referring row must use. A single-part definition returns one
+            /// index; a fallback split returns one per part, in part order.
+            /// Null means the definition was a cycle and its row is skipped.</summary>
+            public int[] Write(string key, string name, List<Part> parts,
+                               List<NestedRow> nested)
+            {
+                if (parts == null) parts = new List<Part>();
+                if (nested == null) nested = new List<NestedRow>();
+
+                int[] known;
+                if (key != null && _byKey.TryGetValue(key, out known)) return known;
+
+                bool added = key != null && _visiting.Add(key);
+                if (key != null && !added)
+                {
+                    Warn(WarningCodes.InstanceSkipped,
+                        "Block definition \"" + Label(name)
+                        + "\" nests inside itself; the nested row was skipped");
+                    return null;
+                }
+
+                try
+                {
+                    int[] indices;
+                    if (parts.Count <= 1)
+                    {
+                        // Single-part output predates parts: it keeps the old
+                        // identity key, bytes and name. Content dedupe here
+                        // would change the table, so it applies only below.
+                        indices = WriteSingle(name, parts, nested);
+                    }
+                    else
+                    {
+                        string contentKey = ContentKey(parts, nested, !_peerSupportsParts);
+                        if (_byContent.TryGetValue(contentKey, out known))
+                        {
+                            Cache(key, known);
+                            return known;
+                        }
+                        indices = _peerSupportsParts
+                            ? WriteMulti(name, contentKey, parts, nested)
+                            : WriteSplit(name, contentKey, parts, nested);
+                        _byContent[contentKey] = indices;
+                    }
+                    Cache(key, indices);
+                    return indices;
+                }
+                finally
+                {
+                    if (key != null) _visiting.Remove(key);
+                }
+            }
+
+            private int[] WriteSingle(string name, List<Part> parts, List<NestedRow> nested)
+            {
+                int index = _definitions.Count;
+                var entry = new Dictionary<string, object>();
+                entry["name"] = name ?? "";
+                _definitions.Add(entry);
+
+                string prefix = Prefix(index, -1);
+                if (parts.Count == 1) AppendPart(parts[0], prefix, index, -1);
+                AppendRows(nested, prefix);
+                return new int[] { index };
+            }
+
+            private int[] WriteMulti(string name, string contentKey, List<Part> parts,
+                                     List<NestedRow> nested)
+            {
+                int index = _definitions.Count;
+                var entry = new Dictionary<string, object>();
+                entry["name"] = string.IsNullOrEmpty(name)
+                    ? DefinitionPrefix + contentKey
+                    : name;
+                entry["parts"] = (long)parts.Count;
+                _definitions.Add(entry);
+
+                for (int part = 0; part < parts.Count; part++)
+                    AppendPart(parts[part], Prefix(index, part), index, part);
+                AppendRows(nested, Prefix(index, -1));
+                return new int[] { index };
+            }
+
+            private int[] WriteSplit(string name, string contentKey, List<Part> parts,
+                                     List<NestedRow> nested)
+            {
+                Warn(WarningCodes.InstanceSplit,
+                    "Block definition \"" + Label(name) + "\" (" + contentKey
+                    + ") has " + parts.Count
+                    + " parts; the Blender peer does not advertise blocks/2, so it was split into "
+                    + parts.Count + " single-part definitions");
+
+                var indices = new int[parts.Count];
+                for (int part = 0; part < parts.Count; part++)
+                {
+                    int index = _definitions.Count;
+                    indices[part] = index;
+
+                    var entry = new Dictionary<string, object>();
+                    entry["name"] = SplitName(name, contentKey, part, parts.Count);
+                    _definitions.Add(entry);
+
+                    string prefix = Prefix(index, -1);
+                    AppendPart(parts[part], prefix, index, -1);
+                    // The nested rows belong to the first part, exactly as
+                    // Blender's Q10b1 split does: putting them on every part
+                    // would draw each child once per part.
+                    if (part == 0) AppendRows(nested, prefix);
+                }
+                return indices;
+            }
+
+            private static string SplitName(string name, string contentKey,
+                                            int part, int parts)
+            {
+                string suffix = " [part " + part.ToString(CultureInfo.InvariantCulture)
+                    + "/" + parts.ToString(CultureInfo.InvariantCulture) + "]";
+                // Blender keeps a named definition's name and adds the part
+                // suffix. An unnamed definition gets the deterministic hash
+                // fallback instead of colliding empty block names.
+                return string.IsNullOrEmpty(name) ? DefinitionPrefix + contentKey + suffix
+                                                  : name + suffix;
+            }
+
+            private void AppendPart(Part part, string prefix, int definition, int partIndex)
+            {
+                if (part == null) return;
+                foreach (Section section in part.Sections)
+                    AddSection(new Section(prefix + section.Name, section.Dtype, section.Raw));
+
+                foreach (Dictionary<string, object> descriptor in part.Descriptors)
+                {
+                    var copy = new Dictionary<string, object>(descriptor);
+                    copy["definition"] = (long)definition;
+                    if (partIndex >= 0) copy["part"] = (long)partIndex;
+                    else copy.Remove("part");
+
+                    object rawSection;
+                    string section = copy.TryGetValue("section", out rawSection)
+                        ? rawSection as string : null;
+                    if (section != null) copy["section"] = prefix + section;
+                    object rawOffsets;
+                    if (copy.TryGetValue("offsets", out rawOffsets) && rawOffsets is string)
+                        copy["offsets"] = prefix + (string)rawOffsets;
+                    _attributes.Add(copy);
+                }
+            }
+
+            private void AppendRows(List<NestedRow> nested, string prefix)
+            {
+                var refDef = new List<uint>();
+                var transforms = new List<float>();
+                foreach (NestedRow row in nested)
+                {
+                    if (row == null) continue;
+                    int[] children = row.Resolve();
+                    if (children == null) continue;
+                    foreach (int child in children)
+                    {
+                        if (child < 0) continue;
+                        refDef.Add((uint)child);
+                        transforms.AddRange(row.WireTransform);
+                    }
+                }
+                if (refDef.Count == 0) return;
+                AddSection(Section.U32(prefix + "inst.ref_def", refDef.ToArray()));
+                AddSection(Section.Floats(prefix + "inst.transforms", transforms.ToArray()));
+            }
+
+            private void AddSection(Section section)
+            {
+                if (section == null) return;
+                if (!_sectionNames.Add(section.Name))
+                    throw new FrameException("bad_frame",
+                        "duplicate section name " + section.Name);
+                _sections.Add(section);
+            }
+
+            /// <summary>A stable key over everything that makes a multi-part
+            /// definition's content: the part count and form, each part's
+            /// ordered section names and bytes, each part's attribute
+            /// descriptors, and the nested rows (child identity plus
+            /// placement). It deliberately omits the table index and the
+            /// display name, so identical definitions dedupe and an unnamed
+            /// definition can use the key as its name.</summary>
+            private string ContentKey(List<Part> parts, List<NestedRow> nested, bool split)
+            {
+                using (var sha = SHA256.Create())
+                {
+                    Update(sha, "definition.parts", BitConverter.GetBytes((long)parts.Count));
+                    Update(sha, "definition.form",
+                        BitConverter.GetBytes((long)(split ? 2 : 1)));
+                    for (int part = 0; part < parts.Count; part++)
+                    {
+                        Update(sha, "part.index", BitConverter.GetBytes((long)part));
+                        Part content = parts[part];
+                        if (content == null) continue;
+
+                        var byName = new Dictionary<string, Section>(StringComparer.Ordinal);
+                        foreach (Section section in content.Sections)
+                            if (section != null && section.Name != null)
+                                byName[section.Name] = section;
+                        foreach (string name in FrameCodec.OrderedNames(byName.Keys))
+                            Update(sha, name, byName[name].Raw);
+
+                        foreach (Dictionary<string, object> descriptor in content.Descriptors)
+                        {
+                            byte[] json;
+                            try
+                            {
+                                json = Json.WriteCanonicalUtf8(descriptor);
+                            }
+                            catch (JsonException)
+                            {
+                                json = System.Text.Encoding.UTF8.GetBytes("unhashable");
+                            }
+                            Update(sha, "attr.descriptor", json);
+                        }
+                    }
+
+                    for (int row = 0; row < nested.Count; row++)
+                    {
+                        NestedRow placement = nested[row];
+                        if (placement == null) continue;
+                        Update(sha, "inst.ref",
+                            System.Text.Encoding.UTF8.GetBytes(placement.Signature));
+                        var bytes = new byte[placement.WireTransform.Length * 4];
+                        Buffer.BlockCopy(placement.WireTransform, 0, bytes, 0, bytes.Length);
+                        Update(sha, "inst.transforms", bytes);
+                    }
+
+                    sha.TransformFinalBlock(new byte[0], 0, 0);
+                    return Hex(sha.Hash, 12);
+                }
+            }
+
+            private void Cache(string key, int[] indices)
+            {
+                if (key != null) _byKey[key] = indices;
+            }
+
+            private void Warn(string code, string message)
+            {
+                if (_warnings == null || string.IsNullOrEmpty(message)) return;
+                if (!_warned.Add(message)) return;
+                _warnings.Add(new WireWarning(code, message));
+            }
+
+            private static string Prefix(int index, int part)
+            {
+                string prefix = "idef." + index.ToString(CultureInfo.InvariantCulture) + ".";
+                return part < 0 ? prefix : prefix + part.ToString(CultureInfo.InvariantCulture) + ".";
+            }
+
+            private static string Label(string name)
+            {
+                return string.IsNullOrEmpty(name) ? "(unnamed)" : name;
+            }
+        }
+
+        private class DefinitionWriter
+        {
+            private readonly double _scale;
+            private readonly List<WireWarning> _warnings;
+            private readonly DefinitionTableWriter _table;
+            private readonly Dictionary<string, DefinitionContent> _contents =
+                new Dictionary<string, DefinitionContent>(StringComparer.Ordinal);
+
+            public DefinitionWriter(double scale, List<Section> sections,
+                                    List<Dictionary<string, object>> attributes,
+                                    List<Dictionary<string, object>> definitions,
+                                    List<WireWarning> warnings,
+                                    bool peerSupportsParts)
+            {
+                _scale = scale;
+                _warnings = warnings;
+                _table = new DefinitionTableWriter(sections, attributes, definitions,
+                                                   warnings, peerSupportsParts);
+            }
+
+            /// <summary>Every table index for one instance's definition, writing
+            /// it on first use. A normal definition returns one index; a
+            /// fallback split returns one per part, in part order.
             ///
             /// The paired definition is preferred: graph-side definitions (the
             /// ones Stage In builds, and the Model components') carry their
@@ -1379,186 +1837,171 @@ namespace Stageloom
             /// with no pairing names a document definition and is read from the
             /// table by id. Both routes share one key, so an id never lands in
             /// the table twice.</summary>
-            public int Definition(ModelInstanceDefinition paired, Guid referenceId)
+            public int[] Definition(ModelInstanceDefinition paired, Guid referenceId)
             {
+                string key = Key(paired, referenceId);
+                int[] known;
+                if (_table.TryGet(key, out known)) return known;
+
                 if (paired != null && paired.Objects != null && paired.Objects.Count > 0)
-                    return WriteDefinition(paired, Key(paired, referenceId));
+                {
+                    DefinitionContent content = Content(key, paired, null);
+                    return Write(paired, key, content);
+                }
 
                 if (referenceId != Guid.Empty)
                 {
                     RhinoDoc document = RhinoDoc.ActiveDoc;
-                    if (document != null && document.InstanceDefinitions.Find(referenceId, true) != null)
-                        return DefinitionFromDocument(referenceId);
-                    // A document block the id names is gone (deleted, another
-                    // document): an empty table entry would be a phantom block,
-                    // so the row is skipped loudly instead.
-                    _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
-                        "An instance reference to a document block (" + referenceId.ToString("N")
-                        + ") could not be resolved; the row was skipped"));
-                    return -1;
+                    InstanceDefinition docDef = document == null
+                        ? null : document.InstanceDefinitions.Find(referenceId, true);
+                    if (docDef == null)
+                    {
+                        // A document block the id names is gone (deleted,
+                        // another document): an empty table entry would be a
+                        // phantom block, so the row is skipped loudly instead.
+                        _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
+                            "An instance reference to a document block ("
+                            + referenceId.ToString("N")
+                            + ") could not be resolved; the row was skipped"));
+                        return null;
+                    }
+                    DefinitionContent content = Content(key, null, docDef);
+                    return WriteDocument(docDef, key, content);
                 }
+
                 if (paired == null || paired.Objects == null || paired.Objects.Count == 0)
                 {
                     _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
                         "An instance reference without a definition was skipped"));
-                    return -1;
+                    return null;
                 }
-                return WriteDefinition(paired, Key(paired, referenceId));
+                return null;
             }
 
-            private int WriteDefinition(ModelInstanceDefinition paired, string key)
+            private int[] Write(ModelInstanceDefinition paired, string key,
+                                DefinitionContent content)
             {
-                int known;
-                if (key != null && _byKey.TryGetValue(key, out known)) return known;
-
-                var meshes = new List<Mesh>();
-                var curves = new List<Curve>();
-                var points = new List<Point3d>();
-                var subds = new List<SubD>();
-                var breps = new List<Brep>();
-                var nested = new List<GH_InstanceReference>();
-                var sources = new List<GeometryBase>();
-
-                if (paired != null && paired.Objects != null)
-                {
-                    foreach (ModelObject obj in paired.Objects)
-                        CollectObject(obj, meshes, curves, points, subds, breps, nested, sources);
-                }
-
                 string name = DisplayName(paired);
-                if (!HasDefinitionContent(meshes, curves, points, subds, breps, nested))
+                if (!content.HasContent)
                 {
                     // All the definition's objects were null (or none survived):
                     // writing the table entry would give the row an empty block,
                     // which Blender would draw as nothing. Drop the row instead.
                     _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
-                        "Block definition \"" + (string.IsNullOrEmpty(name) ? "(unnamed)" : name)
+                        "Block definition \"" + Label(name)
                         + "\" has no objects and was skipped"));
-                    return -1;
+                    return null;
                 }
 
-                int index = _definitions.Count;
-                var entry = new Dictionary<string, object>();
-                entry["name"] = name;
-                _definitions.Add(entry);
-                if (key != null) _byKey[key] = index;
-
-                string prefix = "idef." + index + ".";
-                WriteGeometry(prefix, meshes, curves, points, subds, breps, nested, sources, index);
-                return index;
+                List<DefinitionTableWriter.Part> parts = BuildParts(content);
+                return _table.Write(key, name, parts, content.Nested);
             }
 
-            /// <summary>A document definition by id, for a reference whose
-            /// pairing is gone (a definition another document object owns).</summary>
-            private int DefinitionFromDocument(Guid id)
+            private int[] WriteDocument(InstanceDefinition docDef, string key,
+                                        DefinitionContent content)
             {
-                string key = "id:" + id.ToString("N");
-                int known;
-                if (_byKey.TryGetValue(key, out known)) return known;
+                string name = docDef.Name ?? "";
+                if (!content.HasContent)
+                {
+                    _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
+                        "Block definition \"" + Label(name)
+                        + "\" has no objects and was skipped"));
+                    return null;
+                }
 
-                RhinoDoc doc = RhinoDoc.ActiveDoc;
-                InstanceDefinition docDef = doc == null ? null : doc.InstanceDefinitions.Find(id, true);
-                if (docDef == null)
+                List<DefinitionTableWriter.Part> parts = BuildParts(content);
+                return _table.Write(key, name, parts, content.Nested);
+            }
+
+            /// <summary>Convert the gathered parts into the table writer's
+            /// neutral buffers. A single-part definition keeps the legacy
+            /// global attribute indices (so its bytes are unchanged); a
+            /// multi-part definition numbers attributes within its part, and a
+            /// fallback split numbers them within each emitted single-part
+            /// definition.</summary>
+            private List<DefinitionTableWriter.Part> BuildParts(DefinitionContent content)
+            {
+                var result = new List<DefinitionTableWriter.Part>(content.Parts.Count);
+                bool single = content.Parts.Count <= 1;
+                int attributeBase = _table.AttributeCount;
+                for (int part = 0; part < content.Parts.Count; part++)
                 {
-                    _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
-                        "A nested block (" + key + ") is not in the document and was skipped"));
-                    return -1;
+                    int index0 = single ? attributeBase : 0;
+                    int? partIndex = content.Parts.Count > 1 && _table.PeerSupportsParts
+                        ? (int?)part : null;
+                    result.Add(BuildPart(content.Parts[part], index0, partIndex));
                 }
-                if (!_visiting.Add(key))
+                return result;
+            }
+
+            private DefinitionTableWriter.Part BuildPart(GeometryPart part, int index0,
+                                                          int? partIndex)
+            {
+                var buffer = new DefinitionTableWriter.Part();
+                if (!part.HasGeometry) return buffer;
+
+                Dictionary<string, object> counts;
+                List<Section> geometry = Conversion.SectionsFromGeometry(
+                    part.Meshes, part.Curves, part.Points, part.Subds, part.Breps,
+                    _scale, _warnings, out counts);
+                buffer.Sections.AddRange(geometry);
+
+                foreach (GeometryBase source in part.Sources)
                 {
-                    _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
-                        "A block definition nests inside itself and was skipped"));
-                    return -1;
+                    string group = AttributeStore.GroupOf(source);
+                    if (group == null) continue;
+                    // index0 continues across several sources of one part.
+                    // A multi-part part starts at zero so its content key is
+                    // index-free; a single-part definition starts at the
+                    // frame's committed count so its legacy bytes are exact.
+                    AttributeStore.Collect(source, group, buffer.Sections,
+                                           buffer.Descriptors, "", 0L, partIndex,
+                                           index0 + buffer.Descriptors.Count);
                 }
-                try
+                return buffer;
+            }
+
+            private DefinitionContent Content(string key, ModelInstanceDefinition paired,
+                                              InstanceDefinition docDef)
+            {
+                DefinitionContent content;
+                if (key != null && _contents.TryGetValue(key, out content)) return content;
+                content = paired != null ? GatherPaired(paired) : GatherDocument(docDef);
+                if (key != null) _contents[key] = content;
+                return content;
+            }
+
+            private DefinitionContent GatherPaired(ModelInstanceDefinition paired)
+            {
+                var content = new DefinitionContent();
+                if (paired.Objects != null)
+                    foreach (ModelObject obj in paired.Objects)
+                        GatherModelObject(obj, content);
+                return content;
+            }
+
+            private DefinitionContent GatherDocument(InstanceDefinition docDef)
+            {
+                var content = new DefinitionContent();
+                RhinoObject[] objects = docDef.GetObjects();
+                if (objects != null)
                 {
-                    var meshes = new List<Mesh>();
-                    var curves = new List<Curve>();
-                    var points = new List<Point3d>();
-                    var subds = new List<SubD>();
-                    var breps = new List<Brep>();
-                    var nested = new List<GH_InstanceReference>();
-                    var sources = new List<GeometryBase>();
-                    foreach (RhinoObject obj in docDef.GetObjects())
+                    foreach (RhinoObject obj in objects)
                     {
                         if (obj == null)
                         {
                             _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
-                                "A null object in block definition (" + key + ") was skipped"));
+                                "A null object in block definition \"" + Label(docDef.Name)
+                                + "\" was skipped"));
                             continue;
                         }
-                        CollectGeometry(obj.Geometry, meshes, curves, points, subds, breps, nested, sources);
+                        GatherDocumentObject(obj, content);
                     }
-
-                    if (!HasDefinitionContent(meshes, curves, points, subds, breps, nested))
-                    {
-                        _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
-                            "Block definition \"" + (docDef.Name ?? "(unnamed)")
-                            + "\" has no objects and was skipped"));
-                        return -1;
-                    }
-
-                    int index = _definitions.Count;
-                    var entry = new Dictionary<string, object>();
-                    entry["name"] = docDef.Name ?? "";
-                    _definitions.Add(entry);
-                    _byKey[key] = index;
-
-                    string prefix = "idef." + index + ".";
-                    WriteGeometry(prefix, meshes, curves, points, subds, breps, nested, sources, index);
-                    return index;
                 }
-                finally
-                {
-                    _visiting.Remove(key);
-                }
+                return content;
             }
 
-            private void WriteGeometry(string prefix,
-                                       List<Mesh> meshes, List<Curve> curves, List<Point3d> points,
-                                       List<SubD> subds, List<Brep> breps,
-                                       List<GH_InstanceReference> nested,
-                                       List<GeometryBase> sources, int index)
-            {
-                if (meshes.Count > 0 || curves.Count > 0 || points.Count > 0
-                    || subds.Count > 0 || breps.Count > 0)
-                {
-                    Dictionary<string, object> counts;
-                    List<Section> geometry = Conversion.SectionsFromGeometry(
-                        meshes, curves, points, subds, breps, _scale, _warnings, out counts);
-                    _sections.AddRange(Conversion.PrefixSections(geometry, prefix));
-                    foreach (GeometryBase source in sources)
-                    {
-                        string group = AttributeStore.GroupOf(source);
-                        if (group != null)
-                            AttributeStore.Collect(source, group, _sections, _attributes, prefix, index);
-                    }
-                }
-
-                if (nested.Count > 0)
-                {
-                    var refDef = new List<uint>();
-                    var transforms = new List<float>();
-                    foreach (GH_InstanceReference goo in nested)
-                    {
-                        if (goo == null || goo.Value == null) continue;
-                        int child = Definition(goo.InstanceDefinition, goo.Value.ParentIdefId);
-                        if (child < 0) continue;
-                        refDef.Add((uint)child);
-                        transforms.AddRange(Conversion.TransformToWire(goo.Value.Xform, _scale));
-                    }
-                    if (refDef.Count > 0)
-                    {
-                        _sections.Add(Section.U32(prefix + "inst.ref_def", refDef.ToArray()));
-                        _sections.Add(Section.Floats(prefix + "inst.transforms", transforms.ToArray()));
-                    }
-                }
-            }
-
-            private void CollectObject(ModelObject obj, List<Mesh> meshes, List<Curve> curves,
-                                       List<Point3d> points, List<SubD> subds, List<Brep> breps,
-                                       List<GH_InstanceReference> nested,
-                                       List<GeometryBase> sources)
+            private void GatherModelObject(ModelObject obj, DefinitionContent content)
             {
                 if (obj == null)
                 {
@@ -1566,38 +2009,78 @@ namespace Stageloom
                         "A null object in a block definition was skipped"));
                     return;
                 }
+
                 // A block instance ModelObject (graph-side or document-backed) is
                 // the one definitive way to reach the child definition and its
                 // transform: CastTo<InstanceReferenceGeometry> refuses it, the
-                // goo cast does not.
+                // goo cast does not. It is a definition-level row, never a part.
                 GH_InstanceReference goo;
-                if (obj.CastTo<GH_InstanceReference>(out goo) && goo != null && goo.Value != null)
+                if (obj.CastTo<GH_InstanceReference>(out goo))
                 {
-                    nested.Add(goo);
-                    return;
+                    if (goo != null && goo.Value != null)
+                    {
+                        content.Nested.Add(Row(goo));
+                        return;
+                    }
+                    if (obj.ObjectType == ObjectType.InstanceReference)
+                    {
+                        _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
+                            "An instance reference in a block definition has no wire form"
+                            + " and was skipped"));
+                        return;
+                    }
                 }
-
-                GeometryBase geometry = GeometryOf(obj, nested);
-                if (geometry != null)
-                    CollectGeometry(geometry, meshes, curves, points, subds, breps, nested, sources);
-            }
-
-            /// <summary>One geometry out of a ModelObject, or null.</summary>
-            private GeometryBase GeometryOf(ModelObject obj, List<GH_InstanceReference> nested)
-            {
-                // ObjectType first: a cast chain would happily mesh a Brep or
-                // edge-ify a mesh (GH_Convert Secondary), which is the lossy
-                // direction for definitions.
-                ObjectType type = obj.ObjectType;
-                if (type == ObjectType.InstanceReference)
+                if (obj.ObjectType == ObjectType.InstanceReference)
                 {
                     InstanceReferenceGeometry reference;
                     if (obj.CastTo<InstanceReferenceGeometry>(out reference) && reference != null)
                     {
-                        nested.Add(new GH_InstanceReference(reference));
-                        return null;
+                        content.Nested.Add(Row(new GH_InstanceReference(reference)));
+                        return;
                     }
+                    _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
+                        "An instance reference in a block definition has no wire form"
+                        + " and was skipped"));
+                    return;
                 }
+
+                var part = new GeometryPart();
+                GeometryBase geometry = GeometryOf(obj);
+                if (geometry != null) CollectGeometry(geometry, part, content.Nested);
+                else
+                    _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
+                        "An object in a block definition (" + obj.TypeName
+                        + ") has no wire form and was skipped"));
+                // It stays a part even when empty: dropping it would renumber
+                // every later part. A null list entry is not an object and is
+                // skipped above, so it never consumes a part index.
+                content.Parts.Add(part);
+            }
+
+            private void GatherDocumentObject(RhinoObject obj, DefinitionContent content)
+            {
+                GeometryBase geometry = obj.Geometry;
+                if (geometry == null)
+                {
+                    _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
+                        "An object in a block definition (" + obj.ObjectType
+                        + ") has no geometry and was skipped"));
+                    return;
+                }
+
+                var part = new GeometryPart();
+                CollectGeometry(geometry, part, content.Nested);
+                if (geometry is InstanceReferenceGeometry) return;
+                content.Parts.Add(part);
+            }
+
+            /// <summary>One geometry out of a ModelObject, or null. ObjectType
+            /// first: a cast chain would happily mesh a Brep or edge-ify a
+            /// mesh (GH_Convert Secondary), which is the lossy direction for
+            /// definitions.</summary>
+            private GeometryBase GeometryOf(ModelObject obj)
+            {
+                ObjectType type = obj.ObjectType;
                 if (type == ObjectType.Mesh)
                 {
                     Mesh mesh;
@@ -1613,6 +2096,11 @@ namespace Stageloom
                     Curve curve;
                     if (obj.CastTo<Curve>(out curve) && curve != null) return curve;
                 }
+                if (type == ObjectType.Point)
+                {
+                    Point point;
+                    if (obj.CastTo<Point>(out point) && point != null) return point;
+                }
                 if (type == ObjectType.PointSet || type == ObjectType.Point)
                 {
                     PointCloud cloud;
@@ -1625,40 +2113,69 @@ namespace Stageloom
                 }
                 // Last resort: whichever of the transportable kinds it becomes.
                 Mesh fallbackMesh;
-                if (obj.CastTo<Mesh>(out fallbackMesh) && fallbackMesh != null) return fallbackMesh;
+                if (obj.CastTo<Mesh>(out fallbackMesh) && fallbackMesh != null)
+                    return fallbackMesh;
                 Curve fallbackCurve;
-                if (obj.CastTo<Curve>(out fallbackCurve) && fallbackCurve != null) return fallbackCurve;
-                _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
-                    "An object in a block definition (" + obj.TypeName + ") has no wire form and was skipped"));
+                if (obj.CastTo<Curve>(out fallbackCurve) && fallbackCurve != null)
+                    return fallbackCurve;
+                Point fallbackPoint;
+                if (obj.CastTo<Point>(out fallbackPoint) && fallbackPoint != null)
+                    return fallbackPoint;
+                PointCloud fallbackCloud;
+                if (obj.CastTo<PointCloud>(out fallbackCloud) && fallbackCloud != null)
+                    return fallbackCloud;
                 return null;
             }
 
-            private void CollectGeometry(GeometryBase geometry, List<Mesh> meshes, List<Curve> curves,
-                                         List<Point3d> points, List<SubD> subds, List<Brep> breps,
-                                         List<GH_InstanceReference> nested,
-                                         List<GeometryBase> sources)
+            private void CollectGeometry(GeometryBase geometry, GeometryPart part,
+                                         List<DefinitionTableWriter.NestedRow> nested)
             {
                 if (geometry == null) return;
                 Mesh mesh = geometry as Mesh;
-                if (mesh != null) { meshes.Add(mesh); sources.Add(mesh); return; }
+                if (mesh != null) { part.Meshes.Add(mesh); part.Sources.Add(mesh); return; }
                 SubD subd = geometry as SubD;
-                if (subd != null) { subds.Add(subd); sources.Add(subd); return; }
+                if (subd != null) { part.Subds.Add(subd); part.Sources.Add(subd); return; }
                 PointCloud cloud = geometry as PointCloud;
                 if (cloud != null)
                 {
-                    points.AddRange(cloud.GetPoints());
-                    sources.Add(cloud);
+                    part.Points.AddRange(cloud.GetPoints());
+                    part.Sources.Add(cloud);
                     return;
                 }
                 Brep brep = geometry as Brep;
-                if (brep != null) { breps.Add(brep); return; }
+                if (brep != null) { part.Breps.Add(brep); return; }
                 Curve curve = geometry as Curve;
-                if (curve != null) { curves.Add(curve); return; }
+                if (curve != null) { part.Curves.Add(curve); return; }
                 InstanceReferenceGeometry reference = geometry as InstanceReferenceGeometry;
-                if (reference != null) { nested.Add(new GH_InstanceReference(reference)); return; }
-                if (geometry is Point) { points.Add(((Point)geometry).Location); return; }
+                if (reference != null)
+                {
+                    var goo = new GH_InstanceReference(reference);
+                    if (goo.Value != null) nested.Add(Row(goo));
+                    else
+                        _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
+                            "An instance reference in a block definition has no wire form"
+                            + " and was skipped"));
+                    return;
+                }
+                if (geometry is Point)
+                {
+                    part.Points.Add(((Point)geometry).Location);
+                    return;
+                }
                 _warnings.Add(new WireWarning(WarningCodes.InstanceSkipped,
-                    "A block definition object (" + geometry.ObjectType + ") has no wire form and was skipped"));
+                    "A block definition object (" + geometry.ObjectType
+                    + ") has no wire form and was skipped"));
+            }
+
+            private DefinitionTableWriter.NestedRow Row(GH_InstanceReference goo)
+            {
+                float[] wire = Conversion.TransformToWire(goo.Value.Xform, _scale);
+                string signature = Key(goo.InstanceDefinition, goo.Value.ParentIdefId);
+                return new DefinitionTableWriter.NestedRow(wire, signature,
+                    delegate
+                    {
+                        return Definition(goo.InstanceDefinition, goo.Value.ParentIdefId);
+                    });
             }
 
             private static string Key(ModelInstanceDefinition paired, Guid referenceId)
@@ -1681,6 +2198,11 @@ namespace Stageloom
                     if (!string.IsNullOrEmpty(name)) return name;
                 }
                 return "";
+            }
+
+            private static string Label(string name)
+            {
+                return string.IsNullOrEmpty(name) ? "(unnamed)" : name;
             }
         }
 

@@ -1,13 +1,16 @@
-// Layer C, instance-grammar half: the C# inbound half of protocol §5.2.
+// Layer C, instance half: the C# side of protocol §5.2.
 //
 //     StageloomInstanceTests.exe <fixtures root>
 //
-// The definition table, the `idef.<i>.*` / `idef.<i>.<p>.*` namespaces, the
-// part attribute descriptors and the row pairs are validated before Rhino
-// geometry exists, so most of this suite runs under wine with no RhinoCore.
-// When the process can construct native Rhino geometry, the last checks build
-// the Q10a multi-part fixtures through Instances.Build and inspect the
-// resulting blocks.
+// The inbound half validates the definition table, the `idef.<i>.*` /
+// `idef.<i>.<p>.*` namespaces, the part attribute descriptors and the row
+// pairs before Rhino geometry exists, so most of this suite runs under wine
+// with no RhinoCore. The outbound half drives the definition table writer on
+// prepared parts: single-part byte compatibility, part namespaces, nested
+// rows, content keys and the blocks/2 fallback. When the process can construct
+// native Rhino geometry, the last checks build the Q10a multi-part fixtures
+// through Instances.Build and emit synthetic definitions through
+// Instances.Emit.
 //
 // Exit code 0 all pass, 1 any failure.
 
@@ -40,10 +43,17 @@ namespace Stageloom.Tests.Console
             CheckContentHash(root);
             CheckDescriptorGrammar();
             CheckAttributePartFilter();
+            CheckOutboundSinglePart();
+            CheckOutboundMultiPart();
+            CheckOutboundFallback();
+            CheckOutboundContentKey();
+            CheckOutboundCycle();
+            CheckOutboundAttributes();
 
             if (CanBuildRhinoGeometry())
             {
                 CheckNativeBuild(root);
+                CheckNativeEmit();
             }
             else
             {
@@ -762,6 +772,588 @@ namespace Stageloom.Tests.Console
                 && HasNote(notes, "part must be a non-negative integer"), Notes(notes));
         }
 
+        // ------------------------------------------------------------- outbound
+
+        private static void CheckOutboundSinglePart()
+        {
+            System.Console.WriteLine();
+            System.Console.WriteLine("outbound definitions");
+
+            var sections = new List<Section>();
+            var attributes = new List<Dictionary<string, object>>();
+            var definitions = new List<Dictionary<string, object>>();
+            var warnings = new List<WireWarning>();
+            var table = new Instances.DefinitionTableWriter(
+                sections, attributes, definitions, warnings, true);
+
+            Instances.DefinitionTableWriter.Part part =
+                OutPart(0f, "load", null);
+            int[] indices = table.Write("id:single", "",
+                new List<Instances.DefinitionTableWriter.Part> { part }, null);
+
+            Check("outbound single-part: one legacy table entry",
+                indices != null && indices.Length == 1 && indices[0] == 0
+                && definitions.Count == 1
+                && !definitions[0].ContainsKey("parts")
+                && (string)definitions[0]["name"] == "",
+                "indices " + (indices == null ? "null" : indices.Length.ToString())
+                + "; definitions " + definitions.Count);
+
+            var expectedSections = Conversion.PrefixSections(part.Sections, "idef.0.");
+            Check("outbound single-part: sections keep the old bytes and namespace",
+                SameSections(sections, expectedSections), SectionNames(sections));
+
+            var expectedDefinitions = new List<Dictionary<string, object>>
+            {
+                new Dictionary<string, object> { { "name", "" } },
+            };
+            Check("outbound single-part: the table entry has the old bytes",
+                Json.WriteCanonical(definitions) == Json.WriteCanonical(expectedDefinitions),
+                Json.WriteCanonical(definitions));
+            var expectedDescriptors = new List<Dictionary<string, object>>
+            {
+                Descriptor("mesh", "load", "FLOAT", "POINT", 1,
+                    "idef.0.attr.0.values", 0, null),
+            };
+            Check("outbound single-part: descriptors keep the old definition index and no part",
+                Json.WriteCanonical(attributes) == Json.WriteCanonical(expectedDescriptors),
+                Json.WriteCanonical(attributes));
+            Check("outbound single-part: the output hash is unchanged",
+                FrameCodec.OutputHash(sections, Json.WriteCanonical(attributes),
+                                      Json.WriteCanonical(definitions))
+                == FrameCodec.OutputHash(expectedSections,
+                                         Json.WriteCanonical(expectedDescriptors),
+                                         Json.WriteCanonical(expectedDefinitions)),
+                FrameCodec.OutputHash(sections, Json.WriteCanonical(attributes),
+                                      Json.WriteCanonical(definitions)));
+            Check("outbound single-part: no warning", warnings.Count == 0, Notes(WireNotes(warnings)));
+
+            // A single part plus a nested row is still the original single-part
+            // namespace: the nested rows are definition-level, not a part.
+            sections = new List<Section>();
+            attributes = new List<Dictionary<string, object>>();
+            definitions = new List<Dictionary<string, object>>();
+            warnings = new List<WireWarning>();
+            table = new Instances.DefinitionTableWriter(
+                sections, attributes, definitions, warnings, true);
+            int[] child = table.Write("id:child", "Bolt",
+                new List<Instances.DefinitionTableWriter.Part> { OutPart(2f, null, null) }, null);
+            var rows = new List<Instances.DefinitionTableWriter.NestedRow>
+            {
+                new Instances.DefinitionTableWriter.NestedRow(
+                    IdentityWire(), "id:child", delegate { return child; }),
+            };
+            table.Write("id:parent", "Parent",
+                new List<Instances.DefinitionTableWriter.Part> { OutPart(3f, null, null) }, rows);
+            Check("outbound single-part: a nested row stays at definition level",
+                definitions.Count == 2 && !definitions[1].ContainsKey("parts")
+                && Find(sections, "idef.1.inst.ref_def") != null
+                && Find(sections, "idef.1.0.inst.ref_def") == null,
+                SectionNames(sections));
+        }
+
+        private static void CheckOutboundMultiPart()
+        {
+            var sections = new List<Section>();
+            var attributes = new List<Dictionary<string, object>>();
+            var definitions = new List<Dictionary<string, object>>();
+            var warnings = new List<WireWarning>();
+            var table = new Instances.DefinitionTableWriter(
+                sections, attributes, definitions, warnings, true);
+
+            int[] child = table.Write("id:bolt", "Bolt",
+                new List<Instances.DefinitionTableWriter.Part> { OutPart(9f, null, null) }, null);
+            var rows = new List<Instances.DefinitionTableWriter.NestedRow>
+            {
+                new Instances.DefinitionTableWriter.NestedRow(
+                    IdentityWire(), "id:bolt", delegate { return child; }),
+            };
+            var parts = new List<Instances.DefinitionTableWriter.Part>
+            {
+                OutPart(0f, "first", 0),
+                OutPart(1f, "second", 1),
+            };
+            int[] indices = table.Write("id:assembly", "Assembly", parts, rows);
+
+            Check("outbound multi-part: one table entry with parts = 2",
+                indices != null && indices.Length == 1 && definitions.Count == 2
+                && definitions[1].ContainsKey("parts")
+                && definitions[1]["parts"] is long
+                && (long)definitions[1]["parts"] == 2
+                && (string)definitions[1]["name"] == "Assembly",
+                definitions.Count + " definition(s)");
+
+            Check("outbound multi-part: every part gets its own namespace",
+                Find(sections, "idef.1.0.mesh.verts") != null
+                && Find(sections, "idef.1.1.mesh.verts") != null
+                && Find(sections, "idef.1.mesh.verts") == null
+                && Find(sections, "idef.1.0.attr.0.values") != null
+                && Find(sections, "idef.1.1.attr.0.values") != null,
+                SectionNames(sections));
+
+            var first = DescriptorAt(attributes, "idef.1.0.attr.0.values");
+            var second = DescriptorAt(attributes, "idef.1.1.attr.0.values");
+            Check("outbound multi-part: part descriptors carry definition and part",
+                first != null && second != null
+                && first["definition"] is long && (long)first["definition"] == 1
+                && first["part"] is long && (long)first["part"] == 0
+                && second["definition"] is long && (long)second["definition"] == 1
+                && second["part"] is long && (long)second["part"] == 1,
+                Json.WriteCanonical(attributes));
+
+            Section rowsRef = Find(sections, "idef.1.inst.ref_def");
+            Section rowTransforms = Find(sections, "idef.1.inst.transforms");
+            Check("outbound multi-part: nested rows stay at definition level",
+                rowsRef != null && rowsRef.ToU32().Length == 1
+                && rowsRef.ToU32()[0] == (uint)child[0]
+                && rowTransforms != null && rowTransforms.ToFloats().Length == 16
+                && Find(sections, "idef.1.0.inst.ref_def") == null,
+                SectionNames(sections));
+
+            Check("outbound multi-part: no duplicate section names",
+                NoDuplicateSections(sections), SectionNames(sections));
+            Check("outbound multi-part: no warning", warnings.Count == 0,
+                Notes(WireNotes(warnings)));
+
+            // An empty part is preserved: it is a part, not an omitted one.
+            sections = new List<Section>();
+            attributes = new List<Dictionary<string, object>>();
+            definitions = new List<Dictionary<string, object>>();
+            table = new Instances.DefinitionTableWriter(
+                sections, attributes, definitions, new List<WireWarning>(), true);
+            parts = new List<Instances.DefinitionTableWriter.Part>
+            {
+                OutPart(0f, "only", 0),
+                new Instances.DefinitionTableWriter.Part(),
+            };
+            table.Write("id:empty-part", "EmptyPart", parts, null);
+            Check("outbound multi-part: an empty part keeps its index",
+                definitions.Count == 1 && (long)definitions[0]["parts"] == 2
+                && Find(sections, "idef.0.0.mesh.verts") != null
+                && Find(sections, "idef.0.1.mesh.verts") == null
+                && NoDuplicateSections(sections),
+                SectionNames(sections));
+        }
+
+        private static void CheckOutboundFallback()
+        {
+            var sections = new List<Section>();
+            var attributes = new List<Dictionary<string, object>>();
+            var definitions = new List<Dictionary<string, object>>();
+            var warnings = new List<WireWarning>();
+            var table = new Instances.DefinitionTableWriter(
+                sections, attributes, definitions, warnings, false);
+
+            int[] child = table.Write("id:bolt", "Bolt",
+                new List<Instances.DefinitionTableWriter.Part> { OutPart(9f, null, null) }, null);
+            var rows = new List<Instances.DefinitionTableWriter.NestedRow>
+            {
+                new Instances.DefinitionTableWriter.NestedRow(
+                    IdentityWire(), "id:bolt", delegate { return child; }),
+            };
+            var parts = new List<Instances.DefinitionTableWriter.Part>
+            {
+                OutPart(0f, "first", null),
+                OutPart(1f, "second", null),
+            };
+            int[] indices = table.Write("id:assembly", "Assembly", parts, rows);
+
+            Check("outbound fallback: one single-part definition per part",
+                indices != null && indices.Length == 2 && definitions.Count == 3
+                && !definitions[1].ContainsKey("parts")
+                && !definitions[2].ContainsKey("parts"),
+                definitions.Count + " definition(s)");
+            Check("outbound fallback: names carry the part suffix",
+                (string)definitions[1]["name"] == "Assembly [part 0/2]"
+                && (string)definitions[2]["name"] == "Assembly [part 1/2]",
+                (string)definitions[1]["name"] + " / " + (string)definitions[2]["name"]);
+            Check("outbound fallback: sections use the single-part namespace",
+                Find(sections, "idef.1.mesh.verts") != null
+                && Find(sections, "idef.2.mesh.verts") != null
+                && Find(sections, "idef.1.0.mesh.verts") == null
+                && Find(sections, "idef.2.0.mesh.verts") == null,
+                SectionNames(sections));
+            Check("outbound fallback: attribute descriptors lose the part",
+                DescriptorAt(attributes, "idef.1.attr.0.values") != null
+                && DescriptorAt(attributes, "idef.2.attr.0.values") != null
+                && !DescriptorAt(attributes, "idef.1.attr.0.values").ContainsKey("part")
+                && !DescriptorAt(attributes, "idef.2.attr.0.values").ContainsKey("part"),
+                Json.WriteCanonical(attributes));
+            Check("outbound fallback: nested rows live on the first part only",
+                Find(sections, "idef.1.inst.ref_def") != null
+                && Find(sections, "idef.2.inst.ref_def") == null
+                && Find(sections, "idef.1.inst.ref_def").ToU32()[0] == (uint)child[0],
+                SectionNames(sections));
+
+            bool warned = false;
+            foreach (WireWarning warning in warnings)
+                if (warning.Code == WarningCodes.InstanceSplit
+                    && warning.Message.IndexOf("Assembly", StringComparison.Ordinal) >= 0
+                    && warning.Message.IndexOf("2 parts", StringComparison.Ordinal) >= 0
+                    && warning.Message.IndexOf("split", StringComparison.Ordinal) >= 0)
+                    warned = true;
+            Check("outbound fallback: a stage warning names the definition and part count",
+                warned, Notes(WireNotes(warnings)));
+
+            // The same definition reached under another identity dedupes by
+            // content; its rows still fan out to both part definitions.
+            var again = new List<Instances.DefinitionTableWriter.Part>
+            {
+                OutPart(0f, "first", null),
+                OutPart(1f, "second", null),
+            };
+            int[] repeated = table.Write("id:assembly-again", "Assembly", again, rows);
+            Check("outbound fallback: identical definitions dedupe by content",
+                repeated != null && repeated.Length == 2
+                && repeated[0] == indices[0] && repeated[1] == indices[1]
+                && definitions.Count == 3,
+                definitions.Count + " definition(s)");
+
+            // With the capability, the same content is one multi-part entry.
+            sections = new List<Section>();
+            attributes = new List<Dictionary<string, object>>();
+            definitions = new List<Dictionary<string, object>>();
+            table = new Instances.DefinitionTableWriter(
+                sections, attributes, definitions, new List<WireWarning>(), true);
+            int[] supported = table.Write("id:assembly", "Assembly", OutPartsTwo(), null);
+            Check("outbound capability: the same content becomes one multi-part definition",
+                supported != null && supported.Length == 1 && definitions.Count == 1
+                && (long)definitions[0]["parts"] == 2
+                && Find(sections, "idef.0.0.mesh.verts") != null
+                && Find(sections, "idef.0.1.mesh.verts") != null,
+                SectionNames(sections));
+
+            // An empty part survives the fallback as well.
+            sections = new List<Section>();
+            definitions = new List<Dictionary<string, object>>();
+            table = new Instances.DefinitionTableWriter(
+                sections, new List<Dictionary<string, object>>(), definitions,
+                new List<WireWarning>(), false);
+            var emptyPart = new List<Instances.DefinitionTableWriter.Part>
+            {
+                OutPart(0f, null, null),
+                new Instances.DefinitionTableWriter.Part(),
+            };
+            int[] split = table.Write("id:empty-part", "EmptyPart", emptyPart, null);
+            Check("outbound fallback: an empty part still gets its definition",
+                split != null && split.Length == 2 && definitions.Count == 2
+                && Find(sections, "idef.0.mesh.verts") != null
+                && Find(sections, "idef.1.mesh.verts") == null,
+                SectionNames(sections));
+
+            // An unnamed definition gets the deterministic hash fallback, not
+            // two colliding empty names.
+            sections = new List<Section>();
+            definitions = new List<Dictionary<string, object>>();
+            table = new Instances.DefinitionTableWriter(
+                sections, new List<Dictionary<string, object>>(), definitions,
+                new List<WireWarning>(), false);
+            table.Write("id:unnamed-split", "",
+                new List<Instances.DefinitionTableWriter.Part>
+                {
+                    OutPart(0f, null, null),
+                    OutPart(1f, null, null),
+                }, null);
+            string splitName = (string)definitions[0]["name"];
+            Check("outbound fallback: unnamed parts use the hash fallback",
+                definitions.Count == 2
+                && splitName.StartsWith(Instances.DefinitionPrefix, StringComparison.Ordinal)
+                && splitName.EndsWith("[part 0/2]", StringComparison.Ordinal)
+                && (string)definitions[1]["name"] != splitName,
+                splitName + " / " + (string)definitions[1]["name"]);
+        }
+
+        private static void CheckOutboundContentKey()
+        {
+            var sections = new List<Section>();
+            var definitions = new List<Dictionary<string, object>>();
+            var table = new Instances.DefinitionTableWriter(
+                sections, new List<Dictionary<string, object>>(), definitions,
+                new List<WireWarning>(), true);
+
+            int[] first = table.Write("id:one", "", OutPartsTwo(), null);
+            string firstName = (string)definitions[0]["name"];
+            int[] same = table.Write("id:two", "", OutPartsTwo(), null);
+            Check("outbound hash: identical multi-part definitions dedupe",
+                same != null && same.Length == 1 && same[0] == first[0]
+                && definitions.Count == 1,
+                definitions.Count + " definition(s)");
+            Check("outbound hash: an unnamed definition uses the deterministic fallback name",
+                firstName.Length == Instances.DefinitionPrefix.Length + 12
+                && firstName.StartsWith(Instances.DefinitionPrefix, StringComparison.Ordinal),
+                firstName);
+
+            var changedPart = new List<Instances.DefinitionTableWriter.Part>
+            {
+                OutPart(0f, "first", 0),
+                OutPart(2f, "second", 1),
+            };
+            int[] changed = table.Write("id:three", "", changedPart, null);
+            string changedName = (string)definitions[1]["name"];
+            Check("outbound hash: changing a part changes the key and name",
+                changed != null && changed[0] != first[0] && definitions.Count == 2
+                && changedName != firstName,
+                changedName + " vs " + firstName);
+
+            var changedAttribute = new List<Instances.DefinitionTableWriter.Part>
+            {
+                OutPart(0f, "first", 0),
+                OutPart(1f, "renamed", 1),
+            };
+            int[] attribute = table.Write("id:four", "", changedAttribute, null);
+            Check("outbound hash: changing a part attribute changes the key",
+                attribute != null && attribute[0] != first[0] && definitions.Count == 3,
+                definitions.Count + " definition(s)");
+
+            var changedCount = new List<Instances.DefinitionTableWriter.Part>
+            {
+                OutPart(0f, "first", 0),
+                OutPart(1f, "second", 1),
+                OutPart(2f, "third", 2),
+            };
+            int[] count = table.Write("id:five", "", changedCount, null);
+            Check("outbound hash: changing the part count changes the key",
+                count != null && count[0] != first[0] && definitions.Count == 4,
+                definitions.Count + " definition(s)");
+
+            var rowA = new Instances.DefinitionTableWriter.NestedRow(
+                IdentityWire(), "id:child", null);
+            var rowB = new Instances.DefinitionTableWriter.NestedRow(
+                TranslationWire(1f, 0f, 0f), "id:child", null);
+            sections = new List<Section>();
+            definitions = new List<Dictionary<string, object>>();
+            table = new Instances.DefinitionTableWriter(
+                sections, new List<Dictionary<string, object>>(), definitions,
+                new List<WireWarning>(), true);
+            table.Write("id:nested-a", "", OutPartsTwo(),
+                new List<Instances.DefinitionTableWriter.NestedRow> { rowA });
+            table.Write("id:nested-b", "", OutPartsTwo(),
+                new List<Instances.DefinitionTableWriter.NestedRow> { rowB });
+            Check("outbound hash: changing a nested placement changes the key",
+                definitions.Count == 2
+                && (string)definitions[0]["name"] != (string)definitions[1]["name"],
+                (string)definitions[0]["name"] + " vs " + (string)definitions[1]["name"]);
+
+            // The fallback name is stable across two independent writes.
+            sections = new List<Section>();
+            definitions = new List<Dictionary<string, object>>();
+            table = new Instances.DefinitionTableWriter(
+                sections, new List<Dictionary<string, object>>(), definitions,
+                new List<WireWarning>(), true);
+            table.Write("id:stable", "", OutPartsTwo(), null);
+            Check("outbound hash: an unnamed fallback name is deterministic",
+                (string)definitions[0]["name"] == firstName,
+                (string)definitions[0]["name"] + " vs " + firstName);
+
+            // Single-part definitions keep the old identity key: two distinct
+            // definitions with identical content are still two entries and
+            // their name stays empty, exactly as before Q10b2b.
+            sections = new List<Section>();
+            definitions = new List<Dictionary<string, object>>();
+            table = new Instances.DefinitionTableWriter(
+                sections, new List<Dictionary<string, object>>(), definitions,
+                new List<WireWarning>(), true);
+            table.Write("id:a", "", new List<Instances.DefinitionTableWriter.Part>
+                { OutPart(0f, "load", null) }, null);
+            table.Write("id:b", "", new List<Instances.DefinitionTableWriter.Part>
+                { OutPart(0f, "load", null) }, null);
+            Check("outbound hash: single-part definitions keep the old identity key",
+                definitions.Count == 2 && (string)definitions[0]["name"] == ""
+                && (string)definitions[1]["name"] == ""
+                && Find(sections, "idef.0.attr.0.values") != null
+                && Find(sections, "idef.1.attr.0.values") != null,
+                definitions.Count + " definition(s)");
+        }
+
+        private static void CheckOutboundCycle()
+        {
+            var sections = new List<Section>();
+            var definitions = new List<Dictionary<string, object>>();
+            var warnings = new List<WireWarning>();
+            var table = new Instances.DefinitionTableWriter(
+                sections, new List<Dictionary<string, object>>(), definitions,
+                warnings, true);
+
+            var parts = new List<Instances.DefinitionTableWriter.Part>
+                { OutPart(0f, null, null) };
+            System.Func<int[]> loop = null;
+            var self = new Instances.DefinitionTableWriter.NestedRow(
+                IdentityWire(), "id:self", delegate { return loop(); });
+            loop = delegate
+            {
+                return table.Write("id:self", "Loop", parts,
+                    new List<Instances.DefinitionTableWriter.NestedRow> { self });
+            };
+
+            int[] outer = table.Write("id:self", "Loop", parts,
+                new List<Instances.DefinitionTableWriter.NestedRow> { self });
+            bool noted = false;
+            foreach (WireWarning warning in warnings)
+                if (warning.Message.IndexOf("nests inside itself", StringComparison.Ordinal) >= 0)
+                    noted = true;
+            Check("outbound cycle: a self-nesting definition warns and stops",
+                outer != null && outer.Length == 1 && definitions.Count == 1
+                && noted && Find(sections, "idef.0.inst.ref_def") == null,
+                Notes(WireNotes(warnings)) + " sections " + SectionNames(sections));
+
+            int[] cached = table.Write("id:self", "Loop", parts, null);
+            Check("outbound cycle: a completed definition is cached, not rehashed",
+                cached != null && cached[0] == outer[0] && definitions.Count == 1,
+                definitions.Count + " definition(s)");
+        }
+
+        private static void CheckOutboundAttributes()
+        {
+            var root = new ArchivableDictionary();
+            AttributeStore.Set(root, "weight", "FLOAT", "POINT", new double[] { 1.0, 2.0 });
+
+            var sections = new List<Section>();
+            var descriptors = new List<Dictionary<string, object>>();
+            AttributeStore.Collect(root, "mesh", sections, descriptors,
+                "idef.0.1.", 0L, 1L, 3);
+            Check("outbound attributes: a part prefix and part field are written",
+                descriptors.Count == 1
+                && (long)descriptors[0]["part"] == 1L
+                && (long)descriptors[0]["definition"] == 0L
+                && (string)descriptors[0]["section"] == "idef.0.1.attr.3.values"
+                && Find(sections, "idef.0.1.attr.3.values") != null,
+                Json.WriteCanonical(descriptors));
+
+            sections = new List<Section>();
+            descriptors = new List<Dictionary<string, object>>();
+            AttributeStore.Collect(root, "mesh", sections, descriptors,
+                "idef.0.", 0L, null, 2);
+            Check("outbound attributes: a single-part descriptor keeps the old bytes",
+                descriptors.Count == 1 && !descriptors[0].ContainsKey("part")
+                && (string)descriptors[0]["section"] == "idef.0.attr.2.values"
+                && Find(sections, "idef.0.attr.2.values") != null,
+                Json.WriteCanonical(descriptors));
+
+            // Curves and points use the same part parameter and prefix.
+            var curve = new ArchivableDictionary();
+            AttributeStore.Set(curve, "kind", "FLOAT", "CURVE", new double[] { 7.0 });
+            sections = new List<Section>();
+            descriptors = new List<Dictionary<string, object>>();
+            AttributeStore.Collect(curve, "crv", sections, descriptors,
+                "idef.0.0.", 0L, 0L, 0);
+            Check("outbound attributes: a curve descriptor follows the part rule",
+                descriptors.Count == 1 && (long)descriptors[0]["part"] == 0L
+                && (string)descriptors[0]["group"] == "crv"
+                && (string)descriptors[0]["section"] == "idef.0.0.attr.0.values"
+                && Find(sections, "idef.0.0.attr.0.values") != null,
+                Json.WriteCanonical(descriptors));
+
+            var cloud = new ArchivableDictionary();
+            AttributeStore.Set(cloud, "id", "INT", "POINT", new int[] { 4 });
+            sections = new List<Section>();
+            descriptors = new List<Dictionary<string, object>>();
+            AttributeStore.Collect(cloud, "pts", sections, descriptors,
+                "idef.0.1.", 0L, 1L, 0);
+            Check("outbound attributes: a point descriptor follows the part rule",
+                descriptors.Count == 1 && (long)descriptors[0]["part"] == 1L
+                && (string)descriptors[0]["group"] == "pts"
+                && Find(sections, "idef.0.1.attr.0.values") != null,
+                Json.WriteCanonical(descriptors));
+        }
+
+        private static List<Instances.DefinitionTableWriter.Part> OutPartsTwo()
+        {
+            return new List<Instances.DefinitionTableWriter.Part>
+            {
+                OutPart(0f, "first", 0),
+                OutPart(1f, "second", 1),
+            };
+        }
+
+        private static Instances.DefinitionTableWriter.Part OutPart(
+            float x, string attributeName, long? part)
+        {
+            var sections = new List<Section>
+            {
+                Section.Floats("mesh.verts", new float[]
+                {
+                    x, 0, 0, x + 1, 0, 0, x + 1, 1, 0, x, 1, 0,
+                }),
+                Section.U32("mesh.face_counts", new uint[] { 4 }),
+                Section.U32("mesh.face_indices", new uint[] { 0, 1, 2, 3 }),
+            };
+            var descriptors = new List<Dictionary<string, object>>();
+            if (attributeName != null)
+            {
+                sections.Add(AttrValue("attr.0.values", x));
+                descriptors.Add(Descriptor("mesh", attributeName, "FLOAT", "POINT", 1,
+                    "attr.0.values", 0L, part));
+            }
+            return new Instances.DefinitionTableWriter.Part(sections, descriptors);
+        }
+
+        private static float[] IdentityWire()
+        {
+            return new float[]
+            {
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1,
+            };
+        }
+
+        private static float[] TranslationWire(float x, float y, float z)
+        {
+            return new float[]
+            {
+                1, 0, 0, x,
+                0, 1, 0, y,
+                0, 0, 1, z,
+                0, 0, 0, 1,
+            };
+        }
+
+        private static bool SameSections(List<Section> actual, List<Section> expected)
+        {
+            if (actual.Count != expected.Count) return false;
+            for (int i = 0; i < actual.Count; i++)
+            {
+                if (actual[i].Name != expected[i].Name
+                    || actual[i].Dtype != expected[i].Dtype) return false;
+                if (actual[i].Raw.Length != expected[i].Raw.Length) return false;
+                for (int j = 0; j < actual[i].Raw.Length; j++)
+                    if (actual[i].Raw[j] != expected[i].Raw[j]) return false;
+            }
+            return true;
+        }
+
+        private static bool NoDuplicateSections(List<Section> sections)
+        {
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (Section section in sections)
+                if (!names.Add(section.Name)) return false;
+            return true;
+        }
+
+        private static Dictionary<string, object> DescriptorAt(
+            List<Dictionary<string, object>> descriptors, string section)
+        {
+            foreach (Dictionary<string, object> descriptor in descriptors)
+                if (Json.GetString(descriptor, "section") == section) return descriptor;
+            return null;
+        }
+
+        private static string SectionNames(List<Section> sections)
+        {
+            var names = new List<string>();
+            foreach (Section section in sections) names.Add(section.Name);
+            return "[" + string.Join(",", names.ToArray()) + "]";
+        }
+
+        private static List<string> WireNotes(List<WireWarning> warnings)
+        {
+            var result = new List<string>();
+            foreach (WireWarning warning in warnings)
+                result.Add(warning.Code + ": " + warning.Message);
+            return result;
+        }
+
         // -------------------------------------------------------------- native
 
         private static void CheckNativeBuild(string root)
@@ -893,6 +1485,117 @@ namespace Stageloom.Tests.Console
                         ? "null objects"
                         : empty.InstanceDefinition.Objects.Count + " objects")
                 + "; notes: " + Notes(notes));
+        }
+
+        private static void CheckNativeEmit()
+        {
+            System.Console.WriteLine();
+            System.Console.WriteLine("native instance emit");
+
+            Mesh first = NativeQuad(0.0);
+            Mesh second = NativeQuad(0.5);
+            ModelObject firstObject = ModelObject.Cast(new GH_Mesh(first));
+            ModelObject secondObject = ModelObject.Cast(new GH_Mesh(second));
+            if (firstObject == null || secondObject == null)
+            {
+                Check("native emit: two meshes have model objects", false,
+                    "ModelObject.Cast returned null");
+                return;
+            }
+
+            var definitionAttributes = new ModelInstanceDefinition.Attributes();
+            definitionAttributes.Name = "Assembly";
+            definitionAttributes.Objects = new List<ModelObject> { firstObject, secondObject };
+            var definition = new ModelInstanceDefinition(definitionAttributes);
+            var top = new GH_InstanceReference(
+                new InstanceReferenceGeometry(Guid.NewGuid(), Transform.Identity), definition);
+
+            var sections = new List<Section>();
+            var attributes = new List<Dictionary<string, object>>();
+            var definitions = new List<Dictionary<string, object>>();
+            var warnings = new List<WireWarning>();
+            Instances.Emit(new List<GH_InstanceReference> { top }, 1.0, sections,
+                attributes, definitions, warnings, true);
+            Check("native emit: a two-object definition is multi-part",
+                definitions.Count == 1 && definitions[0].ContainsKey("parts")
+                && (long)definitions[0]["parts"] == 2
+                && Find(sections, "idef.0.0.mesh.verts") != null
+                && Find(sections, "idef.0.1.mesh.verts") != null
+                && Find(sections, "idef.0.mesh.verts") == null
+                && NoDuplicateSections(sections)
+                && warnings.Count == 0,
+                definitions.Count + " definition(s); " + SectionNames(sections)
+                + "; " + Notes(WireNotes(warnings)));
+
+            sections = new List<Section>();
+            attributes = new List<Dictionary<string, object>>();
+            definitions = new List<Dictionary<string, object>>();
+            warnings = new List<WireWarning>();
+            Instances.Emit(new List<GH_InstanceReference> { top }, 1.0, sections,
+                attributes, definitions, warnings, false);
+            Section refDef = Find(sections, "inst.ref_def");
+            Section transforms = Find(sections, "inst.transforms");
+            Check("native emit: without blocks/2 the row fans out to every part",
+                definitions.Count == 2
+                && (string)definitions[0]["name"] == "Assembly [part 0/2]"
+                && (string)definitions[1]["name"] == "Assembly [part 1/2]"
+                && refDef != null && refDef.ToU32().Length == 2
+                && refDef.ToU32()[0] == 0 && refDef.ToU32()[1] == 1
+                && transforms != null && transforms.ToFloats().Length == 32
+                && Find(sections, "idef.0.mesh.verts") != null
+                && Find(sections, "idef.1.mesh.verts") != null,
+                definitions.Count + " definition(s); " + SectionNames(sections));
+
+            bool warned = false;
+            foreach (WireWarning warning in warnings)
+                if (warning.Code == WarningCodes.InstanceSplit
+                    && warning.Message.IndexOf("Assembly", StringComparison.Ordinal) >= 0
+                    && warning.Message.IndexOf("2 parts", StringComparison.Ordinal) >= 0)
+                    warned = true;
+            Check("native emit: the fallback is visible on the stage", warned,
+                Notes(WireNotes(warnings)));
+
+            // A graph-side definition that contains itself must warn, not
+            // recurse until the stack ends.
+            var self = new GH_InstanceReference(
+                new InstanceReferenceGeometry(Guid.NewGuid(), Transform.Identity));
+            var loopAttributes = new ModelInstanceDefinition.Attributes();
+            loopAttributes.Name = "Loop";
+            loopAttributes.Objects = new List<ModelObject>
+            {
+                ModelObject.Cast(self),
+                ModelObject.Cast(new GH_Mesh(first)),
+            };
+            var loopDefinition = new ModelInstanceDefinition(loopAttributes);
+            self.InstanceDefinition = loopDefinition;
+            var loopTop = new GH_InstanceReference(
+                new InstanceReferenceGeometry(Guid.NewGuid(), Transform.Identity), loopDefinition);
+
+            sections = new List<Section>();
+            attributes = new List<Dictionary<string, object>>();
+            definitions = new List<Dictionary<string, object>>();
+            warnings = new List<WireWarning>();
+            Instances.Emit(new List<GH_InstanceReference> { loopTop }, 1.0, sections,
+                attributes, definitions, warnings, true);
+            bool cycleNoted = false;
+            foreach (WireWarning warning in warnings)
+                if (warning.Message.IndexOf("nests inside itself", StringComparison.Ordinal) >= 0)
+                    cycleNoted = true;
+            Check("native emit: a graph-side cycle warns instead of overflowing",
+                definitions.Count == 1 && cycleNoted
+                && Find(sections, "idef.0.inst.ref_def") == null,
+                Notes(WireNotes(warnings)));
+        }
+
+        private static Mesh NativeQuad(double offset)
+        {
+            var mesh = new Mesh();
+            mesh.Vertices.Add(offset, 0, 0);
+            mesh.Vertices.Add(offset + 1, 0, 0);
+            mesh.Vertices.Add(offset + 1, 1, 0);
+            mesh.Vertices.Add(offset, 1, 0);
+            mesh.Faces.AddFace(0, 1, 2, 3);
+            return mesh;
         }
 
         private static ArchivableDictionary AttributeRoot(GeometryBase geometry)

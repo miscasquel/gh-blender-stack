@@ -43,6 +43,9 @@ namespace Stageloom.Core
         public const string SubdJoined = "subd_joined";
         public const string BrepMeshed = "brep_meshed";
         public const string InstanceSkipped = "instance_skipped";
+        /// <summary>A multi-part definition was split into single-part ones
+        /// because the peer did not advertise `blocks/2` (protocol §8).</summary>
+        public const string InstanceSplit = "instance_split";
         public const string NgonHoles = "ngon_holes";
     }
 
