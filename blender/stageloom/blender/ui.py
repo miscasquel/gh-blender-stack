@@ -37,6 +37,7 @@ _STATE_ICONS = {
     stack_mod.STATE_DISABLED: "CHECKBOX_DEHLT",
     stack_mod.STATE_FROZEN: "FREEZE",
     stack_mod.STATE_UNBOUND: "GHOST_ENABLED",
+    stack_mod.STATE_CONFLICT: _DUPLICATE_ICON,
 }
 
 # A stage that fails to draw is logged once per distinct failure, not once per

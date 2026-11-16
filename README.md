@@ -31,8 +31,8 @@ Blender                                          Rhino / Grasshopper (wine)
   a stack object gives the copy its own stage key, stack identity, node group and
   helpers, with its parameter values and animation, so the two cannot cross-talk.
   Two stages never share a key: a file or undo that restores such a state shows
-  the conflict on every affected stage and is resolved per stage from the panel
-  with **Resolve duplicate key**.
+  the `conflict` state on every affected stage and sends or applies nothing for
+  them; it is resolved per stage from the panel with **Resolve duplicate key**.
 - **Geometry kinds.** Meshes (n-gons and vertex colours), curves (poly, Bezier,
   NURBS, circles, ellipses, arcs), point clouds, SubD control cages with
   edge-crease tags, and Breps/surfaces (meshed on the way out, lossy). Stage In
@@ -67,11 +67,12 @@ Blender                                          Rhino / Grasshopper (wine)
 - **Protocol.** Binary frames with a canonical JSON header; geometry and
   parameters in the same stream. The Python and C# codecs are checked against
   twelve shared golden fixtures.
-- **Lifecycle.** States (`waiting`, `ok`, `error`, `disconnected`, `disabled`,
-  `frozen`, `unbound`), timeouts, latest-wins requests, and reconnect with
-  backoff. The stage's modifier is its lifecycle: its toggles enable and disable
-  it, deleting it removes the stage, Pull refreshes it once, Freeze parks it.
-  Inspectable from the UI.
+- **Lifecycle.** States (`idle`, `waiting`, `ok`, `error`, `disconnected`,
+  `disabled`, `frozen`, `unbound`, `conflict`), timeouts, latest-wins requests,
+  and reconnect with backoff. `disabled`/`frozen`/`conflict` follow the stage's
+  flags and key ownership rather than ad-hoc writes. The stage's modifier is its
+  lifecycle: its toggles enable and disable it, deleting it removes the stage,
+  Pull refreshes it once, Freeze parks it. Inspectable from the UI.
 - **Live stages.** Every delivered request is a solver step: the stage asks
   again whenever its own inputs or the frame move, one request is outstanding at
   a time, and a late answer for a superseded request is dropped. A disconnected

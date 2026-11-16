@@ -209,7 +209,6 @@ def _on_load(scene=None):
     engine._state_since.clear()
     engine._last_no_send.clear()
     engine._timings.clear()
-    engine._waiting_objects.clear()
     engine._last_stall_check = 0.0
     engine._reset_reports()
     engine._dirty.clear()
@@ -240,7 +239,7 @@ def _on_load(scene=None):
             continue
         for stage in record.stages:
             if stage.state == engine.stack_mod.STATE_WAITING:
-                engine._set(stage, "state", engine.stack_mod.STATE_IDLE)
+                engine._set_state(stage, engine.stack_mod.STATE_IDLE)
             # A saved request id names a request from the session that just
             # ended. A response queued at load must not apply it before
             # `_verify` has asked Grasshopper again, so clear it on every stage;
@@ -437,7 +436,6 @@ def _nudge_stalled_waits():
     if now - engine._last_stall_check < 1.0:
         return
     engine._last_stall_check = now
-    waiting = set()
     for obj in engine._all_stack_objects():
         record = engine.stack_mod.stack_of(obj)
         for stage in record.stages:
@@ -449,10 +447,7 @@ def _nudge_stalled_waits():
             pending = engine._pending.get(key)
             if not pending:
                 continue
-            waiting.add(obj.name)
             if now - min(pending.values()) > engine.SOFT_RETRY_SECONDS:
                 engine._dirty.add(obj.name)
                 engine._mark_hot()
-    engine._waiting_objects.clear()
-    engine._waiting_objects.update(waiting)
 

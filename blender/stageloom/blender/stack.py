@@ -31,6 +31,11 @@ STAGE_KEY_LENGTH = 6
 INPUT_PREFIX = "prefix"
 INPUT_GENERATOR = "generator"
 
+# Stage states are a projection of the stage's flags and the last activity.
+# `enabled` and `frozen` stay flags; their states are derived and are written
+# only by the engine's state owner (engine/state.py). `conflict` is not a mode:
+# it means the stage key has no proven owner, and it outranks every other state
+# until the user resolves the duplicate.
 STATE_IDLE = "idle"
 STATE_WAITING = "waiting"
 STATE_OK = "ok"
@@ -39,6 +44,40 @@ STATE_DISCONNECTED = "disconnected"
 STATE_DISABLED = "disabled"
 STATE_FROZEN = "frozen"
 STATE_UNBOUND = "unbound"
+STATE_CONFLICT = "conflict"
+STATE_VALUES = frozenset(
+    (
+        STATE_IDLE,
+        STATE_WAITING,
+        STATE_OK,
+        STATE_ERROR,
+        STATE_DISCONNECTED,
+        STATE_DISABLED,
+        STATE_FROZEN,
+        STATE_UNBOUND,
+        STATE_CONFLICT,
+    )
+)
+# The states that stand for a flag (or a key-ownership fact) rather than for
+# activity. They are never written when the corresponding fact is absent.
+FLAG_STATES = frozenset((STATE_DISABLED, STATE_FROZEN, STATE_CONFLICT))
+
+
+def rest_state(stage):
+    """The state a stage settles into when no request is in flight.
+
+    The flags decide, in precedence order: a disabled stage reports disabled,
+    a frozen stage reports frozen, and a live stage reports idle. An answer
+    settling to ``ok`` asks for that state directly; the engine's state owner
+    clamps it back to a flag state when one is set. A conflicted key overrides
+    both through that owner, which is the only writer of ``stage.state``; this
+    function deliberately knows nothing about the index.
+    """
+    if not getattr(stage, "enabled", True):
+        return STATE_DISABLED
+    if getattr(stage, "frozen", False):
+        return STATE_FROZEN
+    return STATE_IDLE
 
 
 def new_stage_key(label="stage"):

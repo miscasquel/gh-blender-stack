@@ -390,14 +390,11 @@ def _trigger_dependents(pairs, token, frame):
             # A user-frozen stage stays frozen with the failure visible; any
             # other dependent lands in error. Rollback below unfreezes the
             # stages this bake froze, so no dependent is left half-asked.
-            engine._set(
+            engine._set_state(
                 dep_stage,
-                "state",
-                engine.stack_mod.STATE_FROZEN
-                if dep_stage.frozen
-                else engine.stack_mod.STATE_ERROR,
+                engine.stack_mod.STATE_ERROR,
+                error=reason_text,
             )
-            engine._set(dep_stage, "error", reason_text)
             line = "bake: dependent %s/%s failed at frame %s: %s" % (
                 dep_obj.name,
                 dep_stage.key,

@@ -93,6 +93,7 @@ def _conflict_message(key, claims):
 def _mark_key_conflict(key):
     """Put every stage claiming a conflicted key in the visible safe state.
 
+    The state is ``conflict``; the error text names the claimants as detail.
     Nothing may be sent or applied for the key while it is ambiguous, so the
     transient per-stage state is cleared with it. The stage records stay
     untouched otherwise: resolving one claimant is what gives the others a
@@ -114,17 +115,19 @@ def _mark_key_conflict(key):
         engine._timings.pop((stack_id, key), None)
         engine._forget_prefix(obj, key)
         engine._set(stage, "rid", "")
-        engine._set(stage, "state", engine.stack_mod.STATE_ERROR)
-        engine._set(stage, "error", message)
+        engine._set_state(stage, engine.stack_mod.STATE_CONFLICT, error=message)
 
 
 def _clear_conflict_error(stage):
     """Clear the derived error/state left by a conflict, if present."""
-    if not stage.error.startswith(CONFLICT_PREFIX):
+    if stage.state != engine.stack_mod.STATE_CONFLICT and not stage.error.startswith(
+        CONFLICT_PREFIX
+    ):
         return False
     engine._set(stage, "error", "")
-    if stage.state == engine.stack_mod.STATE_ERROR:
-        engine._set(stage, "state", engine.stack_mod.STATE_IDLE)
+    # The key is no longer conflicted when this runs; the flags decide whether
+    # the stage returns to idle, frozen or disabled.
+    engine._set_state(stage, engine.stack_mod.rest_state(stage))
     return True
 
 
@@ -405,7 +408,7 @@ def _split_stage(obj, stage, new_key=None):
     for entry in stage.params:
         entry.stage_key = new_key
     # A new key has no document that has answered it yet.
-    engine._set(stage, "state", engine.stack_mod.STATE_UNBOUND)
+    engine._set_state(stage, engine.stack_mod.STATE_UNBOUND)
     engine._set(stage, "rid", "")
     engine._set(stage, "geom_hash", "")
     engine._set(stage, "applied_out_hash", "")
@@ -617,11 +620,10 @@ def _drop_removed_stages(obj, record):
                 # it. With more than one same-name candidate there is no safe
                 # binding, so report the ambiguity instead of guessing.
                 if len(candidates) > 1:
-                    engine._set(stage, "state", engine.stack_mod.STATE_ERROR)
-                    engine._set(
+                    engine._set_state(
                         stage,
-                        "error",
-                        "ambiguous modifier name: %d unattached modifiers match %r"
+                        engine.stack_mod.STATE_ERROR,
+                        error="ambiguous modifier name: %d unattached modifiers match %r"
                         % (len(candidates), stage.label or stage.key),
                     )
                     engine._no_send(record, stage, "ambiguous modifier name")
@@ -676,7 +678,7 @@ def _repair_plumbing(obj, record, stage, modifier):
         engine._verify.add((record.stack_id, stage.key))
         engine._last_frame.pop((record.stack_id, stage.key), None)
         if stage.state != engine.stack_mod.STATE_UNBOUND:
-            engine._set(stage, "state", engine.stack_mod.STATE_UNBOUND)
+            engine._set_state(stage, engine.stack_mod.STATE_UNBOUND)
         engine.prefs.log("[stageloom] %s: plumbing rebuilt, marked unbound" % stage.key, flush=True)
     return rebuilt
 
@@ -713,9 +715,11 @@ def request_again(obj, stage=None, skip_frozen=False):
         if item.frozen:
             # Pull on a frozen stage: one request, then parked again.
             engine._arm_pull((record.stack_id, item.key))
-            engine._set(item, "state", engine.stack_mod.STATE_FROZEN)
+            engine._set_state(item, engine.stack_mod.STATE_FROZEN)
         else:
-            engine._set(item, "state", engine.stack_mod.STATE_IDLE)
+            # A disabled stage never leaves disabled; unfreeze/Pull cannot make
+            # it idle behind the flag.
+            engine._set_state(item, engine.stack_mod.STATE_IDLE)
     engine._reindex_object(obj)
     # A new stage (or a Pull) brings the engine back from dormancy.
     engine._ensure_active()
@@ -734,15 +738,19 @@ def freeze(obj, stage):
     engine._forget(record.stack_id, stage.key)
     engine._set(stage, "rid", "")
     engine._set(stage, "error", "")
-    engine._set(stage, "state", engine.stack_mod.STATE_FROZEN)
+    engine._set_state(stage, engine.stack_mod.STATE_FROZEN)
 
 
 def unfreeze(obj, stage):
-    """Resume a frozen stage: the next pass asks Grasshopper again."""
+    """Resume a frozen stage: the next pass asks Grasshopper again.
+
+    Only the frozen flag changed; a disabled or conflicted stage settles back
+    to its own state instead of pretending to be idle.
+    """
     record = engine.stack_mod.stack_of(obj)
     if record is not None:
         engine._clear_pull((record.stack_id, stage.key))
-    engine._set(stage, "state", engine.stack_mod.STATE_IDLE)
+    engine._set_state(stage, engine.stack_mod.STATE_IDLE)
     engine._ensure_active()
     engine._dirty.add(obj.name)
     engine._mark_hot()

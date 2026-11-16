@@ -537,12 +537,18 @@ class WaitingAgeTests(unittest.TestCase):
         bpy.ops.stageloom.add_stage(label="AgeB")
         stage = bpy.context.object.gh_stack.stages[0]
         record = bpy.context.object.gh_stack
-        engine._state_since[(record.stack_id, stage.key)] = time.monotonic() - 4.0
-        self.assertGreaterEqual(engine.waiting_seconds(record.stack_id, stage.key), 3.9)
+        key = (record.stack_id, stage.key)
+        # A wait is an in-flight request; only then does the stamp mean age.
+        engine._pending[key] = {"rid": "aging"}
+        engine._state_since[key] = time.monotonic() - 4.0
+        self.assertGreaterEqual(engine.waiting_seconds(*key), 3.9)
+        # A stamp with no request behind it must not age a settled stage.
+        engine._pending.pop(key, None)
+        self.assertEqual(engine.waiting_seconds(*key), 0.0)
         # A new registration throws the stamps away: a stamp from a previous
         # session would age a stage that is not waiting at all.
         engine._state_since.clear()
-        self.assertEqual(engine.waiting_seconds(record.stack_id, stage.key), 0.0)
+        self.assertEqual(engine.waiting_seconds(*key), 0.0)
 
 
 if __name__ == "__main__":

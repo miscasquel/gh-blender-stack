@@ -316,7 +316,8 @@ The old A1–A10 remain the functional core. Add the release gates that the
   the instance-heavy case.
 - **A10 Duplicates.** Duplicated stacks and stages keep independent keys,
   session identities, groups, helpers and animation; a saved or undone shared key
-  is a visible, resolvable conflict instead of a silent split.
+  shows the explicit `conflict` state and sends/applies nothing for the affected
+  stages instead of silently splitting them.
 - **A11 Platform.** Windows 11 + Rhino 8 + Blender 5.3 passes the full matrix;
   the Linux/wine development matrix remains green.
 - **A12 Chain playback/bake.** Multi-stage Play Every Frame works, and a

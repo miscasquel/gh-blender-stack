@@ -103,10 +103,9 @@ def _clear_failed_response(stage_key, rid=None):
             continue
         engine._clear_pull(key)
         engine._verify.add(key)
-        engine._set(
+        engine._set_state(
             stage,
-            "state",
-            engine.stack_mod.STATE_FROZEN if stage.frozen else engine.stack_mod.STATE_IDLE,
+            engine.stack_mod.STATE_IDLE,
         )
         engine._dirty.add(obj.name)
         engine._mark_hot()
@@ -162,7 +161,7 @@ def _on_client_hello(header):
                 _apply_output_presence(stage, entry)
             if stage.state == engine.stack_mod.STATE_WAITING:
                 engine._forget(record.stack_id, stage.key)
-                engine._set(stage, "state", engine.stack_mod.STATE_IDLE)
+                engine._set_state(stage, engine.stack_mod.STATE_IDLE)
             # A request id names a request this client session was asked. The
             # next client may be a different document: a late response carrying
             # the old id must not apply before the verify request goes out.
@@ -350,9 +349,13 @@ def _handle_response(header, sections):
                 # The error ends a Pull as surely as an answer does: without
                 # this the permit would arm one more request while frozen.
                 engine._clear_pull(pending_key)
-            if not stage.frozen:
-                engine._set(stage, "state", engine.stack_mod.STATE_ERROR)
-            engine._set(stage, "error", error.get("message") if isinstance(error, dict) else str(error))
+            # The guard keeps a frozen stage frozen and records the reason; a
+            # disabled stage stays disabled.
+            engine._set_state(
+                stage,
+                engine.stack_mod.STATE_ERROR,
+                error=error.get("message") if isinstance(error, dict) else str(error),
+            )
             # Deliberately no retry here: a solve that just failed would fail
             # again the moment it was asked, turning one broken component into
             # a request loop against the client. Protocol §7: an errored stage
@@ -407,8 +410,8 @@ def _handle_response(header, sections):
             engine.nodes.ensure_group(obj, stage.key, engine._nested_rows_of(sections))
         engine._set(stage, "warnings", engine._warnings_text(header))
         # An unchanged output is still the solver's current state: it settles
-        # normally, and a frozen stage stays frozen because freeze owns state.
-        engine._set(stage, "state", engine._rest_state(stage))
+        # normally; a frozen or disabled stage keeps its flag state.
+        engine._set_state(stage, engine.stack_mod.STATE_OK)
         engine._set(stage, "error", "")
         # A Pull is one request: the answer that names its rid ends the permit,
         # so a frozen stage parks again instead of asking forever.
@@ -490,8 +493,7 @@ def _handle_error(header):
             )
             continue
         engine._set(stage, "error", "%s: %s" % (code, message))
-        if stage.state == engine.stack_mod.STATE_WAITING:
-            engine._set(stage, "state", engine.stack_mod.STATE_ERROR)
+        engine._set_state(stage, engine.stack_mod.STATE_ERROR)
 
 
 def _request_is_current(record, stage, rid):
@@ -513,7 +515,7 @@ def _resend_in_full(obj, record, stage, reason):
     # the resend is to tell Grasshopper again.
     engine._verify.add((record.stack_id, stage.key))
     engine._set(stage, "geom_hash", "")
-    engine._set(stage, "state", engine.stack_mod.STATE_IDLE)
+    engine._set_state(stage, engine.stack_mod.STATE_IDLE)
     engine._set(stage, "error", "")
     engine._dirty.add(obj.name)
     engine.prefs.log("[stageloom] %s: resending geometry (%s)" % (stage.key, reason), flush=True)

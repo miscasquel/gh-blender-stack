@@ -211,7 +211,7 @@ class DuplicateStageTests(unittest.TestCase):
     def test_04_a_loaded_file_reports_a_stale_duplicate(self):
         # A save taken after duplication but before a pass carries the shared
         # key. A load cannot prove which claimant is the original, so both are
-        # errored and neither is silently split or sent.
+        # conflicted and neither is silently split or sent.
         copy = self.obj.copy()
         bpy.context.scene.collection.objects.link(copy)
         copy.name = "Original.002"
@@ -221,7 +221,7 @@ class DuplicateStageTests(unittest.TestCase):
         self.assertEqual(copy_stage.key, self.original_key, "the load split by name")
         self.assertEqual(self.stage.key, self.original_key)
         for stage in (self.stage, copy_stage):
-            self.assertEqual(stage.state, "error")
+            self.assertEqual(stage.state, self.stack_mod.STATE_CONFLICT)
             self.assertIn(self.original_key, stage.error)
             self.assertIn("Original", stage.error)
             self.assertIn("Original.002", stage.error)
@@ -302,7 +302,10 @@ class RuntimeDuplicateIdentityTests(unittest.TestCase):
         self.engine._process_object(copy)
         copy_stage = copy.gh_stack.stages[0]
         self.assertEqual(copy_stage.key, key, "the only claimant was split")
-        self.assertNotEqual(copy_stage.state, "error")
+        self.assertNotIn(
+            copy_stage.state,
+            (self.stack_mod.STATE_ERROR, self.stack_mod.STATE_CONFLICT),
+        )
         self.assertIs(self.engine._stage_owners[key], copy)
         self.assertNotIn(key, self.engine._stage_conflicts)
 
@@ -334,7 +337,7 @@ class RuntimeDuplicateIdentityTests(unittest.TestCase):
         self.assertEqual(stage.key, key)
         self.assertEqual(copy_stage.key, key, "undo silently split the key")
         for item in (stage, copy_stage):
-            self.assertEqual(item.state, "error")
+            self.assertEqual(item.state, self.stack_mod.STATE_CONFLICT)
             self.assertIn(key, item.error)
         self.assertIn(key, self.engine._stage_conflicts)
         self.assertNotIn(key, self.engine._stage_owners)
@@ -363,7 +366,7 @@ class StrictConflictTests(unittest.TestCase):
         self.assertEqual(self.chair_stage.key, self.key)
         self.assertEqual(self.chair.gh_stack.stack_id, self.copy.gh_stack.stack_id)
         for stage in (self.chair_stage, self.copy_stage):
-            self.assertEqual(stage.state, "error")
+            self.assertEqual(stage.state, self.stack_mod.STATE_CONFLICT)
             self.assertIn(self.key, stage.error)
             self.assertIn("Chair", stage.error)
             self.assertIn("AChair", stage.error)
@@ -405,7 +408,10 @@ class StrictConflictTests(unittest.TestCase):
         self.engine._on_load()
         self.assertEqual(self.chair_stage.key, self.key)
         self.assertEqual(self.chair_stage.error, "")
-        self.assertNotEqual(self.chair_stage.state, "error")
+        self.assertNotIn(
+            self.chair_stage.state,
+            (self.stack_mod.STATE_ERROR, self.stack_mod.STATE_CONFLICT),
+        )
         self.assertNotIn(self.key, self.engine._stage_conflicts)
 
     def test_03_conflicted_keys_never_reach_process_or_response(self):
@@ -480,7 +486,10 @@ class StrictConflictTests(unittest.TestCase):
         modifier = self.nodes.modifier_of(self.copy, self.copy_stage)
         self.assertIsNotNone(modifier.node_group)
         self.assertEqual(modifier.node_group.name, self.nodes.group_name(new_key))
-        self.assertNotEqual(self.copy_stage.state, "error")
+        self.assertNotIn(
+            self.copy_stage.state,
+            (self.stack_mod.STATE_ERROR, self.stack_mod.STATE_CONFLICT),
+        )
 
 
 class SameObjectConflictTests(unittest.TestCase):
@@ -505,7 +514,7 @@ class SameObjectConflictTests(unittest.TestCase):
         self.assertIn(self.key, self.engine._stage_conflicts)
         self.assertNotIn(self.key, self.engine._stage_owners)
         for stage in (self.stage_a, self.stage_b):
-            self.assertEqual(stage.state, "error")
+            self.assertEqual(stage.state, self.stack_mod.STATE_CONFLICT)
             self.assertIn(self.key, stage.error)
             self.assertIn("2 stages", stage.error)
         self.assertEqual(list(self.engine._stage_views(self.key)), [])
@@ -561,7 +570,10 @@ class NormalReloadTests(unittest.TestCase):
         self.assertEqual((stage_a.key, stage_b.key), self.keys)
         self.assertNotEqual(stage_a.key, stage_b.key)
         for obj, stage in ((obj_a, stage_a), (obj_b, stage_b)):
-            self.assertNotEqual(stage.state, "error")
+            self.assertNotIn(
+                stage.state,
+                (self.stack_mod.STATE_ERROR, self.stack_mod.STATE_CONFLICT),
+            )
             self.assertNotIn(stage.key, self.engine._stage_conflicts)
             self.assertIs(self.engine._stage_owners[stage.key], obj)
 

@@ -87,12 +87,6 @@ def _prefix_result(result):
     return {}, [], [], []
 
 
-def _rest_state(stage):
-    """The state a stage settles into after an answer. A frozen stage stays
-    frozen through a Pull; it owns the state."""
-    return engine.stack_mod.STATE_FROZEN if stage.frozen else engine.stack_mod.STATE_OK
-
-
 _EMPTY_GEOMETRY_HASH = None
 
 
@@ -148,16 +142,10 @@ def _expire_pull(record, stage):
     engine._clear_pull(key)
     engine._forget(record.stack_id, stage.key)
     engine._set(stage, "rid", "")
-    engine._set(
-        stage,
-        "state",
-        engine.stack_mod.STATE_FROZEN if stage.frozen else engine.stack_mod.STATE_IDLE,
-    )
-    engine._set(
-        stage,
-        "error",
-        "Pull timed out after %.0f s; keeping the last output" % timeout,
-    )
+    message = "Pull timed out after %.0f s; keeping the last output" % timeout
+    # A frozen stage stays frozen and keeps the reason; the guard also clamps a
+    # disabled stage to disabled and a conflicted key to conflict.
+    engine._set_state(stage, engine.stack_mod.STATE_ERROR, error=message)
     line = "%s: Pull timed out after %.0f s; keeping the last output" % (
         stage.key,
         timeout,
@@ -228,7 +216,7 @@ def _process_stage(obj, record, stage):
         engine._sent.pop((record.stack_id, stage.key), None)
         engine._last_frame.pop((record.stack_id, stage.key), None)
         engine._set(stage, "rid", "")
-        engine._set(stage, "state", engine.stack_mod.STATE_DISABLED)
+        engine._set_state(stage, engine.stack_mod.STATE_DISABLED)
         engine._no_send(record, stage, "disabled")
         return "idle"
     engine._repair_plumbing(obj, record, stage, modifier)
@@ -248,7 +236,7 @@ def _process_stage(obj, record, stage):
                 # stall nudge dirty the object once a second forever.
                 engine._forget(record.stack_id, stage.key)
                 engine._set(stage, "rid", "")
-            engine._set(stage, "state", engine.stack_mod.STATE_FROZEN)
+            engine._set_state(stage, engine.stack_mod.STATE_FROZEN)
             engine._no_send(record, stage, "frozen")
             return "idle"
 
@@ -258,10 +246,8 @@ def _process_stage(obj, record, stage):
         # client that is gone, and a reconnect's hello resets the rest. The
         # stage keeps its last output, so there is no prefix read to pay for.
         engine._forget(record.stack_id, stage.key)
-        engine._waiting_objects.discard(obj.name)
-        engine._set(
+        engine._set_state(
             stage,
-            "state",
             engine.stack_mod.STATE_UNBOUND
             if not stage.applied_out_hash
             else engine.stack_mod.STATE_DISCONNECTED,
@@ -311,10 +297,11 @@ def _process_stage(obj, record, stage):
         # document has ever answered reads unbound instead of disconnected:
         # disconnected means a client was there and left.
         engine._no_send(record, stage, "disconnected", rid)
-        engine._set(
+        engine._set_state(
             stage,
-            "state",
-            engine.stack_mod.STATE_UNBOUND if not stage.applied_out_hash else engine.stack_mod.STATE_DISCONNECTED,
+            engine.stack_mod.STATE_UNBOUND
+            if not stage.applied_out_hash
+            else engine.stack_mod.STATE_DISCONNECTED,
         )
         return "idle"
 
@@ -368,7 +355,7 @@ def _process_stage(obj, record, stage):
     ):
         # Nothing moved, so the displayed output is still current. Settle any
         # transient state (an unfreeze or a repair leaves `idle`/`unbound`).
-        engine._set(stage, "state", engine._rest_state(stage))
+        engine._set_state(stage, engine.stack_mod.STATE_OK)
         engine._no_send(record, stage, "unchanged")
         return "idle"
 
@@ -408,7 +395,7 @@ def _process_stage(obj, record, stage):
         # make the stage wait out a whole timeout for an answer nobody was asked
         # for — and the retry would be gated on that same pending entry.
         engine.stats["undelivered"] += 1
-        engine._set(stage, "state", engine.stack_mod.STATE_DISCONNECTED)
+        engine._set_state(stage, engine.stack_mod.STATE_DISCONNECTED)
         engine._no_send(record, stage, "undelivered", rid)
         return "idle"
     engine._verify.discard(verify_key)
@@ -440,18 +427,17 @@ def _process_stage(obj, record, stage):
         # stages and the playback gate never blocks on this one.
         engine._set(stage, "rid", rid)
         engine._set(stage, "geom_hash", geom_hash)
-        engine._set(stage, "state", engine.stack_mod.STATE_OK)
+        engine._set_state(stage, engine.stack_mod.STATE_OK)
         engine._set(stage, "error", retry_note)
         return "idle"
     engine._pending_of(record.stack_id, stage.key)[rid] = now
-    engine._waiting_objects.add(obj.name)
     engine._state_since[(record.stack_id, stage.key)] = now
     engine._set(stage, "rid", rid)
     engine._set(stage, "geom_hash", geom_hash)
     # A delivered request is the solver step: the same state and frame do not ask
     # again until the playhead or the stage's own inputs move on. An undelivered
     # send returns above and leaves the frame for the retry.
-    engine._set(stage, "state", engine.stack_mod.STATE_WAITING)
+    engine._set_state(stage, engine.stack_mod.STATE_WAITING)
     engine._set(stage, "error", retry_note)
     return "waiting"
 

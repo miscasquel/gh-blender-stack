@@ -52,9 +52,15 @@ def waiting_seconds(stack_id, stage_key):
     """How long a stage has been waiting for an answer, or 0.0 when it is not.
 
     Read by the diagnostics panel: an answer outstanding for a second is where a
-    sync fault is indistinguishable from a stage that is merely thinking.
+    sync fault is indistinguishable from a stage that is merely thinking. The
+    pending request is the truth: a stage that settled to ok/error/idle may still
+    have an old send stamp until it is cleared, and an idle stage must never
+    report a wait.
     """
-    since = engine._state_since.get((stack_id, stage_key))
+    key = (stack_id, stage_key)
+    if not engine._pending.get(key):
+        return 0.0
+    since = engine._state_since.get(key)
     if since is None:
         return 0.0
     return engine.time.monotonic() - since

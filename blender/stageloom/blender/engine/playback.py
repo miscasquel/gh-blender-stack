@@ -28,8 +28,9 @@ def _report(stage, text, error=False):
     """Record one playback failure once per stage, not once per frame."""
     engine.stats["playback_failures"] += 1
     if error:
-        engine._set(stage, "state", engine.stack_mod.STATE_ERROR)
-        engine._set(stage, "error", text)
+        # A frozen or disabled stage keeps its flag state; the failure stays
+        # visible in the error detail and the playback report.
+        engine._set_state(stage, engine.stack_mod.STATE_ERROR, error=text)
     if _reported.get(stage.key) == text:
         return
     _reported[stage.key] = text

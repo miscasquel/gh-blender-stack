@@ -379,10 +379,10 @@ class OneWayStageTests(LiveTestCase):
             self.engine._pending.get((self.obj.gh_stack.stack_id, self.stage.key)),
             "a one-way stage armed a response wait",
         )
-        self.assertNotIn(
-            self.obj.name,
-            self.engine._waiting_objects,
-            "a one-way stage kept the engine waiting on the object",
+        self.assertEqual(
+            self.engine.waiting_seconds(self.obj.gh_stack.stack_id, self.stage.key),
+            0.0,
+            "a one-way stage reported a wait it cannot have",
         )
 
     def test_02_a_frame_change_delivers_again_without_waiting(self):

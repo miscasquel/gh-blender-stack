@@ -1977,7 +1977,11 @@ class EngineUpdateTests(unittest.TestCase):
 
         holder, member, stage, record = self._collection_scene()
         self._capture(holder, record, stage)
-        self.assertIn(holder.name, engine._waiting_objects)
+        self.assertGreater(
+            engine.waiting_seconds(record.stack_id, stage.key),
+            0.0,
+            "the captured request is not reported as in flight",
+        )
 
         pending = engine._pending_of(record.stack_id, stage.key)
         self.assertTrue(pending)

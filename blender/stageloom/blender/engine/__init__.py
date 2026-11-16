@@ -124,11 +124,9 @@ _stage_conflicts = set()
 _stack_objects = []  # every object with at least one stage
 _index_dirty = True
 _index_object_count = -1
-# Object names with a request in flight, for the Diagnostics summary. Refreshed
-# from `_pending` by the once-a-second stall scan; the scan itself walks the
-# scene rather than trusting this set, because a rename between send and check
-# would leave the old name in here (see `_nudge_stalled_waits`).
-_waiting_objects = set()
+# The once-a-second stall scan's last run. The scan walks the scene's stack
+# objects rather than trusting names captured at send time, because a rename
+# between send and check would leave a stale name behind.
 _last_stall_check = 0.0
 _registered = False
 # True while the engine timer and its per-frame handlers are registered. The
@@ -528,7 +526,6 @@ def register():
     _pull_deadlines.clear()
     _last_no_send.clear()
     _timings.clear()
-    _waiting_objects.clear()
     _last_stall_check = 0.0
     _reset_reports()
     # The prefix guard and tick flag are session state: register is a clean
@@ -591,6 +588,7 @@ def unregister():
             handler_list.remove(handler)
     _registered = False
 
+from .state import _set_state
 from .diagnostics import (
     _age,
     _is_engine_module,
@@ -643,7 +641,6 @@ from .request import (
     _prefix_sections,
     _process_stage,
     _pull_expired,
-    _rest_state,
     _same_prefix,
     _sections_hash,
     _set,
@@ -789,10 +786,10 @@ __all__ = [
     "_prefix_sections",
     "_process_stage",
     "_pull_expired",
-    "_rest_state",
     "_same_prefix",
     "_sections_hash",
     "_set",
+    "_set_state",
     "_timeout",
     "_all_stack_objects",
     "_drop_removed_stages",
