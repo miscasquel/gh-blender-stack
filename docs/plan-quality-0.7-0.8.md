@@ -61,7 +61,9 @@ as accepted ADRs rather than open findings.
 - No dead exported symbol; no test-only API in shipped code; no TODO/FIXME.
 - `scripts/check-all` completes in ≤ 3 minutes on the development machine and
   is what CI runs.
-- Benchmarks: p50/p95 within 10% of the stored baseline or the build fails.
+- Benchmarks: p50/p95 within **5%** of the stored baseline or the build fails.
+  A 0–5% regression is accepted only with a quantified offsetting gain in the
+  same task.
 - Two real Rhino/Blender documents open from 0.6.0 with stages, params,
   keyframes, helpers and animation intact (migration test where possible).
 - Nested blocks/instances round-trip both directions, including multi-part
@@ -573,7 +575,8 @@ direct tests; behavior unchanged except documented fixes.
 ### W8 — Performance (0.8.0)
 
 - **Gates:** `bench.py --check-baseline` compares p50/p95 per scenario to the
-  stored JSON; fail over 10% or a documented absolute limit. Add bake/cascade
+  stored JSON. **Fail over 5% on any metric.** A 0–5% regression is allowed
+  only with a quantified offsetting gain recorded in the task; add bake/cascade
   time and memory; a 200-stage scale scenario; assert scenario setup (instance
   rows, vertex counts).
 - **C# hot path:** `Section` as owner+offset+length views; avoid the 3–5 mesh
@@ -594,8 +597,9 @@ direct tests; behavior unchanged except documented fixes.
 - **Cache/bake:** no custom cache. Measure native bake/cascade, simulation-zone
   cache if adopted.
 
-**Exit:** baseline gate green; p95 within budget; no unbounded growth in a
-10k-touch/1k-frame soak; 200-stage panel draw and 100k-triangle apply measured.
+**Exit:** baseline gate green; p95 within budget; no >5% regression without an
+accepted offsetting gain; no unbounded growth in a 10k-touch/1k-frame soak;
+200-stage panel draw and 100k-triangle apply measured.
 
 ---
 
@@ -702,7 +706,8 @@ Includes W7, W8, W9 and completes W10:
 
 - Every module ≥ 8.5; no god module; no global mutable registry outside its
   owner; no dead code or un-owned shim.
-- Performance baseline gate green; scale tests documented.
+- Performance baseline gate green; scale tests documented; no >5% regression
+  without a quantified offsetting gain.
 - Docs/ADR/CI factually consistent; spikes and stale planning archived.
 - Reproducible artifacts and a tag-triggered release workflow.
 - A fresh audit against the same rubric finds no critical or major findings.

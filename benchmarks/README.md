@@ -57,6 +57,12 @@ with headroom, not targets. The response token covers definition parts too, so
 the instance repeated-apply budget is the same 4 ms guard around the 2.45 ms
 v0.6 baseline; the Q9 verified path measured 6.98 ms there.
 
+**0.8 regression policy:** the baseline gate fails on any metric more than
+**5% slower** than its stored p50/p95. A regression of 0–5% is allowed only
+when the same task records a quantified offsetting gain (another benchmark,
+production-code reduction, test/runtime improvement, or an accepted
+correctness/simplicity benefit). An unoffset regression is a failure.
+
 The 1M case has an in-place-apply guard but no full-pipeline latency budget:
 the plan asks that it evaluate without a crash or an unbounded memory increase.
 The report records timings, frame size and RSS before/after; compare those
