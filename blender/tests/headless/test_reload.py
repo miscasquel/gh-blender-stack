@@ -160,6 +160,9 @@ class RepairTests(unittest.TestCase):
         obj.name = "Repair"
         bpy.ops.stageloom.add_stage(label="Repair")
         cls.stage_key = obj.gh_stack.stages[0].key
+        # A saved token is a claim about helper data from the old session. The
+        # load and the plumbing repair both invalidate it.
+        obj.gh_stack.stages[0].applied_topology = "sha256:" + "d" * 64
 
         # The file this test opens: helpers and the node group already gone.
         for kind in helpers.KINDS:
@@ -195,6 +198,9 @@ class RepairTests(unittest.TestCase):
         self.assertIsNotNone(obj, "the saved object did not survive the reload")
         stage = obj.gh_stack.stages[0]
         self.assertEqual(stage.state, "unbound", "a rebuilt stage was not marked unbound")
+        self.assertEqual(
+            stage.applied_topology, "", "a loaded/rebuilt helper kept its old token"
+        )
         for kind in self.helpers.KINDS:
             self.assertIsNotNone(
                 self.helpers.helper_for(obj, self.stage_key, kind),

@@ -5,6 +5,25 @@ import sys
 engine = sys.modules[__package__]
 
 
+def _topology_token(header):
+    """The response's optional mesh-topology token (protocol §4.4).
+
+    Absent, wrong-shaped or malformed values are no token, never an error: a
+    peer that does not send one is answered by the verified path, and a bad
+    field must not cost the frame. Only the producer's exact ``sha256:`` +
+    64 lowercase hex shape is trusted for the fast path.
+    """
+    geom = header.get("geom")
+    if not isinstance(geom, dict):
+        return None
+    token = geom.get("topology")
+    if not isinstance(token, str) or len(token) != 71 or not token.startswith("sha256:"):
+        return None
+    if any(char not in "0123456789abcdef" for char in token[7:]):
+        return None
+    return token
+
+
 def _handle_incoming():
     """Apply every queued message, isolating one bad frame from the rest.
 
@@ -388,9 +407,10 @@ def _handle_response(header, sections):
         if out_hash != stage.applied_out_hash or engine._payload_missing(obj, stage, sections):
             started = engine.time.monotonic()
             try:
-                engine._apply(
+                applied_topology = engine._apply(
                     obj, stage, sections, header.get("attributes"),
                     header.get("definitions", []),
+                    topology=_topology_token(header),
                 )
             except engine.geometry_io.GeometryIOError as exc:
                 # A malformed or internally inconsistent section group is a
@@ -400,6 +420,9 @@ def _handle_response(header, sections):
             engine._record_timing(record, stage, "apply_ms", engine._timed_since(started))
             engine.stats["applies"] += 1
             engine._set(stage, "applied_out_hash", out_hash)
+            # A frame without a mesh group (or from an old peer) clears the
+            # claim: the helper no longer holds a topology this token names.
+            engine._set(stage, "applied_topology", applied_topology or "")
             applied = True
             engine._trace.append("%s: applied %s" % (stage.key, (out_hash or "")[-8:]))
         else:

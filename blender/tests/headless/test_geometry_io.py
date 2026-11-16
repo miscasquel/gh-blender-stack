@@ -10,6 +10,7 @@ blender/tests/headless/run.py``. Asserts are real: a failure sets the exit code.
 
 import time
 import unittest
+from unittest import mock
 
 import bpy
 import numpy as np
@@ -167,6 +168,59 @@ class SectionRoundTripTests(unittest.TestCase):
         co = np.empty(len(obj.data.vertices) * 3, dtype=np.float32)
         obj.data.vertices.foreach_get("co", co)
         np.testing.assert_allclose(co.reshape(-1, 3), moved, rtol=0, atol=1e-6)
+
+    def test_token_fast_path_still_writes_colours_and_creases(self):
+        verts = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]
+        target = new_mesh_object("token-colours", verts, [(0, 1, 2, 3)])
+        token = "sha256:" + "c" * 64
+        base = [
+            ("mesh.verts", "f32", np.asarray(verts, dtype=np.float32)),
+            ("mesh.face_counts", "u32", np.array([4], dtype=np.uint32)),
+            ("mesh.face_indices", "u32", np.array([0, 1, 2, 3], dtype=np.uint32)),
+        ]
+        black = np.zeros((4, 4), dtype=np.uint8)
+        black[:, 3] = 255
+        geometry_io.sections_to_mesh(
+            target.data,
+            base + [("mesh.colors", "u8", black)],
+            topology=token,
+            previous=token,
+        )
+
+        red = np.zeros((4, 4), dtype=np.uint8)
+        red[:, 0] = 255
+        red[:, 3] = 255
+        moved = np.asarray(verts, dtype=np.float32) + np.float32(1.0)
+        creases = ("mesh.crease_edges", "u32", np.array([[0, 1]], dtype=np.uint32))
+        with mock.patch.object(
+            geometry_io,
+            "_topology_matches",
+            side_effect=AssertionError("the token path read polygon/loop arrays"),
+        ):
+            geometry_io.sections_to_mesh(
+                target.data,
+                [
+                    ("mesh.verts", "f32", moved),
+                    ("mesh.face_counts", "u32", np.array([4], dtype=np.uint32)),
+                    ("mesh.face_indices", "u32", np.array([0, 1, 2, 3], dtype=np.uint32)),
+                    ("mesh.colors", "u8", red),
+                    creases,
+                    ("mesh.crease_values", "f32", np.array([0.5], dtype=np.float32)),
+                ],
+                topology=token,
+                previous=token,
+            )
+
+        colour = target.data.color_attributes[geometry_io.COLOR_ATTRIBUTE]
+        self.assertEqual(tuple(round(v, 3) for v in colour.data[0].color_srgb), (1.0, 0.0, 0.0, 1.0))
+        crease = target.data.attributes[geometry_io.CREASE_ATTRIBUTE]
+        edge_verts = np.empty(len(target.data.edges) * 2, dtype=np.uint32)
+        target.data.edges.foreach_get("vertices", edge_verts)
+        lookup = {
+            (min(int(a), int(b)), max(int(a), int(b))): index
+            for index, (a, b) in enumerate(edge_verts.reshape(-1, 2))
+        }
+        self.assertAlmostEqual(crease.data[lookup[(0, 1)]].value, 0.5, places=6)
 
     def test_mesh_and_subd_groups_are_selected_as_units(self):
         verts = np.asarray(

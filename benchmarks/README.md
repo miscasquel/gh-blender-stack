@@ -40,15 +40,27 @@ These are the plan's §5A targets, enforced by `scripts/bench` unless
 | Check | Budget |
 |---|---|
 | 100k triangle Blender round trip (read, hash, encode, decode, in-place apply) | ≤ 50 ms |
+| 100k triangle in-place apply (same topology token) | ≤ 4 ms |
+| 1M triangle in-place apply (same topology token) | ≤ 30 ms |
 | 13× instance prefix read + encode | ≤ 100 ms |
+| 13× instance repeated apply (same topology token) | ≤ 4 ms |
 | 13× instance repeated apply reuses the node group | required |
 | Multi-stage dirty engine pass | ≤ 100 ms |
 | Idle engine pass | ≤ 2 ms |
 | Live playback frame (no plan budget yet) | ≤ 250 ms |
 
-The 1M case has no latency budget: the plan asks that it evaluate without a
-crash or an unbounded memory increase. The report records timings, frame size
-and RSS before/after; compare those across runs.
+The in-place budgets exist because the token fast path is what keeps a repeat
+apply from reading every polygon and loop: the Q9 verified path measured 6.4 ms
+at 100k and 69 ms at 1M on the reference machine, while the token path returns
+to the v0.6 2.15 ms / 22.3 ms baseline. The 4 ms and 30 ms ceilings are guards
+with headroom, not targets. The response token covers definition parts too, so
+the instance repeated-apply budget is the same 4 ms guard around the 2.45 ms
+v0.6 baseline; the Q9 verified path measured 6.98 ms there.
+
+The 1M case has an in-place-apply guard but no full-pipeline latency budget:
+the plan asks that it evaluate without a crash or an unbounded memory increase.
+The report records timings, frame size and RSS before/after; compare those
+across runs.
 
 ## Live Rhino measurement
 

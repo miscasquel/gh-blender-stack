@@ -461,7 +461,9 @@ class PlaybackSyncTests(unittest.TestCase):
         self.stage.error = ""
         real_apply = engine._apply
 
-        def failing_apply(obj, stage, payload, attributes=None, definitions=None):
+        def failing_apply(
+            obj, stage, payload, attributes=None, definitions=None, topology=None
+        ):
             raise RuntimeError("playback apply fault")
 
         engine._apply = failing_apply

@@ -403,6 +403,10 @@ def scenario_pipeline(args, report):
         _, apply_fresh_stats = timed(apply_fresh, repeats, warmup=warmup)
 
         target = bpy.data.meshes.new("apply-in-place")
+        # The producer token is opaque to Blender. The benchmark stands in for
+        # the C# Stage Out value with a well-shaped sentinel: the measured path
+        # is exactly what a repeated response with the same token takes.
+        topology = "sha256:" + "0" * 64
         geometry_io.sections_to_mesh(target, sections)
         by_name = sections_dict(sections)
         verts_array = np.array(by_name["mesh.verts"], copy=True)
@@ -413,7 +417,11 @@ def scenario_pipeline(args, report):
             if name != "mesh.verts"
         )
         _, apply_inplace_stats = timed(
-            lambda: geometry_io.sections_to_mesh(target, moved), repeats, warmup=warmup
+            lambda: geometry_io.sections_to_mesh(
+                target, moved, topology=topology, previous=topology
+            ),
+            repeats,
+            warmup=warmup,
         )
         bpy.data.meshes.remove(target)
 
@@ -495,8 +503,9 @@ def scenario_instances(args, report):
     rows = len(by_name.get("inst.ref_def", ()))
     group = bpy.data.node_groups[nodes.group_name(stage.key)]
     group_id = group.as_pointer()
+    topology = "sha256:" + "1" * 64
 
-    def apply_with(offset):
+    def apply_with(offset, token=topology):
         payload = {}
         for name, dtype, values in sections:
             if name == "inst.transforms":
@@ -505,9 +514,12 @@ def scenario_instances(args, report):
                 payload[name] = matrices.reshape(-1)
             else:
                 payload[name] = values
-        engine._apply(holder, stage, payload, attributes)
+        return engine._apply(holder, stage, payload, attributes, topology=token)
 
+    # The first apply stores the token exactly as the message path does; the
+    # repeated applies then take the same-topology path for the definition.
     _, apply_first_stats = timed(lambda: apply_with(0.0), 1, warmup=False)
+    stage.applied_topology = topology
     _, apply_repeat_stats = timed(
         lambda: apply_with(1.0), max(2, args.repeats), warmup=True
     )
@@ -815,6 +827,24 @@ def check(report, checks):
                 "ok": total <= 50.0,
             }
         )
+    # The token path is the difference between a repeated apply that writes
+    # positions and one that re-reads every loop. The 100k ceiling is the
+    # guard the plan lacks: 6.4 ms (the Q9 regression) fails, the token path
+    # (~2 ms here) passes with room for machine variance. The 1M case has a
+    # looser ceiling for the same reason; --quick omits it.
+    for triangles, ceiling in ((100_000, 4.0), (1_000_000, 30.0)):
+        row = pipeline.get(triangles)
+        if row is None:
+            continue
+        checks.append(
+            {
+                "name": "%dk triangle in-place apply" % (triangles // 1000),
+                "value": row["apply_inplace_ms"]["median"],
+                "unit": "ms",
+                "budget": ceiling,
+                "ok": row["apply_inplace_ms"]["median"] <= ceiling,
+            }
+        )
     instances = report.get("instances")
     if instances is not None:
         total = instances["prefix_ms"]["median"] + instances["encode_ms"]["median"]
@@ -834,6 +864,18 @@ def check(report, checks):
                 "unit": "bool",
                 "budget": 1.0,
                 "ok": bool(instances["group_reused"]),
+            }
+        )
+        # The response token covers definition parts too, so this is the same
+        # fast path as the pipeline. It fails on the Q9 6.98 ms verified path
+        # and passes around the 2.4 ms v0.6 baseline.
+        checks.append(
+            {
+                "name": "13x instance repeated apply",
+                "value": instances["apply_repeat_ms"]["median"],
+                "unit": "ms",
+                "budget": 4.0,
+                "ok": instances["apply_repeat_ms"]["median"] <= 4.0,
             }
         )
     multi = report.get("multistage")

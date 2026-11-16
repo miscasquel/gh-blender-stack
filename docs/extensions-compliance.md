@@ -42,10 +42,10 @@ Bake stage is the offline path.
 ```text
 blender_manifest.toml    version = "0.7.0"
 scripts/test-core        110 tests pass
-scripts/test-blender     413 tests pass; offline gate PASS
+scripts/test-blender     423 tests pass; offline gate PASS
 scripts/test-gha         fourteen codec fixtures + seven console suites pass
 scripts/test-extension   installed extension round trip: pass
-scripts/check-all        full gate PASS in 113.0 s
+scripts/check-all        full gate PASS in 116.0 s
 scripts/check-docs       ok (version, Python runtime, transport, fixtures, vendor path, stale paths)
 uvx ruff@0.17.2 check .  All checks passed
 scripts/build-extension  dist/stageloom-0.7.0.zip built and validated

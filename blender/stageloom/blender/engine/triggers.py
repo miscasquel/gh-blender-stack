@@ -125,12 +125,14 @@ def _after_history_step():
     """Re-assert the client-side state after an undo or redo.
 
     The stage record is part of the .blend, so undo/redo restores its saved
-    `geom_hash`, `rid` and `applied_out_hash` to the values captured in the
-    step. What the connected client holds did not travel with that step: after
-    undoing a move, the client still has the moved geometry. `_sent` is the
-    session truth, so the saved geometry field is put back from it (or cleared
-    when nothing was sent, which asks in full) and the next pass decides
-    full/ref correctly instead of sending a ref the client must refuse.
+    `geom_hash`, `rid`, `applied_out_hash` and `applied_topology` to the values
+    captured in the step. A topology token names the helper data of that step,
+    not the session's next apply, so it is cleared here. What the connected
+    client holds did not travel with that step: after undoing a move, the client
+    still has the moved geometry. `_sent` is the session truth, so the saved
+    geometry field is put back from it (or cleared when nothing was sent, which
+    asks in full) and the next pass decides full/ref correctly instead of
+    sending a ref the client must refuse.
 
     Marking every stack dirty also gives the step a pass even when its
     depsgraph delivery is missed; the memo is cleared for the same reason — an
@@ -148,6 +150,10 @@ def _after_history_step():
         for stage in record.stages:
             sent = engine._sent.get((record.stack_id, stage.key))
             engine._set(stage, "geom_hash", sent[1] if sent is not None else "")
+            # A topology token restored by the step describes the helper data
+            # saved in that step, not what the session will apply next. Drop it
+            # so the next apply rebuilds or verifies instead of trusting it.
+            engine._set(stage, "applied_topology", "")
             # The solver state is not part of Blender's undo history: ask for
             # the current state instead of assuming the restored rid was
             # delivered.
@@ -247,6 +253,10 @@ def _on_load(scene=None):
             # output. Pull permits belong to that old session too: an armed Pull
             # must not fire into a stage the file saved frozen.
             engine._set(stage, "rid", "")
+            # The token belongs to the helper data this file saved; a new
+            # session proves nothing about it (and an old producer may not
+            # have sent one), so the next apply verifies or rebuilds.
+            engine._set(stage, "applied_topology", "")
             if stage.geom_hash:
                 # We cannot know that GH kept the geometry: ask again in full.
                 stage.geom_hash = ""

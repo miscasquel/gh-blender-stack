@@ -868,11 +868,15 @@ class BatchIsolationTests(LiveSyncTestCase):
         real_apply = engine._apply
         calls = {"n": 0}
 
-        def failing_apply(obj, stage, payload, attributes=None, definitions=None):
+        def failing_apply(
+            obj, stage, payload, attributes=None, definitions=None, topology=None
+        ):
             calls["n"] += 1
             if calls["n"] == 1:
                 raise RuntimeError("test: apply fault")
-            return real_apply(obj, stage, payload, attributes, definitions)
+            return real_apply(
+                obj, stage, payload, attributes, definitions, topology=topology
+            )
 
         engine._apply = failing_apply
         try:

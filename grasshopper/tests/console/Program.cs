@@ -55,6 +55,8 @@ namespace Stageloom.Tests.Console
 
             CheckHashOrder();
 
+            CheckTopologyHash();
+
             CheckDecoderBoundary();
 
             CheckFloatText();
@@ -483,6 +485,175 @@ namespace Stageloom.Tests.Console
             _failures += problems.Count;
             System.Console.WriteLine("FAIL hash-order");
             foreach (string p in problems) System.Console.WriteLine("     " + p);
+        }
+
+        /// <summary>The additive topology token (protocol §4.4): it must change
+        /// with the base group's topology and stay identical when only
+        /// positions, colours, creases, attributes, curves, points, definitions
+        /// or section order change.</summary>
+        private static void CheckTopologyHash()
+        {
+            var problems = new List<string>();
+            float[] verts = new float[]
+            {
+                0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0,
+            };
+            uint[] counts = new uint[] { 4 };
+            uint[] indices = new uint[] { 0, 1, 2, 3 };
+
+            List<Section> sections = TopologySections("mesh", verts, counts, indices);
+            string token = FrameCodec.TopologyHash(sections);
+            if (token == null || !token.StartsWith("sha256:") || token.Length != 71)
+                problems.Add("topology token is not a sha256: value: " + (token ?? "null"));
+
+            float[] moved = new float[]
+            {
+                10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+            };
+            if (FrameCodec.TopologyHash(
+                    TopologySections("mesh", moved, counts, indices)) != token)
+                problems.Add("a position-only change changed the token");
+
+            List<Section> colored = TopologySections("mesh", verts, counts, indices);
+            colored.Add(Section.Bytes("mesh.colors",
+                new byte[] { 255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255 }));
+            if (FrameCodec.TopologyHash(colored) != token)
+                problems.Add("a colour change changed the token");
+
+            List<Section> creased = TopologySections("mesh", verts, counts, indices);
+            creased.Add(Section.U32("mesh.crease_edges", new uint[] { 0, 1 }));
+            creased.Add(Section.Floats("mesh.crease_values", new float[] { 1.0f }));
+            if (FrameCodec.TopologyHash(creased) != token)
+                problems.Add("a crease change changed the token");
+
+            List<Section> attributed = TopologySections("mesh", verts, counts, indices);
+            attributed.Add(Section.Floats("attr.0.values", new float[] { 1, 2, 3, 4 }));
+            if (FrameCodec.TopologyHash(attributed) != token)
+                problems.Add("an attribute change changed the token");
+
+            List<Section> defined = TopologySections("mesh", verts, counts, indices);
+            defined.AddRange(DefinitionSections(0, null, "mesh", verts, counts, indices));
+            defined.Add(Section.U32("inst.ref_def", new uint[] { 0 }));
+            defined.Add(Section.Floats("inst.transforms", new float[16]));
+            string definedToken = FrameCodec.TopologyHash(defined);
+            if (definedToken == token)
+                problems.Add("a definition mesh group did not change the token");
+
+            List<Section> ordered = new List<Section>(defined);
+            ordered.Reverse();
+            if (FrameCodec.TopologyHash(ordered) != definedToken)
+                problems.Add("section order changed the token");
+
+            List<Section> definitionOnly = DefinitionSections(0, null, "mesh", verts, counts, indices);
+            string definitionOnlyToken = FrameCodec.TopologyHash(definitionOnly);
+            if (definitionOnlyToken == null)
+                problems.Add("a definition-only frame carried no topology token");
+            if (definitionOnlyToken == token)
+                problems.Add("a base mesh and a definition group share a token");
+            if (FrameCodec.TopologyHash(DefinitionSections(1, null, "mesh", verts, counts, indices))
+                == definitionOnlyToken)
+                problems.Add("a definition index change kept the token");
+            if (FrameCodec.TopologyHash(DefinitionSections(0, 0, "mesh", verts, counts, indices))
+                == definitionOnlyToken)
+                problems.Add("a definition part change kept the token");
+            if (FrameCodec.TopologyHash(DefinitionSections(0, null, "subd", verts, counts, indices))
+                == definitionOnlyToken)
+                problems.Add("a definition group change kept the token");
+
+            List<Section> definitionMoved = DefinitionSections(
+                0, null, "mesh", moved, counts, indices);
+            if (FrameCodec.TopologyHash(definitionMoved) != definitionOnlyToken)
+                problems.Add("definition positions changed the token");
+
+            List<Section> definitionDecorated = DefinitionSections(
+                0, null, "mesh", verts, counts, indices);
+            definitionDecorated.Add(Section.Bytes(
+                "idef.0.mesh.colors", new byte[] { 255, 0, 0, 255 }));
+            definitionDecorated.Add(Section.Floats(
+                "idef.0.attr.0.values", new float[] { 1, 2, 3, 4 }));
+            definitionDecorated.Add(Section.Floats("idef.0.crv.points",
+                new float[] { 0, 0, 0, 1 }));
+            if (FrameCodec.TopologyHash(definitionDecorated) != definitionOnlyToken)
+                problems.Add("definition attributes/colours/curves changed the token");
+
+            float[] larger = new float[verts.Length + 3];
+            Array.Copy(verts, larger, verts.Length);
+            if (FrameCodec.TopologyHash(DefinitionSections(
+                    0, null, "mesh", larger, counts, indices)) == definitionOnlyToken)
+                problems.Add("a definition vertex-count change kept the token");
+            if (FrameCodec.TopologyHash(DefinitionSections(
+                    0, null, "mesh", verts, new uint[] { 3, 1 },
+                    new uint[] { 0, 1, 2, 3 })) == definitionOnlyToken)
+                problems.Add("a definition face-count change kept the token");
+            if (FrameCodec.TopologyHash(DefinitionSections(
+                    0, null, "mesh", verts, counts,
+                    new uint[] { 0, 1, 3, 2 })) == definitionOnlyToken)
+                problems.Add("a definition face-index change kept the token");
+
+            if (FrameCodec.TopologyHash(
+                    TopologySections("mesh", larger, counts, indices)) == token)
+                problems.Add("a vertex-count change kept the token");
+
+            if (FrameCodec.TopologyHash(
+                    TopologySections("mesh", verts, new uint[] { 3, 1 },
+                        new uint[] { 0, 1, 2, 3 })) == token)
+                problems.Add("a face-count change kept the token");
+
+            if (FrameCodec.TopologyHash(
+                    TopologySections("mesh", verts, counts,
+                        new uint[] { 0, 1, 3, 2 })) == token)
+                problems.Add("a face-index change kept the token");
+
+            string subdToken = FrameCodec.TopologyHash(
+                TopologySections("subd", verts, counts, indices));
+            if (subdToken == token)
+                problems.Add("the mesh and subd groups share a token");
+
+            List<Section> both = TopologySections("mesh", verts, counts, indices);
+            both.AddRange(TopologySections("subd", moved, new uint[] { 3 },
+                new uint[] { 0, 1, 2 }));
+            if (FrameCodec.TopologyHash(both) != token)
+                problems.Add("both groups did not choose the mesh token");
+
+            if (FrameCodec.TopologyHash(new List<Section>()) != null)
+                problems.Add("an empty frame carried a topology token");
+            if (FrameCodec.TopologyHash(new Section[]
+                {
+                    Section.Floats("crv.points", new float[] { 0, 0, 0, 1 }),
+                }) != null)
+                problems.Add("a curve-only frame carried a topology token");
+
+            if (problems.Count == 0)
+            {
+                System.Console.WriteLine("PASS topology-hash");
+                return;
+            }
+            _failures += problems.Count;
+            System.Console.WriteLine("FAIL topology-hash");
+            foreach (string p in problems) System.Console.WriteLine("     " + p);
+        }
+
+        private static List<Section> TopologySections(
+            string group, float[] verts, uint[] counts, uint[] indices)
+        {
+            var sections = new List<Section>();
+            sections.Add(Section.Floats(group + ".verts", verts));
+            sections.Add(Section.U32(group + ".face_counts", counts));
+            sections.Add(Section.U32(group + ".face_indices", indices));
+            return sections;
+        }
+
+        private static List<Section> DefinitionSections(
+            int index, int? part, string group, float[] verts, uint[] counts, uint[] indices)
+        {
+            string prefix = "idef." + index.ToString(CultureInfo.InvariantCulture) + ".";
+            if (part.HasValue)
+                prefix += part.Value.ToString(CultureInfo.InvariantCulture) + ".";
+            var sections = new List<Section>();
+            sections.Add(Section.Floats(prefix + group + ".verts", verts));
+            sections.Add(Section.U32(prefix + group + ".face_counts", counts));
+            sections.Add(Section.U32(prefix + group + ".face_indices", indices));
+            return sections;
         }
 
         private static void CheckNames(List<string> problems, string label,

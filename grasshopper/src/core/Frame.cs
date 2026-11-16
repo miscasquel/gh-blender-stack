@@ -573,6 +573,177 @@ namespace Stageloom.Core
             return ordered;
         }
 
+        /// <summary>Topology token for every mesh/SubD helper a response writes
+        /// (protocol §4.4): the base group plus each definition geometry group.
+        /// It identifies what the Blender in-place fast path reuses: the
+        /// selected group name, the vertex section's element count, and the raw
+        /// face_counts/face_indices bytes, under the base or definition
+        /// index/part it belongs to. Positions, colours, creases, attributes,
+        /// curve and point sections, definition names and the response order are
+        /// deliberately absent, so an attribute-only or position-only change
+        /// keeps the token. A frame with no mesh/SubD section returns null and
+        /// Blender keeps its verified topology path.</summary>
+        public static string TopologyHash(IList<Section> sections)
+        {
+            if (sections == null) return null;
+
+            using (var sha = SHA256.Create())
+            {
+                bool any = false;
+
+                // The same precedence the Blender selector and Conversion use:
+                // mesh.verts wins over subd.verts when both are present.
+                Section verts = FindSection(sections, "mesh.verts");
+                string group = "mesh";
+                if (verts == null)
+                {
+                    verts = FindSection(sections, "subd.verts");
+                    group = "subd";
+                }
+                if (verts != null)
+                {
+                    UpdateHashString(sha, "base");
+                    UpdateHashString(sha, group);
+                    UpdateHashU64(sha, (ulong)verts.ElementCount);
+                    UpdateOptionalSection(sha, FindSection(sections, group + ".face_counts"));
+                    UpdateOptionalSection(sha, FindSection(sections, group + ".face_indices"));
+                    any = true;
+                }
+
+                List<DefinitionTopology> definitions = DefinitionTopologies(sections);
+                definitions.Sort(delegate(DefinitionTopology left, DefinitionTopology right)
+                {
+                    int byIndex = left.Index.CompareTo(right.Index);
+                    if (byIndex != 0) return byIndex;
+                    return left.Part.CompareTo(right.Part);
+                });
+                foreach (DefinitionTopology definition in definitions)
+                {
+                    UpdateHashString(sha, "definition");
+                    UpdateHashU64(sha, (ulong)definition.Index);
+                    // -1 is the single-part namespace; part 0 is its first
+                    // multi-part sibling. The +1 keeps both distinct.
+                    UpdateHashU64(sha, (ulong)(definition.Part + 1));
+                    UpdateHashString(sha, definition.Group);
+                    UpdateHashU64(sha, (ulong)definition.Verts.ElementCount);
+                    UpdateOptionalSection(sha, definition.Counts);
+                    UpdateOptionalSection(sha, definition.Indices);
+                    any = true;
+                }
+
+                if (!any) return null;
+                sha.TransformFinalBlock(new byte[0], 0, 0);
+                return "sha256:" + ToHex(sha.Hash);
+            }
+        }
+
+        private sealed class DefinitionTopology
+        {
+            public int Index;
+            public int Part;  // -1 for the single-part namespace (`idef.<i>.`).
+            public string Group;
+            public Section Verts;
+            public Section Counts;
+            public Section Indices;
+        }
+
+        private static List<DefinitionTopology> DefinitionTopologies(IList<Section> sections)
+        {
+            var prefixes = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (Section section in sections)
+            {
+                if (section == null || !section.Name.StartsWith("idef.", StringComparison.Ordinal))
+                    continue;
+                string prefix;
+                if (TryDefinitionPrefix(section.Name, "mesh.verts", out prefix)
+                    || TryDefinitionPrefix(section.Name, "subd.verts", out prefix))
+                {
+                    if (seen.Add(prefix)) prefixes.Add(prefix);
+                }
+            }
+
+            var definitions = new List<DefinitionTopology>();
+            foreach (string prefix in prefixes)
+            {
+                string group = FindSection(sections, prefix + "mesh.verts") != null
+                    ? "mesh" : "subd";
+                Section verts = FindSection(sections, prefix + group + ".verts");
+                if (verts == null) continue;
+                int index;
+                int part;
+                if (!ParseDefinitionPrefix(prefix, out index, out part)) continue;
+                var definition = new DefinitionTopology();
+                definition.Index = index;
+                definition.Part = part;
+                definition.Group = group;
+                definition.Verts = verts;
+                definition.Counts = FindSection(sections, prefix + group + ".face_counts");
+                definition.Indices = FindSection(sections, prefix + group + ".face_indices");
+                definitions.Add(definition);
+            }
+            return definitions;
+        }
+
+        private static bool TryDefinitionPrefix(string name, string groupSuffix, out string prefix)
+        {
+            prefix = null;
+            string suffix = "." + groupSuffix;
+            if (!name.EndsWith(suffix, StringComparison.Ordinal)) return false;
+            prefix = name.Substring(0, name.Length - suffix.Length) + ".";
+            return prefix.StartsWith("idef.", StringComparison.Ordinal);
+        }
+
+        /// <summary>Parse ``idef.&lt;i&gt;.`` or ``idef.&lt;i&gt;.&lt;p&gt;.`` into
+        /// its numeric index and part (-1 for the single-part namespace). A
+        /// malformed name is ignored here; the converters reject it as a frame
+        /// error later.</summary>
+        private static bool ParseDefinitionPrefix(string prefix, out int index, out int part)
+        {
+            index = 0;
+            part = -1;
+            string trimmed = prefix.Substring(0, prefix.Length - 1);
+            string[] pieces = trimmed.Split('.');
+            if (pieces.Length < 2 || pieces.Length > 3 || pieces[0] != "idef") return false;
+            if (!TryIndex(pieces[1], out index)) return false;
+            if (pieces.Length == 3 && !TryIndex(pieces[2], out part)) return false;
+            return true;
+        }
+
+        private static Section FindSection(IList<Section> sections, string name)
+        {
+            foreach (Section section in sections)
+                if (section != null && section.Name == name) return section;
+            return null;
+        }
+
+        private static void UpdateHashString(HashAlgorithm sha, string value)
+        {
+            byte[] bytes = Encoding.UTF8.GetBytes(value);
+            UpdateHashU64(sha, (ulong)bytes.Length);
+            sha.TransformBlock(bytes, 0, bytes.Length, null, 0);
+        }
+
+        private static void UpdateHashU64(HashAlgorithm sha, ulong value)
+        {
+            byte[] bytes = new byte[8];
+            for (int i = 0; i < 8; i++)
+            {
+                bytes[i] = (byte)(value & 0xFF);
+                value >>= 8;
+            }
+            sha.TransformBlock(bytes, 0, bytes.Length, null, 0);
+        }
+
+        private static void UpdateOptionalSection(HashAlgorithm sha, Section section)
+        {
+            byte[] present = new byte[] { section == null ? (byte)0 : (byte)1 };
+            sha.TransformBlock(present, 0, 1, null, 0);
+            if (section == null) return;
+            UpdateHashU64(sha, (ulong)section.Raw.Length);
+            sha.TransformBlock(section.Raw, 0, section.Raw.Length, null, 0);
+        }
+
         /// <summary>Output hash: sections in the given (header) order (protocol
         /// §6.3). Attribute descriptors take part as one synthetic entry named
         /// `attr.descriptors` (canonical JSON): section names are index-based,

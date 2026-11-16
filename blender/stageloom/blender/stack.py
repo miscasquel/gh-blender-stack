@@ -284,6 +284,13 @@ class StageloomStage(bpy.types.PropertyGroup):
     nonce: IntProperty(name="Nonce", default=0)
     geom_hash: StringProperty(name="Geometry hash", default="")
     applied_out_hash: StringProperty(name="Applied output hash", default="")
+    # The mesh topology token the last applied response carried (protocol
+    # §4.4), covering the base group and every definition part. Equal to the
+    # next response's token and with matching element counts, each mesh helper
+    # can take the position-only path without reading its polygon and loop
+    # arrays. Empty means no proven topology: old peers, an error, a rebuilt
+    # helper, a load or an undo clear it.
+    applied_topology: StringProperty(name="Applied topology", default="")
     error: StringProperty(name="Last error", default="")
     warnings: StringProperty(name="Warnings", default="")
     # Outbound conversion losses from this stage's prefix (Catmull-Rom comps,

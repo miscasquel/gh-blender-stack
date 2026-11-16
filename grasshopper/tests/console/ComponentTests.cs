@@ -54,6 +54,7 @@ namespace Stageloom.Tests.Console
                 RunStageInLateWrite(server);
                 RunStageOutNoRequest(server, stageOut);
                 RunStageOutDependentAnswer(server, stageOut);
+                RunStageOutTopologyToken(server, stageOut);
                 RunEmptyFrame(server, stageIn);
                 RunOneWayTests(server);
                 RunRemovedKeyTests(server);
@@ -334,6 +335,94 @@ namespace Stageloom.Tests.Console
             Check("the queued key answers in its own batch",
                 GhLink.ShouldAnswer(queued), "");
             GhLink.EndRequestSolveForTest();
+        }
+
+        /// <summary>The ok response carries the additive base-topology token
+        /// (§4.4) and it tracks topology only: a moved vertex keeps it, a
+        /// flipped quad changes it. Curves/points carry no token, and an error
+        /// response carries no `geom` at all.</summary>
+        private static void RunStageOutTopologyToken(FakeServer server, StageOutHarness component)
+        {
+            const string key = "component-out-topology";
+            StageSlot slot = GhLink.Slot(key);
+
+            List<Section> quad = TopologySections(new uint[] { 0, 1, 2, 3 });
+            Dictionary<string, object> first = StageOutComponent.TopologyHeader(quad);
+            string firstToken = first == null ? null : Json.GetString(first, "topology");
+            Check("the ok header carries a topology token",
+                firstToken != null && firstToken.StartsWith("sha256:")
+                && firstToken.Length == 71,
+                "token=" + (firstToken ?? "null"));
+
+            List<Section> moved = TopologySections(new uint[] { 0, 1, 2, 3 });
+            moved[0] = Section.Floats("mesh.verts",
+                new float[] { 10, 0, 0, 11, 0, 0, 11, 1, 0, 10, 1, 0 });
+            Dictionary<string, object> movedHeader = StageOutComponent.TopologyHeader(moved);
+            Check("a position-only answer keeps the topology token",
+                movedHeader != null
+                && Json.GetString(movedHeader, "topology") == firstToken,
+                "first=" + firstToken + " moved="
+                + (movedHeader == null ? "null" : Json.GetString(movedHeader, "topology")));
+
+            Dictionary<string, object> flipped =
+                StageOutComponent.TopologyHeader(TopologySections(new uint[] { 0, 1, 3, 2 }));
+            Check("a changed face order changes the topology token",
+                flipped != null
+                && Json.GetString(flipped, "topology") != firstToken,
+                "first=" + firstToken + " flipped="
+                + (flipped == null ? "null" : Json.GetString(flipped, "topology")));
+
+            Check("a curve-only response carries no topology token",
+                StageOutComponent.TopologyHeader(new Section[]
+                {
+                    Section.Floats("crv.points", new float[] { 0, 0, 0, 1 }),
+                }) == null, "");
+
+            // A goo that throws during dispatch reaches Stage Out's own error
+            // answer: that response must stay shaped like every error (no geom).
+            const string errorRid = "sha256:component-out-topology-error";
+            slot.Rid = errorRid;
+            slot.Status = "ok";
+            Quiet(slot);
+            GhLink.RequestStage(key, errorRid);
+            Check("the error token test starts a request context",
+                GhLink.BeginRequestSolveForTest(), "");
+            var errorDa = StageOutData(component, key);
+            errorDa.Inputs["Geometry"] = new List<IGH_Goo> { new ThrowingGoo() };
+            component.Run(errorDa);
+            Dictionary<string, object> errorResponse = ReadUntil(server, "response");
+            Check("a throwing solve emits an error response",
+                Json.GetString(errorResponse, "status") == "error",
+                "status=" + Json.GetString(errorResponse, "status"));
+            Check("an error response carries no topology token",
+                Json.Get(errorResponse, "geom") == null,
+                "geom=" + Json.WriteCanonical(Json.Get(errorResponse, "geom")));
+            GhLink.EndRequestSolveForTest();
+        }
+
+        private static List<Section> TopologySections(uint[] indices)
+        {
+            var sections = new List<Section>();
+            sections.Add(Section.Floats("mesh.verts",
+                new float[] { 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0 }));
+            sections.Add(Section.U32("mesh.face_counts", new uint[] { 4 }));
+            sections.Add(Section.U32("mesh.face_indices", indices));
+            return sections;
+        }
+
+        /// <summary>A goo whose dispatch cast fails, so Stage Out's own error
+        /// path answers exactly as it would for a conversion failure.</summary>
+        private sealed class ThrowingGoo : GH_Goo<object>
+        {
+            public override IGH_Goo Duplicate() { return new ThrowingGoo(); }
+            public override bool IsValid { get { return true; } }
+            public override string ToString() { return "throwing"; }
+            public override string TypeName { get { return "Throwing"; } }
+            public override string TypeDescription { get { return "A goo that fails dispatch"; } }
+            public override bool CastTo<Q>(ref Q target)
+            {
+                throw new InvalidOperationException("topology error test");
+            }
         }
 
         // ------------------------------------------------------- empty frame

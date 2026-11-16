@@ -1657,14 +1657,20 @@ def select_mesh_group(by_name):
     return None
 
 
-def sections_to_mesh(mesh, sections, notes=None):
+def sections_to_mesh(mesh, sections, notes=None, topology=None, previous=None):
     """Update ``mesh`` from sections, in place.
 
     Exactly one complete group is selected first (``select_mesh_group``). Its
-    positions are written with ``foreach_set`` only when the full topology
-    signature — vertex count, face counts and face indices — matches; otherwise
-    the mesh is rebuilt with ``clear_geometry`` + ``from_pydata``. Colours and
-    creases follow the selected group. Extra sections (curves, points) are
+    positions are written with ``foreach_set`` only when the topology matches;
+    otherwise the mesh is rebuilt with ``clear_geometry`` + ``from_pydata``.
+
+    ``topology`` is the producer's additive mesh-topology token (protocol §4.4)
+    and ``previous`` is the token stored with the helper's displayed geometry.
+    When the two match and the cheap element counts agree, positions, colours,
+    creases and attributes are written without reading ``mesh.polygons`` or
+    ``mesh.loops`` at all. A present-but-different token rebuilds directly (the
+    token already proves the topology differs), and an absent token keeps the
+    verified comparison for old peers. Extra sections (curves, points) are
     ignored here; they belong to other components.
     """
     by_name = {}
@@ -1697,20 +1703,21 @@ def sections_to_mesh(mesh, sections, notes=None):
             % (int(indices.max()), len(verts))
         )
 
-    same_topology = (
+    lengths_match = (
         len(mesh.vertices) == len(verts)
         and len(mesh.polygons) == len(counts)
         and len(mesh.loops) == len(indices)
     )
-    if same_topology:
-        current_counts = np.empty(len(mesh.polygons), dtype=np.uint32)
-        mesh.polygons.foreach_get("loop_total", current_counts)
-        current_indices = np.empty(len(mesh.loops), dtype=np.uint32)
-        mesh.loops.foreach_get("vertex_index", current_indices)
-        same_topology = bool(
-            np.array_equal(current_counts, counts)
-            and np.array_equal(current_indices, indices)
-        )
+    if topology is not None:
+        # A token is a producer claim about the source topology. With the same
+        # token and the same cheap counts, the displayed topology is the one
+        # this frame describes; a different token proves a rebuild is needed.
+        # Either way the polygon/loop arrays are not read.
+        same_topology = previous == topology and lengths_match
+    else:
+        # No token (old peer or a producer that could not name the group):
+        # verify the arrays, exactly as before.
+        same_topology = lengths_match and _topology_matches(mesh, counts, indices)
 
     if same_topology:
         mesh.vertices.foreach_set("co", verts.reshape(-1))
@@ -1738,6 +1745,23 @@ def sections_to_mesh(mesh, sections, notes=None):
 
     mesh.update()
     return mesh
+
+
+def _topology_matches(mesh, counts, indices):
+    """The verified-path comparison: read the mesh's loops and compare them.
+
+    The token path never calls this; it is the only place ``sections_to_mesh``
+    reads ``mesh.polygons``/``mesh.loops``. Kept as its own function so a test
+    can guard the fast path without patching Blender's RNA collections.
+    """
+    current_counts = np.empty(len(mesh.polygons), dtype=np.uint32)
+    mesh.polygons.foreach_get("loop_total", current_counts)
+    current_indices = np.empty(len(mesh.loops), dtype=np.uint32)
+    mesh.loops.foreach_get("vertex_index", current_indices)
+    return bool(
+        np.array_equal(current_counts, counts)
+        and np.array_equal(current_indices, indices)
+    )
 
 
 def _faces_from(counts, indices):

@@ -412,6 +412,7 @@ def _split_stage(obj, stage, new_key=None):
     engine._set(stage, "rid", "")
     engine._set(stage, "geom_hash", "")
     engine._set(stage, "applied_out_hash", "")
+    engine._set(stage, "applied_topology", "")
     engine._set(stage, "error", "")
     engine._set(stage, "warnings", "")
     engine._set(stage, "input_warnings", "")
@@ -672,6 +673,7 @@ def _repair_plumbing(obj, record, stage, modifier):
     if rebuilt:
         engine._forget(record.stack_id, stage.key)
         engine._set(stage, "applied_out_hash", "")
+        engine._set(stage, "applied_topology", "")
         # The helpers are empty again: ask for the answer even if the request
         # id and frame have not moved, or the same-frame gate treats the empty
         # display as current.

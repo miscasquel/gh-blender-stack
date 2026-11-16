@@ -239,6 +239,19 @@ namespace Stageloom
             p.AddTextParameter("Status", "T", "Stage status", GH_ParamAccess.item);
         }
 
+        /// <summary>The response's optional `geom` object (protocol §4.4), or
+        /// null when the frame has no base or definition mesh/SubD group. A
+        /// test seam: the console suite has no RhinoCore, so it cannot build a
+        /// real Mesh, but this is the exact object the ok response adds.</summary>
+        internal static Dictionary<string, object> TopologyHeader(IList<Section> sections)
+        {
+            string topology = FrameCodec.TopologyHash(sections);
+            if (string.IsNullOrEmpty(topology)) return null;
+            var geom = new Dictionary<string, object>();
+            geom["topology"] = topology;
+            return geom;
+        }
+
         protected override void SolveInstance(IGH_DataAccess da)
         {
             string key = "";
@@ -349,6 +362,10 @@ namespace Stageloom
                         sections,
                         attributes.Count > 0 ? Json.WriteCanonical(attributes) : null,
                         definitions.Count > 0 ? Json.WriteCanonical(definitions) : null);
+                    // Additive topology token for Blender's in-place fast path
+                    // (protocol §4.4). It is a property of the base mesh/SubD
+                    // group only; definitions keep the verified apply path.
+                    Dictionary<string, object> topologyHeader = TopologyHeader(sections);
                     // A request-driven stage always answers: Blender is waiting
                     // for this rid. A user-driven solve whose answer is
                     // byte-identical to the last send is quiet.
@@ -362,6 +379,8 @@ namespace Stageloom
                         header["status"] = "ok";
                         header["warnings"] = warningList;
                         header["counts"] = counts;
+                        if (topologyHeader != null)
+                            header["geom"] = topologyHeader;
                         if (attributes.Count > 0)
                             header["attributes"] = attributes;
                         if (definitions.Count > 0)

@@ -108,6 +108,7 @@ class DuplicateStageTests(unittest.TestCase):
         driver.driver.type = "SCRIPTED"
         driver.driver.expression = "0.25"
 
+        cls.stage.applied_topology = "sha256:" + "a" * 64
         cls.dup = cls.obj.copy()
         bpy.context.scene.collection.objects.link(cls.dup)
         cls.dup.name = "Original.001"
@@ -140,6 +141,9 @@ class DuplicateStageTests(unittest.TestCase):
         )
         self.assertEqual(dup_stage.state, "unbound")
         self.assertEqual(dup_stage.applied_out_hash, "", "the copy inherited an applied output")
+        self.assertEqual(
+            dup_stage.applied_topology, "", "the copy inherited an applied topology"
+        )
         self.assertEqual(dup_stage.params[0].stage_key, dup_stage.key)
 
         orig_group = self.nodes.modifier_of(self.obj, self.stage).node_group

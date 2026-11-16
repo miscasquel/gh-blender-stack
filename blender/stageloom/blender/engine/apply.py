@@ -135,7 +135,8 @@ def _invalidate_prefix_batch(obj, stage):
 _LEGACY_DEFINITIONS = object()
 
 
-def _apply(obj, stage, sections, attributes=None, definitions=_LEGACY_DEFINITIONS):
+def _apply(obj, stage, sections, attributes=None, definitions=_LEGACY_DEFINITIONS,
+           topology=None):
     """Write the response geometry into the stage's helpers, one per kind, then
     its attributes into the helpers that can hold them.
 
@@ -156,6 +157,12 @@ def _apply(obj, stage, sections, attributes=None, definitions=_LEGACY_DEFINITION
     definition collection. The whole frame is validated before anything is
     written, so a mixed namespace or a part outside `0..N-1` rejects the frame
     instead of pairing one part's vertices with another part's faces.
+
+    ``topology`` is the response's additive mesh-topology token (protocol
+    §4.4). It covers the base mesh and every definition part's mesh/SubD group,
+    so all mesh helpers make the same fast/rebuilt decision under one token.
+    Returns the token when at least one mesh helper applied it, or None when the
+    frame did not prove one.
     """
     # Resolve and validate the definition table first: a bad entry must reject
     # the frame before any helper is touched (atomicity), and legacy direct
@@ -227,6 +234,10 @@ def _apply(obj, stage, sections, attributes=None, definitions=_LEGACY_DEFINITION
             engine.helpers.remove_definition(obj, stage.key, index)
 
     # Data first, wiring after: the node group reads the final definition set.
+    # The response token covers every base and definition mesh group, so all
+    # mesh helpers take the same topology decision and the stage stores the
+    # token once, after the whole apply has succeeded.
+    applied_topology = None
     for index in sorted(keep):
         _collection, part_objects = engine.helpers.ensure_definition_parts(
             obj, stage.key, index, parts_by_index[index]
@@ -235,11 +246,23 @@ def _apply(obj, stage, sections, attributes=None, definitions=_LEGACY_DEFINITION
             entry = groups.get((index, part))
             if entry is None:
                 entry = {"mesh": [], "curves": [], "points": []}
-            engine._apply_mesh(objects["mesh"], entry["mesh"])
+            if engine._apply_mesh(
+                objects["mesh"],
+                entry["mesh"],
+                topology=topology,
+                previous=stage.applied_topology,
+            ) is not None:
+                applied_topology = topology
             engine._apply_curves(objects["curves"], entry["curves"])
             engine._apply_points(objects["points"], entry["points"])
 
-    engine._apply_mesh(engine.helpers.ensure_helper(obj, stage.key, "mesh"), base["mesh"])
+    if engine._apply_mesh(
+        engine.helpers.ensure_helper(obj, stage.key, "mesh"),
+        base["mesh"],
+        topology=topology,
+        previous=stage.applied_topology,
+    ) is not None:
+        applied_topology = topology
     engine._apply_curves(engine.helpers.ensure_helper(obj, stage.key, "curves"), base["curves"])
     engine._apply_points(engine.helpers.ensure_helper(obj, stage.key, "points"), base["points"])
     engine._apply_attributes(obj, stage, sections, attributes, parts_by_index)
@@ -249,6 +272,7 @@ def _apply(obj, stage, sections, attributes=None, definitions=_LEGACY_DEFINITION
     # The frame is fully on screen: the heartbeat's "applied" stamp. Written
     # here rather than at the callers so every apply path is counted once.
     engine._heartbeat["applied_at"] = engine.time.monotonic()
+    return applied_topology
 
 
 # A part count is an object-allocation factor on the apply side: a malformed
@@ -785,14 +809,22 @@ def _apply_attributes(obj, stage, sections, attributes, parts_by_index):
         helper.update_tag()
 
 
-def _apply_mesh(helper, entries):
+def _apply_mesh(helper, entries, topology=None, previous=None):
+    """Write one mesh helper's group and return the topology now displayed.
+
+    The base and every definition helper get the response token and the token
+    the stage displayed last; ``sections_to_mesh`` owns the topology decision.
+    No entries means the group is gone: the helper is cleared and no token is
+    returned, so the stage forgets a topology that no longer describes what it
+    shows.
+    """
     mesh = helper.data
     if not entries:
         if len(mesh.vertices) or len(mesh.polygons):
             engine._bump_id(helper)
             mesh.clear_geometry()
             helper.update_tag()
-        return
+        return None
     engine._bump_id(helper)
     prepared = []
     for name, values in entries:
@@ -804,8 +836,11 @@ def _apply_mesh(helper, entries):
         elif name.endswith(".crease_edges"):
             arr = arr.reshape(-1, 2)
         prepared.append((name, engine._dtype_of(name), arr))
-    engine.geometry_io.sections_to_mesh(mesh, prepared)
+    engine.geometry_io.sections_to_mesh(
+        mesh, prepared, topology=topology, previous=previous
+    )
     helper.update_tag()
+    return topology
 
 
 def _apply_curves(helper, entries):

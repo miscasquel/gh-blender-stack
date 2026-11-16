@@ -16,10 +16,10 @@ records where those documents must change.
 
 **0.7.0 completion record (2026-11-16).** Q1–Q19 are complete; Q5 was merged
 into Q4 (the cache and the `Live` toggle were one removal). The release was
-measured, not inferred: 110 core tests, 413 Blender headless tests plus the
+measured, not inferred: 110 core tests, 423 Blender headless tests plus the
 offline gate, fourteen golden fixtures in the Python and C# codecs, the C#
 codec and its seven console suites, the installed extension round trip, and
-`scripts/check-all` green in 113.0 s on the development machine. The release
+`scripts/check-all` green in 116.0 s on the development machine. The release
 notes, README and `plan.md` carry the measured test counts; the compliance
 record carries the same verification. **W7 and W8 are explicitly out of
 0.7.0** and remain the 0.8.0 plan; nothing in this record claims those seams or
@@ -668,10 +668,10 @@ test is an incomplete fix.
 0.7.0 regression tests from W10 are implemented through Q1–Q19 (Q5 merged into
 Q4). W7–W9 were limited to what these fixes needed; they are not complete.
 
-**Measured at close-out:** 110 core tests; 413 Blender headless tests plus the
+**Measured at close-out:** 110 core tests; 423 Blender headless tests plus the
 offline gate; the C# codec and its seven console suites; fourteen golden
 fixtures; the installed extension round trip; `scripts/check-all` green in
-113.0 s.
+116.0 s.
 
 **Exit criteria:**
 

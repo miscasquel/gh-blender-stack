@@ -56,9 +56,9 @@ generator stages, one-way Stage In feeds, the persisted loopback endpoint
 component, the non-metre units matrix and the reference performance matrix
 remain.
 
-**Verified at release:** 110 core tests, 413 Blender headless tests plus the
+**Verified at release:** 110 core tests, 423 Blender headless tests plus the
 offline gate, the C# codec and its seven console suites, fourteen golden
-fixtures, the installed extension round trip, and `scripts/check-all` in 113.0 s
+fixtures, the installed extension round trip, and `scripts/check-all` in 116.0 s
 on the development machine.
 
 **Performance check (2026-11-14):** the 13× 99,458-triangle reference scene

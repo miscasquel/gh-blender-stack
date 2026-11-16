@@ -302,6 +302,7 @@ class ResponseValidationTests(unittest.TestCase):
         self.stage.rid = rid
         self.stage.state = self.stack_mod.STATE_OK
         self.stage.applied_out_hash = "sha256:before-load"
+        self.stage.applied_topology = "sha256:" + "e" * 64
         header, sections = self._frame(rid, "sha256:after-load")
 
         self.engine._on_load()
@@ -310,6 +311,11 @@ class ResponseValidationTests(unittest.TestCase):
             self.stage.rid,
             "",
             "a non-frozen stage kept the request id saved with the file",
+        )
+        self.assertEqual(
+            self.stage.applied_topology,
+            "",
+            "a load kept a topology token from the old session",
         )
         # A response was already queued when the file opened. It is for a
         # request the load no longer waits for, so it must be dropped: the load
@@ -380,6 +386,15 @@ class ResponseValidationTests(unittest.TestCase):
         self.assertEqual(self.stage.rid, new_rid)
         self.assertEqual(self.stage.state, self.stack_mod.STATE_WAITING)
         self.assertEqual(self.stage.error, "", "a stale error reached the stage row")
+
+    def test_16_undo_clears_the_applied_topology(self):
+        self.stage.applied_topology = "sha256:" + "f" * 64
+        self.engine._on_undo()
+        self.assertEqual(
+            self.stage.applied_topology,
+            "",
+            "an undo kept a topology token from the undone step",
+        )
 
     def test_13_an_uncorrelated_error_keeps_the_pending_wait(self):
         import stageloom.blender.bridge as bridge

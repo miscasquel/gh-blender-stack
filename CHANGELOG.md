@@ -70,6 +70,14 @@ affected stages; resolve each affected stage once in the panel.
   Colour stays sRGB on the wire (linear float colours are converted), absent
   point radii clear the previous values, and mixed mesh/SubD groups and
   malformed curve arrays are rejected instead of paired or indexed blindly.
+- **In-place applies stay fast after the topology check.** An `ok` response now
+  carries an additive `geom.topology` token covering its base mesh/SubD cage and
+  every block definition geometry group. When the token and the
+  vertex/face/loop counts match a displayed helper, Blender updates positions,
+  colours, creases and attributes without reading the polygon and loop arrays;
+  a changed token rebuilds every mesh helper in that response, and a peer that
+  sends none keeps the verified path. The token is not part of `out_hash`, is
+  absent on error responses, and does not change the protocol version.
 - **Approximations are visible.** Catmull-Rom fitting, missing Bezier handles,
   clamped NURBS order, dropped crease edges and ignored mixed groups now produce
   a counted stage warning instead of disappearing.
@@ -85,9 +93,9 @@ affected stages; resolve each affected stage once in the panel.
 
 ### Tests
 
-- 110 core tests; 413 Blender headless tests plus the offline gate; fourteen
+- 110 core tests; 423 Blender headless tests plus the offline gate; fourteen
   golden fixtures; the C# codec and its seven console suites; the installed
-  extension round trip. `scripts/check-all` passes in 113.0 s on the development
+  extension round trip. `scripts/check-all` passes in 116.0 s on the development
   machine.
 
 ## [0.6.0] — 2026-11-14
