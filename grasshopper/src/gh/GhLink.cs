@@ -200,6 +200,16 @@ namespace Stageloom
         private static Worker _worker;      // under Gate
         private static Thread _thread;      // under Gate
         private static volatile bool _connected;
+        // The capability this client advertises in hello (protocol §4.1, §8).
+        internal const string Blocks2Capability = "blocks/2";
+        // The peer's `caps` from its last request (protocol §4.3). Absence is
+        // an empty set, never a guess: Q10b may emit multi-part definitions
+        // only when Blender advertised blocks/2, and falls back otherwise.
+        private static HashSet<string> _peerCaps = new HashSet<string>();
+        internal static bool PeerSupports(string capability)
+        {
+            lock (Gate) { return _peerCaps.Contains(capability); }
+        }
         private static int _activeSenders;
         private static int _retryRequests;
         // Test/diagnostic: one sender loop per connection. It must not outlive
@@ -727,6 +737,8 @@ namespace Stageloom
                     lock (Gate)
                     {
                         if (_client == client) _client = null;
+                        // Capabilities belong to the socket that carried them.
+                        _peerCaps = new HashSet<string>();
                         // Frames queued for a connection that just died are stale:
                         // a reconnect publishes hello/schema again, and the engine
                         // re-derives any response it still needs. Delivering the
@@ -822,6 +834,12 @@ namespace Stageloom
                 Note("ignoring message type " + type);
                 return;
             }
+
+            // The request is the peer's capability advertisement (protocol
+            // §4.3). A missing or malformed list is "none": a sender must not
+            // infer blocks/2, and Q10b falls back with a warning instead.
+            HashSet<string> peerCaps = ReadCaps(header);
+            lock (Gate) { _peerCaps = peerCaps; }
 
             string key = Json.GetString(header, "stage");
             string rid = Json.GetString(header, "rid");
@@ -934,6 +952,22 @@ namespace Stageloom
             }
 
             RequestStage(key, rid);
+        }
+
+        /// <summary>The optional `caps` list from a request. Only strings are
+        /// capabilities; unknown ones are retained but never acted on, and a
+        /// missing/non-list field means the peer advertised nothing.</summary>
+        private static HashSet<string> ReadCaps(Dictionary<string, object> header)
+        {
+            var caps = new HashSet<string>();
+            var list = Json.Get(header, "caps") as List<object>;
+            if (list == null) return caps;
+            foreach (object item in list)
+            {
+                string cap = item as string;
+                if (!string.IsNullOrEmpty(cap)) caps.Add(cap);
+            }
+            return caps;
         }
 
         /// <summary>The request's attribute descriptors as a list, tolerating a
@@ -1533,6 +1567,11 @@ namespace Stageloom
                 hello["doc"] = _lastDocName;
                 hello["doc_units"] = UnitsName();
                 hello["stages"] = list;
+                // Optional additive field (protocol §4.1): this client reads
+                // multi-part definition entries. Older Blender ignores it.
+                var caps = new List<object>();
+                caps.Add(Blocks2Capability);
+                hello["caps"] = caps;
                 Enqueue(FrameCodec.Encode(hello, null));
                 lock (Gate)
                 {

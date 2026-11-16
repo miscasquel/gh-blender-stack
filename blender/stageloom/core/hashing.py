@@ -51,27 +51,75 @@ def _update_section(digest, name, raw):
     digest.update(raw)
 
 
+# Definition and part indices are decimal integers. C# parses them with
+# int.TryParse(NumberStyles.None, InvariantCulture); matching that here keeps
+# the two hashers on one grammar. A token outside this range is not an index.
+_MAX_INDEX = 2**31 - 1
+
+
+def _parse_index(token):
+    """The int a decimal index token names, or None.
+
+    ASCII digits only: ``str.isdigit`` also accepts non-ASCII digits that the
+    C# parser does not, which would give the two sides different hash orders.
+    """
+    if not token or not token.isascii() or not token.isdigit():
+        return None
+    value = int(token)
+    return value if value <= _MAX_INDEX else None
+
+
+def _split_part(rest):
+    """``(part, inner)`` for a multi-part name fragment, else ``(None, rest)``.
+
+    ``rest`` is what follows ``idef.<i>.``. A definition-level fragment starts
+    with a section kind (``mesh``, ``inst``, ``attr``, ...); a multi-part one
+    starts with a part number, so only a leading decimal component is a part.
+    """
+    head, separator, inner = rest.partition(".")
+    if not separator or not inner:
+        return None, rest
+    part = _parse_index(head)
+    return (part, inner) if part is not None else (None, rest)
+
+
 def ordered_names(names):
     """The canonical §6.1 order for a set of section names.
 
-    Base sections follow the §5 table order; `idef.<i>.*` groups follow, one
-    definition after the other in index order, each definition ordered the same
-    way; anything else is last, sorted, so an unknown name stays deterministic.
+    Base sections follow the §5 table order. `idef.<i>.*` groups follow, one
+    definition after the other in numeric index order. Within a definition,
+    multi-part sections come first in numeric part order, each part ordered the
+    same way; the definition-level sections (nested `inst.*` rows) follow after
+    all parts, so a definition's rows stay last as they always have. Anything
+    else is last, sorted, so an unknown name stays deterministic.
+
+    Single-part definitions have no numeric part fragment, so their order is
+    unchanged: the §5 table order over the whole definition.
     """
     base = []
     groups = {}
     extra = []
     for name in names:
         parts = name.split(".", 2)
-        if len(parts) == 3 and parts[0] == "idef" and parts[1].isdigit():
-            groups.setdefault(int(parts[1]), []).append(parts[2])
+        index = _parse_index(parts[1]) if len(parts) == 3 and parts[0] == "idef" else None
+        if index is not None:
+            entry = groups.setdefault(index, {"base": [], "parts": {}})
+            part, inner = _split_part(parts[2])
+            if part is None:
+                entry["base"].append(inner)
+            else:
+                entry["parts"].setdefault(part, []).append(inner)
         elif name in HASH_SECTION_ORDER:
             base.append(name)
         else:
             extra.append(name)
     ordered = [name for name in HASH_SECTION_ORDER if name in base]
     for index in sorted(groups):
-        for inner in ordered_names(groups[index]):
+        entry = groups[index]
+        for part in sorted(entry["parts"]):
+            for inner in ordered_names(entry["parts"][part]):
+                ordered.append("idef.%d.%d.%s" % (index, part, inner))
+        for inner in ordered_names(entry["base"]):
             ordered.append("idef.%d.%s" % (index, inner))
     ordered += sorted(extra)
     return ordered

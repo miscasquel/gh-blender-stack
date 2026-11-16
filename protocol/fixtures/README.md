@@ -35,9 +35,11 @@ python3 scripts/make-fixtures
 | `request-mesh` | `mesh.*` sections including colours and crease edges |
 | `request-subd` | `subd.*` sections with a crease |
 | `request-instances` | block definitions and instances, including a nested placement and a per-definition point attribute |
+| `request-instances-multipart` | a two-part definition (`parts: 2`), both part namespaces, an attribute on part 1, a definition-level nested row and a single-part definition that omits `parts` |
 | `response-mesh` | a two-triangle mesh response |
 | `response-mixed` | mesh + curves + points in one response, with a warning |
 | `response-attributes` | attributes: `i32` face ids, `f32` point loads, boolean flags, an UTF-8 string tag with its offsets section |
+| `response-instances-multipart` | the response direction of the two-part definition: an attribute on part 0, a nested row and a top-level placement |
 | `response-error` | a solve failure (`status = "error"`) |
 | `error-unknown-ref` | the `error` message type for an unknown geometry ref |
 

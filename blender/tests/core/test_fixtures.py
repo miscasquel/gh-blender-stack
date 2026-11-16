@@ -41,8 +41,9 @@ class GoldenFrameTests(unittest.TestCase):
         names = fixture_names()
         for required in (
             "ping", "hello", "schema", "request-ref", "request-mesh", "request-subd",
-            "request-instances", "response-mesh", "response-mixed",
-            "response-attributes", "response-error", "error-unknown-ref",
+            "request-instances", "request-instances-multipart",
+            "response-mesh", "response-mixed", "response-attributes",
+            "response-instances-multipart", "response-error", "error-unknown-ref",
         ):
             self.assertIn(required, names)
 
@@ -122,6 +123,25 @@ class GoldenFrameTests(unittest.TestCase):
         self.assertIn("mesh.verts", names)
         self.assertIn("crv.points", names)
         self.assertIn("pts.positions", names)
+
+    def test_multipart_fixtures_use_the_part_namespace(self):
+        for name, definition, part, attribute_section in (
+            ("request-instances-multipart", 0, 1, "idef.0.1.attr.0.values"),
+            ("response-instances-multipart", 0, 0, "idef.0.0.attr.0.values"),
+        ):
+            with self.subTest(fixture=name):
+                frame, expect = self.load(name)
+                header, _sections = codec.decode_frame(frame)
+                definitions = header["definitions"]
+                self.assertEqual(definitions[0], {"name": definitions[0]["name"], "parts": 2})
+                self.assertNotIn("parts", definitions[1])
+                self.assertIn("idef.0.0.mesh.verts", expect["sections"])
+                self.assertIn("idef.0.1.mesh.verts", expect["sections"])
+                self.assertIn(attribute_section, expect["sections"])
+                self.assertEqual(header["attributes"][0]["definition"], definition)
+                self.assertEqual(header["attributes"][0]["part"], part)
+                self.assertIn("idef.0.inst.ref_def", expect["sections"])
+                self.assertIn("inst.ref_def", expect["sections"])
 
 
 if __name__ == "__main__":

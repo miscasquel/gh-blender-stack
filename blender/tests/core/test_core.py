@@ -168,6 +168,78 @@ class GeometryHashTests(unittest.TestCase):
             names, ["mesh.verts", "idef.2.mesh.verts", "idef.10.mesh.verts"]
         )
 
+    def test_single_part_definition_order_is_unchanged(self):
+        # The pre-multi-part order: §5 order inside one definition, then the
+        # definition-level attribute name (an unknown name) sorted last.
+        names = hashing.ordered_names(
+            [
+                "idef.0.inst.transforms",
+                "idef.0.mesh.face_counts",
+                "idef.0.mesh.verts",
+                "idef.0.attr.0.values",
+            ]
+        )
+        self.assertEqual(
+            names,
+            [
+                "idef.0.mesh.verts",
+                "idef.0.mesh.face_counts",
+                "idef.0.inst.transforms",
+                "idef.0.attr.0.values",
+            ],
+        )
+
+    def test_definition_part_order_is_numeric_not_lexicographic(self):
+        names = hashing.ordered_names(
+            [
+                "idef.0.10.mesh.verts",
+                "idef.0.2.crv.points",
+                "idef.0.2.mesh.face_counts",
+                "idef.0.2.mesh.verts",
+                "idef.0.inst.ref_def",
+                "idef.0.inst.transforms",
+                "idef.0.10.crv.points",
+            ]
+        )
+        self.assertEqual(
+            names,
+            [
+                "idef.0.2.mesh.verts",
+                "idef.0.2.mesh.face_counts",
+                "idef.0.2.crv.points",
+                "idef.0.10.mesh.verts",
+                "idef.0.10.crv.points",
+                "idef.0.inst.ref_def",
+                "idef.0.inst.transforms",
+            ],
+        )
+
+    def test_multipart_definition_order_is_definition_then_part(self):
+        names = hashing.ordered_names(
+            [
+                "idef.10.0.mesh.verts",
+                "idef.2.1.mesh.verts",
+                "idef.2.0.mesh.verts",
+            ]
+        )
+        self.assertEqual(
+            names,
+            [
+                "idef.2.0.mesh.verts",
+                "idef.2.1.mesh.verts",
+                "idef.10.0.mesh.verts",
+            ],
+        )
+
+    def test_multipart_hash_is_insertion_order_independent(self):
+        a = hashing.geometry_hash(
+            {"idef.0.10.mesh.verts": b"ab", "idef.0.2.mesh.verts": b"cd"}
+        )
+        b = hashing.geometry_hash(
+            {"idef.0.2.mesh.verts": b"cd", "idef.0.10.mesh.verts": b"ab"}
+        )
+        self.assertEqual(a, b)
+
     def test_output_hash_uses_header_order(self):
         a = hashing.output_hash([("mesh.verts", b"ab"), ("crv.counts", b"cd")])
         b = hashing.output_hash([("crv.counts", b"cd"), ("mesh.verts", b"ab")])

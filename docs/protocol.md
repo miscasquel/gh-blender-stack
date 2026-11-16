@@ -47,6 +47,7 @@ version bump.
 - Canonical header encoding: UTF-8, keys sorted, no insignificant whitespace (`separators=(",", ":")` in Python; the equivalent in C#). Fixtures depend on this.
 - Header numbers are JSON integers or IEEE 754 doubles. Integers are signed 64-bit; a token outside `-2^63..2^63-1` is a `bad_frame`, never a rounded double. Float text is Python's `repr` for every finite double: shortest round-trip digits, fixed notation for decimal exponents `-4..15`, scientific outside, lowercase `e` with at least two exponent digits, and `.0` on integral fixed values (`1e15` is `1000000000000000.0`, `1e16` is `1e+16`, negative zero is `-0.0`). Non-finite values are not valid in a header.
 - `protocol/number-corpus.json` is the cross-language vector for that float text. Both the Python core test and the C# console test check every entry.
+- The header may also carry two optional vocabulary lists: `caps` (strings, §4.1/§4.3/§8) and `definitions` (objects, §5.2). They add no framing: a reader that does not know a field ignores it, and each list is validated where it is consumed. An absent list is not the same as an empty one where semantics say so: absent `definitions` means no instances, absent `caps` means no advertised capabilities.
 
 ## 4. Message types
 
@@ -58,10 +59,16 @@ Sent once per connection, first.
 
 ```json
 {"type":"hello","v":2,"client":"Stageloom 0.6.0","doc":"Panels.gh",
- "doc_units":"Millimeters",
+ "doc_units":"Millimeters","caps":["blocks/2"],
  "stages":[{"key":"panelize-3f9a","enabled":true,"has_stage_in":true,"has_stage_out":true}]}
 ```
 
+- `caps` (optional, additive) is an array of capability strings. A reader
+  ignores capability strings it does not know. Absence means the client
+  advertises none; it never means "try it and see". This client advertises
+  `blocks/2`, which means it reads multi-part definition entries (§5.2). The
+  field is not identity and takes no part in the geometry, output or request
+  hashes.
 - `stages` lists every Stage In or Stage Out in the document, with its key and enabled flag.
 - `has_stage_in` (optional, additive) is `true` when at least one Stage In component claims the key. `false` means the stage has only a Stage Out: it is a **generator**, ignores inbound geometry and is driven entirely by its Params. A reader that does not know the field treats its absence as unknown and keeps whatever mode it has saved.
 - `has_stage_out` (optional, additive) is `true` when at least one Stage Out component claims the key. `false` means the stage is a **one-way consumer**: its Stage In still receives geometry, but nothing answers, so Blender must not wait for or apply a response. Absence means unknown; a reader keeps its saved two-way behavior. GH republishes `hello` when either presence value changes.
@@ -90,10 +97,16 @@ Sent after `hello`, and again whenever a Param component's declaration changes.
  "rid":"sha256:…","nonce":0,
  "params":{"6f1c…guid…":2.5,"0b7e…guid…":3},
  "geom":{"mode":"full","hash":"sha256:…"},
- "units":"m","space":"stack-local",
+ "units":"m","space":"stack-local","caps":["blocks/2"],
  "sections":[ … ]}
 ```
 
+- `caps` (optional, additive) is the same capability list as `hello` (§4.1).
+  Blender advertises `blocks/2` on every request. The field is negotiation
+  only: it is excluded from the request ID and every geometry hash, and a
+  peer that does not know it ignores it. Absence means the sender advertises
+  no capabilities; a sender that needs multi-part definitions then uses the
+  warned fallback in §8.
 - `params` maps parameter `id` to a value cast to the schema type before encoding: floats as JSON numbers, ints as integers, bools as `true`/`false`, vectors and colors as arrays of three numbers, value lists as integers (the index), text as strings.
 - `attributes` (optional) lists the attribute sections the request carries (§5.1). It is present only with `sections`, so a `ref` request never carries it.
 - `geom.mode` is `full` or `ref`.
@@ -242,24 +255,43 @@ The header carries the definition table, one entry per definition, in index
 order:
 
 ```json
-"definitions": [{"name":"Tree"}, {"name":""}]
+"definitions": [{"name":"Tree","parts":2}, {"name":""}]
 ```
 
 - `name` is a display name and may be empty. It is not identity: definition
   identity is content-based on each side, and the whole list partakes in the
   geometry and output hashes as `definitions` (§6.1, §6.3), so a rename is not
   silent.
-- Definition `i`'s geometry is a complete §5 section group prefixed
-  `idef.<i>.`: `idef.0.mesh.verts`, `idef.0.crv.points`, and so on, with the
-  same names and dtypes. Attribute descriptors for definition `i` carry
-  `"definition": i` and their sections are prefixed too:
-  `idef.<i>.attr.<j>.values` (with `.<j>.offsets` for STRING).
+- `parts` is optional and defaults to `1`. It is a positive integer: `N` is the
+  number of parts the definition is made of. An entry with `parts: 1` is the
+  same definition as one with `parts` absent, so a single-part definition may
+  omit it.
+- **Single-part namespace (`parts` absent or `1`).** Definition `i`'s geometry
+  is a complete §5 section group prefixed `idef.<i>.`: `idef.0.mesh.verts`,
+  `idef.0.crv.points`, and so on, with the same names and dtypes. Attribute
+  descriptors for definition `i` carry `"definition": i` and their sections are
+  prefixed too: `idef.<i>.attr.<j>.values` (with `.<j>.offsets` for STRING).
+  This is the original v2 form and is byte-for-byte unchanged.
+- **Multi-part namespace (`parts` > `1`).** Each part `p` in `0..N-1` is a
+  complete §5 section group prefixed `idef.<i>.<p>.`: `idef.0.0.mesh.verts`,
+  `idef.0.1.crv.points`, and so on. An attribute on a part carries
+  `"definition": i` and the new `"part": p`, and its sections use the same
+  prefix: `idef.<i>.<p>.attr.<j>.values` (plus `.<j>.offsets` for STRING).
+  `part` is absent on a single-part attribute descriptor and required on a
+  multi-part one; it must match the section prefix. A part may be empty,
+  exactly like an empty definition.
+- A definition uses **one** namespace. A multi-part definition never has a
+  single-part geometry or attribute section, and a single-part definition never
+  has an `idef.<i>.<p>.*` section. Definition-level rows are the exception that
+  stays outside the part namespaces (next bullet).
 - Rows are `inst.ref_def` (u32, `[R]`) and `inst.transforms` (f32, `[R,16]`):
   one definition index and one 4x4 matrix per row. Both sections are
   all-or-nothing; `inst.ref_def` length is `R` and `inst.transforms` length is
   `R*16`.
 - Definition `i`'s own nested rows are `idef.<i>.inst.ref_def` /
-  `idef.<i>.inst.transforms`, referencing other definitions in the table.
+  `idef.<i>.inst.transforms`, referencing other definitions in the table. They
+  stay at definition level for a multi-part definition too: there is no
+  `idef.<i>.<p>.inst.*`.
 - The matrices are row-major (`m[row][col]`); a point transforms as a row vector
   (Rhino's `Transform` convention), so the translation sits in the fourth column
   — elements 3, 7 and 11, as in `[1,0,0,tx, 0,1,0,ty, 0,0,1,tz, 0,0,0,1]`.
@@ -267,7 +299,30 @@ order:
   matrix on read and write.
 - Absent `definitions` means no instances. A definition with no geometry
   sections is a legal empty definition and still occupies its index.
-- A definition index outside the table is a `bad_frame` on decode.
+- A definition index outside the table is a `bad_frame` (checked by the
+  consumer-side rules below).
+
+**Definition validation (consumer side).** These rules are semantic, so they are
+checked where the table is consumed (the GH → Blender apply path and the
+Blender → GH instance builder), not by the generic section codec:
+
+- `definitions` is an array of objects; `name` is a string and `parts`, when
+  present, is a JSON integer `>= 1` (a boolean is not an integer).
+- Every `idef.<i>.*` section has `i < len(definitions)`; every part fragment
+  `p` is an integer with `p < parts`. A section name that does not parse is
+  rejected rather than skipped.
+- Every value in `inst.ref_def` and in each `idef.<i>.inst.ref_def` is
+  `< len(definitions)`. References are forward or backward within the flat
+  table; there is no ordering requirement.
+- An attribute descriptor's `definition`, and for a multi-part definition its
+  `part`, match the section prefix it names.
+- A mixed namespace, a part outside `0..N-1`, an out-of-table index or a
+  malformed entry is a `bad_frame`. A cycle among definition rows is rejected
+  with a warning (never by recursing forever). Dropping the bad part silently
+  is not allowed.
+- Multi-part output (`parts > 1`) requires the peer to have advertised
+  `blocks/2` in `hello`/`request`; without it the sender falls back as §8
+  describes.
 
 ## 6. Identifiers, hashes, and apply rules
 
@@ -284,7 +339,28 @@ Prefixed with `sha256:` and hex-encoded. Computed with numpy on the Blender side
 
 **Attributes take part.** When the frame carries attributes, their descriptor list (§5.1) is hashed as one extra entry named `attr.descriptors`, holding the canonical JSON of the list. Section names are index-based (`attr.0.values`), so without the descriptors a renamed attribute would hash identically and the stage would silently keep the old name.
 
-**Instances take part.** Definition sections (`idef.<i>.*`) hash in definition-index order, each definition after the other, so the hash does not depend on section order; `inst.ref_def` / `inst.transforms` hash in the §5-order after the geometry sections. The `definitions` header list is hashed as one extra entry named `definitions`, canonical JSON, for the same reason as the attribute descriptors: a rename alone must not look like the same request.
+**Instances take part.** Definition sections (`idef.<i>.*`) hash in definition-
+index order, each definition after the other, so the hash does not depend on
+section order. Within a definition:
+
+1. multi-part sections come first, in numeric part order (`0`, `1`, … `10`;
+   never lexicographic `0`, `1`, `10`, `2`); inside one part, sections follow
+   the §5 table order;
+2. definition-level sections (`idef.<i>.inst.ref_def` /
+   `idef.<i>.inst.transforms`) follow all parts, in §5 table order;
+3. a single-part definition has no part step: its sections follow the §5 table
+   order, which is the pre-multi-part behavior and produces the same hash.
+
+`inst.ref_def` / `inst.transforms` hash in the §5-order after the top-level
+geometry sections. Attribute sections (`attr.<j>.*`, or `idef.<i>.<p>.attr.<j>.*`
+inside a part) follow the known geometry groups of their scope, sorted by name,
+which is their index order. Definition and part indices are decimal ASCII and
+compared numerically. The `definitions` header list is hashed as one extra entry
+named `definitions`, canonical JSON, for the same reason as the attribute
+descriptors: a rename alone must not look like the same request. `parts` is part of that
+canonical JSON, so re-cutting the same geometry into a different number of
+parts changes the hash. `caps` is negotiation, not geometry, and never enters
+the hash.
 
 ### 6.2 Request ID (Blender only)
 
@@ -302,7 +378,7 @@ Prefixed with `sha256:`. GH never computes or validates request IDs. It echoes t
 
 ### 6.3 Output hash (GH only)
 
-SHA-256 over the response sections, in header order: name (UTF-8), 0x00, raw bytes. Prefixed with `sha256:`. Blender treats it as an opaque string. Attribute descriptors take part the same way as in the geometry hash: one extra entry named `attr.descriptors` after the sections, holding the canonical JSON of the list. The `definitions` list takes part as one extra entry named `definitions`, canonical JSON, so a renamed definition is not a silent no-op.
+SHA-256 over the response sections, in header order: name (UTF-8), 0x00, raw bytes. Prefixed with `sha256:`. Blender treats it as an opaque string. Attribute descriptors take part the same way as in the geometry hash: one extra entry named `attr.descriptors` after the sections, holding the canonical JSON of the list. The `definitions` list takes part as one extra entry named `definitions`, canonical JSON, so a renamed definition is not a silent no-op; the JSON includes `parts`, so a changed partition is visible too. Multi-part section names (`idef.<i>.<p>.*`) are hashed exactly as they travel in the header. `caps` is excluded: a capability advertisement must not change an answer's identity.
 
 ### 6.4 Apply rules (Blender)
 
@@ -331,6 +407,22 @@ SHA-256 over the response sections, in header order: name (UTF-8), 0x00, raw byt
 - `v` is the protocol version. This document is version 2.
 - Additive changes inside a version (new optional fields, new warning codes) are allowed. Readers ignore unknown fields.
 - Breaking changes bump `v`.
+- **Capabilities.** A semantic change an old peer would silently misread
+  travels as an optional string in `caps`, not as a version bump. Both sides
+  advertise on their first frame: GH in `hello`, Blender in every `request`.
+  A reader retains the peer's list for the connection; unknown strings are
+  ignored, and an absent field means "no capabilities", never "assume the
+  newest".
+- **`blocks/2`** means the peer reads multi-part `definitions` entries
+  (§5.2). A sender emits `parts > 1` only when the peer advertised it. If it
+  needs multi-part output but sees no capability, it must split the definition
+  into one single-part definition per part and report a visible warning on the
+  stage (or log it, for a frame with no stage). Emitting the multi-part frame
+  anyway is a bug: an old peer ignores the `parts` field and the
+  `idef.<i>.<p>.*` sections, so the parts collapse silently.
+- The fallback is sender-side only; the wire stays v2. A receiver does not
+  guess a missing `parts` from section names: `parts` absent means one part.
+- `caps` is excluded from request IDs, geometry hashes and output hashes.
 
 ## 9. Fixtures
 
@@ -344,7 +436,7 @@ Both the Python and C# codecs must decode every fixture to the same values, and 
 - C# under wine: `scripts/test-gha`, via `grasshopper/tests/console/StageloomCoreTests.exe`.
 - Regenerate with `python3 scripts/make-fixtures`.
 
-Twelve fixtures, covering `ping`, `hello`, `schema`, a `ref` request, a mesh request, a SubD request, a request with a definition table, nested instance rows and a per-definition attribute, a mesh response, a mixed mesh/curve/point response, a response with attributes (`i32`, `f32`, `u8` and a STRING offsets section), an error response, and the `error` message. Floats in fixtures are exactly representable in f32, so both codecs agree byte for byte without a tolerance.
+Fourteen fixtures, covering `ping`, `hello`, `schema`, a `ref` request, a mesh request, a SubD request, a request with a definition table, nested instance rows and a per-definition attribute, a request and a response with a two-part definition (part namespaces, a part attribute and a definition-level nested row), a mesh response, a mixed mesh/curve/point response, a response with attributes (`i32`, `f32`, `u8` and a STRING offsets section), an error response, and the `error` message. Floats in fixtures are exactly representable in f32, so both codecs agree byte for byte without a tolerance. The `hello` fixture predates `caps` and remains a valid frame without it.
 
 ## 10. Changes from plan rev 2
 
@@ -394,3 +486,10 @@ Twelve fixtures, covering `ping`, `hello`, `schema`, a `ref` request, a mesh req
 - 2026-11-16: Blender's local frame cache and `Live` toggle are removed. The wire
   is unchanged; §6.4 now drops a response for a superseded `rid` instead of
   storing it, and every frame is a live request ([ADR 0016](decisions/0016-live-only-stages.md)).
+- 2026-11-16: multi-part block definitions add optional `parts` to a
+  `definitions` entry and the `idef.<i>.<p>.*` namespace (§5.2), gated by the
+  new optional `caps` field in `hello` and `request` with the capability
+  `blocks/2` (§4.1, §4.3, §8). Single-part names and hashes are unchanged; the
+  geometry hash orders parts numerically after the definition index and keeps a
+  definition's nested rows last. `request-instances-multipart` and
+  `response-instances-multipart` pin both directions. Additive inside v2.

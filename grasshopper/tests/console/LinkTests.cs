@@ -75,6 +75,10 @@ namespace Stageloom.Tests.Console
                 Check("hello units", !string.IsNullOrEmpty((string)Json.Get(hello, "doc_units")),
                     "doc_units=" + Json.Get(hello, "doc_units"));
                 Check("hello stages empty", ((List<object>)Json.Get(hello, "stages")).Count == 0, "");
+                var helloCaps = Json.Get(hello, "caps") as List<object>;
+                Check("hello advertises blocks/2",
+                    helloCaps != null && helloCaps.Contains(GhLink.Blocks2Capability),
+                    "caps=" + Json.WriteCanonical(Json.Get(hello, "caps")));
 
                 // 2. a request before any component: no slot, a note, no growth.
                 server.Send(Frame(Header("request", "k0", "r0"), null));
@@ -209,6 +213,7 @@ namespace Stageloom.Tests.Console
                 var parameters = new Dictionary<string, object>();
                 parameters["p1"] = 2.5;
                 requestHeader["params"] = parameters;
+                requestHeader["caps"] = new List<object> { GhLink.Blocks2Capability };
                 server.Send(Frame(requestHeader, MeshSections()));
                 Check("request fills the slot", WaitFor(delegate { return GhLink.FindSlot("k1") != null; }), "");
                 StageSlot slot = GhLink.FindSlot("k1");
@@ -220,12 +225,18 @@ namespace Stageloom.Tests.Console
                     && Convert.ToDouble(slot.Params["p1"], System.Globalization.CultureInfo.InvariantCulture) == 2.5,
                     "params=" + Json.WriteCanonical(slot.Params));
                 Check("slot sections kept", slot.Frame.Sections.Count == 3, "");
+                Check("the peer's blocks/2 capability is retained",
+                    GhLink.PeerSupports(GhLink.Blocks2Capability), "");
 
                 // 6. a ref for geometry the slot does not hold is refused with
-                //    unknown_ref before any timeout can start.
+                //    unknown_ref before any timeout can start. It carries no
+                //    caps, so the retained capability is cleared: absence is
+                //    never read as support.
                 var refHeader = Header("request", "k1", "sha256:r2");
                 refHeader["geom"] = Geom("ref", "sha256:h2");
                 server.Send(Frame(refHeader, null));
+                Check("a request without caps clears the peer capability",
+                    WaitFor(delegate { return !GhLink.PeerSupports(GhLink.Blocks2Capability); }), "");
                 Dictionary<string, object> refusal = ReadUntil(server, "error");
                 Check("unknown_ref code", (string)Json.Get(refusal, "code") == "unknown_ref",
                     "code=" + Json.Get(refusal, "code"));

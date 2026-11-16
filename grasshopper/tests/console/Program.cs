@@ -53,6 +53,8 @@ namespace Stageloom.Tests.Console
 
             CheckParamValues();
 
+            CheckHashOrder();
+
             CheckDecoderBoundary();
 
             CheckFloatText();
@@ -145,6 +147,43 @@ namespace Stageloom.Tests.Console
                 string got = FrameCodec.GeometryHash(decoded.Sections);
                 if (got != expectedHash)
                     problems.Add("sections_hash " + got + " != " + expectedHash);
+            }
+
+            // The multi-part fixtures pin the grammar the hash order depends on:
+            // the explicit `parts`, the part namespaces, the attribute's part
+            // and the definition-level nested row pair.
+            if (name == "request-instances-multipart" || name == "response-instances-multipart")
+            {
+                var definitions = Json.Get(decoded.Header, "definitions") as List<object>;
+                if (definitions == null || definitions.Count != 2)
+                {
+                    problems.Add("definitions table missing or wrong length");
+                }
+                else
+                {
+                    var first = definitions[0] as Dictionary<string, object>;
+                    var second = definitions[1] as Dictionary<string, object>;
+                    if (first == null || !(Json.Get(first, "parts") is long)
+                        || (long)Json.Get(first, "parts") != 2)
+                        problems.Add("definition 0 does not declare parts=2");
+                    if (second == null || second.ContainsKey("parts"))
+                        problems.Add("definition 1 should use the single-part namespace");
+                }
+                if (decoded.Find("idef.0.0.mesh.verts") == null
+                    || decoded.Find("idef.0.1.mesh.verts") == null)
+                    problems.Add("part geometry sections are missing");
+                if (decoded.Find("idef.0.inst.ref_def") == null)
+                    problems.Add("definition-level nested row is missing");
+                var attributes = Json.Get(decoded.Header, "attributes") as List<object>;
+                var descriptor = attributes != null && attributes.Count == 1
+                    ? attributes[0] as Dictionary<string, object> : null;
+                if (descriptor == null
+                    || !(Json.Get(descriptor, "definition") is long)
+                    || (long)Json.Get(descriptor, "definition") != 0
+                    || !(Json.Get(descriptor, "part") is long)
+                    || (long)Json.Get(descriptor, "part") !=
+                       (name == "request-instances-multipart" ? 1L : 0L))
+                    problems.Add("part attribute descriptor is wrong");
             }
 
             Report(name, problems);
@@ -367,6 +406,100 @@ namespace Stageloom.Tests.Console
             _failures += problems.Count;
             System.Console.WriteLine("FAIL param-values");
             foreach (string p in problems) System.Console.WriteLine("     " + p);
+        }
+
+        /// <summary>Section-name hash order, including multi-part definitions
+        /// (protocol §6.1). Mirrors the Python core tests: numeric definition
+        /// and part order, single-part order unchanged, and definition-level
+        /// nested rows after all parts.</summary>
+        private static void CheckHashOrder()
+        {
+            var problems = new List<string>();
+
+            CheckNames(problems, "single-part definition order unchanged",
+                new string[]
+                {
+                    "idef.0.mesh.verts", "idef.0.mesh.face_counts",
+                    "idef.0.inst.transforms", "idef.0.attr.0.values",
+                },
+                FrameCodec.OrderedNames(new string[]
+                {
+                    "idef.0.inst.transforms", "idef.0.mesh.face_counts",
+                    "idef.0.mesh.verts", "idef.0.attr.0.values",
+                }));
+            CheckNames(problems, "definition index is numeric",
+                new string[]
+                {
+                    "mesh.verts", "idef.2.mesh.verts", "idef.10.mesh.verts",
+                },
+                FrameCodec.OrderedNames(new string[]
+                {
+                    "idef.10.mesh.verts", "idef.2.mesh.verts", "mesh.verts",
+                }));
+            CheckNames(problems, "part index is numeric",
+                new string[]
+                {
+                    "idef.0.2.mesh.verts", "idef.0.2.mesh.face_counts",
+                    "idef.0.2.crv.points", "idef.0.10.mesh.verts",
+                    "idef.0.10.crv.points", "idef.0.inst.ref_def",
+                    "idef.0.inst.transforms",
+                },
+                FrameCodec.OrderedNames(new string[]
+                {
+                    "idef.0.10.mesh.verts", "idef.0.2.crv.points",
+                    "idef.0.2.mesh.face_counts", "idef.0.2.mesh.verts",
+                    "idef.0.inst.ref_def", "idef.0.inst.transforms",
+                    "idef.0.10.crv.points",
+                }));
+            CheckNames(problems, "definition before part",
+                new string[]
+                {
+                    "idef.2.0.mesh.verts", "idef.2.1.mesh.verts",
+                    "idef.10.0.mesh.verts",
+                },
+                FrameCodec.OrderedNames(new string[]
+                {
+                    "idef.10.0.mesh.verts", "idef.2.1.mesh.verts",
+                    "idef.2.0.mesh.verts",
+                }));
+
+            string a = FrameCodec.GeometryHash(new Section[]
+            {
+                new Section("idef.0.10.mesh.verts", "f32", new byte[] { 1, 2 }),
+                new Section("idef.0.2.mesh.verts", "f32", new byte[] { 3, 4 }),
+            });
+            string b = FrameCodec.GeometryHash(new Section[]
+            {
+                new Section("idef.0.2.mesh.verts", "f32", new byte[] { 3, 4 }),
+                new Section("idef.0.10.mesh.verts", "f32", new byte[] { 1, 2 }),
+            });
+            if (a != b) problems.Add("multipart geometry hash depends on section order");
+
+            if (problems.Count == 0)
+            {
+                System.Console.WriteLine("PASS hash-order");
+                return;
+            }
+            _failures += problems.Count;
+            System.Console.WriteLine("FAIL hash-order");
+            foreach (string p in problems) System.Console.WriteLine("     " + p);
+        }
+
+        private static void CheckNames(List<string> problems, string label,
+                                       string[] expected, List<string> got)
+        {
+            if (got.Count != expected.Length)
+            {
+                problems.Add(label + ": got " + got.Count + " names, expected " + expected.Length
+                             + " (" + string.Join(",", got.ToArray()) + ")");
+                return;
+            }
+            for (int i = 0; i < expected.Length; i++)
+            {
+                if (got[i] == expected[i]) continue;
+                problems.Add(label + ": name " + i + " is " + got[i] + ", expected " + expected[i]);
+                return;
+            }
         }
 
         /// <summary>Decoder boundary: malformed input must fail as a classified

@@ -472,14 +472,49 @@ namespace Stageloom.Core
             }
         }
 
+        /// <summary>One definition's still-unprefixed section names, split into
+        /// the multi-part namespaces and the definition-level ones.</summary>
+        private sealed class DefinitionGroup
+        {
+            public readonly List<string> Base = new List<string>();
+            public readonly SortedDictionary<int, List<string>> Parts =
+                new SortedDictionary<int, List<string>>();
+        }
+
+        private static bool TryIndex(string token, out int value)
+        {
+            value = 0;
+            if (string.IsNullOrEmpty(token)) return false;
+            // ASCII digits only; char.IsDigit also accepts digits the Python
+            // side does not treat as an index, which would split the hashers.
+            for (int i = 0; i < token.Length; i++)
+                if (token[i] < '0' || token[i] > '9') return false;
+            return int.TryParse(token, NumberStyles.None, CultureInfo.InvariantCulture, out value);
+        }
+
+        private static bool TryPart(string rest, out int part, out string inner)
+        {
+            part = 0;
+            inner = null;
+            int dot = rest.IndexOf('.');
+            if (dot <= 0 || dot == rest.Length - 1) return false;
+            if (!TryIndex(rest.Substring(0, dot), out part)) return false;
+            inner = rest.Substring(dot + 1);
+            return true;
+        }
+
         /// <summary>The canonical section-name order of protocol §6.1. Base
-        /// sections follow the §5 table order; `idef.&lt;i&gt;.*` groups follow,
-        /// one definition after the other in index order, each definition
-        /// ordered the same way; anything else is last, sorted.</summary>
+        /// sections follow the §5 table order. `idef.&lt;i&gt;.*` groups follow,
+        /// one definition after the other in numeric index order. Within a
+        /// definition, multi-part sections come first in numeric part order,
+        /// each part ordered the same way; definition-level sections (nested
+        /// `inst.*` rows) follow after all parts. Anything else is last, sorted.
+        /// Single-part definitions have no numeric part fragment, so their
+        /// order is unchanged.</summary>
         public static List<string> OrderedNames(IEnumerable<string> names)
         {
             var baseNames = new List<string>();
-            var groups = new SortedDictionary<int, List<string>>();
+            var groups = new SortedDictionary<int, DefinitionGroup>();
             var extra = new List<string>();
             foreach (string name in names)
             {
@@ -487,15 +522,30 @@ namespace Stageloom.Core
                 if (parts.Length == 3 && parts[0] == "idef")
                 {
                     int index;
-                    if (int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out index))
+                    if (TryIndex(parts[1], out index))
                     {
-                        List<string> inner;
-                        if (!groups.TryGetValue(index, out inner))
+                        DefinitionGroup group;
+                        if (!groups.TryGetValue(index, out group))
                         {
-                            inner = new List<string>();
-                            groups[index] = inner;
+                            group = new DefinitionGroup();
+                            groups[index] = group;
                         }
-                        inner.Add(parts[2]);
+                        int part;
+                        string inner;
+                        if (TryPart(parts[2], out part, out inner))
+                        {
+                            List<string> list;
+                            if (!group.Parts.TryGetValue(part, out list))
+                            {
+                                list = new List<string>();
+                                group.Parts[part] = list;
+                            }
+                            list.Add(inner);
+                        }
+                        else
+                        {
+                            group.Base.Add(parts[2]);
+                        }
                         continue;
                     }
                 }
@@ -506,9 +556,18 @@ namespace Stageloom.Core
             var ordered = new List<string>();
             foreach (string name in HashSectionOrder)
                 if (baseNames.Contains(name)) ordered.Add(name);
-            foreach (KeyValuePair<int, List<string>> entry in groups)
-                foreach (string inner in OrderedNames(entry.Value))
-                    ordered.Add("idef." + entry.Key.ToString(CultureInfo.InvariantCulture) + "." + inner);
+            foreach (KeyValuePair<int, DefinitionGroup> entry in groups)
+            {
+                string prefix = "idef." + entry.Key.ToString(CultureInfo.InvariantCulture) + ".";
+                foreach (KeyValuePair<int, List<string>> part in entry.Value.Parts)
+                {
+                    string partPrefix = prefix + part.Key.ToString(CultureInfo.InvariantCulture) + ".";
+                    foreach (string inner in OrderedNames(part.Value))
+                        ordered.Add(partPrefix + inner);
+                }
+                foreach (string inner in OrderedNames(entry.Value.Base))
+                    ordered.Add(prefix + inner);
+            }
             extra.Sort(StringComparer.Ordinal);
             ordered.AddRange(extra);
             return ordered;

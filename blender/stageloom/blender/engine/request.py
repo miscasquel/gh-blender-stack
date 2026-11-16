@@ -2,6 +2,8 @@
 
 import sys
 
+from ...core import CAP_BLOCKS_2
+
 engine = sys.modules[__package__]
 
 
@@ -269,6 +271,10 @@ def _process_stage(obj, record, stage):
         "geom": {"mode": mode, "hash": geom_hash, "subd": bool(record.subd)},
         "units": "m",
         "space": "stack-local",
+        # This client reads multi-part definition entries. An old GH ignores
+        # the unknown field; a GH that needs blocks/2 and does not see a peer
+        # cap falls back to one definition per part with a warning.
+        "caps": [CAP_BLOCKS_2],
     }
     # Descriptors describe the attribute sections, so they travel only with the
     # sections they describe (a `ref` request carries none of either). The
