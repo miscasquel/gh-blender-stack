@@ -54,6 +54,9 @@ namespace Stageloom.Tests.Console
                 RunStageInLateWrite(server);
                 RunStageOutNoRequest(server, stageOut);
                 RunStageOutDependentAnswer(server, stageOut);
+                RunEmptyFrame(server, stageIn);
+                RunOneWayTests(server);
+                RunRemovedKeyTests(server);
                 RunUnitTransforms();
                 RunParamVisibilityTests();
                 RunLifecycleTests(server, stageIn, stageOut);
@@ -331,6 +334,228 @@ namespace Stageloom.Tests.Console
             Check("the queued key answers in its own batch",
                 GhLink.ShouldAnswer(queued), "");
             GhLink.EndRequestSolveForTest();
+        }
+
+        // ------------------------------------------------------- empty frame
+
+        /// <summary>A full request with zero sections is a real frame, not the
+        /// "no frame" sentinel: a later ref for it is accepted, and Stage In
+        /// reports an empty geometry list with `ok`.</summary>
+        private static void RunEmptyFrame(FakeServer server, StageInHarness component)
+        {
+            System.Console.WriteLine();
+            System.Console.WriteLine("empty frame");
+
+            const string key = "component-in-empty";
+            const string fullRid = "sha256:component-in-empty-full";
+            SendRequest(server, key, fullRid, new List<Section>());
+            StageSlot slot = WaitSlot(key, fullRid);
+            Check("a zero-section full request is a held frame",
+                GhLink.HasFrame(slot.Frame) && slot.Frame.Sections.Count == 0,
+                "frame=" + (GhLink.HasFrame(slot.Frame) ? "held" : "empty")
+                + " sections=" + slot.Frame.Sections.Count);
+            Check("the empty frame keeps the full rid", slot.Frame.Rid == fullRid,
+                "rid=" + slot.Frame.Rid);
+
+            const string refRid = "sha256:component-in-empty-ref";
+            var refHeader = new Dictionary<string, object>();
+            refHeader["type"] = "request";
+            refHeader["stage"] = key;
+            refHeader["rid"] = refRid;
+            var refGeom = new Dictionary<string, object>();
+            refGeom["mode"] = "ref";
+            refGeom["hash"] = "sha256:hash-" + fullRid;
+            refHeader["geom"] = refGeom;
+            server.Send(FrameCodec.Encode(refHeader, null));
+
+            StageSlot refSlot = WaitSlot(key, refRid);
+            Check("a ref for a held empty frame is accepted",
+                GhLink.HasFrame(refSlot.Frame) && refSlot.Frame.Sections.Count == 0
+                && refSlot.Status == "waiting",
+                "status=" + refSlot.Status + " sections=" + refSlot.Frame.Sections.Count);
+
+            var da = new FakeDa(component);
+            da.Inputs["Key"] = key;
+            da.Inputs["Enabled"] = true;
+            component.Run(da);
+            Check("stage in reports ok for an empty frame",
+                Output(da, "Status") == "ok", "status=" + Output(da, "Status"));
+            Check("stage in outputs an empty geometry list",
+                da.Outputs["Geometry"] is List<IGH_Goo>
+                && ((List<IGH_Goo>)da.Outputs["Geometry"]).Count == 0,
+                "geometry=" + (da.Outputs["Geometry"] == null
+                    ? "(null)" : da.Outputs["Geometry"].GetType().Name));
+            Check("stage in writes the empty frame verdict",
+                slot.InStatus == "ok" && slot.InMessage == "",
+                "in=" + slot.InStatus + " message=" + slot.InMessage);
+            Check("the empty frame carries its request id",
+                Output(da, "Request ID") == refRid,
+                "rid=" + Output(da, "Request ID"));
+            Quiet(slot);
+        }
+
+        // ---------------------------------------------------------- one-way
+
+        /// <summary>A key with no enabled Stage Out is one-way: Stage In's
+        /// verdict is terminal, and RetryStaleSolves never re-asks for it. A
+        /// Param-only key has no stage at all and is equally never retried.</summary>
+        private static void RunOneWayTests(FakeServer server)
+        {
+            System.Console.WriteLine();
+            System.Console.WriteLine("one-way stages");
+
+            var inOnly = new StageInHarness();
+            var outDisabled = new StageOutHarness();
+            var inForDisabled = new StageInHarness();
+            var paramOnly = new ParamHarness();
+            try
+            {
+                // 1. Stage In only: no Stage Out claim at all.
+                const string inKey = "one-way-in";
+                inOnly.Add(null);
+                inOnly.Run(StageInData(inOnly, inKey));
+                SendRequest(server, inKey, "sha256:one-way-in", Sections());
+                StageSlot inSlot = WaitSlot(inKey, "sha256:one-way-in");
+                Check("a Stage In only key has no answering Stage Out",
+                    !GhLink.StageAnswers(inKey), "");
+                RetryNoRequest(inSlot);
+                Check("a Stage In only key is not retried",
+                    inSlot.ResolveAttempts == 0,
+                    "attempts=" + inSlot.ResolveAttempts);
+
+                FakeDa inDa = StageInData(inOnly, inKey);
+                inOnly.Run(inDa);
+                Check("a Stage In only key reaches a terminal status",
+                    Output(inDa, "Status") == "ok" && inSlot.Status == "ok",
+                    "output=" + Output(inDa, "Status") + " slot=" + inSlot.Status);
+                RetryNoRequest(inSlot);
+                Check("the delivered one-way key is not retried",
+                    inSlot.ResolveAttempts == 0,
+                    "attempts=" + inSlot.ResolveAttempts);
+                Quiet(inSlot);
+
+                // 2. A Stage Out present but disabled cannot answer either.
+                const string disabledKey = "one-way-disabled-out";
+                outDisabled.Add(null);
+                inForDisabled.Add(null);
+                FakeDa disabledOut = StageOutData(outDisabled, disabledKey);
+                disabledOut.Inputs["Enabled"] = false;
+                outDisabled.Run(disabledOut);
+                SendRequest(server, disabledKey, "sha256:one-way-disabled", Sections());
+                StageSlot disabledSlot = WaitSlot(disabledKey, "sha256:one-way-disabled");
+                Check("a disabled Stage Out does not answer",
+                    !GhLink.StageAnswers(disabledKey), "");
+                RetryNoRequest(disabledSlot);
+                Check("a disabled Stage Out key is not retried",
+                    disabledSlot.ResolveAttempts == 0,
+                    "attempts=" + disabledSlot.ResolveAttempts);
+                FakeDa disabledIn = StageInData(inForDisabled, disabledKey);
+                inForDisabled.Run(disabledIn);
+                Check("Stage In owns the status when Stage Out is disabled",
+                    disabledSlot.Status == "ok" && disabledSlot.OutStatus == "waiting",
+                    "status=" + disabledSlot.Status + " out=" + disabledSlot.OutStatus);
+                Quiet(disabledSlot);
+
+                // 3. Param only: the key has a schema, but no stage to answer.
+                const string paramKey = "one-way-param";
+                paramOnly.Add(null);
+                paramOnly.Run(ParamData(paramOnly, paramKey));
+                SendRequest(server, paramKey, "sha256:one-way-param", Sections());
+                StageSlot paramSlot = WaitSlot(paramKey, "sha256:one-way-param");
+                Check("a Param only key has no answering Stage Out",
+                    !GhLink.StageAnswers(paramKey), "");
+                RetryNoRequest(paramSlot);
+                Check("a Param only key is not retried",
+                    paramSlot.ResolveAttempts == 0,
+                    "attempts=" + paramSlot.ResolveAttempts);
+                Check("a Param only request stays waiting without a retry storm",
+                    paramSlot.Status == "waiting" && paramSlot.ResolveAttempts == 0,
+                    "status=" + paramSlot.Status + " attempts=" + paramSlot.ResolveAttempts);
+                Quiet(paramSlot);
+            }
+            finally
+            {
+                // Consume any pending request these cases queued so the next
+                // case does not inherit their document id.
+                if (GhLink.BeginRequestSolveForTest()) GhLink.EndRequestSolveForTest();
+                GhLink.Unregister(inOnly);
+                GhLink.Unregister(outDisabled);
+                GhLink.Unregister(inForDisabled);
+                GhLink.Unregister(paramOnly);
+            }
+        }
+
+        /// <summary>Make a slot look like a request that has waited much longer
+        /// than the retry threshold, then run one retry pass.</summary>
+        private static void RetryNoRequest(StageSlot slot)
+        {
+            slot.RequestedAt = DateTime.UtcNow.AddSeconds(-2);
+            slot.ResolveAttempts = 0;
+            slot.SolveInFlight = false;
+            GhLink.RetryStaleSolves();
+        }
+
+        // ------------------------------------------------------ removed keys
+
+        /// <summary>A key cleared from its component leaves the published view
+        /// at once and is refused with unknown_stage, not kept as a provisional
+        /// slot forever. Claiming the key again clears the tombstone.</summary>
+        private static void RunRemovedKeyTests(FakeServer server)
+        {
+            System.Console.WriteLine();
+            System.Console.WriteLine("removed keys");
+
+            const string key = "component-removed";
+            var component = new StageInHarness();
+            try
+            {
+                component.Add(null);
+                component.Run(StageInData(component, key));
+                SendRequest(server, key, "sha256:removed-1", Sections());
+                StageSlot slot = WaitSlot(key, "sha256:removed-1");
+                Check("the claimed key holds a request",
+                    slot.Rid == "sha256:removed-1", "rid=" + slot.Rid);
+                GhLink.BeginRequestSolveForTest();
+                GhLink.EndRequestSolveForTest();
+
+                // Clear the key exactly as SolveInstance does when the Key
+                // input is emptied.
+                var cleared = new FakeDa(component);
+                cleared.Inputs["Key"] = "";
+                cleared.Inputs["Enabled"] = true;
+                component.Run(cleared);
+                Check("clearing the key drops its slot",
+                    GhLink.FindSlot(key) == null, "slot still exists");
+
+                SendRequest(server, key, "sha256:removed-2", Sections());
+                Dictionary<string, object> refusal = ReadErrorFor(server, key, "sha256:removed-2");
+                Check("a request for a removed key is refused",
+                    Json.GetString(refusal, "code") == "unknown_stage"
+                    && Json.GetString(refusal, "stage") == key
+                    && Json.GetString(refusal, "rid") == "sha256:removed-2",
+                    "error=" + Json.WriteCanonical(refusal));
+                Check("a removed key does not become provisional",
+                    GhLink.FindSlot(key) == null, "slot exists");
+
+                // Re-claiming the key makes it live again.
+                component.Run(StageInData(component, key));
+                SendRequest(server, key, "sha256:removed-3", Sections());
+                StageSlot restored = WaitSlot(key, "sha256:removed-3");
+                Check("re-claiming a removed key accepts requests",
+                    restored.Rid == "sha256:removed-3", "rid=" + restored.Rid);
+                Quiet(restored);
+                GhLink.BeginRequestSolveForTest();
+                GhLink.EndRequestSolveForTest();
+            }
+            catch (Exception ex)
+            {
+                _failures++;
+                System.Console.WriteLine("FAIL removed keys: " + ex);
+            }
+            finally
+            {
+                GhLink.Unregister(component);
+            }
         }
 
         // --------------------------------------------------------- unit rows
@@ -1195,6 +1420,30 @@ namespace Stageloom.Tests.Console
                 if (Json.GetString(decoded.Header, "type") == type) return decoded.Header;
             }
             throw new Exception("timed out waiting for a " + type + " frame");
+        }
+
+        /// <summary>Reads until the error for one exact stage/rid arrives,
+        /// skipping older errors other cases left in the stream.</summary>
+        private static Dictionary<string, object> ReadErrorFor(
+            FakeServer server, string stage, string rid)
+        {
+            DateTime end = DateTime.UtcNow.AddSeconds(3);
+            while (DateTime.UtcNow < end)
+            {
+                bool closed;
+                byte[] frame = server.TryReadFrame(300, out closed);
+                if (frame == null)
+                {
+                    if (closed) break;
+                    continue;
+                }
+                var decoded = FrameCodec.Decode(frame);
+                if (Json.GetString(decoded.Header, "type") != "error") continue;
+                if (Json.GetString(decoded.Header, "stage") == stage
+                    && Json.GetString(decoded.Header, "rid") == rid)
+                    return decoded.Header;
+            }
+            throw new Exception("timed out waiting for an error for " + stage + " " + rid);
         }
 
         private static bool NoFrameOfType(FakeServer server, string type, int windowMs)

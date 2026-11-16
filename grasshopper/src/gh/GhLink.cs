@@ -6,11 +6,14 @@
 //
 // Threading: GH objects only on the UI thread. The socket thread decodes frames
 // and stores them in the owning document's slot; it asks the UI thread to solve
-// through a scheduling delegate captured at registration. Requests are queued
-// with their document id: a scheduled solve only expires components in that
-// document, and only expires the requested stages, with ExpireSolution(false)
-// so the already-scheduled solution is the one recompute. Replies are queued and
-// sent by a dedicated sender thread.
+// through a dispatch captured at registration (RhinoApp.InvokeOnUiThread around
+// GH_Document.ScheduleSolution — GH1 has no thread-safe document accessor, so
+// the GH call runs in the UI callback, never on the socket). Document units are
+// captured on the UI thread too; publication and requests read only that
+// snapshot. Requests are queued with their document id: a scheduled solve only
+// expires components in that document, and only expires the requested stages,
+// with ExpireSolution(false) so the already-scheduled solution is the one
+// recompute. Replies are queued and sent by a dedicated sender thread.
 
 using System;
 using System.Collections.Generic;
@@ -64,6 +67,11 @@ namespace Stageloom
         /// created through the document-scoped lookup; a request only ever
         /// reads and writes the owning document's slot.</summary>
         internal Guid DocumentId = Guid.Empty;
+        /// <summary>The stage key this slot answers. Empty for the
+        /// document-less slots the console suites and scripts create directly;
+        /// such a slot has no published role, so Stage Out remains the
+        /// aggregate status owner.</summary>
+        public string Key = "";
         public volatile string Rid = "";
         /// <summary>The rid the current solve is answering. Pinned only for the
         /// stages a request solve names, because a request can overwrite `Rid`
@@ -281,8 +289,9 @@ namespace Stageloom
             public int ComponentCount;
             // Captured on the UI thread at registration. The socket thread only
             // invokes this opaque snapshot; it never walks the document or calls
-            // OnPingDocument. The remaining off-thread ScheduleSolution call is
-            // Q12's threading item.
+            // OnPingDocument. The delegate body is the one Rhino call on the
+            // request path: RhinoApp.InvokeOnUiThread marshals the actual
+            // GH_Document.ScheduleSolution call to the UI thread.
             public Action<GH_Document.GH_ScheduleDelegate> Schedule;
         }
         private static readonly Dictionary<Guid, DocumentEntry> Documents =
@@ -323,15 +332,64 @@ namespace Stageloom
         private static readonly Dictionary<string, bool> StageEnabled = new Dictionary<string, bool>();
         private static readonly HashSet<string> StageHasIn = new HashSet<string>();
         private static readonly HashSet<string> StageHasOut = new HashSet<string>();
+        // A Stage Out claim whose Enabled input is false does not answer a
+        // request. Presence still comes from StageHasOut (hello keeps saying
+        // the key has a Stage Out); this set decides whether a request may wait
+        // for an answer, which is what the status owner and retry path need.
+        private static readonly HashSet<string> StageOutEnabled = new HashSet<string>();
         private static readonly Dictionary<string, List<Dictionary<string, object>>> StageParams =
             new Dictionary<string, List<Dictionary<string, object>>>();
+        // Keys that were published and are no longer claimed. A request for one
+        // is refused with unknown_stage instead of becoming a provisional slot
+        // nobody will ever claim. Cleared when the key is claimed again.
+        private static readonly HashSet<string> RemovedKeys = new HashSet<string>();
         // One owner key -> document id, or a strict conflict message. Derived
         // from the live claims; never merged last-writer across documents.
         private static readonly Dictionary<string, Guid> KeyOwners = new Dictionary<string, Guid>();
         private static readonly Dictionary<string, string> Conflicts =
             new Dictionary<string, string>();
 
+        // UI-thread snapshot of the document units. Read only under Gate by the
+        // publication path; refreshed by CaptureDocumentSnapshot on the UI
+        // thread. RhinoDoc.ActiveDoc is never read from the socket or sender.
+        private static string _cachedUnits = "Meters";
+        private static double _cachedUnitScale = 1.0;
+        // The managed id of the first UI-thread entry point. Used only by debug
+        // assertions: 0 means no UI entry point has run yet.
+        private static int _uiThreadId;
+
+        // The SolutionEnd handler of the batch currently owning the request
+        // queue, kept so Stop can detach it. The handler also re-checks the
+        // worker token, so a late event cannot finish a newer batch.
+        private static GH_Document _solveHandlerDocument;            // under Gate
+        private static GH_Document.SolutionEndEventHandler _solveHandler;  // under Gate
+
         public static bool Connected { get { return _connected; } }
+
+        /// <summary>True when the caller is the Grasshopper UI thread, or when
+        /// no UI-thread entry point has run yet. Debug assertions use this;
+        /// release builds never call Rhino from the socket or sender.</summary>
+        internal static bool IsUiThread
+        {
+            get
+            {
+                int id = _uiThreadId;
+                return id == 0 || id == Thread.CurrentThread.ManagedThreadId;
+            }
+        }
+
+        internal static int UiThreadId { get { return _uiThreadId; } }
+
+        private static void CaptureUiThread()
+        {
+            if (_uiThreadId == 0)
+                Interlocked.CompareExchange(ref _uiThreadId, Thread.CurrentThread.ManagedThreadId, 0);
+        }
+
+        private static void AssertUiThread(string what)
+        {
+            System.Diagnostics.Debug.Assert(IsUiThread, what + " must run on the GH UI thread");
+        }
 
         /// <summary>True while the socket worker exists. A component can show
         /// "connecting" instead of "disconnected" between Configure and the
@@ -394,6 +452,7 @@ namespace Stageloom
         /// the only stable identity carried into the socket-thread registries.</summary>
         public static void Register(GH_Component component, GH_Document document)
         {
+            CaptureUiThread();
             Guid id = Guid.Empty;
             string name = "";
             if (document != null)
@@ -412,12 +471,17 @@ namespace Stageloom
         /// process, so the console suites exercise isolation with these ids.</summary>
         internal static void RegisterInDocumentForTest(GH_Component component, Guid documentId)
         {
+            CaptureUiThread();
             RegisterCore(component, documentId, "document " + ShortId(documentId), null);
         }
 
         private static void RegisterCore(GH_Component component, Guid documentId,
                                          string documentName, GH_Document reference)
         {
+            CaptureUiThread();
+            string units = "Meters";
+            double unitScale = 1.0;
+            if (reference != null) ReadDocumentUnits(reference, out units, out unitScale);
             lock (Gate)
             {
                 if (FindRegistrationLocked(component) == null)
@@ -437,10 +501,22 @@ namespace Stageloom
                     if (!string.IsNullOrEmpty(documentName)) entry.Name = documentName;
                     if (reference != null)
                     {
+                        _cachedUnits = units;
+                        _cachedUnitScale = unitScale;
+                        // The captured delegate is the only Rhino entry point
+                        // on the socket path. GH1 has no thread-safe
+                        // GH_Document accessor, but RhinoApp.InvokeOnUiThread is
+                        // the documented UI dispatch: the actual
+                        // GH_Document.ScheduleSolution(10, work) call runs on
+                        // the UI thread, never on the socket.
                         GH_Document document = reference;
                         entry.Schedule = delegate(GH_Document.GH_ScheduleDelegate work)
                         {
-                            document.ScheduleSolution(10, work);
+                            RhinoApp.InvokeOnUiThread((Action)delegate
+                            {
+                                AssertUiThread("GH_Document.ScheduleSolution");
+                                document.ScheduleSolution(10, work);
+                            });
                         };
                     }
                 }
@@ -561,6 +637,7 @@ namespace Stageloom
         /// components yet.</summary>
         public static void Forget(GH_Component owner)
         {
+            bool changed = false;
             lock (Gate)
             {
                 foreach (Claim claim in Claims)
@@ -571,9 +648,14 @@ namespace Stageloom
                     claim.ParamId = null;
                     claim.Declaration = null;
                     RebuildPublicationLocked();
-                    return;
+                    changed = true;
+                    break;
                 }
             }
+            // The key left hello/schema now, not at the next solution. The
+            // rebuild also tombstones it and drops its slot, so a request for
+            // the cleared key is refused instead of becoming provisional.
+            if (changed) SendPublication();
         }
 
         public static void Note(string text)
@@ -708,6 +790,14 @@ namespace Stageloom
             lock (Gate) { return Conflicts.ContainsKey(key ?? ""); }
         }
 
+        /// <summary>A full request with zero sections is a real frame. Only the
+        /// shared <see cref="HeldFrame.Empty"/> instance means "no frame"; an
+        /// empty section list is a stage that legitimately returns nothing.</summary>
+        internal static bool HasFrame(HeldFrame frame)
+        {
+            return frame != null && !object.ReferenceEquals(frame, HeldFrame.Empty);
+        }
+
         /// <summary>The solve verdict for a stage, written under the same lock
         /// every reader takes (RetryStaleSolves, Handle). Only the UI thread
         /// writes it.</summary>
@@ -729,8 +819,11 @@ namespace Stageloom
         /// <paramref name="statusEpoch"/> are the snapshot the solve read; when
         /// a newer request or protocol error arrived while the geometry was
         /// building, that event is authoritative and this late write is
-        /// dropped. Stage In owns only the In half: the aggregate status stays
-        /// with Stage Out, the component that answers Blender.</summary>
+        /// dropped. Stage In owns only the In half for a two-way stage: the
+        /// aggregate status stays with Stage Out, the component that answers
+        /// Blender. A key no enabled Stage Out can answer is one-way, so Stage
+        /// In owns the aggregate and writes the terminal status itself; that is
+        /// what keeps RetryStaleSolves from re-asking forever.</summary>
         public static void SetInStatus(StageSlot slot, HeldFrame frame, int statusEpoch,
                                        string status, string message)
         {
@@ -741,7 +834,28 @@ namespace Stageloom
                     || !object.ReferenceEquals(slot.Frame, frame)) return;
                 slot.InStatus = status;
                 slot.InMessage = message ?? "";
+                if (!string.IsNullOrEmpty(slot.Key) && !StageAnswersLocked(slot.Key))
+                {
+                    slot.Status = status;
+                    slot.Message = message ?? "";
+                }
             }
+        }
+
+        /// <summary>Whether a request for this key will be answered by an
+        /// enabled Stage Out. False means one-way (Stage In only, Param only,
+        /// a disabled Stage Out, or no stage at all): Stage In owns the
+        /// terminal status and the retry path must leave the slot alone. A
+        /// conflicted key never answers. Under Gate.</summary>
+        private static bool StageAnswersLocked(string key)
+        {
+            if (string.IsNullOrEmpty(key) || Conflicts.ContainsKey(key)) return false;
+            return StageHasOut.Contains(key) && StageOutEnabled.Contains(key);
+        }
+
+        internal static bool StageAnswers(string key)
+        {
+            lock (Gate) { return StageAnswersLocked(key ?? ""); }
         }
 
         /// <summary>One frame/epoch snapshot for Stage In, read together under
@@ -805,6 +919,8 @@ namespace Stageloom
             Worker worker;
             Thread thread;
             MiniWsClient client;
+            GH_Document solveDocument;
+            GH_Document.SolutionEndEventHandler solveHandler;
             lock (Gate)
             {
                 worker = _worker;
@@ -812,13 +928,27 @@ namespace Stageloom
                 client = _client;
                 _worker = null;
                 _thread = null;
+                _client = null;
+                _connected = false;
+                solveDocument = _solveHandlerDocument;
+                solveHandler = _solveHandler;
+                _solveHandlerDocument = null;
+                _solveHandler = null;
             }
             if (worker != null) worker.Running = false;
             if (client != null) client.Dispose();
+            // A late SolutionEnd from a solve that belonged to the stopped
+            // worker must not finish a batch the next worker owns. Detach it
+            // here; the handler also re-checks the worker token before touching
+            // the queue.
+            if (solveDocument != null && solveHandler != null)
+            {
+                try { solveDocument.SolutionEnd -= solveHandler; }
+                catch (Exception) { }
+            }
             OutboxSignal.Set();
             if (thread != null && thread != Thread.CurrentThread)
                 thread.Join(2000);
-            _connected = false;
             // The worker's finally usually clears these as it exits; if the join
             // above timed out, do not carry frames from the dead connection into
             // the next one.
@@ -890,6 +1020,32 @@ namespace Stageloom
             if (!Configure(host, port, persist, out error)) Note(error);
         }
 
+        /// <summary>The worker token is authoritative: a stopped or replaced
+        /// worker is never current again, even if its blocked connect returns
+        /// long after Stop.</summary>
+        private static bool IsCurrentWorkerLocked(Worker worker)
+        {
+            return worker != null && object.ReferenceEquals(_worker, worker) && worker.Running;
+        }
+
+        private static bool IsCurrentWorker(Worker worker)
+        {
+            lock (Gate) { return IsCurrentWorkerLocked(worker); }
+        }
+
+        /// <summary>Publishes only when the calling worker still owns the link.
+        /// Holding Gate across the check and the enqueue makes Stop atomic
+        /// against it: either the publication is queued before Stop clears the
+        /// outbox, or it is skipped. No GH or Rhino call happens here.</summary>
+        private static void PublishIfCurrent(Worker worker)
+        {
+            lock (Gate)
+            {
+                if (!IsCurrentWorkerLocked(worker)) return;
+                SendPublication();
+            }
+        }
+
         private static void Loop(Worker worker)
         {
             int backoffMs = 500;
@@ -900,15 +1056,22 @@ namespace Stageloom
                 {
                     client = new MiniWsClient(Endpoint);
                     client.Connect();
-                    lock (Gate) { _client = client; }
-                    _connected = true;
                     lock (Gate)
                     {
+                        // A handshake that completes after Stop must not adopt
+                        // the stale socket, revive the connection, or clear the
+                        // state of the worker that replaced it.
+                        if (!IsCurrentWorkerLocked(worker)) return;
+                        _client = client;
+                        _connected = true;
                         _publishedThisConnection = false;
                         // A new connection must republish every schema; the
                         // previous connection's signatures describe a peer that
                         // no longer exists.
                         _lastSchema.Clear();
+                        // Frames queued for any earlier connection are stale.
+                        Outbox.Clear();
+                        OutboxBytes = 0;
                         // The unchanged-answer skip is a fact about the socket
                         // that carried the frame, not about the document. A new
                         // peer has not received the last answer, so a user-driven
@@ -920,7 +1083,8 @@ namespace Stageloom
                     Note("connected to " + Endpoint);
                     // Publish from this thread: waiting for the next solve would
                     // delay hello until the user touches the canvas.
-                    SendPublication();
+                    PublishIfCurrent(worker);
+                    if (!IsCurrentWorker(worker)) return;
                     var stopSend = new ManualResetEvent(false);
                     var sender = new Thread(delegate() { SendLoop(client, stopSend, worker); });
                     sender.IsBackground = true;
@@ -945,18 +1109,24 @@ namespace Stageloom
                 finally
                 {
                     if (client != null) client.Dispose();
-                    _connected = false;
                     lock (Gate)
                     {
-                        if (_client == client) _client = null;
-                        // Capabilities belong to the socket that carried them.
-                        _peerCaps = new HashSet<string>();
-                        // Frames queued for a connection that just died are stale:
-                        // a reconnect publishes hello/schema again, and the engine
-                        // re-derives any response it still needs. Delivering the
-                        // backlog instead was the other half of the outbox bug.
-                        Outbox.Clear();
-                        OutboxBytes = 0;
+                        // Only the current worker may tear down the shared
+                        // connection state. A stale worker's finally used to
+                        // clear the next connection's outbox and capabilities.
+                        if (IsCurrentWorkerLocked(worker))
+                        {
+                            _connected = false;
+                            if (object.ReferenceEquals(_client, client)) _client = null;
+                            // Capabilities belong to the socket that carried them.
+                            _peerCaps = new HashSet<string>();
+                            // Frames queued for a connection that just died are stale:
+                            // a reconnect publishes hello/schema again, and the engine
+                            // re-derives any response it still needs. Delivering the
+                            // backlog instead was the other half of the outbox bug.
+                            Outbox.Clear();
+                            OutboxBytes = 0;
+                        }
                     }
                 }
                 int slept = 0;
@@ -975,6 +1145,10 @@ namespace Stageloom
             {
                 byte[] frame = client.ReceiveBinary();
                 if (frame == null) return;
+                // Stop may have replaced this worker while a frame was being
+                // read. Nothing decoded by a stopped worker may touch the next
+                // session's slots or outbox.
+                if (!worker.Running || !IsCurrentWorker(worker)) return;
                 DecodedFrame decoded;
                 try
                 {
@@ -1006,11 +1180,11 @@ namespace Stageloom
                     Note("bad frame (" + ex.GetType().Name + "): " + FirstLine(ex));
                     continue;
                 }
-                Handle(decoded);
+                Handle(decoded, worker);
             }
         }
 
-        private static void Handle(DecodedFrame decoded)
+        private static void Handle(DecodedFrame decoded, Worker worker)
         {
             Dictionary<string, object> header = decoded.Header;
             string type = Json.GetString(header, "type");
@@ -1066,6 +1240,7 @@ namespace Stageloom
 
             StageSlot slot = null;
             bool noComponents = false;
+            bool removedKey = false;
             string conflict = "";
             lock (Gate)
             {
@@ -1075,6 +1250,14 @@ namespace Stageloom
                 if (Conflicts.TryGetValue(key, out conflict))
                 {
                     // The frame is answered below, outside the lock.
+                }
+                else if (!KeyOwners.ContainsKey(key) && RemovedKeys.Contains(key))
+                {
+                    // The key was published and every claimant released it.
+                    // No component can ever claim it again in this state, so a
+                    // provisional slot would just wait for a solve that cannot
+                    // answer it.
+                    removedKey = true;
                 }
                 else
                 {
@@ -1107,6 +1290,13 @@ namespace Stageloom
                 Enqueue(ErrorFrame("duplicate_stage", conflict, key, rid));
                 return;
             }
+            if (removedKey)
+            {
+                const string message = "no Stageloom component claims this stage key";
+                Note("request for removed stage " + key + " refused");
+                Enqueue(ErrorFrame("unknown_stage", message, key, rid));
+                return;
+            }
             if (noComponents)
             {
                 // The request triggers no solve: there is no document to solve.
@@ -1137,9 +1327,11 @@ namespace Stageloom
                 slot.Params = incoming;
 
                 HeldFrame current = slot.Frame;
-                // A ref is servable only for the geometry we actually hold. A
-                // missing hash (an older client) falls back to "do we hold any".
-                canServe = current != null && current.Sections.Count > 0
+                // A ref is servable for any frame we hold, including a full
+                // request with zero sections. Only the shared Empty sentinel
+                // means "no frame"; an empty section list is real geometry.
+                // A missing hash (an older client) falls back to "do we hold any".
+                canServe = HasFrame(current)
                            && (string.IsNullOrEmpty(hash) || hash == current.GeometryHash);
 
                 // Publish one complete frame: a full request replaces the
@@ -1185,7 +1377,7 @@ namespace Stageloom
                 return;
             }
 
-            RequestStage(key, rid);
+            RequestStage(key, rid, worker);
         }
 
         /// <summary>The optional `caps` list from a request. Only strings are
@@ -1246,9 +1438,17 @@ namespace Stageloom
         /// scheduled solve never has to guess an origin component.</summary>
         internal static void RequestStage(string key, string rid)
         {
+            RequestStage(key, rid, null);
+        }
+
+        private static void RequestStage(string key, string rid, Worker worker)
+        {
             if (string.IsNullOrEmpty(key)) return;
             lock (Gate)
             {
+                // A frame decoded by a worker Stop already replaced must not
+                // queue work for the next session.
+                if (worker != null && !IsCurrentWorkerLocked(worker)) return;
                 string conflict;
                 if (Conflicts.TryGetValue(key, out conflict)) return;
                 Guid owner = Guid.Empty;
@@ -1262,20 +1462,29 @@ namespace Stageloom
                     : (owned ? owner : Guid.Empty);
                 PendingRequests[key] = new PendingRequest(documentId, rid);
             }
-            SchedulePendingSolve();
+            SchedulePendingSolve(worker);
+        }
+
+        private static void SchedulePendingSolve()
+        {
+            SchedulePendingSolve(null);
         }
 
         /// <summary>Schedules the request solve that owns the pending map. The
-        /// delegate runs on the GH UI thread. The document reference was
-        /// captured on the UI thread at registration; no OnPingDocument call is
-        /// made here. When no pending document has a live reference the queue
-        /// is released and the requests stay for the retry path.</summary>
-        private static void SchedulePendingSolve()
+        /// delegate runs on the GH UI thread. The document reference and its
+        /// dispatch were captured on the UI thread at registration; no
+        /// OnPingDocument call is made here. The worker token travels with the
+        /// delegate so a solve scheduled before Stop cannot run against the
+        /// next worker's queue. When no pending document has a live reference
+        /// the queue is released and the requests stay for the retry path.</summary>
+        private static void SchedulePendingSolve(Worker worker)
         {
             Guid documentId = Guid.Empty;
             Action<GH_Document.GH_ScheduleDelegate> schedule = null;
+            Worker token = null;
             lock (Gate)
             {
+                if (worker != null && !IsCurrentWorkerLocked(worker)) return;
                 if (_solveQueued || PendingRequests.Count == 0) return;
                 Guid first = Guid.Empty;
                 foreach (KeyValuePair<string, PendingRequest> pair in PendingRequests)
@@ -1287,6 +1496,7 @@ namespace Stageloom
                     {
                         documentId = pair.Value.DocumentId;
                         schedule = entry.Schedule;
+                        token = worker != null ? worker : _worker;
                         break;
                     }
                 }
@@ -1298,6 +1508,11 @@ namespace Stageloom
                     Note("request received, but no active document; held in the slot");
                     return;
                 }
+                if (token == null || !IsCurrentWorkerLocked(token))
+                {
+                    Note("request received, but no active worker; held in the slot");
+                    return;
+                }
                 // Reserve the one scheduled delegate before leaving the lock:
                 // two requests for the same document coalesce, and a request
                 // for another document waits for the next batch.
@@ -1305,24 +1520,26 @@ namespace Stageloom
                 _solveQueuedAt = DateTime.UtcNow;
                 _solveDocumentId = documentId;
             }
+            Worker solveWorker = token;
             try
             {
                 schedule(new GH_Document.GH_ScheduleDelegate(delegate(GH_Document d)
                 {
-                    RunRequestSolve(d, documentId);
+                    RunRequestSolve(d, documentId, solveWorker);
                 }));
             }
             catch (Exception ex)
             {
-                ReleaseQueuedSolve();
+                ReleaseQueuedSolve(solveWorker);
                 Note("ScheduleSolution failed: " + FirstLine(ex));
             }
         }
 
-        private static void ReleaseQueuedSolve()
+        private static void ReleaseQueuedSolve(Worker worker)
         {
             lock (Gate)
             {
+                if (worker != null && !IsCurrentWorkerLocked(worker)) return;
                 _solveQueued = false;
                 _solveQueuedAt = DateTime.MinValue;
                 _solveDocumentId = Guid.Empty;
@@ -1337,16 +1554,20 @@ namespace Stageloom
         /// recompute=false expires those objects and their dependents without
         /// asking the document for another solution; this scheduled solution is
         /// the one that recomputes.</summary>
-        private static void RunRequestSolve(GH_Document document, Guid documentId)
+        private static void RunRequestSolve(GH_Document document, Guid documentId, Worker worker)
         {
-            List<GH_Component> expire = BeginRequestSolve(documentId);
+            AssertUiThread("RunRequestSolve");
+            List<GH_Component> expire = BeginRequestSolve(documentId, worker);
             if (expire == null)
             {
                 // A duplicate delegate can arrive when a queued callback was
                 // recovered and the original then runs. If no other batch owns
                 // the queue, release it; otherwise the owner will finish it.
+                // A delegate from a stopped worker must not clear the flag of
+                // the worker that replaced it.
                 lock (Gate)
                 {
+                    if (worker != null && !IsCurrentWorkerLocked(worker)) return;
                     if (_activeRequests == null)
                     {
                         _solveQueued = false;
@@ -1356,7 +1577,41 @@ namespace Stageloom
                 }
                 return;
             }
-            if (document != null) document.SolutionEnd += OnSolutionEnd;
+            if (document != null)
+            {
+                // The batch owns this document's SolutionEnd. The handler
+                // captures the worker token so a late event (or a Stop) cannot
+                // finish a batch that belongs to a later connection.
+                GH_Document.SolutionEndEventHandler handler = null;
+                handler = delegate(object sender, GH_SolutionEventArgs e)
+                {
+                    GH_Document source = sender as GH_Document;
+                    if (source != null) source.SolutionEnd -= handler;
+                    bool scheduleNext;
+                    lock (Gate)
+                    {
+                        if (!IsCurrentWorkerLocked(worker)) return;
+                        if (!object.ReferenceEquals(_solveHandler, handler)) return;
+                        _solveHandler = null;
+                        _solveHandlerDocument = null;
+                        // Reconcile when the solve has finished: every component
+                        // has published by then, so an unclaimed provisional
+                        // slot is genuinely foreign.
+                        scheduleNext = FinishRequestSolveLocked();
+                    }
+                    ReconcileOwnership();
+                    // Requests that arrived during the solve are the next
+                    // batch. They were kept out of this context so their inputs
+                    // are read fresh.
+                    if (scheduleNext) SchedulePendingSolve();
+                };
+                lock (Gate)
+                {
+                    _solveHandlerDocument = document;
+                    _solveHandler = handler;
+                }
+                document.SolutionEnd += handler;
+            }
             foreach (GH_Component component in expire)
             {
                 try { component.ExpireSolution(false); }
@@ -1373,13 +1628,15 @@ namespace Stageloom
 
         /// <summary>Moves one document's pending requests into the active solve
         /// context. Returns the components to expire, or null when that
-        /// document has nothing pending or another delegate already owns the
-        /// batch. The caller must not hold Gate while expiring: ExpireSolution
-        /// is a GH API call on the UI thread.</summary>
-        private static List<GH_Component> BeginRequestSolve(Guid documentId)
+        /// document has nothing pending, another delegate already owns the
+        /// batch, or the scheduling worker is no longer current. The caller
+        /// must not hold Gate while expiring: ExpireSolution is a GH API call
+        /// on the UI thread.</summary>
+        private static List<GH_Component> BeginRequestSolve(Guid documentId, Worker worker)
         {
             lock (Gate)
             {
+                if (worker != null && !IsCurrentWorkerLocked(worker)) return null;
                 var active = new Dictionary<string, PendingRequest>();
                 foreach (KeyValuePair<string, PendingRequest> pair in PendingRequests)
                     if (pair.Value.DocumentId == documentId)
@@ -1447,7 +1704,7 @@ namespace Stageloom
         {
             Guid documentId;
             lock (Gate) { documentId = FirstPendingDocumentLocked(); }
-            return BeginRequestSolve(documentId) != null;
+            return BeginRequestSolve(documentId, null) != null;
         }
 
         /// <summary>Test hook: like <see cref="BeginRequestSolveForTest"/> but
@@ -1455,32 +1712,14 @@ namespace Stageloom
         internal static bool BeginRequestSolveForTest(out Guid documentId)
         {
             lock (Gate) { documentId = FirstPendingDocumentLocked(); }
-            return BeginRequestSolve(documentId) != null;
+            return BeginRequestSolve(documentId, null) != null;
         }
 
         /// <summary>Test hook: finishes the active request context exactly as
-        /// OnSolutionEnd does, without a document solve.</summary>
+        /// the SolutionEnd handler does, without a document solve.</summary>
         internal static void EndRequestSolveForTest()
         {
             lock (Gate) { FinishRequestSolveLocked(); }
-        }
-
-        private static void OnSolutionEnd(object sender, GH_SolutionEventArgs e)
-        {
-            GH_Document document = sender as GH_Document;
-            if (document != null) document.SolutionEnd -= OnSolutionEnd;
-            bool scheduleNext;
-            lock (Gate)
-            {
-                // Reconcile when the solve has finished: every component has
-                // published by then, so an unclaimed provisional slot is
-                // genuinely foreign.
-                scheduleNext = FinishRequestSolveLocked();
-            }
-            ReconcileOwnership();
-            // Requests that arrived during the solve are the next batch. They
-            // were kept out of this context so their inputs are read fresh.
-            if (scheduleNext) SchedulePendingSolve();
         }
 
         /// <summary>Clears the active request context. Only the requested keys
@@ -1575,9 +1814,14 @@ namespace Stageloom
         /// is published only when every claim for it belongs to one document
         /// and no role is duplicated within that document. A key two documents
         /// claim is a strict conflict: no hello row, no schema, no solve, and
-        /// no document's state overwrites the other. Under Gate.</summary>
+        /// no document's state overwrites the other. A key that was published
+        /// and is no longer claimed is tombstoned and its slot dropped, so a
+        /// later request is refused instead of waiting forever. Under Gate.</summary>
         private static void RebuildPublicationLocked()
         {
+            var previousKeys = new HashSet<string>(KeyOwners.Keys);
+            foreach (string key in Conflicts.Keys) previousKeys.Add(key);
+
             var keyClaims = new Dictionary<string, List<Claim>>();
             foreach (Claim claim in Claims)
             {
@@ -1597,6 +1841,7 @@ namespace Stageloom
             var enabled = new Dictionary<string, bool>();
             var hasIn = new HashSet<string>();
             var hasOut = new HashSet<string>();
+            var hasEnabledOut = new HashSet<string>();
             var parameters = new Dictionary<string, List<Dictionary<string, object>>>();
 
             foreach (KeyValuePair<string, List<Claim>> pair in keyClaims)
@@ -1673,7 +1918,11 @@ namespace Stageloom
                         stageEnabled = claim.Enabled;
                     }
                     if (claim.Role == ClaimRole.Input) hasIn.Add(key);
-                    else if (claim.Role == ClaimRole.Output) hasOut.Add(key);
+                    else if (claim.Role == ClaimRole.Output)
+                    {
+                        hasOut.Add(key);
+                        if (claim.Enabled) hasEnabledOut.Add(key);
+                    }
                 }
                 if (stageCount) enabled[key] = stageEnabled;
                 if (paramList.Count > 0) parameters[key] = paramList;
@@ -1717,6 +1966,8 @@ namespace Stageloom
             foreach (string key in hasIn) StageHasIn.Add(key);
             StageHasOut.Clear();
             foreach (string key in hasOut) StageHasOut.Add(key);
+            StageOutEnabled.Clear();
+            foreach (string key in hasEnabledOut) StageOutEnabled.Add(key);
             StageParams.Clear();
             foreach (KeyValuePair<string, List<Dictionary<string, object>>> pair in parameters)
                 StageParams[pair.Key] = pair.Value;
@@ -1724,6 +1975,57 @@ namespace Stageloom
             foreach (KeyValuePair<string, Guid> pair in owners) KeyOwners[pair.Key] = pair.Value;
             Conflicts.Clear();
             foreach (KeyValuePair<string, string> pair in conflicts) Conflicts[pair.Key] = pair.Value;
+
+            // Keys that left the published view entirely are tombstones, not
+            // future provisional slots. A request racing their removal is
+            // refused with unknown_stage, and any slot, pending request or
+            // active pin for the old key goes with it. Re-claiming the key
+            // clears the tombstone below.
+            var removed = new HashSet<string>(previousKeys);
+            foreach (string key in owners.Keys) removed.Remove(key);
+            foreach (string key in conflicts.Keys) removed.Remove(key);
+            foreach (string key in owners.Keys) RemovedKeys.Remove(key);
+            foreach (string key in conflicts.Keys) RemovedKeys.Remove(key);
+            if (removed.Count > 0)
+            {
+                var refusals = new List<KeyValuePair<string, string>>();
+                foreach (string key in removed)
+                {
+                    RemovedKeys.Add(key);
+                    PendingRequest pending;
+                    if (PendingRequests.TryGetValue(key, out pending))
+                    {
+                        PendingRequests.Remove(key);
+                        if (!string.IsNullOrEmpty(pending.Rid))
+                            refusals.Add(new KeyValuePair<string, string>(key, pending.Rid));
+                    }
+                    if (_activeRequests != null && _activeRequests.ContainsKey(key))
+                    {
+                        PendingRequest active;
+                        if (_activeRequests.TryGetValue(key, out active)
+                            && !string.IsNullOrEmpty(active.Rid))
+                            refusals.Add(new KeyValuePair<string, string>(key, active.Rid));
+                        _activeRequests.Remove(key);
+                    }
+                    foreach (Guid documentId in new List<Guid>(Slots.Keys))
+                    {
+                        Dictionary<string, StageSlot> documentSlots = Slots[documentId];
+                        StageSlot slot;
+                        if (!documentSlots.TryGetValue(key, out slot)) continue;
+                        slot.SolveRid = "";
+                        slot.SolveInFlight = false;
+                        slot.SolveStartedAt = DateTime.MinValue;
+                        documentSlots.Remove(key);
+                        if (documentSlots.Count == 0) Slots.Remove(documentId);
+                    }
+                }
+                // An answer can no longer be produced for an in-flight request.
+                // Refuse it now instead of leaving Blender to a timeout.
+                foreach (KeyValuePair<string, string> refusal in refusals)
+                    Enqueue(ErrorFrame("unknown_stage",
+                        "no Stageloom component claims this stage key",
+                        refusal.Key, refusal.Value));
+            }
         }
 
         private static string ClaimKey(Claim claim)
@@ -1798,6 +2100,7 @@ namespace Stageloom
             {
                 slot = new StageSlot();
                 slot.DocumentId = documentId;
+                slot.Key = name;
                 documentSlots[name] = slot;
             }
             return slot;
@@ -1857,6 +2160,8 @@ namespace Stageloom
             StageEnabled.Clear();
             StageHasIn.Clear();
             StageHasOut.Clear();
+            StageOutEnabled.Clear();
+            RemovedKeys.Clear();
             StageParams.Clear();
             PendingRequests.Clear();
             _activeRequests = null;
@@ -1869,6 +2174,11 @@ namespace Stageloom
             _lastStageOuts.Clear();
             _lastSchema.Clear();
             _publishedThisConnection = false;
+            _cachedUnits = "Meters";
+            _cachedUnitScale = 1.0;
+            _lastUnits = "";
+            _solveHandlerDocument = null;
+            _solveHandler = null;
         }
 
         private static Claim ClaimForLocked(GH_Component owner)
@@ -1931,13 +2241,16 @@ namespace Stageloom
             {
                 int fired = WaitHandle.WaitAny(handles, 250);
                 if (fired == 1) return;
-                if (fired == 0) SendFrames(client);
-                if (worker.Running) RetryStaleSolves();
+                if (!IsCurrentWorker(worker)) return;
+                if (fired == 0) SendFrames(client, worker);
+                if (!IsCurrentWorker(worker)) return;
+                RetryStaleSolves(worker);
                 // Re-publish on a slow heartbeat: a component added while the link
                 // was down (or a schema sent before a reconnect) is picked up
                 // without the user having to touch the canvas.
-                if (_connected && (DateTime.UtcNow - LastPublishAt()).TotalSeconds >= 2.0)
-                    SendPublication();
+                if (IsCurrentWorker(worker) && _connected
+                    && (DateTime.UtcNow - LastPublishAt()).TotalSeconds >= 2.0)
+                    PublishIfCurrent(worker);
             }
         }
 
@@ -1945,8 +2258,15 @@ namespace Stageloom
         /// ScheduleSolution calls coalesce, and a request can arrive while the
         /// document is busy; without this the stage would sit `waiting` until a
         /// Push. A slot whose solve is younger than the watchdog is not
-        /// retried: it is slow, not lost.</summary>
+        /// retried: it is slow, not lost. A key with no answering Stage Out is
+        /// one-way and is never retried: nothing will answer it, and eight
+        /// retries only churn the solve queue.</summary>
         internal static void RetryStaleSolves()
+        {
+            RetryStaleSolves(null);
+        }
+
+        private static void RetryStaleSolves(Worker worker)
         {
             var waiting = new List<KeyValuePair<string, PendingRequest>>();
             bool watchdog = false;
@@ -1954,6 +2274,7 @@ namespace Stageloom
             DateTime now = DateTime.UtcNow;
             lock (Gate)
             {
+                if (worker != null && !IsCurrentWorkerLocked(worker)) return;
                 // ScheduleSolution erases a pending callback when another
                 // solution (a canvas edit) runs first. The request is still
                 // queued: put it back on the timer instead of waiting for the
@@ -1980,6 +2301,9 @@ namespace Stageloom
                     {
                         StageSlot slot = kv.Value;
                         if (Conflicts.ContainsKey(kv.Key)) continue;
+                        // One-way stage: Stage In owns the terminal status and
+                        // no Stage Out will ever answer, so leave it alone.
+                        if (!StageAnswersLocked(kv.Key)) continue;
                         if (slot.Status != "waiting") continue;
                         // No request to answer: an unsolicited document solve must
                         // not leave a Stage Out looking like a stalled request.
@@ -2011,23 +2335,26 @@ namespace Stageloom
                 // A recovered timer still owns any requests that arrived while
                 // it was pending, even when every stage was already answered
                 // (a user solve replaced ours).
-                if (rescheduled || watchdog) SchedulePendingSolve();
+                if (rescheduled || watchdog) SchedulePendingSolve(worker);
                 return;
             }
             // One retry batch, one diagnostic: RequestStage below coalesces the
             // keys into the next solve.
             Interlocked.Increment(ref _retryRequests);
             foreach (KeyValuePair<string, PendingRequest> pair in waiting)
-                RequestStage(pair.Key, pair.Value.Rid);
+                RequestStage(pair.Key, pair.Value.Rid, worker);
         }
 
-        private static void SendFrames(MiniWsClient client)
+        private static void SendFrames(MiniWsClient client, Worker worker)
         {
             while (true)
             {
                 byte[] frame;
                 lock (Gate)
                 {
+                    // A stale sender must not take a frame out of the outbox
+                    // the current worker owns.
+                    if (worker != null && !IsCurrentWorkerLocked(worker)) return;
                     if (Outbox.Count == 0) break;
                     // Take the frame out before sending: a failed send must not
                     // leave it at the head for every later frame to queue
@@ -2084,10 +2411,12 @@ namespace Stageloom
 
         /// <summary>Sends hello and schema once per connection, from the UI thread
         /// (called during a solve, with the calling component's document). Cheap
-        /// when nothing changed.</summary>
+        /// when nothing changed. The document units are captured here, on the
+        /// UI thread, before the socket thread ever reads them.</summary>
         public static void Publish(GH_Document doc)
         {
-            if (doc != null && !string.IsNullOrEmpty(doc.FilePath)) _lastDocName = doc.FilePath;
+            AssertUiThread("GhLink.Publish");
+            if (doc != null) CaptureDocumentSnapshot(doc);
             SendPublication();
         }
 
@@ -2107,7 +2436,9 @@ namespace Stageloom
         }
 
         /// <summary>Builds and enqueues hello/schema from the published state.
-        /// Safe from either thread: it only touches the registries and the outbox.</summary>
+        /// Safe from either thread: it touches only the registries, the cached
+        /// UI-thread units snapshot and the outbox. It never reads RhinoDoc or
+        /// GH_Document.</summary>
         private static void SendPublication()
         {
             MarkPublished();
@@ -2116,6 +2447,7 @@ namespace Stageloom
             HashSet<string> stageIns;
             HashSet<string> stageOuts;
             Dictionary<string, List<Dictionary<string, object>>> paramsByStage;
+            string units;
             lock (Gate)
             {
                 stages = new Dictionary<string, bool>(StageEnabled);
@@ -2123,6 +2455,7 @@ namespace Stageloom
                 stageOuts = new HashSet<string>(StageHasOut);
                 paramsByStage = new Dictionary<string, List<Dictionary<string, object>>>();
                 foreach (var kv in StageParams) paramsByStage[kv.Key] = new List<Dictionary<string, object>>(kv.Value);
+                units = _cachedUnits;
             }
 
             // Reserve the once-per-connection hello under Gate: two threads
@@ -2130,8 +2463,13 @@ namespace Stageloom
             bool needHello;
             lock (Gate)
             {
-                needHello = !_publishedThisConnection || StagesChangedLocked(stages, stageIns, stageOuts);
-                if (needHello) _publishedThisConnection = true;
+                needHello = !_publishedThisConnection || _lastUnits != units
+                            || StagesChangedLocked(stages, stageIns, stageOuts);
+                if (needHello)
+                {
+                    _publishedThisConnection = true;
+                    _lastUnits = units;
+                }
             }
 
             if (needHello)
@@ -2156,7 +2494,7 @@ namespace Stageloom
                 // enforces that one) and the example in docs/protocol.md.
                 hello["client"] = "Stageloom 0.6.0";
                 hello["doc"] = _lastDocName;
-                hello["doc_units"] = UnitsName();
+                hello["doc_units"] = units;
                 hello["stages"] = list;
                 // Optional additive field (protocol §4.1): this client reads
                 // multi-part definition entries. Older Blender ignores it.
@@ -2211,6 +2549,9 @@ namespace Stageloom
         // the key set is unchanged.
         private static HashSet<string> _lastStageIns = new HashSet<string>();
         private static HashSet<string> _lastStageOuts = new HashSet<string>();
+        // The doc_units of the last hello. A unit change must republish hello
+        // even when the stage signature is unchanged.
+        private static string _lastUnits = "";
         // Last schema declaration published per stage, by canonical JSON. Under
         // Gate; cleared on a new connection.
         private static readonly Dictionary<string, string> _lastSchema =
@@ -2231,27 +2572,84 @@ namespace Stageloom
             return false;
         }
 
-        private static string UnitsName()
+        /// <summary>Reads a document's model units on the UI thread. This is the
+        /// only place the plugin reads Rhino units; the returned values are
+        /// cached and handed to the socket/sender threads. A null document or a
+        /// document with no RhinoDoc keeps the metre default.</summary>
+        private static void ReadDocumentUnits(GH_Document document, out string units, out double scale)
         {
+            units = "Meters";
+            scale = 1.0;
+            if (document == null) return;
             try
             {
-                if (RhinoDoc.ActiveDoc != null) return RhinoDoc.ActiveDoc.ModelUnitSystem.ToString();
+                RhinoDoc rhino = document.RhinoDocument;
+                if (rhino == null) return;
+                UnitSystem system = rhino.ModelUnitSystem;
+                units = system.ToString();
+                scale = RhinoMath.UnitScale(UnitSystem.Meters, system);
             }
             catch (Exception) { }
-            return "Meters";
+        }
+
+        /// <summary>Refreshes the cached units for the document a component
+        /// solves in. Called on the UI thread at registration and from every
+        /// Publish; never from the socket or sender.</summary>
+        private static void CaptureDocumentSnapshot(GH_Document document)
+        {
+            if (document == null) return;
+            AssertUiThread("GhLink.CaptureDocumentSnapshot");
+            string units;
+            double scale;
+            ReadDocumentUnits(document, out units, out scale);
+            string name = null;
+            try
+            {
+                name = document.FilePath;
+            }
+            catch (Exception) { }
+            lock (Gate)
+            {
+                _cachedUnits = units;
+                _cachedUnitScale = scale;
+                if (!string.IsNullOrEmpty(name)) _lastDocName = name;
+            }
+        }
+
+        /// <summary>Test hook: installs a units snapshot without a Rhino
+        /// document, the same seam the registration capture fills in. Kept
+        /// internal for the console suite; not plugin API.</summary>
+        internal static void SetUnitsSnapshotForTest(string units, double scale)
+        {
+            lock (Gate)
+            {
+                _cachedUnits = string.IsNullOrEmpty(units) ? "Meters" : units;
+                _cachedUnitScale = scale;
+            }
+        }
+
+        private static string UnitsName()
+        {
+            lock (Gate) { return _cachedUnits; }
         }
 
         // ------------------------------------------------------------- helpers
 
+        /// <summary>The cached metres-per-document-unit scale. Safe from any
+        /// thread; Stage In/Out on the UI thread should use the overload that
+        /// takes their document so a unit change is captured before use.</summary>
         public static double DocumentScale()
         {
-            try
-            {
-                if (RhinoDoc.ActiveDoc != null)
-                    return RhinoMath.UnitScale(UnitSystem.Meters, RhinoDoc.ActiveDoc.ModelUnitSystem);
-            }
-            catch (Exception) { }
-            return 1.0;
+            lock (Gate) { return _cachedUnitScale; }
+        }
+
+        /// <summary>Captures the document's units on the UI thread and returns
+        /// the resulting scale, so a solve uses the units its document has
+        /// now rather than the previous solve's snapshot.</summary>
+        public static double DocumentScale(GH_Document document)
+        {
+            if (document != null) CaptureDocumentSnapshot(document);
+            return DocumentScale();
         }
 
         private static string FirstLine(Exception ex)

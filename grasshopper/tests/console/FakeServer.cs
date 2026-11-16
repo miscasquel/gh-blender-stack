@@ -30,9 +30,23 @@ namespace Stageloom.Tests.Console
 
         public void Accept()
         {
+            AcceptHandshakeOnly();
+            CompleteHandshake();
+        }
+
+        /// <summary>Accept the TCP connection but leave the HTTP upgrade
+        /// unanswered, so MiniWsClient.Connect blocks in the handshake.</summary>
+        public void AcceptHandshakeOnly()
+        {
             _client = _listener.AcceptTcpClient();
             _client.NoDelay = true;
             _stream = _client.GetStream();
+        }
+
+        /// <summary>Read the HTTP upgrade and answer 101, completing a
+        /// handshake deferred by <see cref="AcceptHandshakeOnly"/>.</summary>
+        public void CompleteHandshake()
+        {
             string line = ReadLine();
             while (!string.IsNullOrEmpty(line)) line = ReadLine();
             byte[] response = Encoding.ASCII.GetBytes(

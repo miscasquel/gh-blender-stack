@@ -118,7 +118,10 @@ namespace Stageloom
             string message = slot.InMessage;
             string requestRid = held.Rid;
             var geometry = new List<IGH_Goo>();
-            if (held.Sections.Count > 0)
+            // A full request with zero sections is a real frame: Build returns
+            // an empty list and the stage reports `ok`. Only the shared Empty
+            // sentinel means no frame was ever published for this slot.
+            if (GhLink.HasFrame(held))
             {
                 // The frame header carries the instance-definition table
                 // (protocol §5.2). A stage that rebuilt the frame from Sections
@@ -129,7 +132,7 @@ namespace Stageloom
                 if (held.Definitions.Count > 0)
                     frameHeader["definitions"] = held.Definitions;
                 var frame = DecodedFrame.FromSections(frameHeader, held.Sections);
-                double scale = GhLink.DocumentScale();
+                double scale = GhLink.DocumentScale(OnPingDocument());
                 string error;
                 if (!StageBuildGuard.Try(delegate
                     {
@@ -302,8 +305,12 @@ namespace Stageloom
 
                     var warnings = new List<WireWarning>();
                     Dictionary<string, object> counts;
+                    // Capture the owning document's units once, on the UI
+                    // thread, and use the same scale for every section and
+                    // instance row this solve emits.
+                    double scale = GhLink.DocumentScale(OnPingDocument());
                     List<Section> sections = Conversion.SectionsFromGeometry(
-                        meshes, curves, points, subds, breps, GhLink.DocumentScale(),
+                        meshes, curves, points, subds, breps, scale,
                         warnings, out counts);
 
                     // Attributes ride on the source geometry's UserDictionary;
@@ -320,7 +327,7 @@ namespace Stageloom
                     // instance references name, plus the inst.* row pair (§5.2).
                     // Emit also adds the definitions/instances counts.
                     var definitions = new List<Dictionary<string, object>>();
-                    Instances.Emit(instances, GhLink.DocumentScale(), sections, attributes,
+                    Instances.Emit(instances, scale, sections, attributes,
                                    definitions, warnings,
                                    GhLink.PeerSupports(GhLink.Blocks2Capability), counts);
                     // Present even with no blocks: a reader should not have to

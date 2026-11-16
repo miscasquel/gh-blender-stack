@@ -409,6 +409,8 @@ namespace Stageloom.Tests.Console
 
             RunSenderLifecycle();
             RunReconfigure();
+            RunUnitsSnapshot();
+            RunStopDuringHandshake();
             RunSolveRetry();
             RunRequestContext();
             RunSlotStatus();
@@ -665,12 +667,174 @@ namespace Stageloom.Tests.Console
             }
         }
 
+        /// <summary>Publication reads a UI-thread units snapshot; the socket
+        /// and sender never touch RhinoDoc. A unit change republishes hello.
+        /// The thread id captured at registration is the one the UI-only
+        /// methods assert on in debug builds.</summary>
+        private static void RunUnitsSnapshot()
+        {
+            System.Console.WriteLine("link units snapshot");
+            var server = new FakeServer();
+            var component = new TestComponent();
+            try
+            {
+                GhLink.Configure("127.0.0.1", server.Port, false);
+                GhLink.Start();
+                server.Accept();
+                ReadUntil(server, "hello");
+
+                GhLink.Register(component);
+                GhLink.PublishStage(component, "units-snapshot", true);
+                GhLink.Publish(null);
+                ReadUntil(server, "hello");
+
+                Check("registration captures the UI thread",
+                    GhLink.UiThreadId == Thread.CurrentThread.ManagedThreadId
+                    && GhLink.IsUiThread,
+                    "captured=" + GhLink.UiThreadId + " current="
+                    + Thread.CurrentThread.ManagedThreadId);
+                bool workerIsUi = true;
+                var worker = new Thread(delegate() { workerIsUi = GhLink.IsUiThread; });
+                worker.IsBackground = true;
+                worker.Start();
+                worker.Join();
+                Check("a socket-like thread is not the UI thread", !workerIsUi, "");
+
+                GhLink.SetUnitsSnapshotForTest("Millimeters", 1000.0);
+                GhLink.Publish(null);
+                Dictionary<string, object> hello = ReadUntil(server, "hello");
+                Check("hello publishes the cached unit name",
+                    (string)Json.Get(hello, "doc_units") == "Millimeters",
+                    "doc_units=" + Json.Get(hello, "doc_units"));
+                Check("the cached document scale is returned",
+                    GhLink.DocumentScale() == 1000.0,
+                    "scale=" + GhLink.DocumentScale());
+
+                GhLink.SetUnitsSnapshotForTest("Meters", 1.0);
+                GhLink.Publish(null);
+                hello = ReadUntil(server, "hello");
+                Check("a unit change republishes hello",
+                    (string)Json.Get(hello, "doc_units") == "Meters"
+                    && GhLink.DocumentScale() == 1.0,
+                    "doc_units=" + Json.Get(hello, "doc_units")
+                    + " scale=" + GhLink.DocumentScale());
+            }
+            catch (Exception ex)
+            {
+                _failures++;
+                System.Console.WriteLine("FAIL units snapshot: " + ex);
+            }
+            finally
+            {
+                GhLink.Unregister(component);
+                GhLink.Stop();
+                server.Dispose();
+            }
+        }
+
+        /// <summary>Stop during a blocked WebSocket handshake, then an
+        /// immediate restart. When the stale handshake finally completes it
+        /// must not adopt the socket, revive the connection, publish, or clear
+        /// the new worker's outbox.</summary>
+        private static void RunStopDuringHandshake()
+        {
+            System.Console.WriteLine("link stop during handshake");
+            var stalled = new FakeServer();
+            var live = new FakeServer();
+            var component = new TestComponent();
+            try
+            {
+                GhLink.Configure("127.0.0.1", stalled.Port, false);
+                GhLink.Start();
+                GhLink.Register(component);
+                GhLink.PublishStage(component, "stop-handshake", true);
+                stalled.AcceptHandshakeOnly();
+                Thread.Sleep(150);
+
+                GhLink.Stop();
+                Check("stop returns while the handshake is blocked",
+                    !GhLink.Running && !GhLink.Connected,
+                    "running=" + GhLink.Running + " connected=" + GhLink.Connected);
+
+                // Immediate restart against a fresh server while the old
+                // worker is still blocked in its handshake.
+                string error;
+                Check("configure after stop accepts the new endpoint",
+                    GhLink.Configure("127.0.0.1", live.Port, false, out error),
+                    error ?? "");
+                GhLink.Start();
+                live.Accept();
+                Dictionary<string, object> hello = ReadUntil(live, "hello");
+                Check("the restarted link publishes hello",
+                    FindStage(hello, "stop-handshake") != null,
+                    "stages=" + Json.WriteCanonical(Json.Get(hello, "stages")));
+                Check("the restarted link has one sender",
+                    WaitFor(delegate { return GhLink.ActiveSenders == 1; }),
+                    "senders=" + GhLink.ActiveSenders);
+
+                // Complete the handshake the stopped worker is blocked on.
+                // Its Connect returns now; the worker token must reject it.
+                stalled.CompleteHandshake();
+                Check("the stale connect publishes no hello",
+                    NoFrameOfTypeBeforeClose(stalled, "hello", 800), "");
+                Thread.Sleep(150);
+                Check("the stale connect leaves the new link connected",
+                    GhLink.Connected && GhLink.Running && GhLink.ActiveSenders == 1,
+                    "connected=" + GhLink.Connected + " running=" + GhLink.Running
+                    + " senders=" + GhLink.ActiveSenders);
+                Check("the stale socket closes",
+                    stalled.DrainClosed(3000), "");
+
+                // The new session's outbox is intact: a new claim republishes.
+                GhLink.PublishStage(component, "stop-handshake-2", true);
+                GhLink.Publish(null);
+                hello = ReadUntil(live, "hello");
+                Check("the new link still publishes after the stale connect",
+                    FindStage(hello, "stop-handshake-2") != null,
+                    "stages=" + Json.WriteCanonical(Json.Get(hello, "stages")));
+            }
+            catch (Exception ex)
+            {
+                _failures++;
+                System.Console.WriteLine("FAIL stop during handshake: " + ex);
+            }
+            finally
+            {
+                GhLink.Unregister(component);
+                GhLink.Stop();
+                stalled.Dispose();
+                live.Dispose();
+            }
+        }
+
         /// <summary>A slow solve must not be scheduled a second time by the
         /// 250 ms retry loop; the attempt budget stays for a delegate that never
         /// starts, and a lost SolutionEnd is recovered by the watchdog.</summary>
         private static void RunSolveRetry()
         {
             System.Console.WriteLine("link solve retry");
+            // Retry belongs to a key an enabled Stage Out can answer; a
+            // one-way key is never retried. Give the harness stages a real
+            // Stage Out claim so this case still exercises the retry path.
+            var retryOut = new TestComponent();
+            var idleOut = new TestComponent();
+            GhLink.Register(retryOut);
+            GhLink.Register(idleOut);
+            GhLink.PublishStageOut(retryOut, "retry-test", true);
+            GhLink.PublishStageOut(idleOut, "no-request-retry-test", true);
+            try
+            {
+                RunSolveRetryChecks();
+            }
+            finally
+            {
+                GhLink.Unregister(retryOut);
+                GhLink.Unregister(idleOut);
+            }
+        }
+
+        private static void RunSolveRetryChecks()
+        {
             StageSlot slot = GhLink.Slot("retry-test");
             slot.Rid = "sha256:retry-test";
             slot.Status = "waiting";
@@ -949,6 +1113,27 @@ namespace Stageloom.Tests.Console
                 if (frame == null)
                 {
                     if (closed) return false;
+                    continue;
+                }
+                var decoded = FrameCodec.Decode(frame);
+                if (Json.GetString(decoded.Header, "type") == type) return false;
+            }
+            return true;
+        }
+
+        /// <summary>Like <see cref="NoFrameOfType"/>, but a close without the
+        /// frame counts as success: a stale worker that correctly rejects its
+        /// socket closes it without publishing anything.</summary>
+        private static bool NoFrameOfTypeBeforeClose(FakeServer server, string type, int windowMs)
+        {
+            DateTime end = DateTime.UtcNow.AddMilliseconds(windowMs);
+            while (DateTime.UtcNow < end)
+            {
+                bool closed;
+                byte[] frame = server.TryReadFrame(100, out closed);
+                if (frame == null)
+                {
+                    if (closed) return true;
                     continue;
                 }
                 var decoded = FrameCodec.Decode(frame);
