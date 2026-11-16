@@ -13,6 +13,7 @@ from bpy.props import IntProperty, StringProperty
 from . import bridge, engine, helpers, nodes, props, stack as stack_mod
 from .engine import bake as bake_mod
 from .engine.dependencies import stage_dependencies, stage_dependents
+from .registration import register_classes, unregister_classes
 
 STACK_TYPES = {"MESH", "CURVE", "POINTCLOUD"}
 # States a bake may start from for the selected stage and its upstream chain.
@@ -31,6 +32,62 @@ SURFACE_MESSAGE = (
     "(a surface object cannot take a Geometry Nodes modifier); "
     "convert it to a mesh first (Object > Convert > Mesh)"
 )
+LINKED_MESSAGE = (
+    "this object is linked from a library; edit the original .blend to change "
+    "its Stageloom stages"
+)
+STAGE_MESSAGE = "select an object with a Stageloom stage"
+
+
+def _is_stack_object(obj):
+    return obj is not None and getattr(obj, "type", None) in STACK_TYPES
+
+
+def _linked(obj):
+    return getattr(obj, "library", None) is not None
+
+
+def _editable_stack(context):
+    """The context object with a non-empty stack, or None.
+
+    Polls use this so F3 and a stale panel row report a clear refusal instead
+    of executing against a missing stage or an object with no stack.
+    """
+    obj = getattr(context, "object", None)
+    if not _is_stack_object(obj):
+        return None
+    record = stack_mod.stack_of(obj)
+    if record is None or not len(record.stages):
+        return None
+    return obj
+
+
+class StageOperatorMixin:
+    """Poll for operators that address a row in the panel's stage list."""
+
+    @classmethod
+    def poll(cls, context):
+        if _editable_stack(context) is None:
+            cls.poll_message_set(STAGE_MESSAGE)
+            return False
+        return True
+
+
+class EditableStageOperatorMixin(StageOperatorMixin):
+    """A stage operator that writes: refuse a linked-library object.
+
+    Its stage record belongs to the library, so any write would be lost or
+    rejected by Blender; the panel's action must be disabled instead.
+    """
+
+    @classmethod
+    def poll(cls, context):
+        if not super().poll(context):
+            return False
+        if _linked(context.object):
+            cls.poll_message_set(LINKED_MESSAGE)
+            return False
+        return True
 
 
 def _stage(context, index):
@@ -55,7 +112,24 @@ class STAGELOOM_OT_add_stage(bpy.types.Operator):
     bl_description = "Add a Grasshopper stage to the active object"
     bl_options = {"REGISTER", "UNDO"}
 
-    label: StringProperty(name="Label", default="Stage")
+    label: StringProperty(name="Label", default="")
+
+    @classmethod
+    def poll(cls, context):
+        obj = getattr(context, "object", None)
+        if obj is None:
+            cls.poll_message_set("select a mesh, curve or point cloud first")
+            return False
+        if _linked(obj):
+            cls.poll_message_set(LINKED_MESSAGE)
+            return False
+        if getattr(obj, "type", None) == "SURFACE":
+            cls.poll_message_set(SURFACE_MESSAGE)
+            return False
+        if getattr(obj, "type", None) not in STACK_TYPES:
+            cls.poll_message_set("select a mesh, curve or point cloud first")
+            return False
+        return True
 
     def execute(self, context):
         obj = context.object
@@ -67,13 +141,17 @@ class STAGELOOM_OT_add_stage(bpy.types.Operator):
         if obj is None or obj.type not in STACK_TYPES:
             self.report({"ERROR"}, "select a mesh, curve or point cloud first")
             return {"CANCELLED"}
+        if _linked(obj):
+            self.report({"ERROR"}, LINKED_MESSAGE)
+            return {"CANCELLED"}
         record = stack_mod.ensure_stack(obj)
         if record is None:
             self.report({"ERROR"}, "this object cannot hold a stack")
             return {"CANCELLED"}
+        label = (self.label or "").strip() or stack_mod.unique_stage_label(obj)
         stage = record.stages.add()
-        stage.key = stack_mod.new_stage_key(self.label)
-        stage.label = self.label
+        stage.key = stack_mod.new_stage_key(label)
+        stage.label = label
         helpers.ensure_helpers(obj, stage.key)
         nodes.ensure_modifier(obj, stage)
         obj.update_tag()
@@ -82,22 +160,25 @@ class STAGELOOM_OT_add_stage(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class STAGELOOM_OT_push(bpy.types.Operator):
+class STAGELOOM_OT_push(EditableStageOperatorMixin, bpy.types.Operator):
     bl_idname = "stageloom.push"
     bl_label = "Push"
     bl_description = "Send the current state to Grasshopper again"
-    bl_options = {"REGISTER", "UNDO"}
+    # The engine's request/freeze bookkeeping is not part of Blender's undo
+    # snapshot, so an undo of this operator would not put the engine back.
+    bl_options = {"REGISTER"}
 
     def execute(self, context):
         engine.push(context.object)
         return {"FINISHED"}
 
 
-class STAGELOOM_OT_pull(bpy.types.Operator):
+class STAGELOOM_OT_pull(EditableStageOperatorMixin, bpy.types.Operator):
     bl_idname = "stageloom.pull"
     bl_label = "Pull"
     bl_description = "Ask Grasshopper for this stage's output again"
-    bl_options = {"REGISTER", "UNDO"}
+    # Engine state (pending request, pull permit) is not undoable.
+    bl_options = {"REGISTER"}
 
     index: IntProperty(name="Index", default=-1)
 
@@ -112,7 +193,9 @@ class STAGELOOM_OT_pull(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class STAGELOOM_OT_resolve_duplicate_key(bpy.types.Operator):
+class STAGELOOM_OT_resolve_duplicate_key(
+    EditableStageOperatorMixin, bpy.types.Operator
+):
     bl_idname = "stageloom.resolve_duplicate_key"
     bl_label = "Resolve duplicate key"
     bl_description = (
@@ -136,11 +219,12 @@ class STAGELOOM_OT_resolve_duplicate_key(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class STAGELOOM_OT_freeze(bpy.types.Operator):
+class STAGELOOM_OT_freeze(EditableStageOperatorMixin, bpy.types.Operator):
     bl_idname = "stageloom.freeze"
     bl_label = "Freeze"
     bl_description = "Freeze this stage: no requests until unfrozen; the output stays"
-    bl_options = {"REGISTER", "UNDO"}
+    # Freezing also parks engine session state that undo cannot restore.
+    bl_options = {"REGISTER"}
 
     index: IntProperty(name="Index", default=-1)
 
@@ -159,7 +243,7 @@ class STAGELOOM_OT_freeze(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class STAGELOOM_OT_key_all(bpy.types.Operator):
+class STAGELOOM_OT_key_all(EditableStageOperatorMixin, bpy.types.Operator):
     bl_idname = "stageloom.key_all"
     bl_label = "Key all"
     bl_description = "Key every parameter of this stage at the current frame"
@@ -179,7 +263,7 @@ class STAGELOOM_OT_key_all(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class STAGELOOM_OT_purge_orphans(bpy.types.Operator):
+class STAGELOOM_OT_purge_orphans(EditableStageOperatorMixin, bpy.types.Operator):
     bl_idname = "stageloom.purge_orphans"
     bl_label = "Purge orphans"
     bl_description = "Delete parameter properties Grasshopper no longer declares, with their keyframes"
@@ -343,7 +427,7 @@ def _trigger_dependents(pairs, token, frame):
     return triggered, newly_frozen, skipped, None
 
 
-class STAGELOOM_OT_bake(bpy.types.Operator):
+class STAGELOOM_OT_bake(EditableStageOperatorMixin, bpy.types.Operator):
     bl_idname = "stageloom.bake"
     bl_label = "Bake Stage"
     bl_description = (
@@ -662,7 +746,7 @@ def clear_bake_needs_confirmation(stage, entry):
     return _native_bake_has_data(entry)
 
 
-class STAGELOOM_OT_clear_bake(bpy.types.Operator):
+class STAGELOOM_OT_clear_bake(EditableStageOperatorMixin, bpy.types.Operator):
     bl_idname = "stageloom.clear_bake"
     bl_label = "Clear Bake"
     bl_description = (
@@ -733,7 +817,7 @@ class STAGELOOM_OT_clear_bake(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class STAGELOOM_OT_copy_key(bpy.types.Operator):
+class STAGELOOM_OT_copy_key(StageOperatorMixin, bpy.types.Operator):
     bl_idname = "stageloom.copy_key"
     bl_label = "Copy stage key"
     bl_description = "Copy this stage's key, to paste into the Grasshopper components"
@@ -764,42 +848,24 @@ class STAGELOOM_OT_start_server(bpy.types.Operator):
         return {"CANCELLED"}
 
 
-def _safe_unregister(cls):
-    try:
-        bpy.utils.unregister_class(cls)
-    except (RuntimeError, ValueError):
-        pass
+_OPERATOR_CLASSES = (
+    STAGELOOM_OT_add_stage,
+    STAGELOOM_OT_push,
+    STAGELOOM_OT_pull,
+    STAGELOOM_OT_resolve_duplicate_key,
+    STAGELOOM_OT_freeze,
+    STAGELOOM_OT_bake,
+    STAGELOOM_OT_clear_bake,
+    STAGELOOM_OT_key_all,
+    STAGELOOM_OT_purge_orphans,
+    STAGELOOM_OT_copy_key,
+    STAGELOOM_OT_start_server,
+)
 
 
 def register():
-    for cls in (
-        STAGELOOM_OT_add_stage,
-        STAGELOOM_OT_push,
-        STAGELOOM_OT_pull,
-        STAGELOOM_OT_resolve_duplicate_key,
-        STAGELOOM_OT_freeze,
-        STAGELOOM_OT_bake,
-        STAGELOOM_OT_clear_bake,
-        STAGELOOM_OT_key_all,
-        STAGELOOM_OT_purge_orphans,
-        STAGELOOM_OT_copy_key,
-        STAGELOOM_OT_start_server,
-    ):
-        bpy.utils.register_class(cls)
+    register_classes(_OPERATOR_CLASSES)
 
 
 def unregister():
-    for cls in (
-        STAGELOOM_OT_start_server,
-        STAGELOOM_OT_copy_key,
-        STAGELOOM_OT_purge_orphans,
-        STAGELOOM_OT_key_all,
-        STAGELOOM_OT_bake,
-        STAGELOOM_OT_clear_bake,
-        STAGELOOM_OT_freeze,
-        STAGELOOM_OT_resolve_duplicate_key,
-        STAGELOOM_OT_pull,
-        STAGELOOM_OT_push,
-        STAGELOOM_OT_add_stage,
-    ):
-        _safe_unregister(cls)
+    unregister_classes(reversed(_OPERATOR_CLASSES))

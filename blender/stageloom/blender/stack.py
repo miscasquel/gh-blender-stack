@@ -20,6 +20,8 @@ from bpy.props import (
     StringProperty,
 )
 
+from .registration import register_classes, unregister_classes
+
 PARAM_PREFIX = "gh"
 STAGE_KEY_LENGTH = 6
 
@@ -45,6 +47,22 @@ def new_stage_key(label="stage"):
     return "%s-%s" % (slug, "".join(secrets.choice("0123456789abcdef") for _ in range(STAGE_KEY_LENGTH)))
 
 
+def unique_stage_label(obj, base="Stage"):
+    """The first unused ``Stage N`` label on an object's stack.
+
+    New stages used to all be labelled "Stage", which made a multi-stage stack
+    unreadable and every modifier name identical. The label is the user-facing
+    name; the key (and everything derived from it) stays independent.
+    """
+    base = (base or "Stage").strip() or "Stage"
+    record = stack_of(obj)
+    used = {stage.label for stage in record.stages} if record is not None else set()
+    number = 1
+    while "%s %d" % (base, number) in used:
+        number += 1
+    return "%s %d" % (base, number)
+
+
 def duplicate_stage_key(stage_key, object_name):
     """A deterministic key for a stage split out of a runtime duplicate.
 
@@ -66,9 +84,13 @@ def new_stack_id():
     return secrets.token_hex(8)
 
 
+def _value_labels(entry):
+    return [c for c in (entry.values or "").split("\n") if c]
+
+
 def _value_items(self, context):
     """Dropdown entries for a value list parameter, from its schema values."""
-    labels = [c for c in (self.values or "").split("\n") if c]
+    labels = _value_labels(self)
     if not labels:
         return [("0", "(no values)", "")]
     return [(str(i), label, "") for i, label in enumerate(labels)]
@@ -106,7 +128,29 @@ def _stage_changed(self, context):
         notify_param_changed(obj)
 
 
-def _value_changed(self, context):
+def _value_index_get(self):
+    """The dropdown's current entry, read from the parameter's custom property.
+
+    The custom property is the real value (keyframable, and what the engine
+    sends); ``value_index`` is a view of it. Reading it here rather than storing
+    a copy keeps a keyframed or driven value list truthful without a UI write
+    during draw. An out-of-range stored index reads as the first entry: the
+    panel must not raise, and the schema application clamps the property.
+    """
+    obj = getattr(self, "id_data", None)
+    name = param_prop_name(self.stage_key, self.param_id)
+    if obj is None or name not in obj:
+        return 0
+    try:
+        index = int(obj[name])
+    except (TypeError, ValueError):
+        return 0
+    if index < 0 or index >= len(_value_labels(self)):
+        return 0
+    return index
+
+
+def _value_index_set(self, value):
     """Write the picked index to the parameter's custom property, which is the
     value the engine sends and the one keyframes live on."""
     obj = self.id_data  # the owning object, not context: works headless too
@@ -114,7 +158,7 @@ def _value_changed(self, context):
         return
     name = param_prop_name(self.stage_key, self.param_id)
     if name in obj:
-        obj[name] = int(self.value_index)
+        obj[name] = int(value)
         notify_param_changed(obj)
 
 
@@ -136,8 +180,12 @@ class StageloomParam(bpy.types.PropertyGroup):
     has_max: BoolProperty(name="Has max", default=False)
     step: FloatProperty(name="Step", default=0.01)
     values: StringProperty(name="Values", default="")  # newline separated
-    # A view of the custom property, so the panel can draw a dropdown.
-    value_index: EnumProperty(name="Value", items=_value_items, update=_value_changed)
+    # A live view of the custom property, so the panel can draw a dropdown. The
+    # getter reads (never writes) the property, so a draw is pure; the setter is
+    # the user's pick.
+    value_index: EnumProperty(
+        name="Value", items=_value_items, get=_value_index_get, set=_value_index_set
+    )
 
 
 class StageloomStage(bpy.types.PropertyGroup):
@@ -266,9 +314,7 @@ def clear_stage_params(obj, stage_key):
 
 
 def register():
-    bpy.utils.register_class(StageloomParam)
-    bpy.utils.register_class(StageloomStage)
-    bpy.utils.register_class(StageloomStack)
+    register_classes((StageloomParam, StageloomStage, StageloomStack))
     bpy.types.Object.gh_stack = bpy.props.PointerProperty(type=StageloomStack)
 
 
@@ -277,8 +323,4 @@ def unregister():
         del bpy.types.Object.gh_stack
     except AttributeError:
         pass
-    for cls in (StageloomStack, StageloomStage, StageloomParam):
-        try:
-            bpy.utils.unregister_class(cls)
-        except (RuntimeError, ValueError):
-            pass
+    unregister_classes((StageloomStack, StageloomStage, StageloomParam))

@@ -5,6 +5,8 @@ import os
 import bpy
 from bpy.props import EnumProperty, FloatProperty, IntProperty, StringProperty
 
+from .registration import safe_unregister
+
 FALLBACK_DATA_ROOT = "~/.local/share/stageloom"
 # Legacy defaults, migrated once on register.
 OLD_DATA_ROOT = "~/.local/share/gh-stack"
@@ -178,7 +180,4 @@ def register():
 
 
 def unregister():
-    try:
-        bpy.utils.unregister_class(StageloomPreferences)
-    except (RuntimeError, ValueError):
-        pass
+    safe_unregister(StageloomPreferences)

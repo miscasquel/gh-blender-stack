@@ -10,6 +10,7 @@ themselves, and the standard property decorators.
 import bpy
 
 from . import bridge, engine, ops, prefs, props, server as server_mod, stack as stack_mod
+from .registration import safe_unregister
 
 # IMPORT_EXPORT (the two-way glyph) landed after Blender 5.2. Keep the N-panel
 # drawable on the declared floor: fall back to the bidirectional arrow when this
@@ -38,6 +39,33 @@ _STATE_ICONS = {
     stack_mod.STATE_UNBOUND: "GHOST_ENABLED",
 }
 
+# A stage that fails to draw is logged once per distinct failure, not once per
+# redraw: a broken stage redraws continuously (mouse movement is enough) and the
+# old unconditional log flooded the console. The entry is cleared when the stage
+# draws again, so a recovery followed by a new failure is logged again.
+_draw_failures = {}  # stage key -> set of error reprs already logged
+
+
+def _draw_failure_key(stage):
+    return stage.key or stage.label or "<unnamed>"
+
+
+def _note_draw_failure(stage, exc):
+    key = _draw_failure_key(stage)
+    detail = repr(exc)
+    logged = _draw_failures.setdefault(key, set())
+    if detail in logged:
+        return
+    logged.add(detail)
+    prefs.log(
+        "[stageloom] stage %s panel draw failed: %r" % (key, exc),
+        flush=True,
+    )
+
+
+def _clear_draw_failure(stage):
+    _draw_failures.pop(_draw_failure_key(stage), None)
+
 
 class STAGELOOM_PT_panel(bpy.types.Panel):
     bl_label = "Stageloom"
@@ -59,6 +87,7 @@ class STAGELOOM_PT_panel(bpy.types.Panel):
             row.label(text="ws://127.0.0.1:%d/" % _port())
         else:
             row.label(text="Server not running", icon="UNLINKED")
+            row.operator("stageloom.start_server", text="Start Server", icon="PLAY")
         if state.get("error"):
             box.label(text=state["error"], icon="ERROR")
         if state.get("notice"):
@@ -94,17 +123,16 @@ class STAGELOOM_PT_panel(bpy.types.Panel):
                 # One malformed stage must not hide the panels after it: a
                 # single bad icon used to abort the whole N-panel draw. Show
                 # the failure in place and keep going; the details still go
-                # to the console for a bug report.
-                prefs.log(
-                    "[stageloom] stage %s panel draw failed: %r" % (stage.key, exc),
-                    flush=True,
-                )
+                # to the console for a bug report (throttled per failure).
+                _note_draw_failure(stage, exc)
                 box = layout.box()
                 box.label(
                     text="%s: panel failed to draw" % (stage.label or stage.key),
                     icon="ERROR",
                 )
                 box.label(text=str(exc), icon="INFO")
+            else:
+                _clear_draw_failure(stage)
 
     def draw_stage(self, layout, obj, record, stage, index):
         box = layout.box()
@@ -117,6 +145,12 @@ class STAGELOOM_PT_panel(bpy.types.Panel):
         row.operator("stageloom.pull", text="", icon="IMPORT").index = index
         row.operator("stageloom.freeze", text="", icon="FREEZE", depress=stage.frozen).index = index
         row.operator("stageloom.copy_key", text="", icon="COPYDOWN").index = index
+
+        row = box.row()
+        # The label is the user-facing name (and what new modifier names derive
+        # from); the key is the immutable identity and is shown separately.
+        row.use_property_split = True
+        row.prop(stage, "label", text="Label")
 
         row = box.row()
         if stage.baked:
@@ -191,19 +225,9 @@ class STAGELOOM_PT_panel(bpy.types.Panel):
         col.use_property_decorate = True
         if entry.type == "value_list" and entry.values:
             # A dropdown over the custom property, which stays the real value
-            # (keyframable, and what the engine sends). The index is clamped:
-            # assigning an out-of-range identifier raises inside the draw.
-            labels = [c for c in entry.values.split("\n") if c]
-            index = int(obj[name])
-            if index < 0 or index >= len(labels):
-                index = 0
-                obj[name] = 0
-            current = str(index)
-            if entry.value_index != current:
-                try:
-                    entry.value_index = current
-                except TypeError:
-                    pass
+            # (keyframable, and what the engine sends). The entry's getter reads
+            # it, so this row is a pure read; the schema application clamps a
+            # stale index and the setter is the update path.
             col.prop(entry, "value_index", text=entry.label or entry.param_id)
         else:
             # Custom properties are addressed with the bracket syntax in the UI;
@@ -331,24 +355,11 @@ def _port():
     return prefs._pref("port", prefs.DEFAULT_PORT)
 
 
-def _safe_unregister(cls):
-    """Unregister a class that may already be gone.
-
-    Disabling an add-on can race a partially registered state (for example when
-    an extension replaces a development install); an unregister that raises
-    leaves the rest of the module registered.
-    """
-    try:
-        bpy.utils.unregister_class(cls)
-    except (RuntimeError, ValueError):
-        pass
-
-
 def register():
     bpy.utils.register_class(STAGELOOM_PT_panel)
     bpy.utils.register_class(STAGELOOM_PT_diagnostics)
 
 
 def unregister():
-    _safe_unregister(STAGELOOM_PT_diagnostics)
-    _safe_unregister(STAGELOOM_PT_panel)
+    safe_unregister(STAGELOOM_PT_diagnostics)
+    safe_unregister(STAGELOOM_PT_panel)
