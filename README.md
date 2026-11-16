@@ -28,7 +28,7 @@ Blender                                          Rhino / Grasshopper (wine)
 - **Stacks.** Native modifiers and GH stages compose in either order: a stage
   sees everything before its own modifier in the stack, so `GH → GN → GH` chains
   evaluate as a prefix, and a waiting stage pauses the ones after it. Duplicating
-  a stack object gives the copy its own stage key, cache, node group and
+  a stack object gives the copy its own stage key, stack identity, node group and
   helpers, with its parameter values and animation, so the two cannot cross-talk.
   Two stages never share a key: a file or undo that restores such a state shows
   the conflict on every affected stage and is resolved per stage from the panel
@@ -72,15 +72,14 @@ Blender                                          Rhino / Grasshopper (wine)
   backoff. The stage's modifier is its lifecycle: its toggles enable and disable
   it, deleting it removes the stage, Pull refreshes it once, Freeze parks it.
   Inspectable from the UI.
+- **Live stages.** Every delivered request is a solver step: the stage asks
+  again whenever its own inputs or the frame move, one request is outstanding at
+  a time, and a late answer for a superseded request is dropped. A disconnected
+  stage keeps its last output; there is no custom frame cache to replay.
 - **Playback.** In **Play Every Frame**, the playhead waits for each stage's
-  output for the frame before advancing; cached frames replay and a disconnected
-  stage keeps its last output. **Frame Drop** keeps requests latest-wins. A
-  **Sync wait limit** preference caps the wait per stage (0 waits until the
-  answer or a disconnect).
-- **Frame cache.** The cache behaves like a simulation cache: it fills as you
-  play and scrub, stores frames on disk (content-addressed, bounded, resettable
-  per stage), replays with Grasshopper closed, and leaves an idle scene alone so
-  Cycles keeps accumulating samples.
+  output for the frame before advancing; a disconnected stage keeps its last
+  output. **Frame Drop** keeps requests latest-wins. A **Sync wait limit**
+  preference caps the wait per stage (0 waits until the answer or a disconnect).
 - **Bake.** Each stage group carries a native Geometry Nodes Bake node. **Bake
   stage** steps the scene frame range through the same gate, shows cursor
   progress, freezes the stage and every upstream stage it depends on (including
@@ -101,7 +100,8 @@ Blender                                          Rhino / Grasshopper (wine)
   convert them to a mesh first. There are some issues with the meshing, and it
   is obviously a lossy conversion. That won't be solved without a proper surface
   kernel inside blender (surface psycho may bridge this gap)
-- The frame cache's disk format is per machine and has no persistent promise.
+- There is no custom frame cache. Freeze and native **Bake stage** are the
+  offline path; a simulation-zone cache remains later R&D.
 - **Clear Bake cannot be undone.** It deletes the stage's native Geometry Nodes
   bake immediately; recreating it means baking the scene range again. The panel
   asks for confirmation before deleting a bake.
@@ -151,8 +151,8 @@ the same tool across the whole engine surface.
    It connects like the plugin, echoes the geometry back, and the stage reports
    `ok`. `--report <path>` writes what it received and sent to JSON.
 
-The frame cache and logs live in the add-on's per-user extension data directory
-by default; the **Data root** preference in the add-on settings overrides it.
+The add-on's logs live in its per-user extension data directory by default; the
+**Data root** preference in the add-on settings overrides it.
 
 ## Install
 
@@ -234,7 +234,7 @@ Issues and support: <https://github.com/miscasquel/gh-blender-stack/issues>.
 
 ```
 blender/            Blender add-on (extension support) and its tests
-  stageloom/core/    pure Python: codec, hashing, rules, cache, params (no bpy)
+  stageloom/core/    pure Python: codec, hashing, params (no bpy)
   stageloom/blender/ the bpy layer: server, engine, stack, geometry, UI
   tests/core/       layer A tests
   tests/headless/   layer B tests

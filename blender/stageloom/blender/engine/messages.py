@@ -12,9 +12,9 @@ def _handle_incoming():
     guard a raise in one handler aborted the pass and every message behind it
     was lost.
     """
-    for header, sections, raw in engine.bridge.drain_incoming():
+    for header, sections in engine.bridge.drain_incoming():
         try:
-            engine._handle_message(header, sections, raw)
+            engine._handle_message(header, sections)
         except Exception as exc:
             try:
                 engine._report_message_failure(header, exc)
@@ -25,12 +25,12 @@ def _handle_incoming():
                 engine._trace.append("incoming message failed and could not be reported")
 
 
-def _handle_message(header, sections, raw=None):
+def _handle_message(header, sections):
     mtype = header.get("type")
     if mtype == "schema":
         engine._handle_schema(header)
     elif mtype == "response":
-        engine._handle_response(header, sections, raw)
+        engine._handle_response(header, sections)
     elif mtype == "error":
         engine._handle_error(header)
     elif mtype == "hello":
@@ -56,7 +56,7 @@ def _report_message_failure(header, exc):
     engine.prefs.log("[stageloom] incoming %s failed:\n%s" % (where, traceback.format_exc()), flush=True)
     if mtype == "response" and stage_key:
         try:
-            engine._clear_failed_response(stage_key, header.get("rid"))
+            engine._clear_failed_response(stage_key)
         except Exception as recovery:
             # Best-effort, like the cleanup: a stage that cannot be recovered
             # must not cost the *other* messages their chance to be handled.
@@ -67,23 +67,18 @@ def _report_message_failure(header, exc):
             )
 
 
-def _clear_failed_response(stage_key, rid):
+def _clear_failed_response(stage_key):
     """Put the stage of a failed response back in a retryable state.
 
-    The frame is removed first (see `_forget_frame`): a frame whose apply raised
-    would answer the next pass and raise again. Pending is cleared (idempotent)
-    and the state leaves `waiting`, where an empty pending map would look like
-    an answer still on its way.
+    The failed answer consumed its pending entry, so arm the same permit a
+    reconnect uses: the next pass must ask again instead of treating the
+    unchanged request id as already delivered. Pending is cleared
+    (idempotent) and the state leaves `waiting`, where an empty pending map
+    would look like an answer still on its way.
     """
     for obj, record, stage in engine._stage_views(stage_key):
         engine._forget(record.stack_id, stage.key)
-        if rid:
-            engine._forget_frame(record, stage, rid)
-        if stage.live:
-            # A live stage has no frame-cache miss to drive its retry, and the
-            # failed answer consumed its pending entry: arm the same permit a
-            # reconnect uses so the next pass asks again.
-            engine._verify.add((record.stack_id, stage.key))
+        engine._verify.add((record.stack_id, stage.key))
         engine._set(
             stage,
             "state",
@@ -99,21 +94,20 @@ def _on_client_hello(header):
     A request sent while no client was connected is lost, and a stage left
     waiting on it would sit until its timeout. Reset waiting stages and mark
     every stack dirty so the current request goes out again (protocol §8.8).
-    A reconnect with a *different* document resets the stages it claims: frames
-    cached against the old document must not replay.
 
-    Every claimed stage also forgets its geometry hash: a `hello` is a new client
+    Every claimed stage forgets its geometry hash: a `hello` is a new client
     session, so the geometry it holds is unknown, and protocol §8.8 wants the
     next request in full. The stage is also put on `_verify`: a fresh connection
     is the one moment the document may have changed without Blender hearing
-    about it, so the next pass must ask instead of replaying a cached frame.
+    about it, so the next pass must ask even when its request id and frame have
+    not moved.
 
     A stage entry may also publish `has_stage_in` and `has_stage_out`. False
     `has_stage_in` turns the stage into a generator (no Stage In, so no prefix).
     False `has_stage_out` makes it one-way: the prefix is still delivered to its
-    Stage In, but nothing answers, so the stage must not wait, apply or cache.
-    Absent fields mean an older client whose claims are unknown, and the saved
-    modes stay.
+    Stage In, but nothing answers, so the stage must not wait or apply. Absent
+    fields mean an older client whose claims are unknown, and the saved modes
+    stay.
     """
     doc = (header or {}).get("doc") or ""
     claims = {}
@@ -123,18 +117,10 @@ def _on_client_hello(header):
         key = entry.get("key")
         if key:
             claims[key] = entry
-    claimed = set(claims)
     for obj in engine._all_stack_objects():
         record = engine.stack_mod.stack_of(obj)
         if not record.stack_id:
             record.stack_id = engine.stack_mod.ensure_stack(obj).stack_id
-        if doc and claimed and any(stage.key in claimed for stage in record.stages):
-            if record.connected_doc and record.connected_doc != doc:
-                for stage in record.stages:
-                    if stage.key in claimed:
-                        engine._bump_generation(obj, record, stage, "document changed")
-            if record.connected_doc != doc:
-                record.connected_doc = doc
         for stage in record.stages:
             if stage.key in engine._stage_conflicts:
                 # An ambiguous key has no owner to adopt a claim for, and no
@@ -149,6 +135,7 @@ def _on_client_hello(header):
                 engine._set(stage, "state", engine.stack_mod.STATE_IDLE)
             engine._set(stage, "geom_hash", "")
             engine._sent.pop((record.stack_id, stage.key), None)
+            engine._last_frame.pop((record.stack_id, stage.key), None)
             engine._verify.add((record.stack_id, stage.key))
         engine._dirty.add(obj.name)
     engine._trace.append("client hello: %s" % (doc or "unnamed"))
@@ -223,9 +210,9 @@ def _handle_schema(header):
 
             engine.prefs.log("[stageloom] schema error:\n%s" % traceback.format_exc(), flush=True)
             continue
-        # A changed schema is a changed definition: frames cached against
-        # the old one must not replay.
-        engine._bump_generation(obj, record, stage, "schema changed")
+        # A changed schema is a changed definition: ask for a new solve even if
+        # the request id and frame have not moved.
+        engine._verify.add((record.stack_id, stage.key))
         engine._dirty.add(obj.name)
         obj.update_tag()
     if not matched:
@@ -250,7 +237,7 @@ def _answer_pending(record, stage, rid):
     return sent_at
 
 
-def _handle_response(header, sections, raw=None):
+def _handle_response(header, sections):
     key = header.get("stage")
     rid = header.get("rid")
     status = header.get("status")
@@ -265,7 +252,7 @@ def _handle_response(header, sections, raw=None):
         return
     if not isinstance(rid, str) or not rid:
         # A Stage Out solve that was triggered by another stage has no request
-        # to answer. It must not be cached or applied as an empty success.
+        # to answer. It must not be applied as an empty success.
         engine.prefs.log(
             "[stageloom] response for %r without a request id ignored" % (key,),
             flush=True,
@@ -300,17 +287,16 @@ def _handle_response(header, sections, raw=None):
         was_pending = rid in pending
         if not stage.has_stage_out:
             # No Stage Out answers this stage: a response left over from when it
-            # had one is not a sync to apply or cache. Consume only its own
-            # pending entry if the mode change raced the answer.
+            # had one is not a sync to apply. Consume only its own pending entry
+            # if the mode change raced the answer.
             if was_pending:
                 _answer_pending(record, stage, rid)
             continue
         if header.get("status") == "error" and not was_pending:
             # An error answers a request we are waiting for. If this rid is not
-            # pending, the error is stale or unsolicited — often a
-            # document-wide solve answering with the stage's last rid. Acting
-            # on it would evict a good cached frame and could abandon a newer
-            # request.
+            # pending, the error is stale or unsolicited — often a document-wide
+            # solve answering with the stage's last rid. Acting on it could
+            # abandon a newer request.
             continue
 
         if header.get("status") == "error":
@@ -319,14 +305,13 @@ def _handle_response(header, sections, raw=None):
             if code == "unknown_ref":
                 # GH lost the geometry a ref named (reconnect, restarted
                 # document): send it again in full (protocol §4.3). The error is
-                # not a result and must not be cached.
+                # not a result.
                 engine._resend_in_full(obj, record, stage, "unknown_ref response")
                 continue
             if was_pending:
                 # Remove only this request. A different pending entry belongs
                 # to a newer request and must survive a late error.
                 _answer_pending(record, stage, rid)
-            engine._forget_frame(record, stage, rid)
             if not stage.frozen:
                 engine._set(stage, "state", engine.stack_mod.STATE_ERROR)
             engine._set(stage, "error", error.get("message") if isinstance(error, dict) else str(error))
@@ -339,38 +324,16 @@ def _handle_response(header, sections, raw=None):
             continue
 
         out_hash = header.get("out_hash") or ""
-        current = rid == stage.rid
-        if stage.live:
-            # A live stage is stateful: its answer is the solver's new state,
-            # not a frame that can be replayed. A stale answer belongs to a
-            # state the solver has already left; it is neither applied nor
-            # cached, and it may only consume the pending entry it names.
-            if not current:
-                if was_pending:
-                    _answer_pending(record, stage, rid)
-                continue
-        else:
-            stored_out = None
-            memory = engine._cache.get((record.stack_id, key))
-            if memory is not None and rid in memory:
-                stored_out = memory[rid][1] or ""
-            else:
-                try:
-                    entry = engine._store_for(record, stage).entry(rid)
-                except OSError:
-                    entry = None
-                if entry is not None:
-                    stored_out = entry.out_hash or ""
-            if (current or was_pending) and stored_out is not None and stored_out != out_hash:
-                # The same request was answered differently: Grasshopper's
-                # definition changed (a slider upstream of Stage Out, a graph
-                # edit that does not touch Blender's inputs). Everything cached
-                # for this stage is suspect. A stale answer, however, describes
-                # a state the playhead has left; it must not prune the frames
-                # the current state uses.
-                engine._bump_generation(obj, record, stage, "Grasshopper's answer changed")
-            engine._remember(record, stage, rid, header, sections, raw)
-            engine._store_frame(record, stage, rid, header, sections, raw)
+        if rid != stage.rid:
+            # The answer belongs to a request the scene has superseded. It is
+            # not the solver state the user is looking at, and there is no frame
+            # store to replay it from.
+            if was_pending:
+                _answer_pending(record, stage, rid)
+            engine._trace.append(
+                "%s: dropped stale answer %s" % (stage.key, rid[-8:])
+            )
+            continue
 
         # Consume only the request this answer names: a stale ok must not clear
         # a newer pending request (the rule the error path has always had).
@@ -381,9 +344,7 @@ def _handle_response(header, sections, raw=None):
         # A frozen stage is parked with rid="" and must ignore unsolicited
         # answers. Pull deliberately sends one request while frozen; its answer
         # carries the stage's current rid, so rid equality is the permission.
-        if rid == stage.rid and (
-            out_hash != stage.applied_out_hash or engine._payload_missing(obj, stage, sections)
-        ):
+        if out_hash != stage.applied_out_hash or engine._payload_missing(obj, stage, sections):
             started = engine.time.monotonic()
             engine._apply(obj, stage, sections, header.get("attributes"))
             engine._record_timing(record, stage, "apply_ms", engine._timed_since(started))
@@ -391,40 +352,16 @@ def _handle_response(header, sections, raw=None):
             engine._set(stage, "applied_out_hash", out_hash)
             applied = True
             engine._trace.append("%s: applied %s" % (stage.key, (out_hash or "")[-8:]))
-        if rid == stage.rid and not applied:
+        else:
             # The displayed answer is already this one, but the node group may
             # predate the current format (a group written by an older build, or
             # a session that has not applied since nesting landed). Rebuilding
-            # is cheap and is the only way a same-hash frame can repair it.
+            # is cheap and is the only way a same-hash answer can repair it.
             engine.nodes.ensure_group(obj, stage.key, engine._nested_rows_of(sections))
-        if not applied and not was_pending:
-            # Nothing to apply and nothing was being waited for: the answer is
-            # stored under its own rid, which is what makes a later pass over that
-            # frame a replay rather than a request (protocol §6.4).
-            #
-            # If it was for a frame the playhead has moved past, the stage still
-            # gets a pass: that pass is what asks for the frame the scene is on, and
-            # dropping it is how a stage ended up looking stuck until a manual Push.
-            # If it was for the frame already displayed, it is a duplicate and stays
-            # a complete no-op, which is what keeps an idle scene quiet.
-            if rid != stage.rid:
-                engine._dirty.add(obj.name)
-            continue
         engine._set(stage, "warnings", engine._warnings_text(header))
-        if was_pending and not applied and not stage.live:
-            # The active frame's answer arrived, but the playhead moved on while
-            # it was in flight: keep the last good output and let the next pass
-            # evaluate the frame the scene is actually on. A frozen stage stays
-            # frozen — Pull asked for the answer, freeze still owns the state.
-            # A live stage is not a frame: an unchanged output is still the
-            # solver's current state, so it settles normally.
-            engine._set(
-                stage,
-                "state",
-                engine.stack_mod.STATE_FROZEN if stage.frozen else engine.stack_mod.STATE_IDLE,
-            )
-        else:
-            engine._set(stage, "state", engine._rest_state(stage))
+        # An unchanged output is still the solver's current state: it settles
+        # normally, and a frozen stage stays frozen because freeze owns state.
+        engine._set(stage, "state", engine._rest_state(stage))
         engine._set(stage, "error", "")
         if applied:
             engine.stats["tags"] += 1
@@ -479,9 +416,8 @@ def _resend_in_full(obj, record, stage, reason):
     uncertainty behind (protocol §4.3, §8.8)."""
     engine._forget(record.stack_id, stage.key)
     engine._sent.pop((record.stack_id, stage.key), None)
-    # Bypass the frame cache once: the whole point of the resend is to ask
-    # Grasshopper, and a cached frame for the same rid would answer the pass and
-    # swallow it.
+    # Ask even if the request id and frame have not moved: the whole point of
+    # the resend is to tell Grasshopper again.
     engine._verify.add((record.stack_id, stage.key))
     engine._set(stage, "geom_hash", "")
     engine._set(stage, "state", engine.stack_mod.STATE_IDLE)

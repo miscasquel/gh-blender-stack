@@ -176,7 +176,7 @@ class EngineDemoTests(unittest.TestCase):
         self.assertFalse(self.stage.enabled)
         self.assertFalse(modifier.show_render)
         self.assertFalse(modifier.show_in_editmode)
-        # Back on: the cached frame replays.
+        # Back on: the stage asks again and recovers.
         modifier.show_viewport = True
         modifier.show_render = True
         modifier.show_in_editmode = True

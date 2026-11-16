@@ -9,12 +9,13 @@ Short records of decisions that shape the project. Format: context, decision, co
 | [0003](0003-approximate-and-warn-curves.md) | Approximate and warn for curves that cannot be exact | Accepted |
 | [0004](0004-handoffs-removed.md) | Handoffs removed; this plan replaces them | Accepted |
 | [0005](0005-local-repository.md) | Repository on the local machine | Accepted |
-| [0006](0006-carried-decisions.md) | Carried decisions: no file protocol, no rhino3dm, no GhPython, GPL-3.0, extension packaging | Accepted |
+| [0006](0006-carried-decisions.md) | Carried decisions: no file protocol, no rhino3dm, no GhPython, GPL-3.0, extension packaging | Accepted; data root amended by 0016 |
 | [0007](0007-github-publication.md) | Published on GitHub (public, GPL-3.0, history scrubbed) | Accepted |
-| [0008](0008-simulation-style-frame-cache.md) | Simulation-style frame cache; no automatic bake operator | Accepted; amended by 0009 |
-| [0009](0009-playback-sync-and-native-stage-bake.md) | Play Every Frame sync; opt-in native stage bake | Accepted |
-| [0010](0010-selective-stage-solves-and-live-generators.md) | Selective stage solves; generator and live stages | Proposed; live acceptance pending |
+| [0008](0008-simulation-style-frame-cache.md) | Simulation-style frame cache; no automatic bake operator | Superseded by 0016 |
+| [0009](0009-playback-sync-and-native-stage-bake.md) | Play Every Frame sync; opt-in native stage bake | Accepted; amended by 0016 |
+| [0010](0010-selective-stage-solves-and-live-generators.md) | Selective stage solves; generator and live stages | Proposed; amended by 0016 |
 | [0011](0011-plugin-endpoint-configuration.md) | Persisted loopback endpoint for the Grasshopper plugin | Accepted |
 | [0012](0012-bake-data-irreversible.md) | Bake data is irreversible; Clear Bake confirms | Accepted |
 | [0013](0013-stage-key-uniqueness.md) | Stage keys are unique; duplicates are a strict conflict | Accepted |
-| [0014](0014-bake-freezes-upstream.md) | Bake stage freezes its upstream chain | Accepted |
+| [0014](0014-bake-freezes-upstream.md) | Bake stage freezes its upstream chain | Accepted; amended by 0016 |
+| [0016](0016-live-only-stages.md) | Live-only stages; native bake is the offline path | Accepted; supersedes 0008 |

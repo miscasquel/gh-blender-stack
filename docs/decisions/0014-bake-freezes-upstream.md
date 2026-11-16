@@ -1,7 +1,9 @@
 # 0014 — Bake stage freezes its upstream chain
 
 **Status:** Accepted, 2026-11-15. Live Rhino acceptance recorded in
-`benchmarks/results/2026-11-15-live-chain-bake.md`.
+`benchmarks/results/2026-11-15-live-chain-bake.md`. Amended by
+[0016](0016-live-only-stages.md), 2026-11-16: the frame-cache alternative is
+gone; the native bake and Freeze are the offline path.
 
 ## Context
 
@@ -46,8 +48,8 @@ chain. That is more UI and more bake data than the chain needs.
 - Baking the last stage of a tree makes the whole upstream chain static in one
   action. Downstream stages remain live.
 - The frozen upstream objects are static after the bake; rendering an animated
-  upstream object for a range still needs its own bake or cache. The selected
-  stage's native bake covers its own range.
+  upstream object for a range still needs its own bake. The selected stage's
+  native bake covers its own range.
 - A failed rebake may lose the previous bake because the native data is
   replaced; the operator reports the failure and leaves no stale freeze token.
 - Save/reload preserves the bake, token and markers. The packed bake is the

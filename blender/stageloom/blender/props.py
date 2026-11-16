@@ -5,7 +5,7 @@ keyframed and driven. Ranges go through ``id_properties_ui``. The schema itself
 (types, labels, value lists) is kept in the stage's parameter collection for the UI.
 """
 
-from ..core import codec, params as core_params
+from ..core import params as core_params
 from . import bridge, prefs, stack as stack_mod
 
 def schema_of(stage):
@@ -58,10 +58,9 @@ def schema_signature(stage):
     The declared *default* is deliberately not in here. It is only the fallback
     shown when no value has been sent; a definition that drives the Param's
     Default input (a frame value, for example) republishes a different default
-    every solve. Treating that as a definition change reset the generation and
-    threw away every cached frame on every playback step. Labels, types,
-    ranges and value lists still compare, because those are real declaration
-    changes.
+    every solve. Treating that as a declaration change recreated properties on
+    every playback step. Labels, types, ranges and value lists still compare,
+    because those are real declaration changes.
     """
     return [
         (e.param_id, e.label, e.type, e.group, e.has_range,
@@ -89,20 +88,6 @@ def incoming_signature(params):
             )
         )
     return out
-
-
-def definition_fingerprint(stage):
-    """What a cached frame was produced from, as far as Blender can know it: the
-    protocol version and the stage's schema signature.
-
-    The document name is *not* in here: it is only known while a client is
-    connected, and a fingerprint that changes when Grasshopper is closed would
-    defeat offline replay. A reconnected document is handled by the generation
-    bump instead (the stack records which document it is bound to)."""
-    import hashlib
-
-    payload = repr((codec.PROTOCOL_VERSION, schema_signature(stage))).encode("utf-8")
-    return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
 def apply_schema(obj, stage, params):

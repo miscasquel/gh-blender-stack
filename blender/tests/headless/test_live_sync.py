@@ -49,9 +49,6 @@ class LiveSyncTestCase(unittest.TestCase):
         cls.obj.name = "Live"
         bpy.ops.stageloom.add_stage(label="Live")
         cls.stage = cls.obj.gh_stack.stages[0]
-        # This suite pins the deterministic cache/replay path; the stage
-        # default (live) deliberately bypasses it.
-        cls.stage.live = False
         cls.obj[stack_mod.param_prop_name(cls.stage.key, SCALE)] = 1.0
 
         cls.report = os.path.join(tempfile.gettempdir(), "fake_gh_live_%s.json" % cls.__name__)
@@ -116,15 +113,13 @@ class EditModeTests(LiveSyncTestCase):
 
 
 class RevertedEditTests(LiveSyncTestCase):
-    """A cancel, undo or reverted parameter returns to a cached request id.
+    """A cancel, undo or reverted parameter still reaches Grasshopper.
 
-    The cache stores Blender's answer, not the client's inputs. A transform is
-    cancelled by restoring the BMesh and tagging it; undo restores the mesh and
-    the saved stage record from its step; a slider returns to a value used
-    before. In all three the request id goes back to one the frame cache
-    already holds while the connected client still holds the intermediate
-    state. The cache may answer without a send only while the client has been
-    told that exact rid.
+    A transform is cancelled by restoring the BMesh and tagging it; undo
+    restores the mesh and the saved stage record from its step; a slider returns
+    to a value used before. The client still holds the intermediate state, so
+    the reverted request must go out even though its request id appeared
+    earlier in the session.
     """
 
     def tearDown(self):
@@ -166,7 +161,7 @@ class RevertedEditTests(LiveSyncTestCase):
         sends = self.engine.stats["sends"]
 
         # Esc: the operator restores the BMesh to its pre-transform values and
-        # tags the mesh; the request id returns to the original, cached one.
+        # tags the mesh; the reverted state must reach Grasshopper again.
         self.set_first_x(original)
         self.assertTrue(
             pump(
@@ -182,7 +177,7 @@ class RevertedEditTests(LiveSyncTestCase):
         self.assertGreater(
             self.engine.stats["sends"],
             sends,
-            "the revert was answered from the cache without telling Grasshopper",
+            "the revert did not reach Grasshopper",
         )
         self.assertEqual(self.obj.mode, "EDIT", "the test left Edit Mode; the point was to stay in it")
         self.assertEqual(self.stage.state, "ok", self.stage.error)
@@ -211,8 +206,8 @@ class RevertedEditTests(LiveSyncTestCase):
                 and self.stage.state == "ok"
                 and report_of(self.report).get("ref", 0) > refs,
             ),
-            "a reverted parameter was answered from the cache without telling "
-            "Grasshopper (report=%s, helper max %r)"
+            "a reverted parameter did not reach Grasshopper "
+            "(report=%s, helper max %r)"
             % (report_of(self.report), helper_max(self.obj, self.stage.key)),
         )
         self.assertEqual(self.stage.state, "ok", self.stage.error)
@@ -285,7 +280,7 @@ class MultiObjectEditTests(unittest.TestCase):
     *active* edit object, and every other selected object carries its own BMesh
     edits next to it. The old flush copied one object per tick, so a stroke on a
     non-active stack object never changed the datablock the prefix clone read:
-    the geometry hash stayed put and the pass replayed the cached frame. A
+    the geometry hash stayed put and the pass looked like no edit at all. A
     non-stack object being active had the same effect one step earlier — the
     flush early-returned before it looked at any other edit object.
 
@@ -552,7 +547,6 @@ class MultiObjectGhEditTests(unittest.TestCase):
         obj.select_set(True)
         bpy.ops.stageloom.add_stage(label=label)
         stage = obj.gh_stack.stages[0]
-        stage.live = True
         obj[cls.stack_mod.param_prop_name(stage.key, SCALE)] = 1.0
         return obj
 
@@ -583,15 +577,7 @@ class MultiObjectGhEditTests(unittest.TestCase):
             "status": "ok",
             "warnings": [],
         }
-        raw = self.engine.codec.encode_frame(
-            header,
-            [
-                ("mesh.verts", "f32", sections["mesh.verts"]),
-                ("mesh.face_counts", "u32", sections["mesh.face_counts"]),
-                ("mesh.face_indices", "u32", sections["mesh.face_indices"]),
-            ],
-        )
-        bridge.post_incoming(header, sections, raw)
+        bridge.post_incoming(header, sections)
 
     def test_01_one_gh_edit_applies_to_every_affected_stage(self):
         self.assertEqual(self.stage_a.state, "ok", self.stage_a.error)
@@ -640,7 +626,6 @@ class PendingUpdateTests(LiveSyncTestCase):
         engine = self.engine
         self.assertTrue(pump(seconds=15.0, until=lambda: self.stage.state == "ok"))
         engine._dirty.clear()
-        engine._force_read.clear()
         before = first_x(report_of(self.report))
         sends = engine.stats["sends"]
         drains = []
@@ -670,12 +655,9 @@ class PendingUpdateTests(LiveSyncTestCase):
 
 
 class ReconnectVerifyTests(LiveSyncTestCase):
-    def test_01_a_reconnect_asks_instead_of_replaying(self):
-        # Settle so the current rid is cached in memory and on disk.
+    def test_01_a_reconnect_asks_again(self):
         pump(seconds=10.0, until=lambda: self.stage.state == "ok")
-        record = self.stack_mod.stack_of(self.obj)
-        cached_frame = self.engine._cached_response(record, self.stage, self.stage.rid)
-        self.assertIsNotNone(cached_frame, "the frame was not cached; the test proves nothing")
+        self.assertTrue(self.stage.rid, "the stage has no delivered request to verify")
 
         sends = self.engine.stats["sends"]
         self.engine._on_client_hello(
@@ -683,7 +665,7 @@ class ReconnectVerifyTests(LiveSyncTestCase):
         )
         self.assertTrue(
             pump(seconds=15.0, until=lambda: self.engine.stats["sends"] > sends),
-            "a reconnect replayed the cached frame instead of asking",
+            "a reconnect did not ask Grasshopper again",
         )
         self.assertTrue(
             pump(seconds=15.0, until=lambda: self.stage.state == "ok"),
@@ -839,12 +821,9 @@ class BatchIsolationTests(LiveSyncTestCase):
     """A bad frame must not eat the messages behind it.
 
     `_handle_incoming` drains the queue into a list, so a raise in `_apply` must
-    not abort the pass. `_handle_response` also stores the payload and forgets
-    the pending entry *before* applying, so the old
-    failure left the stage `waiting` with nothing outstanding and replayed the
-    poisoned frame on every later pass. Now the failing message is reported,
-    the poisoned frame is dropped, the stage is dirty, and the next message in
-    the same batch is still handled.
+    not abort the pass. The failing message is reported, the stage leaves
+    `waiting`, is marked dirty and is armed to ask again; the next message in the
+    same batch is still handled.
     """
 
     def test_01_one_bad_response_does_not_eat_the_batch(self):
@@ -927,9 +906,10 @@ class BatchIsolationTests(LiveSyncTestCase):
             "the failed response left the stage in waiting",
         )
         self.assertIn(self.obj.name, engine._dirty, "the failed stage was not marked dirty")
-        self.assertIsNone(
-            engine._cached_response(record, self.stage, rid),
-            "the frame whose apply failed was kept and would replay the failure",
+        self.assertIn(
+            (record.stack_id, self.stage.key),
+            engine._verify,
+            "the failed answer did not arm a new request",
         )
 
         # The next pass asks again, and the real client answers.
@@ -1382,13 +1362,13 @@ class SelfHealingTests(LiveSyncTestCase):
         self.assertEqual(self.stage.state, "error")
         self.assertIn("unknown_stage", self.stage.error)
 
-    def test_02_an_unknown_ref_resend_bypasses_the_frame_cache(self):
+    def test_02_an_unknown_ref_resend_asks_again(self):
         engine = self.engine
         record = self.stack_mod.stack_of(self.obj)
         key = (record.stack_id, self.stage.key)
         engine._resend_in_full(self.obj, record, self.stage, "test")
 
-        self.assertIn(key, engine._verify, "the promised full resend would be swallowed by the cache")
+        self.assertIn(key, engine._verify, "the promised full resend was not armed")
         self.assertEqual(self.stage.geom_hash, "")
         self.assertIn(self.obj.name, engine._dirty)
 
@@ -1425,9 +1405,13 @@ class SelfHealingTests(LiveSyncTestCase):
 
 
 class HashTrustTests(LiveSyncTestCase):
-    """An emptied helper with an unchanged applied hash must be re-applied."""
+    """An emptied helper with an unchanged applied hash must be re-applied.
 
-    def test_01_a_cleared_helper_is_reapplied_from_the_frame(self):
+    There is no frame store to replay, so the repair is a fresh request; the
+    answer carries the same output hash and must still be applied over the
+    empty helper."""
+
+    def test_01_a_cleared_helper_is_reapplied_on_request(self):
         import stageloom.blender.helpers as helpers
 
         engine = self.engine
@@ -1437,7 +1421,7 @@ class HashTrustTests(LiveSyncTestCase):
         applies = engine.stats["applies"]
 
         helper.data.clear_geometry()
-        engine._mark_object_dirty(self.obj)
+        engine.request_again(self.obj, self.stage)
         self.assertTrue(
             pump(seconds=10.0, until=lambda: engine.stats["applies"] > applies),
             "the frame was skipped over an emptied helper",

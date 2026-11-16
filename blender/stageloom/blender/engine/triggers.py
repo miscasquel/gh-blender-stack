@@ -72,8 +72,8 @@ def _flush_object(obj):
 
     Edit data lives in the BMesh, not in `obj.data`, until Blender flushes it:
     the one script-facing way is `update_from_editmode()`. Without the flush the
-    prefix clone copies the pre-edit cage and the unchanged hash replays the
-    cached frame. A no-op outside Edit Mode, so Push/Pull can call it directly;
+    prefix clone copies the pre-edit cage and the unchanged hash looks like no
+    edit at all. A no-op outside Edit Mode, so Push/Pull can call it directly;
     a RuntimeError leaves the datablock as it was.
     """
     if obj is None or obj.mode != "EDIT":
@@ -109,8 +109,8 @@ def _flush_edit_mode():
 @engine.bpy.app.handlers.persistent
 def _on_frame_change(scene, depsgraph=None):
     # A frame change tags nothing (the frame is part of the prefix revision).
-    # It forces a read: the cache may answer the new frame with no client.
-    engine._mark_dirty_all(force=True)
+    # It queues every stack: a live stage solves once per frame.
+    engine._mark_dirty_all()
     engine._mark_hot()
 
 
@@ -141,16 +141,14 @@ def _after_history_step():
         for stage in record.stages:
             sent = engine._sent.get((record.stack_id, stage.key))
             engine._set(stage, "geom_hash", sent[1] if sent is not None else "")
-            if stage.live:
-                # The solver state is not part of Blender's undo history: a
-                # restored live stage must ask for the current state instead of
-                # comparing the restored frame with the solver's post-undo path.
-                engine._set(stage, "live_frame", engine.stack_mod.LIVE_FRAME_UNSET)
+            # The solver state is not part of Blender's undo history: ask for
+            # the current state instead of assuming the restored rid was
+            # delivered.
+            engine._verify.add((record.stack_id, stage.key))
+            engine._last_frame.pop((record.stack_id, stage.key), None)
     engine._prefix_memo.clear()
-    # A restored step may name a frame the cache already holds, with or without
-    # a client: the prefix read is what finds that rid.
     if engine._ensure_active():
-        engine._mark_dirty_all(force=True)
+        engine._mark_dirty_all()
         engine._mark_hot()
 
 
@@ -173,7 +171,7 @@ def _on_load(scene=None):
     silent on reopen and never talks to Grasshopper again. A freshly loaded
     file must behave like a reconnect: an in-flight request belonged to the old
     session, a stage saved mid-request must not wait for it, and every stack is
-    evaluated against the cache and Grasshopper.
+    evaluated against Grasshopper again.
 
     A load is also a *new session from Grasshopper's point of view*: the client
     may be a fresh process or a different document, so the geometry hash — a
@@ -186,6 +184,7 @@ def _on_load(scene=None):
     engine.helpers.adopt_existing()
     engine._pending.clear()
     engine._sent.clear()
+    engine._last_frame.clear()
     engine._pull_permits.clear()
     engine._prefix_memo.clear()
     engine._state_since.clear()
@@ -231,8 +230,8 @@ def _on_load(scene=None):
                 # The conflict state names the claimants and blocks both the
                 # request and the answer path; do not repair or verify it.
                 continue
-            # A saved file may meet a document that changed in between: the
-            # cache must not answer without asking once (see _verify).
+            # A saved file may meet a document that changed in between: ask
+            # once even if the saved request id and frame still match.
             engine._verify.add((record.stack_id, stage.key))
             # Plumbing lost with the file (helpers or the node group deleted
             # before the save) is rebuilt here and the stage marked unbound
@@ -245,9 +244,7 @@ def _on_load(scene=None):
     # Activate only when this file has stages. A load into a stage-less file
     # must leave Blender with no Stageloom timer or per-frame handler at all.
     if engine._ensure_active():
-        # The new frame may be answered from the cache, even with no client:
-        # the prefix read is what selects it.
-        engine._mark_dirty_all(force=True)
+        engine._mark_dirty_all()
         engine._mark_hot()
 
 
@@ -268,7 +265,7 @@ def _recover_stuck_guard():
     # "mark dirty" below read the edited scene instead of replaying the stale
     # prefix (and the old rid) one more time.
     engine._prefix_memo.clear()
-    engine._mark_dirty_all(force=True)
+    engine._mark_dirty_all()
     line = (
         "guard watchdog: prefix guard left up by %s %.2f s ago; cleared and all stacks marked dirty"
         % (where, age)
@@ -293,9 +290,9 @@ def _needs_drain(dirty_before):
     """Whether this pass must deliver pending depsgraph updates before it clones.
 
     A pass that clones every queued stack does not need a separate evaluation:
-    the clone sees the pending edit, and bumping the generation makes it read
-    the scene instead of a memo. A narrower pass drains, because the pending
-    update may name a stack that is not queued. Background sessions have no
+    the clone sees the pending edit, and bumping the depsgraph generation makes
+    it read the scene instead of a memo. A narrower pass drains, because the
+    pending update may name a stack that is not queued. Background sessions have no
     event loop delivering updates, so they always drain.
     """
     if engine._in_background():
@@ -369,9 +366,6 @@ def _timer():
                 if not engine._trace or engine._trace[-1] != line:
                     engine._trace.append(line)
             engine._dirty.discard(name)
-        # Every force-read source also queues the object, so one pass consumed
-        # them all. An object that vanished was discarded above.
-        engine._force_read.clear()
         if not engine._stack_objects:
             # The pass removed the last stage: stop the timer and the per-frame
             # handlers until a load/undo/add brings one back.

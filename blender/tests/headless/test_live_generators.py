@@ -1,9 +1,9 @@
-"""Layer B: generator stages (no Stage In) and live stages (no frame cache).
+"""Layer B: generator stages (no Stage In) and live request semantics.
 
 A generator's request names the empty geometry hash, so base geometry edits
-cannot move its request id. A live stage is a stateful solver: it advances once
-per delivered request, ignores the frame cache, and never resets its generation
-for a same-rid answer.
+cannot move its request id. Every stage is live: it advances once per delivered
+request, a frame change asks again, and a same-rid answer is applied when its
+output changed.
 """
 
 import os
@@ -12,7 +12,6 @@ import time
 import unittest
 
 import bpy
-import numpy as np
 
 from harness import (
     SCALE,
@@ -182,18 +181,17 @@ class GeneratorStageTests(LiveTestCase):
         self.assertEqual(self.stage.input_mode, "generator")
 
 
-class LiveFrameTests(LiveTestCase):
-    """A live stage advances once per frame and never touches the frame cache."""
+class LiveStageTests(LiveTestCase):
+    """A stage advances once per frame and applies a changed same-rid answer."""
 
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
         cls.obj, cls.stage = cls.stack_object("Live")
-        cls.stage.live = True
         cls.report = cls.report_path("live")
         # The fake answers its first request twice: the second answer has the
-        # same rid and a changed output, the GH-side-edit shape a live stage
-        # must apply without resetting its generation.
+        # same rid and a changed output, the GH-side-edit shape a stage must
+        # apply.
         cls.fake = start_fake(cls.stage.key, cls.report, "--gh-edit-after", "1", port=cls.port)
 
         def settled():
@@ -214,21 +212,15 @@ class LiveFrameTests(LiveTestCase):
             include_error=True,
         )
 
-    def test_01_a_same_rid_change_applies_without_a_generation_bump(self):
-        generation = self.stage.generation
+    def test_01_a_same_rid_change_applies(self):
         self.assertEqual(
             helper_max(self.obj, self.stage.key),
             42.0,
             "the changed same-rid answer did not apply (helper max %r)"
             % helper_max(self.obj, self.stage.key),
         )
-
         pump(seconds=1.0, until=lambda: not self.engine._dirty)
-        self.assertEqual(
-            self.stage.generation,
-            generation,
-            "a same-rid answer reset a live stage's generation",
-        )
+        self.assertEqual(self.stage.state, "ok", self.stage.error)
 
     def test_02_a_frame_change_sends_once_and_the_same_frame_is_quiet(self):
         engine = self.engine
@@ -241,7 +233,7 @@ class LiveFrameTests(LiveTestCase):
 
         self.assertTrue(
             pump(seconds=5.0, until=lambda: engine.stats["sends"] == sends + 1),
-            "a live stage did not send once on a frame change",
+            "a stage did not send once on a frame change",
         )
         self.assertEqual(
             self.stage.rid, rid, "the frame-change request id moved; the test proves nothing"
@@ -256,31 +248,17 @@ class LiveFrameTests(LiveTestCase):
             "the frame-change answer never settled (state=%s, error=%s)"
             % (self.stage.state, self.stage.error),
         )
-        self.assertEqual(self.stage.live_frame, 2.0)
-
         # No frame change, no input change: the stage must stay idle.
         sends = engine.stats["sends"]
         responses = report_of(self.report).get("responses", 0)
         pump(seconds=0.5)
         self.assertEqual(
-            engine.stats["sends"], sends, "a live stage sent without a frame change"
+            engine.stats["sends"], sends, "a stage sent without a frame change"
         )
         self.assertEqual(
             report_of(self.report).get("responses", 0),
             responses,
-            "a live stage's client answered a request nobody asked for",
-        )
-
-    def test_03_a_live_stage_keeps_no_frame_cache_entry(self):
-        record = self.stack_mod.stack_of(self.obj)
-        key = (record.stack_id, self.stage.key)
-        self.assertFalse(
-            self.engine._cache.get(key), "a live stage stored a replayable hot frame"
-        )
-        self.assertEqual(
-            self.engine._store_for(record, self.stage).rids(),
-            [],
-            "a live stage stored a replayable frame on disk",
+            "a stage's client answered a request nobody asked for",
         )
 
 
@@ -298,7 +276,6 @@ class SharedObjectIsolationTests(LiveTestCase):
         cls.obj[cls.param_name(cls.stage_b, SCALE)] = 1.0
         # A is above B in the modifier stack, so B's parameter cannot change A's
         # prefix: the only reason A could send is the shared object being dirty.
-        cls.stage_a.live = True
         cls.report_a = cls.report_path("shared_a")
         cls.report_b = cls.report_path("shared_b")
         cls.fake_a = start_fake(cls.stage_a.key, cls.report_a, port=cls.port)
@@ -336,7 +313,6 @@ class SharedObjectIsolationTests(LiveTestCase):
         self.assertEqual(self.stage_b.state, "ok", self.stage_b.error)
         live_requests = requests_of(self.report_a)
         live_rid = self.stage_a.rid
-        live_frame = self.stage_a.live_frame
         b_requests = requests_of(self.report_b)
 
         self.obj[self.param_name(self.stage_b, SCALE)] = 2.0
@@ -359,15 +335,10 @@ class SharedObjectIsolationTests(LiveTestCase):
         self.assertEqual(
             requests_of(self.report_a),
             live_requests,
-            "the live stage advanced for another stage's parameter change",
+            "the stage advanced for another stage's parameter change",
         )
         self.assertEqual(
-            self.stage_a.rid, live_rid, "the live stage's request id moved on B's edit"
-        )
-        self.assertEqual(
-            self.stage_a.live_frame,
-            live_frame,
-            "the live stage recorded a new frame for another stage's edit",
+            self.stage_a.rid, live_rid, "the stage's request id moved on B's edit"
         )
 
 
@@ -420,13 +391,12 @@ class OneWayStageTests(LiveTestCase):
         self.engine._on_frame_change(bpy.context.scene)
         self.assertTrue(
             pump(seconds=5.0, until=lambda: requests_of(self.report) > before),
-            "a live one-way stage did not deliver the next frame",
+            "a one-way stage did not deliver the next frame",
         )
         self.assertTrue(
             pump(seconds=2.0, until=lambda: self.stage.state == "ok"),
             "the one-way stage did not settle after delivering",
         )
-        self.assertEqual(self.stage.live_frame, 2.0)
         self.assertFalse(
             self.engine._pending.get((self.obj.gh_stack.stack_id, self.stage.key)),
             "the frame delivery armed a response wait",
@@ -476,7 +446,7 @@ class OneWayStageTests(LiveTestCase):
                 self.stage.has_stage_out,
                 "hello did not restore the two-way path",
             )
-            outcome = engine._process_stage(self.obj, record, self.stage, force=True)
+            outcome = engine._process_stage(self.obj, record, self.stage)
             self.assertEqual(
                 outcome,
                 "waiting",
@@ -485,208 +455,6 @@ class OneWayStageTests(LiveTestCase):
         finally:
             engine._forget(record.stack_id, self.stage.key)
             engine._set(self.stage, "state", "idle")
-
-
-class LiveToggleTests(LiveTestCase):
-    """Switching Live semantics retires the frames from the other mode."""
-
-    @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
-        cls.obj, cls.stage = cls.stack_object("Toggle")
-
-    def test_00_a_new_stage_is_live_by_default_and_explains_itself(self):
-        # A fresh object: adding to the class stack would leave a second stage
-        # behind for the toggle tests.
-        bpy.ops.object.select_all(action="DESELECT")
-        bpy.ops.mesh.primitive_cube_add(size=1.0)
-        obj = bpy.context.object
-        obj.name = "DefaultLive"
-        bpy.context.view_layer.objects.active = obj
-        obj.select_set(True)
-        bpy.ops.stageloom.add_stage(label="DefaultLive")
-        try:
-            stage = obj.gh_stack.stages[0]
-            self.assertTrue(
-                stage.live,
-                "a new stage must be stateful by default",
-            )
-            self.assertEqual(stage.live_frame, self.stack_mod.LIVE_FRAME_UNSET)
-            description = stage.bl_rna.properties["live"].description
-            self.assertIn(
-                "Stateful",
-                description,
-                "the Live checkbox has no tooltip explaining the mode",
-            )
-        finally:
-            bpy.data.objects.remove(obj, do_unlink=True)
-
-    def test_01_toggling_live_clears_the_stage_frame_cache(self):
-        engine = self.engine
-        record = self.stack_mod.stack_of(self.obj)
-        if not record.stack_id:
-            record.stack_id = self.stack_mod.ensure_stack(self.obj).stack_id
-        key = (record.stack_id, self.stage.key)
-        self.stage.live = False
-        engine._cache[key] = {"sha256:old": (b"", "sha256:old-output")}
-        before = self.stage.generation
-
-        self.stage.live = True
-
-        self.assertGreater(
-            self.stage.generation,
-            before,
-            "a Live transition left the old frame generation valid",
-        )
-        self.assertNotIn(
-            key, engine._cache, "a Live transition left its hot frames in place"
-        )
-        self.assertEqual(self.stage.live_frame, self.stack_mod.LIVE_FRAME_UNSET)
-
-    def test_02_undo_forces_a_live_stage_to_ask_again(self):
-        self.stage.live = True
-        self.stage.live_frame = 7.0
-
-        self.engine._after_history_step()
-
-        self.assertEqual(
-            self.stage.live_frame,
-            self.stack_mod.LIVE_FRAME_UNSET,
-            "undo left a live stage believing the solver is on the restored frame",
-        )
-
-
-class StaleAnswerTests(unittest.TestCase):
-    """A stale ok must not reset the stage or clear a newer pending request."""
-
-    @classmethod
-    def setUpClass(cls):
-        bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.preferences.addon_enable(module="stageloom")
-        cls.enterClassContext(isolate_data_root("stageloom-stale-"))
-        import stageloom.blender.engine as engine
-        import stageloom.blender.stack as stack_mod
-
-        cls.engine = engine
-        cls.stack_mod = stack_mod
-        bpy.ops.mesh.primitive_cube_add(size=2.0)
-        cls.obj = bpy.context.object
-        cls.obj.name = "Stale"
-        bpy.context.view_layer.objects.active = cls.obj
-        cls.obj.select_set(True)
-        bpy.ops.stageloom.add_stage(label="Stale")
-        cls.stage = cls.obj.gh_stack.stages[0]
-        cls.record = stack_mod.stack_of(cls.obj)
-        if not cls.record.stack_id:
-            cls.record.stack_id = stack_mod.ensure_stack(cls.obj).stack_id
-        cls.sections = {
-            "mesh.verts": np.array(
-                [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-                dtype=np.float32,
-            ),
-            "mesh.face_counts": np.array([3], dtype=np.uint32),
-            "mesh.face_indices": np.array([0, 1, 2], dtype=np.uint32),
-        }
-
-    @classmethod
-    def tearDownClass(cls):
-        bpy.ops.preferences.addon_disable(module="stageloom")
-
-    def _reset_stale_state(self, live):
-        engine = self.engine
-        key = (self.record.stack_id, self.stage.key)
-        stale_rid = "sha256:stale-live" if live else "sha256:stale"
-        engine._cache.clear()
-        engine._cache_bytes.clear()
-        engine._pending.clear()
-        # Assigning Live runs the cache-reset hook; set the generation and the
-        # test's own cache state afterwards.
-        self.stage.live = live
-        self.stage.generation = 0
-        self.stage.rid = "sha256:current"
-        self.stage.applied_out_hash = "sha256:applied-before"
-        engine._pending[key] = {"sha256:newer": time.monotonic()}
-        if not live:
-            # Seed the same rid with a different output, so the stale answer is
-            # a genuine same-rid definition change rather than a first answer.
-            old_header = {
-                "type": "response",
-                "stage": self.stage.key,
-                "rid": stale_rid,
-                "status": "ok",
-                "out_hash": "sha256:old-output",
-                "warnings": [],
-            }
-            engine._remember(
-                self.record, self.stage, stale_rid, old_header, {}, raw=None
-            )
-        return key, stale_rid
-
-    def _deliver_stale(self, rid):
-        self.engine._handle_response(
-            {
-                "type": "response",
-                "stage": self.stage.key,
-                "rid": rid,
-                "status": "ok",
-                "out_hash": "sha256:new-output",
-                "warnings": [],
-            },
-            self.sections,
-        )
-
-    def test_01_a_stale_ok_does_not_reset_a_deterministic_stage(self):
-        key, rid = self._reset_stale_state(live=False)
-
-        self._deliver_stale(rid)
-
-        self.assertEqual(
-            self.stage.generation, 0, "a stale ok bumped the stage generation"
-        )
-        self.assertIn(
-            "sha256:newer",
-            self.engine._pending.get(key, {}),
-            "a stale ok cleared a newer pending request",
-        )
-        self.assertEqual(
-            self.stage.applied_out_hash,
-            "sha256:applied-before",
-            "a stale ok applied its output",
-        )
-        self.assertIn(
-            rid,
-            self.engine._cache.get(key, {}),
-            "a deterministic stale ok was not stored under its own rid",
-        )
-
-    def test_02_a_stale_ok_to_a_live_stage_is_dropped_not_cached(self):
-        key, rid = self._reset_stale_state(live=True)
-
-        self._deliver_stale(rid)
-
-        self.assertEqual(
-            self.stage.generation, 0, "a stale live ok bumped the generation"
-        )
-        self.assertIn(
-            "sha256:newer",
-            self.engine._pending.get(key, {}),
-            "a stale live ok cleared a newer pending request",
-        )
-        self.assertEqual(
-            self.stage.applied_out_hash,
-            "sha256:applied-before",
-            "a stale live ok applied its output",
-        )
-        self.assertNotIn(
-            rid,
-            self.engine._cache.get(key, {}),
-            "a stale live answer was cached for replay",
-        )
-        self.assertNotIn(
-            rid,
-            self.engine._store_for(self.record, self.stage).rids(),
-            "a stale live answer was stored for replay",
-        )
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
 **Target:** Blender 5.3. **Compatibility floor:** Blender 5.2.
 **Goal:** ship a stable 1.0 for the declared v1 scope: Grasshopper definitions as
 stackable Blender modifiers, with geometry and parameters flowing both ways,
-animation and playback, a frame cache, and renderable native bakes.
+animation and playback, live stages, and renderable native bakes.
 
 **Authority:** this document is the roadmap for 1.0. The wire contract is
 [`protocol.md`](protocol.md); architecture decisions are in
@@ -40,9 +40,10 @@ of the gaps below.
 **Shipped:** meshes, curves, point clouds, SubD cages, Breps (meshed, warned),
 attributes, Grasshopper blocks/instances, parameters with keyframes and drivers,
 mid-stack `GH → GN → GH` chains, stage lifecycle (Pull, Freeze, Bake stage,
-Clear Bake, Key all, Purge orphans), Play Every Frame sync, Frame Drop caching,
-a bounded disk frame cache, multi-stage duplication handling, selective stage
-solves, generator and live stages, one-way Stage In-only feeds, nested instance
+Clear Bake, Key all, Purge orphans), Play Every Frame sync, Frame Drop
+latest-wins requests, a bounded disk frame cache, multi-stage duplication
+handling, selective stage solves, generator and live stages, one-way Stage
+In-only feeds, nested instance
 baking, strictly unique stage keys with per-stage conflict resolution, the
 persisted loopback endpoint component, the non-metre units matrix, and the
 reference performance matrix with its recorded Linux baseline.
@@ -56,6 +57,11 @@ met on 2026-11-14).
 scene updates in 60.6 ms median (64.5 ms p95) with preview on, inside the
 100 ms target; preview off is within noise. See
 [`../benchmarks/results/2026-11-14-live-rhino.md`](../benchmarks/results/2026-11-14-live-rhino.md).
+
+**Changed in 0.7.0:** the custom frame cache and the Live toggle are removed
+([ADR 0016](decisions/0016-live-only-stages.md)). Every stage is live, Freeze
+keeps the last applied output, and the native Bake node is the offline path.
+The v0.6.0 baseline above still describes what that release shipped.
 
 **Known gaps carried forward:**
 
@@ -99,7 +105,8 @@ floor.
 
 ### In 1.0
 
-- Everything already shipped in v0.6.0.
+- Everything already shipped in v0.6.0, except the custom frame cache and the
+  Live toggle, which 0.7.0 removes (ADR 0016).
 - The hardening work in §5.
 - Migrations and compatibility guarantees in §5C.
 - Platform and distribution work in §5B and §5F.
@@ -114,7 +121,8 @@ floor.
   them).
 - Native B-rep/surface transfer; Breps remain a warned, lossy mesh conversion.
 - Grasshopper 2 / Rhino 9 support; see [`plan-gh2.md`](plan-gh2.md).
-- A stable frame-cache disk format; the cache is disposable by design.
+- A custom frame cache or any second offline cache; Freeze and the native Bake
+  node are the offline path. A simulation-zone cache stays later R&D.
 
 These are scope decisions, not hidden gaps. If 1.0 changes scope, this section
 changes first.
@@ -196,8 +204,9 @@ path behavior is covered by tests or a recorded manual checklist.
 - Add an add-on ↔ `.gha` version handshake. If the two sides are incompatible,
   say so in the panel and in Grasshopper; if they are compatible, connect
   silently.
-- Decide whether the frame cache remains disposable across minor versions or
-  gains a versioned sidecar. Prefer disposable; it is not user data.
+- Keep the 0.7.0 simplification: there is no custom frame cache to version
+  ([ADR 0016](decisions/0016-live-only-stages.md)). Native bake data is
+  Blender's, not the add-on's.
 
 **Exit:** projects saved by the last two public releases open and work, old GH
 components gain new outputs, and the compatibility policy is enforced by tests
@@ -212,7 +221,7 @@ Grasshopper-free, and Play Every Frame is tested with one stage.
 **Work**
 
 - Add a multi-stage Play Every Frame test: each stage in stack order, one request
-  per frame, no skipped frames, cached replay and disconnect behavior.
+  per frame, no skipped frames, and disconnect behavior.
 - Add a chain-level bake acceptance. Either:
   - add **Bake all**/freeze-upstream behavior so the whole chain is independent
     of Grasshopper, or
@@ -237,8 +246,8 @@ state, and Clear Bake restores live behavior without restarting Blender.
   resolve or bound the known meshing issues. Keep the warning path explicit.
 - **Bake undo:** settled as irreversible with confirmation (ADR 0012); keep the
   warning and prompt covered by `test_bake_safety.py`.
-- **Scale:** test large geometry, many stacks, many parameters and cache
-  eviction under sustained playback.
+- **Scale:** test large geometry, many stacks, many parameters and sustained
+  live playback.
 - **Failure injection:** malformed frames, dropped connections, stale responses,
   port conflicts, multiple Blender instances, and a missing/deleted node group.
 - **Threading:** keep the GH-object UI-thread invariant, including the `hello`
@@ -289,12 +298,12 @@ after 0.8 except fixes required by a gate.
 The old A1–A10 remain the functional core. Add the release gates that the
 0.5.x line did not cover.
 
-- **A1 Keyframes.** Keyframed parameters drive the GH output per frame; warm
-  frames replay from the cache.
+- **A1 Keyframes.** Keyframed parameters drive the GH output per frame; every
+  frame is a live request, and a disconnected stage keeps its last output.
 - **A2 Drivers.** A driver on a custom property moves the GH output live.
 - **A3 Chain.** A `GH → GN → GH` chain evaluates without manual steps.
 - **A4 Stack edits.** Reorder, disable and enable create no datablocks; restored
-  states are cache hits.
+  states queue one pass and settle without a duplicate apply.
 - **A5 Curves.** Representable curves round-trip exactly; approximations are
   counted and warned.
 - **A6 SubD.** Cage and edge creases round-trip; the semi-sharp limitation is
@@ -306,8 +315,8 @@ The old A1–A10 remain the functional core. Add the release gates that the
 - **A9 Performance.** The reference matrix meets the budgets in §5A, including
   the instance-heavy case.
 - **A10 Duplicates.** Duplicated stacks and stages keep independent keys,
-  caches, groups, helpers and animation; a saved or undone shared key is a
-  visible, resolvable conflict instead of a silent split.
+  session identities, groups, helpers and animation; a saved or undone shared key
+  is a visible, resolvable conflict instead of a silent split.
 - **A11 Platform.** Windows 11 + Rhino 8 + Blender 5.3 passes the full matrix;
   the Linux/wine development matrix remains green.
 - **A12 Chain playback/bake.** Multi-stage Play Every Frame works, and a
@@ -360,16 +369,16 @@ The old A1–A10 remain the functional core. Add the release gates that the
 2. Is extensions.blender.org a 1.0 requirement or a post-1.0 distribution step?
 3. Is Yak packaging for the `.gha` required for 1.0?
 4. Does 1.0 ship Rhino 8/GH1 only, with GH2 in a later release?
-5. Is the frame-cache format allowed to remain disposable across 1.0, or does it
-   need a versioned sidecar?
+5. Is the native bake scope enough for animation-heavy chains, or does 1.0 need
+   a chain-level bake? (The custom frame cache is gone; see ADR 0016.)
 
 ---
 
 ## 10. References
 
 - [`protocol.md`](protocol.md) — wire protocol v2.
-- [`decisions/`](decisions/) — architecture decisions, including the frame
-  cache and native bake.
+- [`decisions/`](decisions/) — architecture decisions, including live-only
+  stages (0016) and the native bake.
 - [`plan-gh2.md`](plan-gh2.md) — separate Grasshopper 2 / Rhino 9 target.
 - [`extensions-compliance.md`](extensions-compliance.md) — current platform
   compliance record.

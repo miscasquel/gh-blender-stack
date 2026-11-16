@@ -1,10 +1,11 @@
 # 0008 — Simulation-style frame cache, no bake operator
 
-**Status:** Accepted, 2026-10-12. Amended by
-[0009](0009-playback-sync-and-native-stage-bake.md), 2026-11-08: the frame cache
-remains the default path, but an opt-in native stage bake and the Play Every
-Frame sync gate were added later. This record supersedes the plan's original
-bake operator (`docs/plan.md` rev 2, §7 "Bake", §9.8 "Bake range").
+**Status:** Superseded by
+[0016](0016-live-only-stages.md), 2026-11-16: the custom frame cache is removed
+and every stage is live. Previously amended by
+[0009](0009-playback-sync-and-native-stage-bake.md), 2026-11-08. This record
+superseded the plan's original bake operator (`docs/plan.md` rev 2, §7 "Bake",
+§9.8 "Bake range").
 
 ## Context
 

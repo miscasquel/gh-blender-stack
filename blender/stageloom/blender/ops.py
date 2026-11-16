@@ -84,7 +84,7 @@ class STAGELOOM_OT_add_stage(bpy.types.Operator):
 class STAGELOOM_OT_push(bpy.types.Operator):
     bl_idname = "stageloom.push"
     bl_label = "Push"
-    bl_description = "Send the current state to Grasshopper again, and reset this stack's frame cache"
+    bl_description = "Send the current state to Grasshopper again"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
@@ -95,7 +95,7 @@ class STAGELOOM_OT_push(bpy.types.Operator):
 class STAGELOOM_OT_pull(bpy.types.Operator):
     bl_idname = "stageloom.pull"
     bl_label = "Pull"
-    bl_description = "Ask Grasshopper for this stage's output again; cached frames are kept"
+    bl_description = "Ask Grasshopper for this stage's output again"
     bl_options = {"REGISTER", "UNDO"}
 
     index: IntProperty(name="Index", default=-1)
@@ -104,8 +104,8 @@ class STAGELOOM_OT_pull(bpy.types.Operator):
         obj, _record, stage = _stage(context, self.index)
         if stage is None:
             return {"CANCELLED"}
-        # A fresh request without a cache reset: the frame cache stays valid, so
-        # this is also how a frozen stage is refreshed once, on demand.
+        # A fresh request: this is also how a frozen stage is refreshed once,
+        # on demand.
         engine.request_again(obj, stage)
         self.report({"INFO"}, "Pulling %s" % stage.key)
         return {"FINISHED"}
@@ -357,7 +357,7 @@ class STAGELOOM_OT_bake(bpy.types.Operator):
 
         # The native bake steps frames and fires frame_change_post. Arm the same
         # synchronous stage pass Play Every Frame uses; the Bake node then
-        # caches the output of each frame, in order. While that job owns the
+        # stores the output of each frame, in order. While that job owns the
         # graph, do not build or inspect node groups from the per-frame apply:
         # nested Instance-on-Points chains crash Blender 5.3 if we do.
         nodes.hold_group_updates(True)
@@ -424,7 +424,7 @@ class STAGELOOM_OT_bake(bpy.types.Operator):
                     "bake failed: %s; no upstream stage was frozen" % failure,
                 )
             return {"CANCELLED"}
-        # The native cache is now the render source: stop asking Grasshopper
+        # The native bake is now the render source: stop asking Grasshopper
         # for every frame until the user clears the bake. Upstream stages join
         # the freeze only now, after a complete bake; a stage the user had
         # already frozen keeps its own freeze and gets no marker.

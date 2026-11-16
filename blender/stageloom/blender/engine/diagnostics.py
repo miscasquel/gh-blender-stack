@@ -146,7 +146,6 @@ def registration_report():
         "stack_objects": len(engine._stack_objects),
         "index_dirty": bool(engine._index_dirty),
         "dirty": sorted(engine._dirty),
-        "force_read": sorted(engine._force_read),
         "hot_seconds": max(0.0, engine._hot_until - now),
         "passes": engine.stats["passes"],
     }

@@ -30,8 +30,8 @@ detected.
 - **Ambiguity is a strict conflict.** A load, undo/redo or add-on enable cannot
   prove which claimant was the original. Two objects, or two stages on one
   object, sharing a key leave every conflicting stage in `error`, with a message
-  naming the key and claimants. No request is sent and no response is applied or
-  cached for that key; pending, sent, verify and Pull state is cleared. Undo/redo
+  naming the key and claimants. No request is sent and no response is applied
+  for that key; pending, sent, verify and Pull state is cleared. Undo/redo
   restoring a shared key enters the same safe state instead of auto-splitting.
 - **Resolution is per stage and user-driven.** The N-panel shows **Resolve
   duplicate key** only on a conflicting row. It gives that stage a fresh random
@@ -54,7 +54,7 @@ detected.
   from the old stage row.
 - Runtime duplication (Shift+D, Alt+D, copy/paste, scripted `obj.copy()`,
   append/link while the original is live) keeps working without user action:
-  the new object gets a new key and cache namespace before it can send.
+  the new object gets a new key and stack session identity before it can send.
 - Conflicted stages keep their record and plumbing; only their transient request
   state is cleared. Deleting a conflicting stage or object lets the survivors
   leave the conflict and resume on the next pass.

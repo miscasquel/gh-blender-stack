@@ -1,4 +1,4 @@
-"""Preferences: port, timeouts, cache location, log level."""
+"""Preferences: port, timeouts, data root, log level."""
 
 import os
 
@@ -6,9 +6,8 @@ import bpy
 from bpy.props import EnumProperty, FloatProperty, IntProperty, StringProperty
 
 FALLBACK_DATA_ROOT = "~/.local/share/stageloom"
-# Legacy defaults, migrated once on register. The cache is disposable.
+# Legacy defaults, migrated once on register.
 OLD_DATA_ROOT = "~/.local/share/gh-stack"
-DEFAULT_CACHE_MB = 256
 # 9130 is BlenderKit's; do not use it for the Stageloom endpoint.
 DEFAULT_PORT = 59130
 OLD_DEFAULT_PORT = 9130
@@ -98,15 +97,9 @@ class StageloomPreferences(bpy.types.AddonPreferences):
     )
     data_root: StringProperty(
         name="Data root",
-        description="Where the frame cache and logs live",
+        description="Where the add-on's logs live",
         subtype="DIR_PATH",
         default=DEFAULT_DATA_ROOT,
-    )
-    cache_size_mb: IntProperty(
-        name="Cache size limit (MB)",
-        description="Disk budget for cached Grasshopper frames, per stack object and stage",
-        default=DEFAULT_CACHE_MB,
-        min=1,
     )
     log_level: EnumProperty(
         name="Log level",
@@ -125,7 +118,6 @@ class StageloomPreferences(bpy.types.AddonPreferences):
         layout.prop(self, "timeout")
         layout.prop(self, "playback_timeout")
         layout.prop(self, "data_root")
-        layout.prop(self, "cache_size_mb")
         layout.prop(self, "log_level")
 
 
@@ -148,10 +140,6 @@ def data_root():
     return root
 
 
-def cache_size_bytes():
-    return int(_pref("cache_size_mb", DEFAULT_CACHE_MB)) * 1024 * 1024
-
-
 def _migrate_old_data_root():
     """Move a saved preference still on the legacy default to the extension dir."""
     try:
@@ -162,8 +150,7 @@ def _migrate_old_data_root():
     if os.path.expanduser(settings.data_root) == old:
         settings.data_root = DEFAULT_DATA_ROOT
         log(
-            "[stageloom] data root moved from %s to %s; the old frame cache is disposable"
-            % (old, DEFAULT_DATA_ROOT),
+            "[stageloom] data root moved from %s to %s" % (old, DEFAULT_DATA_ROOT),
             flush=True,
         )
 

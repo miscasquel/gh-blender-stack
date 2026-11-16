@@ -378,8 +378,9 @@ async def session(ws, args, state):
         _write_report(args, state)
         print("[fake-gh] response %d (scale %.3f, %s)" % (state.responses, scale, mode), flush=True)
 
-        # Optional scripted events, one response count each, for the frame-cache
-        # tests (they drive the engine's reset and quiet rules deterministically).
+        # Optional scripted events, one response count each, for the request
+        # lifecycle tests (they drive the engine's routing and quiet rules
+        # deterministically).
         if args.echo_after and state.responses == args.echo_after:
             await ws.send(frame)  # byte-for-byte identical
             state.echoes += 1

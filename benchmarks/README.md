@@ -26,7 +26,7 @@ so the WebSocket server, codec, bridge and timer are the real ones.
 | `instances` | one 100k-triangle definition placed 13× through Instance-on-Points | prefix read, encode, first apply, repeated apply, node-group reuse |
 | `roundtrip` | one 100k stage through a real socket to fake-gh | full and parameter-only (`ref`) request latency, with `prefix_ms`, `encode_ms`, `rtt_ms` and `apply_ms` |
 | `multistage` | three 10k stages on one object | one dirty engine pass, full chain settle, idle pass |
-| `playback` | a live stage, 30 frames, stateful fake output | per-frame send-to-apply latency and one response per frame |
+| `playback` | one stage, 30 frames, stateful fake output | per-frame send-to-apply latency and one response per frame |
 
 `rtt_ms` includes the fake client's own Python decode, scale, encode and hash.
 It is a regression number, not a substitute for a live Rhino solve: the
@@ -82,7 +82,8 @@ The first live reference run is in
 
 1. Open a generated `.blend`, confirm both stages are unfrozen and the
    `Stageloom` panel shows the stage keys.
-2. Grasshopper must report connected. Use **Push** once to fill the cache.
+2. Grasshopper must report connected. Use **Push** once to deliver the current
+   stage state.
 3. Set **Play Every Frame**, or scrub, and read the panel after each event.
 4. Record the four numbers plus the scene's triangle count, instance count and
    definition triangle count in the performance report.

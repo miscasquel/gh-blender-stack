@@ -133,13 +133,11 @@ def _pump_until_settled(record, stage, rid, deadline):
 
 def _sync_stage(obj, record, stage, deadline):
     """Make one stage ready for the current playback frame."""
-    # A request left in flight before playback began belongs to the live
-    # session, not to this frame. Its answer is cached when it lands.
+    # A request left in flight before playback began belongs to the session
+    # before this frame. Its answer is dropped if it supersedes.
     engine._forget(record.stack_id, stage.key)
     while True:
-        # A playback frame is a forced read: its answer may come from the frame
-        # cache even when Grasshopper is disconnected (cached playback).
-        outcome = engine._process_stage(obj, record, stage, force=True)
+        outcome = engine._process_stage(obj, record, stage)
         if outcome == "idle":
             if not stage.has_stage_out:
                 # One-way stage: the pass delivered its prefix to Stage In and
@@ -258,7 +256,7 @@ def _on_frame_change_sync(scene, depsgraph=None):
     """One gated frame: block until the current frame's stages are ready."""
     if engine._bake_sync:
         # A native Bake job steps frames and fires this handler. The stage
-        # outputs it caches must be the ones for *this* frame.
+        # outputs it stores must be the ones for *this* frame.
         _update_bake_progress(scene)
         _sync_playback_frame(scene)
         return

@@ -125,8 +125,8 @@ class STAGELOOM_PT_panel(bpy.types.Panel):
         else:
             row.operator("stageloom.bake", text="Bake stage", icon=_BAKE_ICON).index = index
 
-        row = box.row()
-        row.prop(stage, "live", text="Live")
+        if stack_mod.is_generator(stage) or not stage.has_stage_out:
+            row = box.row()
         if stack_mod.is_generator(stage):
             row.label(text="Generator (no Stage In)", icon=_GENERATOR_ICON)
         if not stage.has_stage_out:

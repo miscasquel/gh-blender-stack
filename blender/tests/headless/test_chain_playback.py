@@ -6,8 +6,8 @@ Run with:
 
 What it proves: one object with ``stage A -> native Bevel -> stage B`` asks
 each stage once per frame, upstream first, and stage B's prefix carries stage
-A's applied output. A warm cache replays both stages with every client gone,
-and a cold frame with no clients keeps the last output while playback goes on.
+A's applied output. With every client gone, playback keeps the last output while
+the playhead goes on.
 
 The single-stage gate lives in ``test_playback_sync.py``; this file reuses its
 fakes and assertions instead of growing a second copy of the scaffolding.
@@ -59,8 +59,8 @@ class ChainPlaybackTests(unittest.TestCase):
         time.sleep(0.5)
 
         # Blender's Bevel re-evaluates its interpolated UVs with last-bit (and
-        # occasionally larger) variation between identical prefix reads, and the
-        # frame cache keys on the exact prefix hash. This test proves the gate,
+        # occasionally larger) variation between identical prefix reads, and a
+        # request ref keys on the exact prefix hash. This test proves the gate,
         # not that noise: keep the cube's UV layer out of the fixture.
         bpy.ops.mesh.primitive_cube_add(size=2.0, calc_uvs=False)
         cls.obj = bpy.context.object
@@ -76,8 +76,6 @@ class ChainPlaybackTests(unittest.TestCase):
         bpy.ops.stageloom.add_stage(label="B")
         cls.stage_b = cls.obj.gh_stack.stages[1]
 
-        for stage in (cls.stage_a, cls.stage_b):
-            stage.live = False  # playback replays deterministic frames from the cache
         keyframe_scale(cls.obj, cls.stage_a, [1.0, 2.0, 3.0])
         keyframe_scale(cls.obj, cls.stage_b, [0.5, 1.0, 1.5])
 
@@ -144,13 +142,10 @@ class ChainPlaybackTests(unittest.TestCase):
 
     def setUp(self):
         engine = self.engine
-        for stage in (self.stage_a, self.stage_b):
-            engine._bump_generation(self.obj, self.obj.gh_stack, stage, "chain playback")
-        engine._cache.clear()
-        engine._cache_bytes.clear()
         engine._pending.clear()
         engine._sent.clear()
         engine._verify.clear()
+        engine._last_frame.clear()
         engine._dirty.clear()
         engine._playback_sync = False
         self.playback._reported.clear()
@@ -172,7 +167,7 @@ class ChainPlaybackTests(unittest.TestCase):
         self.engine._trace.append(marker)
         scene.frame_set(frame)
         # frame_change_post may or may not fire under -b; call the same gate the
-        # handler calls. A duplicate call is a cache hit and sends nothing.
+        # handler calls. A duplicate call at the same frame sends nothing.
         ready = self.engine._sync_playback_frame(scene)
         lines = list(self.engine._trace)
         if marker not in lines:
@@ -233,49 +228,7 @@ class ChainPlaybackTests(unittest.TestCase):
         self.assertEqual(stats["playback_synced"], stats["playback_frames"])
         self.assertEqual(stats["playback_failures"], 0)
 
-    def test_02_warm_replay_with_both_fakes_stopped_sends_nothing(self):
-        expected_final = {1: 0.5, 2: 2.0, 3: 4.5}
-        scene = bpy.context.scene
-        self.engine._on_playback_pre(scene)
-        try:
-            for frame in (1, 2, 3):
-                self.assertTrue(self._frame_sends(frame)[0])
-        finally:
-            self.engine._on_playback_post(scene)
-
-        type(self).stop_fakes()
-        self.engine._cache.clear()  # force the disk store, the cross-session path
-        requests = (requests_of(self.report_a), requests_of(self.report_b))
-        sends = self.engine.stats["sends"]
-
-        self.engine._on_playback_pre(scene)
-        try:
-            for frame in (1, 2, 3):
-                ready, sent_a, sent_b = self._frame_sends(frame)
-                self.assertTrue(ready, "cached frame %d was not ready" % frame)
-                self.assertEqual((sent_a, sent_b), ([], []), "a cached frame was requested again")
-                self.assertAlmostEqual(
-                    helper_max(self.obj, self.stage_b.key),
-                    expected_final[frame],
-                    places=2,
-                    msg="cached frame %d was not applied" % frame,
-                )
-        finally:
-            self.engine._on_playback_post(scene)
-
-        self.assertEqual(self.engine.stats["sends"], sends, "a cached frame was requested again")
-        self.assertEqual(
-            (requests_of(self.report_a), requests_of(self.report_b)),
-            requests,
-            "a stopped fake received a request",
-        )
-        self.assertAlmostEqual(helper_max(self.obj, self.stage_b.key), 4.5, places=2)
-        stats = self.engine.stats
-        self.assertGreaterEqual(stats["playback_frames"], 3)
-        self.assertEqual(stats["playback_synced"], stats["playback_frames"])
-        self.assertEqual(stats["playback_failures"], 0)
-
-    def test_03_a_cold_frame_without_clients_keeps_the_last_output(self):
+    def test_02_without_clients_playback_keeps_the_last_output(self):
         type(self).start_fakes()
         self.assertTrue(pump(seconds=15.0, until=type(self).settled), "the chain never re-settled")
         scene = bpy.context.scene
@@ -289,41 +242,35 @@ class ChainPlaybackTests(unittest.TestCase):
         last_a = helper_max(self.obj, self.stage_a.key)
         last_b = helper_max(self.obj, self.stage_b.key)
         type(self).stop_fakes()
-        self.engine._cache.clear()  # frames 3 and 4 are cold
+        requests = (requests_of(self.report_a), requests_of(self.report_b))
+        sends = self.engine.stats["sends"]
 
         self.engine._on_playback_pre(scene)
         try:
             for frame in (1, 2, 3, 4):
                 ready, sent_a, sent_b = self._frame_sends(frame)
-                self.assertEqual(
-                    ready,
-                    frame in (1, 2),
-                    "frame %d readiness disagreed with its cache state" % frame,
-                )
+                self.assertFalse(ready, "a disconnected stage reported frame %d ready" % frame)
                 self.assertEqual((sent_a, sent_b), ([], []), "a request left with no client")
-                if frame in (1, 2):
-                    # Cached frames still show their own output.
-                    self.assertAlmostEqual(
-                        helper_max(self.obj, self.stage_b.key),
-                        {1: 0.5, 2: 2.0}[frame],
-                        places=2,
-                    )
-                else:
-                    # Playback continued past the failed frame and kept the
-                    # previous output on both stages.
-                    self.assertAlmostEqual(helper_max(self.obj, self.stage_a.key), last_a, places=2)
-                    self.assertAlmostEqual(helper_max(self.obj, self.stage_b.key), last_b, places=2)
+                # Playback continued past the failed frame and kept the
+                # previous output on both stages.
+                self.assertAlmostEqual(helper_max(self.obj, self.stage_a.key), last_a, places=2)
+                self.assertAlmostEqual(helper_max(self.obj, self.stage_b.key), last_b, places=2)
         finally:
             self.engine._on_playback_post(scene)
 
+        self.assertEqual(self.engine.stats["sends"], sends, "a request left with no client")
+        self.assertEqual(
+            (requests_of(self.report_a), requests_of(self.report_b)),
+            requests,
+            "a stopped fake received a request",
+        )
         stats = self.engine.stats
         # One gate pass per frame normally; frame_change_post may add a second,
-        # cache-hit pass per frame under -b. A failed pass fails once per stage.
+        # unchanged pass per frame under -b. A failed pass fails once per stage.
         self.assertGreaterEqual(stats["playback_frames"], 4)
-        self.assertGreaterEqual(stats["playback_synced"], 2)
-        self.assertGreaterEqual(stats["playback_frames"] - stats["playback_synced"], 2)
+        self.assertGreaterEqual(stats["playback_frames"] - stats["playback_synced"], 4)
         self.assertEqual(
             stats["playback_failures"],
             2 * (stats["playback_frames"] - stats["playback_synced"]),
-            "the cold frames did not fail once per stage per gate pass",
+            "the disconnected frames did not fail once per stage per gate pass",
         )

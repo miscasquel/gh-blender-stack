@@ -11,12 +11,10 @@ What it proves:
    Grasshopper, three frames produce three requests, in order, no skips.
 2. Frame Drop leaves the gate off and the existing asynchronous engine in
    charge.
-3. A warm frame replays during playback with Grasshopper gone and sends
-   nothing.
-4. The engine timer is suppressed while the gate owns the frame.
-5. A disconnected client fails the frame quickly, keeps the last output, and
+3. The engine timer is suppressed while the gate owns the frame.
+4. A disconnected client fails the frame quickly, keeps the last output, and
    playback continues.
-6. The wait limit defaults to "no timeout", with a preference to cap it.
+5. The wait limit defaults to "no timeout", with a preference to cap it.
 """
 
 import os
@@ -62,7 +60,6 @@ class PlaybackSyncTests(unittest.TestCase):
         cls.obj.name = "Playback"
         bpy.ops.stageloom.add_stage(label="Playback")
         cls.stage = cls.obj.gh_stack.stages[0]
-        cls.stage.live = False  # playback replays deterministic frames from the cache
         cls.record = cls.obj.gh_stack
         keyframe_scale(cls.obj, cls.stage, [1.0, 2.0, 3.0])
 
@@ -100,12 +97,10 @@ class PlaybackSyncTests(unittest.TestCase):
 
     def setUp(self):
         engine = self.engine
-        engine._bump_generation(self.obj, self.record, self.stage, "playback test")
-        engine._cache.clear()
-        engine._cache_bytes.clear()
         engine._pending.clear()
         engine._sent.clear()
         engine._verify.clear()
+        engine._last_frame.clear()
         engine._dirty.clear()
         engine._playback_sync = False
         self.playback._reported.clear()
@@ -163,30 +158,15 @@ class PlaybackSyncTests(unittest.TestCase):
         self.assertGreaterEqual(self.engine.stats["playback_synced"], 3)
         self.assertEqual(self.engine.stats["playback_failures"], 0)
 
-    def test_02_warm_cache_replays_with_grasshopper_closed(self):
-        self._play((1, 2, 3))
-        import stageloom.blender.bridge as bridge
-
-        stop_fake(type(self).fake)
-        type(self).fake = None
-        self.assertTrue(
-            pump(seconds=5.0, until=lambda: not bridge.state["connected"]),
-            "the fake never disconnected",
-        )
-        self.engine._cache.clear()  # force the disk store, the cross-session path
+    def test_02_a_repeated_frame_is_not_asked_twice(self):
+        self._play((1,))
         sends = self.engine.stats["sends"]
-
-        scene = bpy.context.scene
-        self.engine._on_playback_pre(scene)
-        try:
-            for frame in (1, 2, 3):
-                scene.frame_set(frame)
-                self.engine._sync_playback_frame(scene)
-        finally:
-            self.engine._on_playback_post(scene)
-        self.assertEqual(self.engine.stats["sends"], sends, "a cached frame was requested again")
-        self.assertAlmostEqual(helper_max(self.obj, self.stage.key), 3.0, places=2)
-        self.assertEqual(self.engine.stats["playback_failures"], 0)
+        self._play((1,))
+        self.assertEqual(
+            self.engine.stats["sends"],
+            sends,
+            "the gate asked again for a frame already delivered",
+        )
 
     def test_03_timer_is_suppressed_while_the_gate_owns_the_frame(self):
         passes = self.engine.stats["passes"]
@@ -233,7 +213,7 @@ class PlaybackSyncTests(unittest.TestCase):
         finally:
             prefs.playback_timeout = 0.0
 
-    def test_06_a_driven_default_does_not_reset_the_cache(self):
+    def test_06_a_driven_default_is_not_a_declaration_change(self):
         import stageloom.blender.props as props
 
         declared = [
@@ -252,7 +232,7 @@ class PlaybackSyncTests(unittest.TestCase):
         self.assertEqual(
             props.incoming_signature(declared),
             props.incoming_signature(next_frame),
-            "a driven default looked like a definition change and would wipe the cache",
+            "a driven default looked like a declaration change and would rebuild the schema",
         )
 
     def test_07_stage_group_carries_the_native_bake_node(self):

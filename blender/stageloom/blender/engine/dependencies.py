@@ -5,7 +5,7 @@ on its own object and, transitively, on the stages of any object or collection
 its prefix reads. Downstream consumers are never part of the answer: they read
 the selected stage, so they cannot change what it evaluated.
 
-This is a read-only walk. It builds no cache, freezes nothing and does not run a
+This is a read-only walk. It builds no memo, freezes nothing and does not run a
 pass; the Bake operator computes the set once per bake (W2.1).
 """
 

@@ -108,6 +108,7 @@ def _mark_key_conflict(key):
         engine._sent.pop((stack_id, key), None)
         engine._verify.discard((stack_id, key))
         engine._pull_permits.discard((stack_id, key))
+        engine._last_frame.pop((stack_id, key), None)
         engine._last_no_send.pop((stack_id, key), None)
         engine._state_since.pop((stack_id, key), None)
         engine._timings.pop((stack_id, key), None)
@@ -337,24 +338,19 @@ def _all_stack_objects():
             yield obj
 
 
-def _mark_dirty_all(force=False):
-    """Queue every stack object. ``force`` also allows a prefix read while
-    disconnected, which only frame changes, loads, undo/redo and explicit
-    requests need (a cached frame may answer them)."""
+def _mark_dirty_all():
+    """Queue every stack object for a pass."""
     for obj in engine._all_stack_objects():
         engine._dirty.add(obj.name)
-        if force:
-            engine._force_read.add(obj.name)
 
 
 def _forget_prefix(obj, stage_key):
     """Drop one stage's memoized prefix so the next pass re-evaluates it.
 
-    The memo caches the evaluated *sections* under a revision, so anything that
+    The memo keeps the evaluated *sections* under a revision, so anything that
     makes a revision untrustworthy has to retire the entry. Push in particular is
-    documented as the way to get past anything cached: before this it reset only
-    the frame store, so a stale prefix survived it and the re-request went out
-    carrying the same geometry.
+    the way to get past a stale read: the re-request must carry the geometry the
+    scene is showing.
     """
     if obj is not None:
         engine._prefix_memo.pop((obj.as_pointer(), stage_key), None)
@@ -393,7 +389,6 @@ def _split_stage(obj, stage, new_key=None):
     engine._set(stage, "error", "")
     engine._set(stage, "warnings", "")
     engine._set(stage, "nonce", 0)
-    engine._set(stage, "generation", 0)
     # The duplicate is a new claimant: the original's Clear Bake must not
     # unfreeze it, and its own stale token owns no upstream stages.
     engine._set(stage, "bake_token", "")
@@ -571,7 +566,7 @@ def _drop_removed_stages(obj, record):
     """Removing a stage is deleting its modifier in the modifiers panel (§9.8):
     the modifier is the stage's anchor in the stack, so a stage whose modifier is
     gone is removed here — helpers, block definitions and parameter properties
-    included. Cache entries are kept. Returns True when something was removed.
+    included. Returns True when something was removed.
 
     A missing *node group* is not removal: ``modifier_of`` finds the modifier by
     its persistent uid and the group is rebuilt by ``_repair_plumbing``."""
@@ -610,9 +605,7 @@ def _drop_removed_stages(obj, record):
         key = (record.stack_id, stage.key)
         engine._forget(record.stack_id, stage.key)
         engine._sent.pop(key, None)
-        engine._cache.pop(key, None)
-        engine._cache_bytes.pop(key, None)
-        engine._stores.pop(key, None)
+        engine._last_frame.pop(key, None)
         engine._state_since.pop(key, None)
         engine._timings.pop(key, None)
         engine._last_no_send.pop(key, None)
@@ -635,8 +628,8 @@ def _drop_removed_stages(obj, record):
 def _repair_plumbing(obj, record, stage, modifier):
     """Rebuild plumbing a saved file (or the outliner) lost: the node group and
     the helper objects. A rebuilt stage is marked unbound until an answer
-    arrives, and its applied hash is cleared so a cached frame with the same
-    out_hash is re-applied instead of skipped over empty helpers.
+    arrives, and its applied hash is cleared so an answer with the same out_hash
+    is re-applied instead of skipped over empty helpers.
     Returns True when something was rebuilt."""
     rebuilt = False
     if engine.helpers.missing_kinds(obj, stage.key):
@@ -653,6 +646,11 @@ def _repair_plumbing(obj, record, stage, modifier):
     if rebuilt:
         engine._forget(record.stack_id, stage.key)
         engine._set(stage, "applied_out_hash", "")
+        # The helpers are empty again: ask for the answer even if the request
+        # id and frame have not moved, or the same-frame gate treats the empty
+        # display as current.
+        engine._verify.add((record.stack_id, stage.key))
+        engine._last_frame.pop((record.stack_id, stage.key), None)
         if stage.state != engine.stack_mod.STATE_UNBOUND:
             engine._set(stage, "state", engine.stack_mod.STATE_UNBOUND)
         engine.prefs.log("[stageloom] %s: plumbing rebuilt, marked unbound" % stage.key, flush=True)
@@ -666,10 +664,10 @@ def start_server(port=None):
 
 
 def request_again(obj, stage=None, skip_frozen=False):
-    """Force a fresh request without touching the frame cache: the nonce changes
-    so the request id cannot collide with a cached one. Used when a stage is
-    created or its identity changes, and by Pull. The memoized prefix is retired
-    with it: a fresh request must carry what the scene shows.
+    """Force a fresh request: the nonce changes so the request id cannot be
+    mistaken for the answer to the previous one. Used when a stage is created or
+    its identity changes, and by Pull. The memoized prefix is retired with it: a
+    fresh request must carry what the scene shows.
 
     The target is flushed first when it is in Edit Mode: a request built from
     the stale datablock is a `ref` claiming Grasshopper's copy is current, which
@@ -695,18 +693,16 @@ def request_again(obj, stage=None, skip_frozen=False):
         else:
             engine._set(item, "state", engine.stack_mod.STATE_IDLE)
     engine._reindex_object(obj)
-    # A new stage (or a Pull) brings the engine back from dormancy. The read is
-    # forced: a cached frame may answer it even with no client connected.
+    # A new stage (or a Pull) brings the engine back from dormancy.
     engine._ensure_active()
     engine._dirty.add(obj.name)
-    engine._force_read.add(obj.name)
     engine._mark_hot()
 
 
 def freeze(obj, stage):
-    """Freeze a stage: stop requests and cache replay; the helpers keep their
-    last output. An answer already in flight is forgotten (and still cached when
-    it lands); Pull refreshes on demand while frozen."""
+    """Freeze a stage: stop requests; the helpers keep their last output. An
+    answer already in flight is forgotten; Pull refreshes on demand while
+    frozen."""
     record = engine.stack_mod.stack_of(obj)
     if record is None:
         return
@@ -718,61 +714,30 @@ def freeze(obj, stage):
 
 
 def unfreeze(obj, stage):
-    """Resume a frozen stage: the next pass replays a cached frame or asks
-    Grasshopper again, whichever the current request id resolves to."""
+    """Resume a frozen stage: the next pass asks Grasshopper again."""
     record = engine.stack_mod.stack_of(obj)
     if record is not None:
         engine._pull_permits.discard((record.stack_id, stage.key))
     engine._set(stage, "state", engine.stack_mod.STATE_IDLE)
     engine._ensure_active()
     engine._dirty.add(obj.name)
-    # A cached frame may answer the frame the stage is showing.
-    engine._force_read.add(obj.name)
     engine._mark_hot()
 
 
 def push(obj=None):
     """Force a fresh request for every live stage of a stack (increments the
-    nonce) and reset its frame cache: Push exists to get past anything cached.
-    Frozen stages are parked and skipped entirely."""
+    nonce). Frozen stages are parked and skipped entirely."""
     obj = obj or engine.bpy.context.object
     if obj is None:
         return
     record = engine.stack_mod.stack_of(obj)
     if record is None:
         return
-    if not record.stack_id:
-        record.stack_id = engine.stack_mod.ensure_stack(obj).stack_id
-    for stage in record.stages:
-        if stage.frozen:
-            continue
-        engine._bump_generation(obj, record, stage, "Push")
     engine.request_again(obj, skip_frozen=True)
 
 
 def _mark_object_dirty(obj):
     engine._ensure_active()
-    engine._dirty.add(obj.name)
-    # A parameter change can return to a value whose frame is cached.
-    engine._force_read.add(obj.name)
-    engine._mark_hot()
-
-
-def _reset_stage_cache(obj, stage):
-    """Drop one stage's frames after its Live mode changed.
-
-    The frame cache assumes a deterministic stage: a frame is a function of its
-    request id. A live stage is a solver history, not a function. Switching
-    either way makes the stored frames describe the wrong semantics, so retire
-    the generation (hot and disk) instead of letting a later pass replay them.
-    """
-    record = engine.stack_mod.stack_of(obj)
-    if record is None or stage is None:
-        return
-    if not record.stack_id:
-        record.stack_id = engine.stack_mod.ensure_stack(obj).stack_id
-    engine._bump_generation(obj, record, stage, "live mode changed")
-    engine._set(stage, "live_frame", engine.stack_mod.LIVE_FRAME_UNSET)
     engine._dirty.add(obj.name)
     engine._mark_hot()
 

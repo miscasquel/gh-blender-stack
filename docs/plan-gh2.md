@@ -89,8 +89,8 @@ Key API facts established:
 - Attribute Get, Attribute Set, and the Point Cloud Points utility.
 - GH2-side persistence, undo, copy/paste, save/reload.
 - GH1 → GH2 document migration rules (optional phase).
-- Protocol v2 compatibility, including the frame cache, keyframes, drivers, and
-  all existing Blender behaviour.
+- Protocol v2 compatibility, including live stages, keyframes, drivers, and all
+  existing Blender behaviour.
 
 ### 2.2 Out of scope for this version
 

@@ -22,11 +22,10 @@ Blender                                     Rhino / Grasshopper (wine)
   the viewport and render toggles are the preview switch. Freeze, Pull, Bake
   stage, Clear Bake, Key all and Purge orphans live in the Stageloom panel and
   the Diagnostics section.
-- The frame cache writes to disk (the add-on's extension user data directory by
-  default; the **Data root** preference overrides it) and fills as you play and
-  scrub. For a final render, **Bake stage** caches the output through a native
-  Geometry Nodes Bake node; **Clear Bake** returns the stage to live
-  Grasshopper.
+- Every stage is live: playing or scrubbing asks Grasshopper again, and a
+  disconnected stage keeps its last output. For offline frames, **Bake stage**
+  writes the output into the stage's native Geometry Nodes Bake node; **Clear
+  Bake** returns the stage to live Grasshopper.
 - The `Param` component takes a **Key** input, which ties the parameter to its
   stage.
 - Text parameters have a plain field (not animatable, by design). A value-list

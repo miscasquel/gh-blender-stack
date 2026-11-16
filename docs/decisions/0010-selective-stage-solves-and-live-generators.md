@@ -2,7 +2,10 @@
 
 **Status:** Proposed, 2026-11-12. The live Rhino/Grasshopper acceptance run is
 still pending; this record is promoted to Accepted when the reference file
-shows one Kangaroo step per Blender frame and no cross-stage answers.
+shows one Kangaroo step per Blender frame and no cross-stage answers. Amended by
+[0016](0016-live-only-stages.md), 2026-11-16: the `live` flag and the frame-cache
+half of section 6 are removed; every stage follows the live rules, and the
+generator/one-way decisions stand.
 
 ## Context
 

@@ -26,32 +26,14 @@ _EMPTY_GEOMETRY_HASH = None
 def _empty_geometry_hash():
     """The geometry hash of a generator stage: the hash of no sections.
 
-    Cached because every generator request names it, and it can never change:
-    a generator has no Stage In, so the object's geometry must not move its
-    request id.
+    Computed once because every generator request names it, and it can never
+    change: a generator has no Stage In, so the object's geometry must not move
+    its request id.
     """
     global _EMPTY_GEOMETRY_HASH
     if _EMPTY_GEOMETRY_HASH is None:
         _EMPTY_GEOMETRY_HASH = engine.hashing.geometry_hash({})
     return _EMPTY_GEOMETRY_HASH
-
-
-def _live_send_due(stage, rid, verify_key, retry_note):
-    """Whether a live stage has a reason to ask again.
-
-    A live stage is stateful: its output advances once per solve, so a pass that
-    only saw the object dirtied (another stage's apply) must not advance it.
-    The triggers are its own request moving, the playhead moving, an armed
-    verification (reconnect/load/unknown_ref) or the hard-timeout retry. The
-    object-level `_force_read` is deliberately not one of them: on a shared
-    object a parameter edit on stage B must not advance live stage A.
-    """
-    return (
-        rid != stage.rid
-        or engine.bpy.context.scene.frame_float != stage.live_frame
-        or verify_key in engine._verify
-        or bool(retry_note)
-    )
 
 
 def _no_send(record, stage, reason, rid=None):
@@ -71,14 +53,14 @@ def _no_send(record, stage, reason, rid=None):
     engine._trace.append("%s: no send (%s)" % (stage.key, reason))
 
 
-def _process_stage(obj, record, stage, force=None):
+def _process_stage(obj, record, stage):
     """One stage's pass. Returns "waiting" (request in flight; stop the stack),
     "busy" (work happened; keep the fast timer), or "idle".
 
-    ``force`` allows a prefix read while no client is connected: a frame change,
-    load, undo/redo or explicit request may be answered by the frame cache. An
-    ordinary edit cannot, and returns before the expensive clone. When omitted,
-    the object's mark in `_force_read` decides; the playback gate passes True.
+    Every delivered request is a solver step. A pass asks when the stage's own
+    request id or the scene frame moved, or when a reconnect, load, resend or
+    timeout armed a new ask. Another stage merely dirtying the shared object is
+    not one of those: it must not advance this stage.
     """
     if engine._stage_key_conflicted(stage.key):
         # A shared key has no proven owner: sending would make one claimant
@@ -91,8 +73,6 @@ def _process_stage(obj, record, stage, force=None):
         # its old key; its own pass splits it first.
         engine._no_send(record, stage, "stage key owned by %s" % owner.name)
         return "idle"
-    if force is None:
-        force = obj.name in engine._force_read
     modifier = engine.nodes.modifier_of(obj, stage)
     if modifier is None and not stage.modifier_uid:
         # A record saved before the uid existed, whose group is gone: the name
@@ -116,15 +96,16 @@ def _process_stage(obj, record, stage, force=None):
         # still holds geometry for a request the stage never saw answered.
         engine._forget(record.stack_id, stage.key)
         engine._sent.pop((record.stack_id, stage.key), None)
+        engine._last_frame.pop((record.stack_id, stage.key), None)
         engine._set(stage, "rid", "")
         engine._set(stage, "state", engine.stack_mod.STATE_DISABLED)
         engine._no_send(record, stage, "disabled")
         return "idle"
     engine._repair_plumbing(obj, record, stage, modifier)
     if stage.frozen and (record.stack_id, stage.key) not in engine._pull_permits:
-        # Freeze: no requests and no cache replay; the helpers keep their last
-        # output. Pull (engine.request_again) plants a one-shot permit above and
-        # works while frozen; it is consumed here.
+        # Freeze: no requests; the helpers keep their last output. Pull
+        # (engine.request_again) plants a one-shot permit above and works while
+        # frozen; it is consumed here.
         engine._set(stage, "state", engine.stack_mod.STATE_FROZEN)
         engine._no_send(record, stage, "frozen")
         return "idle"
@@ -132,22 +113,19 @@ def _process_stage(obj, record, stage, force=None):
     connected = bool(engine.bridge.state["connected"])
     if not connected:
         # No client can answer a new request. Drop any wait: it belonged to a
-        # client that is gone, and a reconnect's hello resets the rest. An
-        # ordinary edit cannot be answered by the cache, so it must not pay for
-        # a prefix clone; a forced read (frame, load, undo/redo, request) can,
-        # and falls through to the cache lookup below.
+        # client that is gone, and a reconnect's hello resets the rest. The
+        # stage keeps its last output, so there is no prefix read to pay for.
         engine._forget(record.stack_id, stage.key)
         engine._waiting_objects.discard(obj.name)
-        if not force:
-            engine._set(
-                stage,
-                "state",
-                engine.stack_mod.STATE_UNBOUND
-                if not stage.applied_out_hash
-                else engine.stack_mod.STATE_DISCONNECTED,
-            )
-            engine._no_send(record, stage, "disconnected")
-            return "idle"
+        engine._set(
+            stage,
+            "state",
+            engine.stack_mod.STATE_UNBOUND
+            if not stage.applied_out_hash
+            else engine.stack_mod.STATE_DISCONNECTED,
+        )
+        engine._no_send(record, stage, "disconnected")
+        return "idle"
 
     # While a request is young, a pass costs nothing: the prefix does not have
     # to be read to know nothing can go out before the soft retry. Without this
@@ -172,72 +150,24 @@ def _process_stage(obj, record, stage, force=None):
 
     # `stage.rid` is deliberately NOT set here. It names the request the stage is
     # waiting on — the answer it must recognise as its own — so it is written only
-    # when a request actually goes out (or when a cached frame is applied). While
-    # a reply is in flight the playhead may have moved on, and updating `stage.rid`
-    # up front would make `_handle_response` discard that reply as stale: during
-    # playback nothing would ever be applied and the output would freeze for as
-    # long as the round trip takes. The wanted frame is fetched on the next pass,
-    # from the frame cache when it is warm.
+    # when a request actually goes out. While a reply is in flight the playhead
+    # may have moved on, and updating `stage.rid` up front would make
+    # `_handle_response` discard that reply as stale: during playback nothing
+    # would ever be applied and the output would freeze for as long as the round
+    # trip takes. The wanted frame is requested on the next pass after this
+    # answer lands.
 
     verify_key = (record.stack_id, stage.key)
-    live = bool(stage.live)
     one_way = not stage.has_stage_out
     if one_way:
         # No Stage Out answers this key. Drop any wait from when it was
         # two-way and deliver the prefix to its Stage In without arming one.
         engine._forget(record.stack_id, stage.key)
-    # A live stage is stateful: a cached frame would replay a solver step the
-    # current state no longer holds, so it never consults the frame cache. A
-    # one-way stage has no answer channel, so a cached response can only be
-    # stale data from when it had one.
-    cached = None if live or one_way else engine._cached_response(record, stage, rid)
-    sent = engine._sent.get(verify_key)
-    # Whether the client has been told *this* request. A frame in the cache is
-    # Blender's answer, not the client's state: cancelling a transform (or an
-    # undo, or a reverted slider) returns the rid to an earlier, cached frame
-    # while the client still holds the intermediate one.
-    client_has = sent is not None and sent[0] == rid
-    # A reconnect or a file load puts the stage on `_verify`: the definition may
-    # have changed while no one was listening, and a cached frame cannot know
-    # it. With a client there, ask; with none, replay the cache as usual and
-    # keep the permit for when one connects.
-    if cached is not None and (verify_key not in engine._verify or not connected):
-        header, cached_sections = cached
-        out_hash = header.get("out_hash") or ""
-        engine._set(stage, "rid", rid)
-        applied = False
-        if out_hash != stage.applied_out_hash or engine._payload_missing(
-            obj, stage, cached_sections
-        ):
-            started = engine.time.monotonic()
-            engine._apply(obj, stage, cached_sections, header.get("attributes"))
-            engine._record_timing(record, stage, "apply_ms", engine._timed_since(started))
-            engine.stats["applies"] += 1
-            engine._set(stage, "applied_out_hash", out_hash)
-            engine._set(stage, "warnings", engine._warnings_text(header))
-            engine._set(stage, "error", "")
-            applied = True
-        else:
-            # The cached frame is the displayed one, but the group may predate
-            # the current format: repairing it here is what lets a replay fix a
-            # stale session (see _handle_response).
-            engine.nodes.ensure_group(obj, stage.key, engine._nested_rows_of(cached_sections))
-        if not connected or client_has:
-            engine._no_send(record, stage, "cache hit", rid)
-            engine._set(stage, "state", engine._rest_state(stage))
-            return "busy" if applied else "idle"
-        # The frame is right for Blender, but the connected client holds some
-        # other request. Applying it is not enough: the client must also be told
-        # the inputs for this rid, or its viewport keeps the cancelled edit (and
-        # the next edit starts from geometry Blender no longer shows). Fall
-        # through and send; the answer carries the same output and is not
-        # re-applied.
 
     if not connected:
-        # A miss with Grasshopper away keeps the last good output; only cached
-        # frames replay (renders use the cache). A stage no document has ever
-        # answered reads unbound instead of disconnected: disconnected means a
-        # client was there and left.
+        # With Grasshopper away the stage keeps its last output. A stage no
+        # document has ever answered reads unbound instead of disconnected:
+        # disconnected means a client was there and left.
         engine._no_send(record, stage, "disconnected", rid)
         engine._set(
             stage,
@@ -255,14 +185,7 @@ def _process_stage(obj, record, stage, force=None):
         # frames while it works only builds a backlog it grinds through after the
         # user has moved on: the client stops responding and every queued frame is
         # one nobody is looking at by the time it arrives. The frame the scene is
-        # on is requested on the first pass after this answer lands, and the answer
-        # itself is stored either way, so an evaluation is never wasted.
-        #
-        # A replay never reaches here — the lookup above answers it first — so a
-        # cached frame is not throttled by whatever is outstanding. The one
-        # frame that can arrive with a request in flight is a verification
-        # (reconnect or load): by then the previous request belonged to the
-        # session that just ended, and `hello`/`load` cleared it.
+        # on is requested on the first pass after this answer lands.
         sent_rid = next(iter(pending))
         sent_at = pending[sent_rid]
         age = engine.time.monotonic() - sent_at
@@ -288,13 +211,23 @@ def _process_stage(obj, record, stage, force=None):
             engine.stats["timeouts"] += 1
             retry_note = "timed out after %.0f s; requesting the geometry again" % engine._timeout()
 
-    # A live stage advances its solver once per delivered request. A pass that
-    # was only dirtied by another stage's apply sees the same request id and the
-    # same frame, and must stay idle: sending there would step the solver twice
-    # per frame. Verification (reconnect/load/unknown_ref) and the timeout retry
-    # are the explicit permits that bypass this gate.
-    if live and not _live_send_due(stage, rid, verify_key, retry_note):
-        engine._no_send(record, stage, "live unchanged")
+    # Every delivered request is a solver step. A pass that was only dirtied by
+    # another stage's apply sees the same request id and the same frame, and must
+    # stay idle: sending there would step the solver twice per frame. A
+    # verification (reconnect/load/unknown_ref) and the timeout retry are the
+    # explicit permits that bypass this gate.
+    last_frame = engine._last_frame.get(verify_key)
+    if (
+        rid == stage.rid
+        and last_frame is not None
+        and last_frame == engine.bpy.context.scene.frame_float
+        and verify_key not in engine._verify
+        and not retry_note
+    ):
+        # Nothing moved, so the displayed output is still current. Settle any
+        # transient state (an unfreeze or a repair leaves `idle`/`unbound`).
+        engine._set(stage, "state", engine._rest_state(stage))
+        engine._no_send(record, stage, "unchanged")
         return "idle"
 
     # Use the session truth, not the saved stage record: undo/redo restores
@@ -333,9 +266,10 @@ def _process_stage(obj, record, stage, force=None):
         engine._no_send(record, stage, "undelivered", rid)
         return "idle"
     engine._verify.discard(verify_key)
-    # The client has now been told this request; from here the frame cache may
-    # answer it without a send (until a reconnect/load/refusal says otherwise).
+    # The client has now been told this request; `_sent` is the session truth for
+    # the next full/ref decision (until undo or a reconnect says otherwise).
     engine._sent[verify_key] = (rid, geom_hash)
+    engine._last_frame[verify_key] = engine.bpy.context.scene.frame_float
     # A Pull permit is spent by the send it caused, not before it: a send that
     # never left (disconnected, undelivered) leaves the Pull armed for the next
     # pass instead of losing it silently.
@@ -358,8 +292,6 @@ def _process_stage(obj, record, stage, force=None):
         # stages and the playback gate never blocks on this one.
         engine._set(stage, "rid", rid)
         engine._set(stage, "geom_hash", geom_hash)
-        if live:
-            engine._set(stage, "live_frame", engine.bpy.context.scene.frame_float)
         engine._set(stage, "state", engine.stack_mod.STATE_OK)
         engine._set(stage, "error", retry_note)
         return "idle"
@@ -368,11 +300,9 @@ def _process_stage(obj, record, stage, force=None):
     engine._state_since[(record.stack_id, stage.key)] = now
     engine._set(stage, "rid", rid)
     engine._set(stage, "geom_hash", geom_hash)
-    if live:
-        # A delivered request is the solver step: the same state does not ask
-        # again until the playhead or the stage's own inputs move on. An
-        # undelivered send returns above and leaves the frame for the retry.
-        engine._set(stage, "live_frame", engine.bpy.context.scene.frame_float)
+    # A delivered request is the solver step: the same state and frame do not ask
+    # again until the playhead or the stage's own inputs move on. An undelivered
+    # send returns above and leaves the frame for the retry.
     engine._set(stage, "state", engine.stack_mod.STATE_WAITING)
     engine._set(stage, "error", retry_note)
     return "waiting"
@@ -729,8 +659,8 @@ def _sections_hash(sections, attributes=None, definitions=None):
     """The request's geometry hash. Attribute *descriptors* are hashed as one
     extra entry, and the instance *definitions* table as another: the section
     names are index-based, so without them a renamed attribute or definition
-    would produce the same hash, the same request id, and a cache hit that
-    silently keeps the old name."""
+    would produce the same hash and the same request id, and the stage would
+    silently keep the old name."""
     raw = {name: engine.codec.section_bytes(name, dtype, values) for name, dtype, values in sections}
     if attributes:
         raw["attr.descriptors"] = engine.codec.canonical_json(attributes).encode("utf-8")

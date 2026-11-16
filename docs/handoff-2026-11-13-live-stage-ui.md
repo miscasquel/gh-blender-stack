@@ -1,7 +1,10 @@
 # Handoff — selective stage solves, generator/live stages, and the N-panel regression
 
 **Date:** 2026-11-13
-**Status:** committed 2026-11-13. The Blender 5.3 UI blocker is fixed and
+**Status:** historical as of 0.7.0 (2026-11-16): the `Live` toggle and custom
+frame cache described below were removed by
+[ADR 0016](decisions/0016-live-only-stages.md); every stage is live. The
+generator/one-way and UI findings stand. Committed 2026-11-13. The Blender 5.3 UI blocker is fixed and
 covered by `blender/tests/headless/test_ui_panel.py`; the stage loop is
 resilient. Live now defaults on for new stages, with a hover description.
 Stage In-only stages are one-way and no longer block playback. 0.5.2 fixes the

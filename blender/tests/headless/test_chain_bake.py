@@ -399,9 +399,8 @@ class _BakeFixture(unittest.TestCase):
         engine = self.engine
         for obj in list(bpy.data.objects):
             bpy.data.objects.remove(obj, do_unlink=True)
-        for cache in (engine._cache, engine._cache_bytes, engine._prefix_memo):
-            cache.clear()
-        for name in ("_pending", "_sent", "_verify", "_dirty", "_force_read"):
+        engine._prefix_memo.clear()
+        for name in ("_pending", "_sent", "_verify", "_last_frame", "_dirty"):
             getattr(engine, name).clear()
         engine._playback_sync = False
         engine._bake_sync = False

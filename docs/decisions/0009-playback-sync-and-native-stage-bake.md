@@ -2,7 +2,9 @@
 
 **Status:** Accepted, 2026-11-08. Amends [0008](0008-simulation-style-frame-cache.md):
 the frame cache remains the default path; a native bake is an explicit render
-path, not the playback path.
+path, not the playback path. Amended by
+[0016](0016-live-only-stages.md), 2026-11-16: the frame cache is removed; the
+Play Every Frame gate and native bake stand, and every frame is a live request.
 
 ## Context
 

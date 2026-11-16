@@ -36,9 +36,6 @@ class StageControlTests(unittest.TestCase):
 
         bpy.ops.stageloom.add_stage(label="Controls")
         cls.stage = cls.obj.gh_stack.stages[0]
-        # The control tests pin deterministic sends and replays; live has its
-        # own suite.
-        cls.stage.live = False
         cls.param_name = "gh/%s/%s" % (cls.stage.key, "00000000-0000-4000-8000-0000000000aa")
         cls.choice_name = "gh/%s/%s" % (cls.stage.key, "00000000-0000-4000-8000-0000000000cc")
 
@@ -100,10 +97,8 @@ class StageControlTests(unittest.TestCase):
         self.assertEqual(self.stage.state, "frozen", "Pull unfroze the stage")
 
     def test_03_push_skips_frozen(self):
-        generation = self.stage.generation
         counts = self.report_counts()
         bpy.ops.stageloom.push()
-        self.assertEqual(self.stage.generation, generation, "Push touched a frozen stage")
         pump(seconds=0.8)
         self.assertEqual(self.stage.state, "frozen")
         self.assertEqual(self.report_counts(), counts, "Push sent a request for a frozen stage")
@@ -153,8 +148,13 @@ class StageControlTests(unittest.TestCase):
         self.assertIsNone(modifier.node_group)
 
         self.mark()
-        self.assertTrue(pump(until=lambda: modifier.node_group is not None))
-        self.assertEqual(self.stage.state, "ok", self.stage.error)
+        self.assertTrue(
+            pump(
+                until=lambda: modifier.node_group is not None
+                and self.stage.state == "ok"
+            ),
+            "the rebuilt stage never settled: %s" % self.stage.error,
+        )
         self.assertEqual(
             modifier.node_group.name,
             self.nodes.group_name(self.stage.key),
@@ -173,22 +173,22 @@ class StageControlTests(unittest.TestCase):
 
         self.mark()
         self.assertTrue(
-            pump(until=lambda: modifier.node_group is not None),
-            "the pre-uid stage was not repaired",
+            pump(
+                until=lambda: modifier.node_group is not None
+                and stage.state == "ok"
+            ),
+            "the pre-uid stage was not repaired: %s" % stage.error,
         )
         self.assertEqual(len(self.obj.gh_stack.stages), 1, "the stage was removed")
         self.assertEqual(stage.modifier_uid, modifier.persistent_uid, "the uid was not re-adopted")
-        self.assertEqual(stage.state, "ok", stage.error)
 
     def test_07_deleting_the_modifier_removes_the_stage(self):
         import stageloom.blender.helpers as helpers
 
         record = self.obj.gh_stack
         key = (record.stack_id, self.stage.key)
-        # Seed the session maps a live stage can own; removal must clear them
-        # rather than leave the cache and timing entries behind.
-        self.engine._cache[key] = {"sha256:" + "0" * 64: (b"x", "")}
-        self.engine._cache_bytes[key] = 1
+        # Seed the session maps a stage can own; removal must clear them rather
+        # than leave stale bookkeeping behind.
         self.engine._state_since[key] = 0.0
         self.engine._timings[key] = {"prefix_ms": 1.0}
         modifier = self.nodes.modifier_of(self.obj, self.stage)
@@ -205,8 +205,6 @@ class StageControlTests(unittest.TestCase):
             bpy.data.node_groups.get(self.nodes.group_name(self.stage.key)),
             "the node group survived removal",
         )
-        self.assertNotIn(key, self.engine._cache, "the hot cache entry survived removal")
-        self.assertNotIn(key, self.engine._cache_bytes, "the cache accounting survived removal")
         self.assertNotIn(key, self.engine._state_since, "the wait stamp survived removal")
         self.assertNotIn(key, self.engine._timings, "the timings survived removal")
         self.assertFalse(self.engine._active, "the last stage left the engine active")

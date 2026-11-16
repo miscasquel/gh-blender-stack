@@ -19,7 +19,7 @@ OLD_MODIFIER_PREFIX = "GH · "
 # chain) is stale even when the object set matches, which is what lets a
 # same-hash frame repair a session that has not applied since the format
 # changed. Version 4: the stage output passes through a native Bake node, so
-# the modifier carries a bake cache that renders without Grasshopper.
+# the modifier carries native bake data that renders without Grasshopper.
 GROUP_FORMAT = 4
 
 # While Blender's native bake job steps frames it holds the evaluated node
@@ -135,7 +135,7 @@ def ensure_group(stack_obj, stage_key, nested_rows=None):
         scale.inputs["Name"].default_value = "scale"
         group.links.new(scale.outputs["Attribute"], iono.inputs["Scale"])
 
-    prototype_cache = {}
+    prototype_by_index = {}
 
     def prototype_join(index):
         """The node chain for one definition's content: its own per-kind
@@ -143,12 +143,12 @@ def ensure_group(stack_obj, stage_key, nested_rows=None):
         the placement points that name it. Memoized, so a DAG shares one chain
         per definition (the graph does not grow per level), and a child's
         geometry stays a reference (no baked copies)."""
-        cached = prototype_cache.get(index)
-        if cached is not None:
-            return cached
+        existing = prototype_by_index.get(index)
+        if existing is not None:
+            return existing
         proto = group.nodes.new("GeometryNodeJoinGeometry")
         proto.location = (-800.0, next_row())
-        prototype_cache[index] = proto
+        prototype_by_index[index] = proto
         objects, _cloud, nested = definitions.get(index, ({}, None, None))
         for kind in helpers.KINDS:
             info = group.nodes.new("GeometryNodeObjectInfo")
@@ -289,7 +289,7 @@ def _definitions(stack_obj, stage_key, nested_rows=None):
     top-level row cloud or None, nested placement cloud or None). A definition
     only a parent instances has no top cloud, so no chain of its own is drawn;
     one that nests children gets a nested cloud even before the first apply
-    fills it, so a chain rebuilt from a cached frame still wires."""
+    fills it, so a rebuilt chain still wires."""
     top = helpers.instance_clouds(stack_obj, stage_key)
     nested = helpers.nested_clouds(stack_obj, stage_key)
     rows = nested_rows or {}
@@ -298,7 +298,7 @@ def _definitions(stack_obj, stage_key, nested_rows=None):
         _collection, objects = helpers.ensure_definition(stack_obj, stage_key, index)
         if index not in nested and rows.get(index):
             # The apply path normally wrote it already; ensuring it here keeps
-            # a rebuild from a cached frame wired (empty until the next apply).
+            # a rebuilt chain wired (empty until the next apply).
             nested[index] = helpers.ensure_nested_cloud(stack_obj, stage_key, index)
         definitions[index] = (objects, top.get(index), nested.get(index))
     return definitions

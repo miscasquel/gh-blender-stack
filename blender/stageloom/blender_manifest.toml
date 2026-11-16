@@ -25,5 +25,5 @@ wheels = ["./wheels/websockets-17.2-py3-none-any.whl"]
 
 [permissions]
 network = "Listen on localhost for the Grasshopper connection"
-files = "Store cached Grasshopper frames under the data root"
+files = "Write the add-on's logs under the data root"
 clipboard = "Copy the stage key to paste into Grasshopper"

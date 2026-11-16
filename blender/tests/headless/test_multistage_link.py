@@ -1,6 +1,5 @@
 """Layer B: multi-stage response gating and link safety."""
 
-import os
 import time
 import unittest
 
@@ -33,8 +32,6 @@ class ResponseValidationTests(unittest.TestCase):
         bpy.ops.preferences.addon_disable(module="stageloom")
 
     def setUp(self):
-        self.engine._cache.clear()
-        self.engine._cache_bytes.clear()
         self.engine._pending.clear()
         self.engine._sent.clear()
         self.engine._pull_permits.clear()
@@ -62,15 +59,7 @@ class ResponseValidationTests(unittest.TestCase):
             "status": "ok",
             "warnings": [],
         }
-        raw = self.engine.codec.encode_frame(
-            header,
-            [
-                ("mesh.verts", "f32", sections["mesh.verts"]),
-                ("mesh.face_counts", "u32", sections["mesh.face_counts"]),
-                ("mesh.face_indices", "u32", sections["mesh.face_indices"]),
-            ],
-        )
-        return header, sections, raw
+        return header, sections
 
     def test_01_empty_rid_is_ignored(self):
         import stageloom.blender.bridge as bridge
@@ -92,15 +81,6 @@ class ResponseValidationTests(unittest.TestCase):
         bridge.post_incoming(header, {})
         self.engine._handle_incoming()
 
-        self.assertIsNone(
-            self.engine._cached_response(self.record, self.stage, ""),
-            "an empty-rid response was cached",
-        )
-        store = self.engine._store_for(self.record, self.stage)
-        self.assertFalse(
-            os.path.exists(store.index.path_for("")),
-            "an empty-rid response reached the disk store",
-        )
         self.assertIn(
             rid,
             self.engine._pending_of(self.record.stack_id, self.stage.key),
@@ -124,26 +104,15 @@ class ResponseValidationTests(unittest.TestCase):
         bridge.post_incoming(header, {})
         self.engine._handle_incoming()
 
-        self.assertIsNone(
-            self.engine._cached_response(self.record, self.stage, rid),
-            "an ok response without an output hash was cached",
-        )
         self.assertEqual(self.stage.applied_out_hash, "")
 
-    def test_03_error_evicts_a_cached_success(self):
+    def test_03_an_error_answers_and_records_the_failure(self):
         import stageloom.blender.bridge as bridge
 
-        rid = "sha256:cached-before-error"
+        rid = "sha256:failing"
         self.stage.rid = rid
-        header, sections, raw = self._frame(rid, "sha256:before")
-        self.engine._remember(self.record, self.stage, rid, header, sections, raw)
-        self.engine._store_frame(self.record, self.stage, rid, header, sections, raw)
         key = (self.record.stack_id, self.stage.key)
         self.engine._pending[key] = {rid: time.monotonic()}
-        self.assertIsNotNone(
-            self.engine._cached_response(self.record, self.stage, rid),
-            "the test did not seed a cached success",
-        )
 
         error = {
             "type": "response",
@@ -156,10 +125,7 @@ class ResponseValidationTests(unittest.TestCase):
         bridge.post_incoming(error, {})
         self.engine._handle_incoming()
 
-        self.assertIsNone(
-            self.engine._cached_response(self.record, self.stage, rid),
-            "the cached success survived the error and would replay",
-        )
+        self.assertNotIn(key, self.engine._pending, "the error left the request pending")
         self.assertEqual(self.stage.state, self.stack_mod.STATE_ERROR)
         self.assertIn("boom", self.stage.error)
 
@@ -172,8 +138,8 @@ class ResponseValidationTests(unittest.TestCase):
         self.stage.frozen = True
         self.stage.state = self.stack_mod.STATE_FROZEN
         self.stage.applied_out_hash = "sha256:before"
-        header, sections, raw = self._frame(rid, "sha256:after")
-        bridge.post_incoming(header, sections, raw)
+        header, sections = self._frame(rid, "sha256:after")
+        bridge.post_incoming(header, sections)
         self.engine._handle_incoming()
 
         self.assertEqual(
@@ -190,8 +156,8 @@ class ResponseValidationTests(unittest.TestCase):
         self.stage.rid = rid
         self.stage.enabled = False
         self.stage.applied_out_hash = "sha256:before"
-        header, sections, raw = self._frame(rid, "sha256:after")
-        bridge.post_incoming(header, sections, raw)
+        header, sections = self._frame(rid, "sha256:after")
+        bridge.post_incoming(header, sections)
         self.engine._handle_incoming()
 
         self.assertEqual(
@@ -200,15 +166,11 @@ class ResponseValidationTests(unittest.TestCase):
             "a disabled stage applied a response",
         )
 
-    def test_06_stale_error_keeps_the_cached_frame_and_newer_pending(self):
+    def test_06_a_stale_error_keeps_the_newer_pending_request(self):
         import stageloom.blender.bridge as bridge
 
-        old_rid = "sha256:cached-before-stale-error"
+        old_rid = "sha256:stale-error"
         new_rid = "sha256:newer-pending"
-        header, sections, raw = self._frame(old_rid, "sha256:old")
-        self.engine._remember(self.record, self.stage, old_rid, header, sections, raw)
-        self.engine._store_frame(self.record, self.stage, old_rid, header, sections, raw)
-
         key = (self.record.stack_id, self.stage.key)
         self.stage.rid = new_rid
         self.stage.state = self.stack_mod.STATE_WAITING
@@ -225,10 +187,6 @@ class ResponseValidationTests(unittest.TestCase):
         bridge.post_incoming(error, {})
         self.engine._handle_incoming()
 
-        self.assertIsNotNone(
-            self.engine._cached_response(self.record, self.stage, old_rid),
-            "a stale error evicted a good cached frame",
-        )
         self.assertIn(
             new_rid,
             self.engine._pending_of(self.record.stack_id, self.stage.key),
@@ -272,9 +230,6 @@ class ResponseValidationTests(unittest.TestCase):
         rid = "sha256:idle-last-rid"
         self.stage.rid = rid
         self.stage.state = self.stack_mod.STATE_OK
-        header, sections, raw = self._frame(rid, "sha256:good")
-        self.engine._remember(self.record, self.stage, rid, header, sections, raw)
-        self.engine._store_frame(self.record, self.stage, rid, header, sections, raw)
 
         error = {
             "type": "response",
@@ -287,10 +242,6 @@ class ResponseValidationTests(unittest.TestCase):
         bridge.post_incoming(error, {})
         self.engine._handle_incoming()
 
-        self.assertIsNotNone(
-            self.engine._cached_response(self.record, self.stage, rid),
-            "an unsolicited error evicted an idle stage's cached frame",
-        )
         self.assertEqual(self.stage.state, self.stack_mod.STATE_OK)
         self.assertEqual(self.stage.error, "")
 
@@ -341,15 +292,15 @@ class ResponseValidationTests(unittest.TestCase):
             "the disabled stage kept the sent request id",
         )
 
-    def test_10_load_clears_a_live_stage_request_id_before_verify(self):
+    def test_10_load_clears_a_saved_request_id_before_verify(self):
         import stageloom.blender.bridge as bridge
 
-        rid = "sha256:saved-live-rid"
+        rid = "sha256:saved-rid"
         self.stage.frozen = False
         self.stage.rid = rid
         self.stage.state = self.stack_mod.STATE_OK
         self.stage.applied_out_hash = "sha256:before-load"
-        header, sections, raw = self._frame(rid, "sha256:after-load")
+        header, sections = self._frame(rid, "sha256:after-load")
 
         self.engine._on_load()
 
@@ -358,9 +309,10 @@ class ResponseValidationTests(unittest.TestCase):
             "",
             "a non-frozen stage kept the request id saved with the file",
         )
-        # A response was already queued when the file opened. It must be
-        # cached, not applied: the load has to verify with Grasshopper first.
-        bridge.post_incoming(header, sections, raw)
+        # A response was already queued when the file opened. It is for a
+        # request the load no longer waits for, so it must be dropped: the load
+        # has to ask Grasshopper again first.
+        bridge.post_incoming(header, sections)
         self.engine._handle_incoming()
         self.assertEqual(
             self.stage.applied_out_hash,

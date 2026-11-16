@@ -131,7 +131,7 @@ class DuplicateStageTests(unittest.TestCase):
         self.assertNotEqual(
             self.dup.gh_stack.stack_id,
             self.obj.gh_stack.stack_id,
-            "the copy kept the cache namespace",
+            "the copy kept the stack session identity",
         )
         self.assertEqual(
             dup_stage.key,

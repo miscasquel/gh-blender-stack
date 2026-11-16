@@ -61,7 +61,7 @@ Sent once per connection, first.
 
 - `stages` lists every Stage In or Stage Out in the document, with its key and enabled flag.
 - `has_stage_in` (optional, additive) is `true` when at least one Stage In component claims the key. `false` means the stage has only a Stage Out: it is a **generator**, ignores inbound geometry and is driven entirely by its Params. A reader that does not know the field treats its absence as unknown and keeps whatever mode it has saved.
-- `has_stage_out` (optional, additive) is `true` when at least one Stage Out component claims the key. `false` means the stage is a **one-way consumer**: its Stage In still receives geometry, but nothing answers, so Blender must not wait for, apply or cache a response. Absence means unknown; a reader keeps its saved two-way behavior. GH republishes `hello` when either presence value changes.
+- `has_stage_out` (optional, additive) is `true` when at least one Stage Out component claims the key. `false` means the stage is a **one-way consumer**: its Stage In still receives geometry, but nothing answers, so Blender must not wait for or apply a response. Absence means unknown; a reader keeps its saved two-way behavior. GH republishes `hello` when either presence value changes.
 - `doc` is the document's file name. It is for display only.
 
 ### 4.2 `schema` (GH → Blender)
@@ -278,9 +278,9 @@ for section in [sections in the order of §5 table, only those present]:
 
 Prefixed with `sha256:` and hex-encoded. Computed with numpy on the Blender side. Never a hash of a file.
 
-**Attributes take part.** When the frame carries attributes, their descriptor list (§5.1) is hashed as one extra entry named `attr.descriptors`, holding the canonical JSON of the list. Section names are index-based (`attr.0.values`), so without the descriptors a renamed attribute would hash identically and a cache hit would silently keep the old name.
+**Attributes take part.** When the frame carries attributes, their descriptor list (§5.1) is hashed as one extra entry named `attr.descriptors`, holding the canonical JSON of the list. Section names are index-based (`attr.0.values`), so without the descriptors a renamed attribute would hash identically and the stage would silently keep the old name.
 
-**Instances take part.** Definition sections (`idef.<i>.*`) hash in definition-index order, each definition after the other, so the hash does not depend on section order; `inst.ref_def` / `inst.transforms` hash in the §5-order after the geometry sections. The `definitions` header list is hashed as one extra entry named `definitions`, canonical JSON, for the same reason as the attribute descriptors: a rename alone must not look like a cache hit.
+**Instances take part.** Definition sections (`idef.<i>.*`) hash in definition-index order, each definition after the other, so the hash does not depend on section order; `inst.ref_def` / `inst.transforms` hash in the §5-order after the geometry sections. The `definitions` header list is hashed as one extra entry named `definitions`, canonical JSON, for the same reason as the attribute descriptors: a rename alone must not look like the same request.
 
 ### 6.2 Request ID (Blender only)
 
@@ -303,9 +303,9 @@ SHA-256 over the response sections, in header order: name (UTF-8), 0x00, raw byt
 ### 6.4 Apply rules (Blender)
 
 1. A response is applied when its `stage` matches, its `rid` equals the stage's current request ID, and its `out_hash` differs from the applied one.
-2. A response for another `rid` is stored in the cache under its own `rid`. It is not applied.
+2. A response for another `rid` is a late answer to a superseded request. It is dropped, never applied and never stored.
 3. A response with the current `rid` and a new `out_hash` (GH-initiated change) is applied.
-4. A cached result for the current `rid` is applied without sending anything to GH.
+4. There is no cached result to apply: the next pass for a moved request id or frame sends a new request.
 5. An `error` response keeps the last good output and sets the stage to `error`. A later applied response clears the error.
 
 ## 7. Lifecycle
@@ -387,3 +387,6 @@ Twelve fixtures, covering `ping`, `hello`, `schema`, a `ref` request, a mesh req
   geometry to its Stage In, but no response is expected. Additive inside v2;
   the existing `hello` fixture intentionally has no such fields and remains a
   valid old-version frame.
+- 2026-11-16: Blender's local frame cache and `Live` toggle are removed. The wire
+  is unchanged; §6.4 now drops a response for a superseded `rid` instead of
+  storing it, and every frame is a live request ([ADR 0016](decisions/0016-live-only-stages.md)).

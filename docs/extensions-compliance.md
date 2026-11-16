@@ -10,7 +10,7 @@ history is in [`../CHANGELOG.md`](../CHANGELOG.md) and the GitHub releases.
 |---|---|---|
 | G1 `network` / `online_access` | **Closed** | `server.py` gates `start()`; the operator re-checks; `blender/tests/offline/run.py` proves the off state and the Start recovery |
 | G2 `sys.path` | **Closed** | no code path; only comments/vendor; the zip excludes `vendor/` |
-| G3 `files` | **Closed** | manifest |
+| G3 `files` | **Closed** | manifest; logs only (the frame cache was removed in 0.7, ADR 0016) |
 | G4 `clipboard` | **Closed** | manifest |
 | G5 licence | **Closed** | `LICENSE` grant + copyright, manifest `SPDX:GPL-3.0-or-later`, README |
 | G6 `bl_info` | **Closed** | shipped `__init__.py` has none; `scripts/install-addon` generates it from the manifest |

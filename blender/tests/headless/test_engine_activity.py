@@ -4,9 +4,9 @@ Run with:
 
     scripts/test-blender
 
-Pinned here: a stage-less file has no timer or per-frame handlers; an ordinary
-edit with no client skips the prefix read while a forced read still takes it;
-and an all-dirty pass does not force a second depsgraph evaluation.
+Pinned here: a stage-less file has no timer or per-frame handlers; an edit with
+no client skips the prefix read; and an all-dirty pass does not force a second
+depsgraph evaluation.
 """
 
 import unittest
@@ -33,9 +33,8 @@ class DisconnectedFastPathTests(unittest.TestCase):
         cls.obj = bpy.context.object
         bpy.ops.stageloom.add_stage(label="NoClient")
         cls.stage = cls.obj.gh_stack.stages[0]
-        # The first pass reads the forced prefix and settles as disconnected.
         engine._timer()
-        if engine._dirty or engine._force_read:
+        if engine._dirty:
             raise AssertionError("the disconnected stage never settled")
 
     @classmethod
@@ -47,7 +46,7 @@ class DisconnectedFastPathTests(unittest.TestCase):
         self.obj.update_tag()
         bpy.context.view_layer.update()
 
-    def test_01_an_ordinary_edit_skips_the_read_and_a_forced_one_does_not(self):
+    def test_01_an_edit_with_no_client_skips_the_read(self):
         engine = self.engine
         clones = engine.stats["prefix_clones"]
         self._edit()
@@ -57,16 +56,6 @@ class DisconnectedFastPathTests(unittest.TestCase):
             self.stage.state,
             (engine.stack_mod.STATE_DISCONNECTED, engine.stack_mod.STATE_UNBOUND),
         )
-
-        self._edit()
-        engine._mark_dirty_all(force=True)
-        engine._timer()
-        self.assertGreater(
-            engine.stats["prefix_clones"],
-            clones,
-            "a forced read was skipped while disconnected",
-        )
-        self.assertFalse(engine._force_read, "the pass left a forced read armed")
 
     def test_02_the_drain_policy(self):
         engine = self.engine
@@ -83,7 +72,6 @@ class DisconnectedFastPathTests(unittest.TestCase):
         finally:
             engine._in_background = real_background
             engine._dirty.clear()
-            engine._force_read.clear()
 
 
 if __name__ == "__main__":

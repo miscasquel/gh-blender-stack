@@ -92,7 +92,7 @@ def main():
         default_root,
     )
 
-    # Keep the frame cache out of the real user data root for the round trip.
+    # Keep this round trip's add-on data out of the real user data root.
     try:
         bpy.context.preferences.addons[MODULE].preferences.data_root = tempfile.mkdtemp(
             prefix="stageloom-installed-test-"
@@ -100,7 +100,7 @@ def main():
     except KeyError:
         pass
     check(
-        "frame cache kept out of the real data root",
+        "add-on data root kept out of the real user data root",
         bpy.context.preferences.addons[MODULE].preferences.data_root.startswith(tempfile.gettempdir()),
         bpy.context.preferences.addons[MODULE].preferences.data_root,
     )

@@ -10,7 +10,7 @@ read by the UI; the values are simple enough that no lock is needed.
 import queue
 import time
 
-INCOMING = queue.Queue()  # (header dict, sections dict, raw frame or None)
+INCOMING = queue.Queue()  # (header dict, sections dict)
 
 state = {
     "listening": False,
@@ -26,17 +26,13 @@ state = {
 }
 
 
-def post_incoming(header, sections, raw=None):
-    """Queue one decoded frame with the bytes it arrived as, when available.
-
-    The raw frame is the hot cache's storage form: decoding is deferred until a
-    replay, and the disk store writes the same bytes instead of re-encoding a
-    response the socket thread already had."""
-    INCOMING.put((header, sections, raw))
+def post_incoming(header, sections):
+    """Queue one decoded frame for the main thread."""
+    INCOMING.put((header, sections))
 
 
 def drain_incoming():
-    """All queued (header, sections, raw) triples, oldest first."""
+    """All queued (header, sections) pairs, oldest first."""
     items = []
     while True:
         try:

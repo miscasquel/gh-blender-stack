@@ -13,11 +13,11 @@ that", because each one cost a release:
    (`modifier.properties.inputs`), which are ID properties, not RNA properties:
    a `bl_rna` walk cannot see them, and `keys()` raises on a Blender 5.2
    modifier. Dragging one of those sliders left the revision - and so the
-   memoized sections, the geometry hash, the request id and the frame cache -
+   memoized sections, the geometry hash and the request id -
    exactly where they were: the stage answered the same rid with the frame from
    before the edit and never asked Grasshopper anything.
-2. A cache reset (Push) must retire the memoized prefix as well as the frame
-   store, or the "recovery" re-sends the same geometry.
+2. Push must retire the memoized prefix, or the "recovery" re-sends the same
+   geometry.
 3. A prefix that reads another object must follow it: Blender tags the object
    that moved, and any tag moves the generation.
 """
@@ -206,9 +206,9 @@ class ModifierInputMemoTests(unittest.TestCase):
 class ResetRetiresMemoTests(unittest.TestCase):
     """Push must carry the geometry the scene is showing.
 
-    Push resets the frame cache; before it also retired the memoized prefix, a
-    stale stage could not be recovered by anything the add-on offered: the
-    re-request went out with the same geometry and produced the same output.
+    Before Push retired the memoized prefix, a stale stage could not be
+    recovered by anything the add-on offered: the re-request went out with the
+    same geometry and produced the same output.
     """
 
     @classmethod

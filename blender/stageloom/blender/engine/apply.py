@@ -149,7 +149,7 @@ def _apply(obj, stage, sections, attributes=None):
     # stack are stale: an upstream prefix cannot contain this stage's output,
     # and neither can this stage's own prefix (which ends before its modifier).
     # Clearing the whole batch on every apply rebuilt all N prefixes for every
-    # stage of a cached multi-stage pass, which is quadratic on playback.
+    # stage of a multi-stage pass, which is quadratic on playback.
     _invalidate_prefix_batch(obj, stage)
     # The per-helper writes stamp their own geometry, but instance rows,
     # definition collections and cloud removals only touch helper data the memo

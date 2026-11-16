@@ -1,9 +1,10 @@
 """The engine: one tick per timer pass, per stack object.
 
-A pass serves each stage from the memory cache, the disk store, or Grasshopper.
-Cached frames replay with Grasshopper closed; an uncached frame keeps the last
-good output. A stage-less file runs no timer or per-frame handlers. Nothing here
-touches the socket directly: frames go through the bridge.
+Every stage is live: a delivered request is a solver step. A pass asks again
+when the stage's own inputs or the frame move; an answer for a superseded
+request is dropped, and a disconnected stage keeps its last output. A stage-less
+file runs no timer or per-frame handlers. Nothing here touches the socket
+directly: frames go through the bridge.
 """
 
 import sys
@@ -14,7 +15,6 @@ import bpy
 import numpy as np
 
 from ...core import attributes as attributes_mod
-from ...core import cache as frame_cache
 from ...core import codec, hashing
 from .. import bridge, geometry_io, helpers, nodes, prefs, props, server, stack as stack_mod
 
@@ -37,12 +37,9 @@ HOT_SECONDS = 1.0
 # it. The hard `_timeout()` still covers an answer that never comes.
 SOFT_RETRY_SECONDS = 1.0
 
-_cache = {}  # (stack_id, stage_key) -> {rid: (raw frame, out_hash)}; the hot path
-_cache_bytes = {}  # (stack_id, stage_key) -> bytes currently held by its cache
-_stores = {}  # (stack_id, stage_key) -> ResponseStore; the backing store
 _prefix_memo = {}  # (obj.as_pointer(), stage key) -> {"revision": tuple, "sections": list}
 # One depsgraph evaluation can serve every stage prefix on an object. The batch
-# is built on the first cache miss in a pass; an apply drops the entries below
+# is built on the first prefix read in a pass; an apply drops the entries below
 # it in the modifier stack (upstream entries and its own prefix stay valid), and
 # the pass clears what is left when it ends.
 _prefix_batch = {}  # (obj.as_pointer(), stage key) -> (sections, attributes, definitions)
@@ -59,10 +56,9 @@ _pull_permits = set()
 # list of "what a prefix reads" is a hand-maintained description of the
 # depsgraph, and a missing entry is silent stale geometry. Tagged is tagged.
 _prefix_epoch = 0
-# (stack_id, stage_key) pairs that must ask Grasshopper even when a cached frame
-# answers the request id: a reconnect or a file load means the definition may
-# have changed while the add-on was away, and the frame cache cannot know it.
-# Consumed when the verification request is actually sent.
+# (stack_id, stage_key) pairs that must ask Grasshopper even when their request
+# id and frame are unchanged: a reconnect, a file load or an unknown_ref means
+# the client may hold something else. Consumed when the request is sent.
 _verify = set()
 # The last events the engine acted on, for the Diagnostics panel: a bounded ring
 # of "what did it see, what did it do" lines. Never saved.
@@ -93,22 +89,20 @@ _timings = {}
 # an answer is outstanding is not queued behind it, because Grasshopper solves in
 # arrival order on one thread and a queue of frames the user has already scrubbed
 # past only keeps the client busy after they have moved on. The frame the playhead
-# is on is asked for on the first pass after the answer lands, and every answer is
-# stored either way, so nothing evaluated is wasted.
+# is on is asked for on the first pass after the answer lands.
 _pending = {}
 # (stack_id, stage_key) -> (rid, geometry hash) of the last request actually
 # handed to a connected client. The stage record is saved *and undoable*: an
 # undo restores `geom_hash`/`rid` from the undo step, which says nothing about
 # what the client currently holds. This map is connection state, never saved:
-# the cache may answer a request without asking only while the client has been
-# told that exact request (see `_process_stage`), and the request mode is
-# decided against the geometry named here, not against a rolled-back field.
+# the request mode is decided against the geometry named here, not against a
+# rolled-back field.
 _sent = {}
+# (stack_id, stage_key) -> scene frame of the last delivered request. A frame
+# change is one of the two things that ask a live stage to solve again; the other
+# is a moved request id. Session-only, like `_sent`.
+_last_frame = {}
 _dirty = set()  # object names that need a pass
-# Object names whose pass must read the prefix even while no client is
-# connected: a cached frame may answer a frame/load/undo/request. An ordinary
-# edit cannot, so it keeps the last output without a clone (see _process_stage).
-_force_read = set()
 # Stage and stack lookup, rebuilt on load/undo and patched as stages change.
 # The handlers run on the main thread, so direct object references are safe;
 # a rename follows the reference, unlike a name-keyed index.
@@ -157,7 +151,7 @@ _evaluating = False
 _playback_sync = False
 # True while a native Geometry Nodes Bake is running. Its bake job steps frames
 # and fires frame_change_post, so the same synchronous stage pass runs per frame
-# and the Bake node caches the current Grasshopper output. The timer stays out
+# and the Bake node stores the current Grasshopper output. The timer stays out
 # of the way for the duration.
 _bake_sync = False
 # (window_manager, start_frame, total_frames) while a bake runs, so the frame
@@ -314,11 +308,6 @@ def _mark_hot():
 
 
 
-# ------------------------------------------------------------------- cache/store
-
-
-
-
 
 
 
@@ -365,7 +354,7 @@ def _stage_has_modifier(obj, stage):
 
 
 
-# ------------------------------------------------------------------ prefix cache
+# ----------------------------------------------------------------- prefix reads
 
 
 
@@ -463,7 +452,6 @@ def _deactivate():
     _bake_sync = False
     _bake_progress = None
     _dirty.clear()
-    _force_read.clear()
     return False
 
 
@@ -507,11 +495,9 @@ def register():
     # Leaving them behind served a stale prefix and stale counters across a
     # disable/enable. `_dirty` is left alone — it discards nameless objects on its
     # own, and clearing it could skip the first pass a stack needs.
-    _stores.clear()
-    _cache.clear()
-    _cache_bytes.clear()
     _pending.clear()
     _sent.clear()
+    _last_frame.clear()
     _prefix_memo.clear()
     _prefix_batch.clear()
     _prefix_batch_built = False
@@ -521,7 +507,6 @@ def register():
     _pull_permits.clear()
     _last_no_send.clear()
     _timings.clear()
-    _force_read.clear()
     # The prefix guard and tick flag are session state: register is a clean
     # start, with the watchdog left as the in-session guard.
     _evaluating = False
@@ -538,8 +523,6 @@ def register():
         stats[counter] = 0
     # A UI-driven parameter write (the choice dropdown) must reach the engine.
     stack_mod.set_param_changed_hook(_mark_object_dirty)
-    # Live is a cache-semantics switch, not just another parameter.
-    stack_mod.set_stage_cache_reset_hook(_reset_stage_cache)
     # Lifecycle handlers are persistent and always present: Blender clears
     # non-persistent handlers and timers on every file load, and a dormant
     # engine still has to notice a loaded file that contains stages. The
@@ -573,7 +556,6 @@ def unregister():
     if not _registered:
         return
     stack_mod.set_param_changed_hook(None)
-    stack_mod.set_stage_cache_reset_hook(None)
     _deactivate()
     if bpy.app.timers.is_registered(_settle):
         bpy.app.timers.unregister(_settle)
@@ -593,17 +575,6 @@ from .diagnostics import (
     tick_rate,
     trigger_health,
     waiting_seconds,
-)
-from .cache_ops import (
-    _bump_generation,
-    _cached_response,
-    _definition,
-    _drop_hot,
-    _forget_frame,
-    _frame_bytes,
-    _remember,
-    _store_for,
-    _store_frame,
 )
 from .apply import (
     _apply,
@@ -655,7 +626,6 @@ from .lifecycle import (
     _mark_dirty_all,
     _mark_object_dirty,
     _ordered_stages,
-    _reset_stage_cache,
     _process_object,
     _rebuild_index,
     _reindex_object,
@@ -728,7 +698,6 @@ __all__ = [
     "sys",
     "np",
     "attributes_mod",
-    "frame_cache",
     "codec",
     "hashing",
     "bridge",
@@ -749,15 +718,6 @@ __all__ = [
     "tick_rate",
     "trigger_health",
     "waiting_seconds",
-    "_bump_generation",
-    "_cached_response",
-    "_definition",
-    "_drop_hot",
-    "_forget_frame",
-    "_frame_bytes",
-    "_remember",
-    "_store_for",
-    "_store_frame",
     "_apply",
     "_apply_attributes",
     "_apply_curves",
@@ -803,7 +763,6 @@ __all__ = [
     "_mark_dirty_all",
     "_mark_object_dirty",
     "_ordered_stages",
-    "_reset_stage_cache",
     "_process_object",
     "_rebuild_index",
     "_reindex_object",

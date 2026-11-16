@@ -312,7 +312,7 @@ class AttributeEngineTests(unittest.TestCase):
 
     def test_03_an_attribute_value_change_is_new_geometry(self):
         """Attribute values are part of the geometry hash: editing one makes the
-        stage request again instead of hitting the cache."""
+        stage request again instead of reusing the old request id."""
         import stageloom.blender.engine as engine
 
         mesh = quad_mesh("hash-quad")

@@ -26,8 +26,8 @@ Scenarios
     A three-stage chain at 10k triangles: one dirty pass, the full chain settle
     and the idle pass, all against three fake clients.
 ``playback``
-    A live stage over 30 frames: per-frame send-to-apply latency, one request
-    per frame, no cache replay.
+    A stage over 30 frames: per-frame send-to-apply latency, one delivered
+    request per frame.
 
 The reported numbers are engine pass times and protocol work. They do not
 include Grasshopper's own solve (a live Rhino run measures that); the fake's
@@ -122,7 +122,6 @@ def stop_addon():
 def reset_scene():
     """A clean file between scenarios, with the engine's transient state gone."""
     engine._dirty.clear()
-    engine._force_read.clear()
     engine._pending.clear()
     engine._sent.clear()
     engine._verify.clear()
@@ -671,7 +670,7 @@ def scenario_multistage(args, report):
         obj.data.vertices.foreach_set("co", arr)
         obj.update_tag()
         bpy.context.view_layer.update()
-        engine._mark_dirty_all(force=True)
+        engine._mark_dirty_all()
         started = time.monotonic()
         engine._timer()
         dirty_samples.append((time.monotonic() - started) * 1000.0)
@@ -682,7 +681,6 @@ def scenario_multistage(args, report):
 
     # The idle pass: nothing dirty, no request in flight, the timer still ticks.
     engine._dirty.clear()
-    engine._force_read.clear()
     idle_samples = []
     for _ in range(20):
         started = time.monotonic()
@@ -731,7 +729,6 @@ def scenario_playback(args, report):
     verts, quads, actual = grid_arrays(10_000)
     obj = mesh_object("playback", verts, quads)
     stage = add_stage(obj, "Playback")
-    stage.live = True
     record = stack_mod.stack_of(obj)
     port = free_port()
     report_path = os.path.join(DATA_ROOT, "playback-report.json")
@@ -745,7 +742,7 @@ def scenario_playback(args, report):
     # Park the playhead before frame 1 and let the setup request settle there:
     # the connect-time answer is setup, and frame 1 must be a real step.
     bpy.context.scene.frame_set(bpy.context.scene.frame_start - 1)
-    engine._mark_dirty_all(force=True)
+    engine._mark_dirty_all()
     if not wait_for_stages(record, 30.0):
         raise RuntimeError("playback setup did not settle: %s" % stage.state)
     time.sleep(0.05)
@@ -756,7 +753,7 @@ def scenario_playback(args, report):
     per_frame = []
     for frame in range(1, frames + 1):
         bpy.context.scene.frame_set(frame)
-        engine._mark_dirty_all(force=True)
+        engine._mark_dirty_all()
         started = time.monotonic()
         if not wait_for_stages(record, 30.0):
             raise RuntimeError("playback frame did not settle: %s" % stage.state)
