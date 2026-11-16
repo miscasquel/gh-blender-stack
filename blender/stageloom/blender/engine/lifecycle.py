@@ -388,6 +388,7 @@ def _split_stage(obj, stage, new_key=None):
     engine._set(stage, "applied_out_hash", "")
     engine._set(stage, "error", "")
     engine._set(stage, "warnings", "")
+    engine._set(stage, "input_warnings", "")
     engine._set(stage, "nonce", 0)
     # The duplicate is a new claimant: the original's Clear Bake must not
     # unfreeze it, and its own stale token owns no upstream stages.

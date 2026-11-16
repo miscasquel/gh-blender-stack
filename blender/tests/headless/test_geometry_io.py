@@ -48,6 +48,15 @@ def sections_dict(sections):
     return {name: values for name, dtype, values in sections}
 
 
+def _linear_to_srgb(values):
+    linear = np.clip(np.asarray(values, dtype=np.float32), 0.0, 1.0)
+    return np.where(
+        linear <= 0.0031308,
+        linear * 12.92,
+        1.055 * np.power(linear, 1.0 / 2.4) - 0.055,
+    )
+
+
 class SectionRoundTripTests(unittest.TestCase):
     def setUp(self):
         # A clean file per test: remove everything the previous test made.
@@ -95,6 +104,130 @@ class SectionRoundTripTests(unittest.TestCase):
         obj.data.vertices.foreach_get("co", co)
         np.testing.assert_allclose(co.reshape(-1, 3), moved, rtol=0, atol=1e-6)
 
+    def test_topology_change_with_equal_loop_count_rebuilds_faces(self):
+        """[4,4] -> [3,5] keeps six vertices and eight loops; a length-only
+        check would leave the old faces in place."""
+        verts = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0), (2, 0, 0), (2, 1, 0)]
+        target = new_mesh_object(
+            "topology-target", verts, [(0, 1, 2, 3), (1, 2, 3, 4)]
+        )
+        sections = [
+            ("mesh.verts", "f32", np.asarray(verts, dtype=np.float32)),
+            ("mesh.face_counts", "u32", np.array([3, 5], dtype=np.uint32)),
+            ("mesh.face_indices", "u32", np.array([0, 1, 2, 0, 1, 2, 3, 4], dtype=np.uint32)),
+        ]
+        geometry_io.sections_to_mesh(target.data, sections)
+
+        counts = np.empty(len(target.data.polygons), dtype=np.uint32)
+        target.data.polygons.foreach_get("loop_total", counts)
+        np.testing.assert_array_equal(counts, [3, 5])
+        indices = np.empty(len(target.data.loops), dtype=np.uint32)
+        target.data.loops.foreach_get("vertex_index", indices)
+        np.testing.assert_array_equal(indices, [0, 1, 2, 0, 1, 2, 3, 4])
+
+    def test_quad_diagonal_flip_with_identical_counts_rebuilds_faces(self):
+        verts = [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0), (2, 0, 0), (2, 1, 0)]
+        target = new_mesh_object(
+            "flip-target", verts, [(0, 1, 2, 3), (1, 2, 3, 4)]
+        )
+        flipped = np.array([0, 1, 3, 2, 1, 2, 4, 3], dtype=np.uint32)
+        sections = [
+            ("mesh.verts", "f32", np.asarray(verts, dtype=np.float32)),
+            ("mesh.face_counts", "u32", np.array([4, 4], dtype=np.uint32)),
+            ("mesh.face_indices", "u32", flipped),
+        ]
+        geometry_io.sections_to_mesh(target.data, sections)
+
+        indices = np.empty(len(target.data.loops), dtype=np.uint32)
+        target.data.loops.foreach_get("vertex_index", indices)
+        np.testing.assert_array_equal(indices, flipped)
+
+    def test_identical_topology_takes_the_position_only_fast_path(self):
+        verts, faces = grid_verts_faces(4, 4)
+        obj = new_mesh_object("fast-path", verts, faces)
+        sections = geometry_io.mesh_to_sections(obj.data)
+        by = sections_dict(sections)
+        moved = by["mesh.verts"] + np.float32(1.0)
+
+        original_faces_from = geometry_io._faces_from
+
+        def must_not_rebuild(*args):
+            raise AssertionError("a true topology match rebuilt the mesh")
+
+        geometry_io._faces_from = must_not_rebuild
+        try:
+            geometry_io.sections_to_mesh(
+                obj.data,
+                [("mesh.verts", "f32", moved)]
+                + [(n, d, v) for n, d, v in sections if n != "mesh.verts"],
+            )
+        finally:
+            geometry_io._faces_from = original_faces_from
+
+        co = np.empty(len(obj.data.vertices) * 3, dtype=np.float32)
+        obj.data.vertices.foreach_get("co", co)
+        np.testing.assert_allclose(co.reshape(-1, 3), moved, rtol=0, atol=1e-6)
+
+    def test_mesh_and_subd_groups_are_selected_as_units(self):
+        verts = np.asarray(
+            [(0, 0, 0), (1, 0, 0), (0, 1, 0), (1, 1, 0)], dtype=np.float32
+        )
+        mesh_sections = [
+            ("mesh.verts", "f32", verts),
+            ("mesh.face_counts", "u32", np.array([3], dtype=np.uint32)),
+            ("mesh.face_indices", "u32", np.array([0, 1, 2], dtype=np.uint32)),
+        ]
+        subd_sections = [
+            ("subd.verts", "f32", verts + np.float32(5.0)),
+            ("subd.face_counts", "u32", np.array([4], dtype=np.uint32)),
+            ("subd.face_indices", "u32", np.array([0, 1, 3, 2], dtype=np.uint32)),
+        ]
+
+        mesh_only = bpy.data.meshes.new("mesh-only")
+        geometry_io.sections_to_mesh(mesh_only, mesh_sections)
+        self.assertEqual(len(mesh_only.polygons), 1)
+        self.assertEqual(mesh_only.polygons[0].loop_total, 3)
+
+        subd_only = bpy.data.meshes.new("subd-only")
+        geometry_io.sections_to_mesh(subd_only, subd_sections)
+        self.assertEqual(subd_only.polygons[0].loop_total, 4)
+        np.testing.assert_allclose(
+            [subd_only.vertices[0].co[:]], [[5.0, 5.0, 5.0]], rtol=0, atol=1e-6
+        )
+
+        both = bpy.data.meshes.new("both")
+        geometry_io.sections_to_mesh(both, mesh_sections + subd_sections)
+        self.assertEqual(both.polygons[0].loop_total, 3, "mesh must win when both are complete")
+        np.testing.assert_allclose(
+            [both.vertices[0].co[:]], [[0.0, 0.0, 0.0]], rtol=0, atol=1e-6
+        )
+
+        for sections in (
+            mesh_sections + subd_sections[:1],
+            mesh_sections[:1] + subd_sections,
+        ):
+            with self.subTest(sections=[name for name, _dtype, _values in sections]):
+                with self.assertRaises(geometry_io.GeometryIOError):
+                    geometry_io.sections_to_mesh(bpy.data.meshes.new("partial"), sections)
+
+    def test_unmatched_crease_edges_are_noted(self):
+        mesh = bpy.data.meshes.new("crease-note")
+        mesh.from_pydata(
+            [(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)], [], [(0, 1, 2, 3)]
+        )
+        mesh.update()
+        notes = []
+        geometry_io.write_creases(
+            mesh,
+            (
+                np.array([[0, 99], [0, 1]], dtype=np.uint32),
+                np.array([1.0, 0.5], dtype=np.float32),
+            ),
+            notes=notes,
+        )
+        self.assertEqual(len(notes), 1)
+        self.assertIn("1 crease edge", notes[0])
+
     def test_colors_round_trip(self):
         verts, faces = grid_verts_faces(3, 3)
         obj = new_mesh_object("colors", verts, faces)
@@ -116,6 +249,59 @@ class SectionRoundTripTests(unittest.TestCase):
         got.foreach_get("color_srgb", back_f)
         back = np.clip(np.rint(back_f * 255.0), 0.0, 255.0).astype(np.uint8).reshape(-1, 4)
         np.testing.assert_array_equal(back, raw)
+
+    def test_float_color_native_reads_scene_linear_as_srgb(self):
+        verts, faces = grid_verts_faces(3, 3)
+        obj = new_mesh_object("float-colors", verts, faces)
+        mesh = obj.data
+        attr = mesh.color_attributes.new("FCol", "FLOAT_COLOR", "POINT")
+        linear = np.array(
+            [
+                [0.0, 0.0, 0.0, 0.25],
+                [0.5, 0.5, 0.5, 0.5],
+                [1.0, 0.25, 0.75, 1.0],
+                [0.0031308, 0.01, 0.9, 0.75],
+            ]
+            * 4,
+            dtype=np.float32,
+        )[: len(mesh.vertices)]
+        attr.data.foreach_set("color", linear.reshape(-1))
+        mesh.color_attributes.active_color = attr
+
+        sections = geometry_io.mesh_to_sections(mesh)
+        by = sections_dict(sections)
+        expected = np.clip(
+            np.rint(_linear_to_srgb(linear[:, :3]) * 255.0), 0.0, 255.0
+        ).astype(np.uint8)
+        got = by["mesh.colors"]
+        self.assertLessEqual(
+            int(np.max(np.abs(got[:, :3].astype(np.int16) - expected.astype(np.int16)))),
+            1,
+        )
+        np.testing.assert_array_equal(got[:, 3], np.rint(linear[:, 3] * 255.0))
+
+        target = bpy.data.meshes.new("dst-float-colors")
+        geometry_io.sections_to_mesh(target, sections)
+        back_attr = target.color_attributes[geometry_io.COLOR_ATTRIBUTE]
+        self.assertEqual(back_attr.data_type, "BYTE_COLOR")
+        back_f = np.empty(len(target.vertices) * 4, dtype=np.float32)
+        back_attr.data.foreach_get("color_srgb", back_f)
+        back = np.clip(np.rint(back_f * 255.0), 0.0, 255.0).astype(np.uint8).reshape(-1, 4)
+        np.testing.assert_array_equal(back, got)
+
+    def test_byte_color_native_stays_exact(self):
+        verts, faces = grid_verts_faces(3, 3)
+        obj = new_mesh_object("byte-colors", verts, faces)
+        mesh = obj.data
+        attr = mesh.color_attributes.new("BCol", "BYTE_COLOR", "POINT")
+        raw = np.arange(len(mesh.vertices) * 4, dtype=np.uint32).reshape(-1, 4) * 17
+        raw = np.clip(raw, 0, 255).astype(np.uint8)
+        # A byte colour's color_srgb is already the wire's sRGB value.
+        attr.data.foreach_set("color_srgb", raw.reshape(-1).astype(np.float32) / 255.0)
+        mesh.color_attributes.active_color = attr
+
+        by = sections_dict(geometry_io.mesh_to_sections(mesh))
+        np.testing.assert_array_equal(by["mesh.colors"], raw)
 
     def test_creases_round_trip(self):
         verts, faces = grid_verts_faces(3, 3)

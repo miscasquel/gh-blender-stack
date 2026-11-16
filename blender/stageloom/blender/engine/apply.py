@@ -256,6 +256,27 @@ def _kind_of(name):
     return None
 
 
+def _selected_mesh_group(sections, definition=None):
+    """The topology group the frame selects for one scope, or None.
+
+    The attribute path uses the same ``select_mesh_group`` owner as the mesh
+    writer, so attributes can never be attached from the group whose vertices
+    and faces were not written.
+    """
+    prefix = "" if definition is None else "idef.%d." % int(definition)
+    by_name = {
+        name[len(prefix):]: values
+        for name, values in sections.items()
+        if name.startswith(prefix)
+    }
+    try:
+        return engine.geometry_io.select_mesh_group(by_name)
+    except engine.geometry_io.GeometryIOError:
+        # The mesh writer raises the classified error; the attribute pass must
+        # not turn it into a second, different failure.
+        return None
+
+
 def _rows_of(sections, prefix):
     """The decoded row pairs of one scope as ``[(definition index, matrix)]``.
 
@@ -435,6 +456,13 @@ def _apply_attributes(obj, stage, sections, attributes):
         definition, kind = target
         return (definition is not None, -1 if definition is None else int(definition), kind)
 
+    selected_mesh = {}
+
+    def selected_group(definition):
+        if definition not in selected_mesh:
+            selected_mesh[definition] = _selected_mesh_group(sections, definition)
+        return selected_mesh[definition]
+
     for definition, kind in sorted(targets, key=order):
         if definition is None:
             helper = engine.helpers.helper_for(obj, stage.key, kind)
@@ -446,6 +474,14 @@ def _apply_attributes(obj, stage, sections, attributes):
         if helper is None:
             continue
         entries = grouped.get((definition, kind), [])
+        if kind == "mesh" and entries:
+            chosen = selected_group(definition)
+            if chosen is not None:
+                entries = [
+                    entry
+                    for entry in entries
+                    if (entry[0].get("group") or "") == chosen
+                ]
         if not entries and not engine._has_generic_attributes(helper.data):
             continue
         engine._bump_id(helper)

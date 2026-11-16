@@ -37,12 +37,12 @@ HOT_SECONDS = 1.0
 # it. The hard `_timeout()` still covers an answer that never comes.
 SOFT_RETRY_SECONDS = 1.0
 
-_prefix_memo = {}  # (obj.as_pointer(), stage key) -> {"revision": tuple, "sections": list}
+_prefix_memo = {}  # (obj.as_pointer(), stage key) -> revision/sections/hash/definitions/notes
 # One depsgraph evaluation can serve every stage prefix on an object. The batch
 # is built on the first prefix read in a pass; an apply drops the entries below
 # it in the modifier stack (upstream entries and its own prefix stay valid), and
 # the pass clears what is left when it ends.
-_prefix_batch = {}  # (obj.as_pointer(), stage key) -> (sections, attributes, definitions)
+_prefix_batch = {}  # (obj.as_pointer(), stage key) -> (sections, attributes, definitions, notes)
 _prefix_batch_built = False  # the pass's first (full-stack) build has run
 _prefix_batching = False
 # (stack_id, stage_key) pairs allowed exactly one request while frozen: Pull.

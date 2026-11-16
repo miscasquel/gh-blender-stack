@@ -346,7 +346,13 @@ def _handle_response(header, sections):
         # carries the stage's current rid, so rid equality is the permission.
         if out_hash != stage.applied_out_hash or engine._payload_missing(obj, stage, sections):
             started = engine.time.monotonic()
-            engine._apply(obj, stage, sections, header.get("attributes"))
+            try:
+                engine._apply(obj, stage, sections, header.get("attributes"))
+            except engine.geometry_io.GeometryIOError as exc:
+                # A malformed or internally inconsistent section group is a
+                # classified stage error, not an anonymous incoming-frame crash.
+                engine._set(stage, "error", "geometry: %s" % exc)
+                raise
             engine._record_timing(record, stage, "apply_ms", engine._timed_since(started))
             engine.stats["applies"] += 1
             engine._set(stage, "applied_out_hash", out_hash)

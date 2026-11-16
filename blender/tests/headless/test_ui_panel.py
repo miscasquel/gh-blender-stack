@@ -198,7 +198,23 @@ class PanelDrawTests(unittest.TestCase):
         )
         self.assertIn(self.prefix.key, layout.labels)
 
-    def test_03_clear_bake_draws_the_irreversible_warning(self):
+    def test_03_response_and_input_warnings_draw_distinctly(self):
+        original_warnings = self.prefix.warnings
+        original_input = self.prefix.input_warnings
+        self.prefix.warnings = "Grasshopper warning"
+        self.prefix.input_warnings = "2 Catmull-Rom curves were skipped"
+        try:
+            layout = self._draw()
+            self.assertNotEqual(self.prefix.warnings, self.prefix.input_warnings)
+        finally:
+            self.prefix.warnings = original_warnings
+            self.prefix.input_warnings = original_input
+
+        self.assertIn("Grasshopper warning", layout.labels)
+        self.assertIn("Input conversion notes", layout.labels)
+        self.assertIn("2 Catmull-Rom curves were skipped", layout.labels)
+
+    def test_04_clear_bake_draws_the_irreversible_warning(self):
         from stageloom.blender import ops
 
         self.generator.baked = True

@@ -3,8 +3,9 @@
 Reads evaluated geometry into protocol v2 sections and writes sections back in
 place where topology allows. Section names follow protocol §5. Curves keep
 order, weights and endpoint/uniform modes; what Blender cannot express exactly
-is approximated and warned about on the GH side. This is the bpy layer; core
-stays pure.
+is returned as a counted note on the stage's input warnings (and warned about
+on the GH side where that side owns the approximation). This is the bpy layer;
+core stays pure.
 """
 
 import numpy as np
@@ -38,20 +39,66 @@ KNOTS_NORMAL = 0
 KNOTS_ENDPOINT = 1
 KNOTS_BEZIER = 2
 
+# Blender's default point radius. ``pts.radii`` absent means "no per-point
+# radii", so the write path resets every point to this value instead of leaving
+# a previous response's radii behind.
+POINT_RADIUS_DEFAULT = 0.01
+
 
 class GeometryIOError(Exception):
     pass
 
 
+def _note(notes, text):
+    """Append one user-visible conversion note, when a channel was supplied."""
+    if notes is not None:
+        notes.append(text)
+
+
+def _count_note(notes, count, singular, plural):
+    """Append a counted note, so a loss is visible without a line per item."""
+    if notes is not None and count:
+        notes.append("%d %s" % (count, singular if count == 1 else plural))
+
+
+def _linear_to_srgb(values):
+    """Scene-linear floats to sRGB floats, the transfer Blender's native
+    FLOAT_COLOR channel needs before the wire's u8 sRGB quantisation."""
+    linear = np.clip(np.asarray(values, dtype=np.float32), 0.0, 1.0)
+    return np.where(
+        linear <= 0.0031308,
+        linear * 12.92,
+        1.055 * np.power(linear, 1.0 / 2.4) - 0.055,
+    ).astype(np.float32)
+
+
+def _color_bytes(attr, count):
+    """One colour attribute as wire u8 RGBA.
+
+    BYTE_COLOR already stores display-referred sRGB, so ``color_srgb`` is read
+    directly. FLOAT_COLOR stores scene-linear values in ``color``; those are
+    converted to sRGB before quantisation. The alpha channel is linear in both
+    representations (it is opacity, not colour) and is never transfer-encoded.
+    """
+    floats = np.empty(count * 4, dtype=np.float32)
+    if attr.data_type == "BYTE_COLOR":
+        attr.data.foreach_get("color_srgb", floats)
+    else:
+        attr.data.foreach_get("color", floats)
+        rgba = floats.reshape(count, 4)
+        rgba[:, :3] = _linear_to_srgb(rgba[:, :3])
+    return np.clip(np.rint(floats.reshape(count, 4) * 255.0), 0.0, 255.0).astype(np.uint8)
+
+
 # --------------------------------------------------------------------- read
 
 
-def mesh_to_sections(mesh, as_subd=False, prefix=""):
+def mesh_to_sections(mesh, as_subd=False, prefix="", notes=None):
     """Read ``mesh`` into a list of ``(name, dtype, numpy array)`` sections.
 
     ``as_subd`` selects the ``subd.*`` names and omits colours (protocol §5).
     ``prefix`` namespaces the sections of one instance definition (§5.2),
-    e.g. ``"idef.0."``.
+    e.g. ``"idef.0."``. ``notes`` collects user-visible conversion losses.
     """
     group = "subd" if as_subd else "mesh"
     name = prefix + group
@@ -79,7 +126,7 @@ def mesh_to_sections(mesh, as_subd=False, prefix=""):
         if colors is not None:
             sections.append((name + ".colors", "u8", colors))
 
-    creases = read_creases(mesh)
+    creases = read_creases(mesh, notes=notes)
     if creases is not None:
         edges, values = creases
         sections.append((name + ".crease_edges", "u32", edges.reshape(-1, 2)))
@@ -89,12 +136,12 @@ def mesh_to_sections(mesh, as_subd=False, prefix=""):
 
 
 def read_colors(mesh):
-    """The active colour attribute as u8 N×4, or None.
+    """The active colour attribute as wire u8 N×4 sRGB, or None.
 
-    BYTE_COLOR stores bytes; ``color_srgb`` reads them back as floats in 0..1, so
-    they are scaled and rounded to bytes. FLOAT_COLOR stores linear floats, so
-    ``color`` is quantised directly. (Reading into a u8 buffer truncates the float
-    representation instead of converting, which is why both paths read floats.)
+    BYTE_COLOR already stores display-referred sRGB, so ``color_srgb`` is read
+    directly. FLOAT_COLOR stores scene-linear floats; ``color`` is converted to
+    sRGB before quantisation. Both paths read floats because reading into a u8
+    buffer truncates the float representation instead of converting.
 
     A CORNER-domain attribute is folded to one entry per vertex; the last loop that
     references a vertex wins, which is deterministic for Blender's loop order.
@@ -103,13 +150,7 @@ def read_colors(mesh):
     if attr is None:
         return None
     n = len(mesh.vertices) if attr.domain == "POINT" else len(mesh.loops)
-
-    floats = np.empty(n * 4, dtype=np.float32)
-    if attr.data_type == "BYTE_COLOR":
-        attr.data.foreach_get("color_srgb", floats)
-    else:
-        attr.data.foreach_get("color", floats)
-    out = np.clip(np.rint(floats.reshape(n, 4) * 255.0), 0.0, 255.0).astype(np.uint8)
+    out = _color_bytes(attr, n)
 
     if attr.domain == "POINT":
         return out
@@ -121,14 +162,29 @@ def read_colors(mesh):
     return folded
 
 
-def read_creases(mesh):
+def read_creases(mesh, notes=None):
     """Edges with a non-zero crease as ``(edges N×2 u32, values N f32)``, or None.
 
     Fractional values are passed through; the GH side rounds them to the nearest
     tag and warns (D2). Edges at exactly zero are omitted: absent means smooth.
+    A crease channel Blender cannot read as EDGE/FLOAT is skipped and noted.
     """
     attr = mesh.attributes.get(CREASE_ATTRIBUTE)
     if attr is None:
+        return None
+    if attr.domain != "EDGE" or attr.data_type != "FLOAT":
+        _note(
+            notes,
+            "crease_edge is %s/%s, not EDGE/FLOAT; creases were skipped"
+            % (attr.domain, attr.data_type),
+        )
+        return None
+    if len(attr.data) != len(mesh.edges):
+        _note(
+            notes,
+            "crease_edge has %d values for %d edges; creases were skipped"
+            % (len(attr.data), len(mesh.edges)),
+        )
         return None
     values = np.empty(len(mesh.edges), dtype=np.float32)
     attr.data.foreach_get("value", values)
@@ -315,7 +371,7 @@ def isolated_vertex_indices(mesh):
     return np.nonzero(degree == 0)[0].astype(np.uint32)
 
 
-def wire_mesh_to_sections(mesh, index0=0, prefix="", definition=None):
+def wire_mesh_to_sections(mesh, index0=0, prefix="", definition=None, notes=None):
     """Loose mesh edges and vertices as curves and points, plus their attributes.
 
     Each loose edge becomes one two-point polyline. That is the only lossless
@@ -361,14 +417,26 @@ def wire_mesh_to_sections(mesh, index0=0, prefix="", definition=None):
             (prefix + "pts.positions", "f32", np.ascontiguousarray(verts[isolated]))
         )
 
+    if len(mesh.polygons) == 0:
+        # A face-less mesh travels entirely as crv/pts, neither of which carries
+        # the crease channel; say how many authored crease edges were dropped.
+        creases = read_creases(mesh, notes=notes)
+        if creases is not None:
+            _count_note(
+                notes, len(creases[0]),
+                "crease edge on a wire mesh had no wire representation and was dropped",
+                "crease edges on a wire mesh had no wire representation and were dropped",
+            )
+
     attribute_sections, attributes = wire_attributes(
         mesh, loose, edge_verts, isolated, index0=index0,
-        prefix=prefix, definition=definition,
+        prefix=prefix, definition=definition, notes=notes,
     )
     return sections + attribute_sections, attributes
 
 
-def wire_attributes(mesh, loose, edge_verts, isolated, index0=0, prefix="", definition=None):
+def wire_attributes(mesh, loose, edge_verts, isolated, index0=0, prefix="", definition=None,
+                    notes=None):
     """Reindex a mesh's attributes onto its emitted curves and points.
 
     EDGE attributes become one value per curve (domain ``CURVE``). POINT
@@ -381,12 +449,15 @@ def wire_attributes(mesh, loose, edge_verts, isolated, index0=0, prefix="", defi
     if not len(loose) and not len(isolated):
         return sections, descriptors
 
+    unsupported_type = 0
+    unsupported_domain = 0
     for attr in mesh.attributes:
         name = attr.name
         if name.startswith(".") or name in attr_mod.SKIP_NAMES or name == CREASE_ATTRIBUTE:
             continue
         type_name = attr.data_type
         if type_name not in attr_mod.WIRE_TYPES:
+            unsupported_type += 1
             continue
         values = _attribute_values(attr)
         comps = attr_mod.components(type_name)
@@ -403,6 +474,7 @@ def wire_attributes(mesh, loose, edge_verts, isolated, index0=0, prefix="", defi
             continue
 
         if attr.domain != "POINT":
+            unsupported_domain += 1
             continue
 
         if len(loose):
@@ -426,10 +498,16 @@ def wire_attributes(mesh, loose, edge_verts, isolated, index0=0, prefix="", defi
             sections += attribute_sections
             descriptors.append(descriptor)
 
+    _count_note(notes, unsupported_domain,
+                "wire/point attribute had a domain with no wire target and was skipped",
+                "wire/point attributes had a domain with no wire target and were skipped")
+    _count_note(notes, unsupported_type,
+                "wire/point attribute had an unsupported type and was skipped",
+                "wire/point attributes had an unsupported type and were skipped")
     return sections, descriptors
 
 
-def points_attributes(cloud, index0=0, prefix="", definition=None):
+def points_attributes(cloud, index0=0, prefix="", definition=None, notes=None):
     """The generic attributes of a point cloud. The native ``pts.colors``
     channel carries the active colour attribute; everything else travels."""
     skip = []
@@ -607,14 +685,15 @@ def _decode_strings(values, offsets):
 # ------------------------------------------------------------ curves and points
 
 
-def curve_to_sections(curve, prefix=""):
+def curve_to_sections(curve, prefix="", notes=None):
     """Read a Blender Curve datablock into ``crv.*`` sections (protocol §5).
 
     A Bezier spline travels as a degree-3 NURBS in Bezier knot mode, using the
     control net co0, handle_right0, handle_left1, co1, ... — the representation
     the GH side rebuilds exactly. A cyclic Bezier spline wraps the closing
     segment, so its net ends where it starts instead of carrying the cyclic flag.
-    ``prefix`` namespaces a definition's sections (§5.2).
+    ``prefix`` namespaces a definition's sections (§5.2). ``notes`` collects
+    splines this wire form cannot carry.
     """
     points = []
     counts = []
@@ -622,11 +701,15 @@ def curve_to_sections(curve, prefix=""):
     orders = []
     knots_mode = []
     cyclic = []
+    empty_bezier = 0
+    short_splines = 0
+    bad_nurbs = 0
 
     for spline in curve.splines:
         if spline.type == "BEZIER":
             net = _bezier_net(spline)
             if net is None:
+                empty_bezier += 1
                 continue
             points.extend(net)
             counts.append(len(net))
@@ -637,18 +720,28 @@ def curve_to_sections(curve, prefix=""):
             continue
         if spline.type == "NURBS":
             p = [(pt.co[0], pt.co[1], pt.co[2], float(pt.weight)) for pt in spline.points]
-            if len(p) < 2:
+            order = int(spline.order_u)
+            weights = [point[3] for point in p]
+            if (
+                len(p) < 2
+                or order < 2
+                or order > 6
+                or order > len(p)
+                or any(not np.isfinite(weight) or weight <= 0.0 for weight in weights)
+            ):
+                bad_nurbs += 1
                 continue
             points.extend(p)
             counts.append(len(p))
             types.append(CURVE_NURBS)
-            orders.append(int(spline.order_u))
+            orders.append(order)
             knots_mode.append(KNOTS_ENDPOINT if spline.use_endpoint_u else KNOTS_NORMAL)
             cyclic.append(1 if spline.use_cyclic_u else 0)
             continue
         # POLY and anything else Blender has: a polyline through the points.
         p = [(pt.co[0], pt.co[1], pt.co[2], 1.0) for pt in spline.points]
         if len(p) < 2:
+            short_splines += 1
             continue
         points.extend(p)
         counts.append(len(p))
@@ -656,6 +749,16 @@ def curve_to_sections(curve, prefix=""):
         orders.append(0)
         knots_mode.append(0)
         cyclic.append(1 if spline.use_cyclic_u else 0)
+
+    _count_note(notes, empty_bezier,
+                "Bezier spline had no span and was skipped",
+                "Bezier splines had no span and were skipped")
+    _count_note(notes, short_splines,
+                "spline had fewer than two points and was skipped",
+                "splines had fewer than two points and were skipped")
+    _count_note(notes, bad_nurbs,
+                "NURBS spline has an unsupported order or weight and was skipped",
+                "NURBS splines have an unsupported order or weight and were skipped")
 
     if not counts:
         return []
@@ -693,9 +796,9 @@ def _bezier_net(spline):
     return net
 
 
-def points_to_sections(cloud, prefix=""):
+def points_to_sections(cloud, prefix="", notes=None):
     """Read a point cloud into ``pts.*`` sections. ``prefix`` namespaces a
-    definition's sections (§5.2)."""
+    definition's sections (§5.2). ``notes`` collects conversion losses."""
     n = len(cloud.points)
     if n == 0:
         return []
@@ -716,19 +819,15 @@ def points_to_sections(cloud, prefix=""):
 
 
 def read_point_colors(cloud):
-    """The active point-domain colour attribute as u8 N×4, or None."""
-    attrs = cloud.color_attributes
-    if not attrs:
+    """The active point-domain colour attribute as wire u8 N×4 sRGB, or None.
+
+    The same colour-space mapping as ``read_colors``: BYTE_COLOR is direct,
+    FLOAT_COLOR is linear and converted to sRGB before quantisation.
+    """
+    attr = _active_color(cloud)
+    if attr is None or attr.domain != "POINT":
         return None
-    attr = attrs.active_color if attrs.active_color is not None else attrs[0]
-    if attr.domain != "POINT":
-        return None
-    floats = np.empty(len(cloud.points) * 4, dtype=np.float32)
-    if attr.data_type == "BYTE_COLOR":
-        attr.data.foreach_get("color_srgb", floats)
-    else:
-        attr.data.foreach_get("color", floats)
-    return np.clip(np.rint(floats.reshape(-1, 4) * 255.0), 0.0, 255.0).astype(np.uint8)
+    return _color_bytes(attr, len(cloud.points))
 
 
 # ------------------------------------------------- evaluated geometry (prefixes)
@@ -741,10 +840,10 @@ CURVE_TYPE_BEZIER = 2
 CURVE_TYPE_NURBS = 3
 
 
-def geometry_set_to_sections(geometry, as_subd=False):
+def geometry_set_to_sections(geometry, as_subd=False, notes=None):
     """Protocol sections and attribute descriptors for an evaluated
     ``GeometrySet`` (a stage's prefix). Returns ``(sections, attributes,
-    definitions)``.
+    definitions)``. ``notes`` collects user-visible conversion losses.
 
     A stage's prefix is everything before its own modifier in the stack, so it
     can hold a mesh, curves, points, and instances at once. The geometry set must
@@ -763,8 +862,12 @@ def geometry_set_to_sections(geometry, as_subd=False):
     sections = []
     attributes = []
     definitions = []
-    _serialize_geometry(geometry, sections, attributes, prefix="", as_subd=as_subd)
-    rows = _serialize_instances(geometry, sections, attributes, definitions, depth=0)
+    _serialize_geometry(
+        geometry, sections, attributes, prefix="", as_subd=as_subd, notes=notes
+    )
+    rows = _serialize_instances(
+        geometry, sections, attributes, definitions, depth=0, notes=notes
+    )
     if rows is not None:
         ref_def, transforms = rows
         sections.append(("inst.ref_def", "u32", np.asarray(ref_def, dtype=np.uint32)))
@@ -788,7 +891,7 @@ _IDENTITY = (
 
 
 def _serialize_geometry(geometry, sections, attributes, prefix="", as_subd=False,
-                        definition=None):
+                        definition=None, notes=None):
     """Append one GeometrySet's geometry (mesh, curves, point cloud) to
     ``sections`` / ``attributes``, under an optional definition prefix."""
     mesh = geometry.mesh
@@ -798,11 +901,14 @@ def _serialize_geometry(geometry, sections, attributes, prefix="", as_subd=False
             # its isolated vertices as points instead of an empty mesh.
             wire_sections, wire_attrs = wire_mesh_to_sections(
                 mesh, index0=len(attributes), prefix=prefix, definition=definition,
+                notes=notes,
             )
             sections += wire_sections
             attributes += wire_attrs
         else:
-            sections += mesh_to_sections(mesh, as_subd=as_subd, prefix=prefix)
+            sections += mesh_to_sections(
+                mesh, as_subd=as_subd, prefix=prefix, notes=notes
+            )
             attribute_sections, mesh_attributes_ = mesh_attributes(
                 mesh, as_subd=as_subd, index0=len(attributes),
                 prefix=prefix, definition=definition,
@@ -814,6 +920,7 @@ def _serialize_geometry(geometry, sections, attributes, prefix="", as_subd=False
                 # own curves/points so they are not silently dropped.
                 wire_sections, wire_attrs = wire_mesh_to_sections(
                     mesh, index0=len(attributes), prefix=prefix, definition=definition,
+                    notes=notes,
                 )
                 sections += wire_sections
                 attributes += wire_attrs
@@ -821,14 +928,16 @@ def _serialize_geometry(geometry, sections, attributes, prefix="", as_subd=False
     if curves is not None and len(curves.points):
         curve_sections, curve_attrs = curves_component_to_sections(
             curves, index0=len(attributes), prefix=prefix, definition=definition,
+            notes=notes,
         )
         sections += curve_sections
         attributes += curve_attrs
     cloud = geometry.pointcloud
     if cloud is not None and len(cloud.points):
-        sections += points_to_sections(cloud, prefix=prefix)
+        sections += points_to_sections(cloud, prefix=prefix, notes=notes)
         attribute_sections, point_attributes_ = points_attributes(
             cloud, index0=len(attributes), prefix=prefix, definition=definition,
+            notes=notes,
         )
         sections += attribute_sections
         attributes += point_attributes_
@@ -849,7 +958,7 @@ def _has_components(geometry):
     return False
 
 
-def _instance_rows(geometry):
+def _instance_rows(geometry, notes=None):
     """The rows of a GeometrySet's instances component as
     ``[(reference, 16 floats)]``, or None when it has none.
 
@@ -868,7 +977,9 @@ def _instance_rows(geometry):
     index_attr = cloud.attributes.get(".reference_index")
     transform_attr = cloud.attributes.get("instance_transform")
     if index_attr is None or transform_attr is None:
-        prefs.log("[stageloom] instances skipped: no reference_index/instance_transform", flush=True)
+        message = "instance rows have no reference_index/instance_transform and were skipped"
+        prefs.log("[stageloom] " + message, flush=True)
+        _note(notes, message)
         return None
 
     n = len(cloud.points)
@@ -881,15 +992,20 @@ def _instance_rows(geometry):
     matrices = memory.reshape(n, 4, 4).transpose(0, 2, 1).reshape(-1)
 
     rows = []
+    skipped = 0
     for row in range(n):
         slot = int(indices[row])
         if 0 <= slot < len(refs):
             rows.append((refs[slot], matrices[row * 16:(row + 1) * 16]))
         else:
+            skipped += 1
             prefs.log(
                 "[stageloom] instance row %d skipped: reference index %d out of range" % (row, slot),
                 flush=True,
             )
+    _count_note(notes, skipped,
+                "instance row referenced a missing definition and was skipped",
+                "instance rows referenced a missing definition and were skipped")
     return rows or None
 
 
@@ -899,7 +1015,7 @@ _GEOMETRY_MEMBER_TYPES = frozenset(
 )
 
 
-def _reference_parts(reference, depth):
+def _reference_parts(reference, depth, notes=None):
     """A raw Collection or Object reference as ``(units, rows)``.
 
     A **collection** contributes one placement row per member — Blender applies
@@ -913,30 +1029,42 @@ def _reference_parts(reference, depth):
     if reference is None:
         return [], []
     if depth >= MAX_INSTANCE_DEPTH:
-        prefs.log("[stageloom] instance nesting deeper than %d skipped" % MAX_INSTANCE_DEPTH, flush=True)
+        message = (
+            "instance nesting deeper than %d was skipped" % MAX_INSTANCE_DEPTH
+        )
+        prefs.log("[stageloom] " + message, flush=True)
+        _note(notes, message)
         return [], []
     try:
         depsgraph = bpy.context.evaluated_depsgraph_get()
         evaluated = reference.evaluated_get(depsgraph)
     except Exception as ex:
+        message = "1 instance reference could not be evaluated and was skipped"
         prefs.log("[stageloom] instance reference not evaluable: %r" % (ex,), flush=True)
+        _note(notes, message)
         return [], []
 
     if isinstance(reference, bpy.types.Collection):
         units, rows = [], []
+        skipped = 0
         for member in evaluated.objects:
-            member_units, member_rows = _member_parts(member, depth)
+            member_units, member_rows = _member_parts(member, depth, notes=notes)
+            if not member_units and not member_rows and member.type != "EMPTY":
+                skipped += 1
             units += member_units
             rows += member_rows
+        _count_note(notes, skipped,
+                    "collection member had no usable geometry and was skipped",
+                    "collection members had no usable geometry and were skipped")
         for child in getattr(evaluated, "children", None) or ():
-            child_units, child_rows = _reference_parts(child, depth + 1)
+            child_units, child_rows = _reference_parts(child, depth + 1, notes=notes)
             units += child_units
             rows += child_rows
         return units, rows
-    return _object_parts(evaluated, depth)
+    return _object_parts(evaluated, depth, notes=notes)
 
 
-def _member_parts(obj, depth):
+def _member_parts(obj, depth, notes=None):
     """One collection member as ``(units, rows)``: a placement row to the
     member, whose own transform Blender applies. Non-geometry members (cameras,
     lights) and bare empties contribute nothing."""
@@ -951,22 +1079,24 @@ def _member_parts(obj, depth):
     return [], [(obj, _matrix_wire(obj.matrix_world))]
 
 
-def _object_parts(obj, depth):
+def _object_parts(obj, depth, notes=None):
     """A direct object reference as ``(units, rows)``: its evaluated geometry,
     or the content of the collection an empty instances."""
     import bpy
 
     if obj.type == "EMPTY":
         if _instances_a_collection(obj):
-            return _reference_parts(obj.instance_collection, depth + 1)
+            return _reference_parts(obj.instance_collection, depth + 1, notes=notes)
         return [], []
     try:
         return [bpy.types.GeometrySet.from_evaluated_object(obj)], []
     except Exception as ex:
+        message = "1 instance reference object could not be read and was skipped"
         prefs.log(
             "[stageloom] instance reference %r not readable: %r" % (obj.name, ex),
             flush=True,
         )
+        _note(notes, message)
         return [], []
 
 
@@ -981,7 +1111,7 @@ def _matrix_wire(matrix):
     return np.asarray([list(row) for row in matrix], dtype=np.float32).reshape(-1)
 
 
-def _definition_parts(reference, depth):
+def _definition_parts(reference, depth, notes=None):
     """Split one instance reference into ``(units, nested_rows)``.
 
     ``units`` are GeometrySet sources whose geometry belongs to the definition
@@ -996,18 +1126,18 @@ def _definition_parts(reference, depth):
     extra nesting level. Anything else keeps its rows as nested placements.
     """
     if not hasattr(reference, "instance_references"):
-        return _reference_parts(reference, depth)
+        return _reference_parts(reference, depth, notes=notes)
 
     if _has_components(reference):
         return [reference], []
-    rows = _instance_rows(reference) or []
+    rows = _instance_rows(reference, notes=notes) or []
     if not rows:
         return [], []
     if depth < MAX_INSTANCE_DEPTH and all(_is_identity(matrix) for _ref, matrix in rows):
         units = []
         nested = []
         for sub_reference, _matrix in rows:
-            sub_units, sub_rows = _definition_parts(sub_reference, depth + 1)
+            sub_units, sub_rows = _definition_parts(sub_reference, depth + 1, notes=notes)
             units.extend(sub_units)
             nested.extend(sub_rows)
         return units, nested
@@ -1018,7 +1148,7 @@ def _is_identity(matrix):
     return all(float(matrix[i]) == _IDENTITY[i] for i in range(16))
 
 
-def _serialize_definition(reference, sections, attributes, definitions, depth):
+def _serialize_definition(reference, sections, attributes, definitions, depth, notes=None):
     """Serialize one definition into the flat table. Returns its index.
 
     Rows come from two sources, resolved through one dictionary so a child
@@ -1030,10 +1160,12 @@ def _serialize_definition(reference, sections, attributes, definitions, depth):
     definitions.append({"name": _reference_name(reference)})
     prefix = "idef.%d." % index
     if depth >= MAX_INSTANCE_DEPTH:
-        prefs.log("[stageloom] instance nesting deeper than %d skipped" % MAX_INSTANCE_DEPTH, flush=True)
+        message = "instance nesting deeper than %d was skipped" % MAX_INSTANCE_DEPTH
+        prefs.log("[stageloom] " + message, flush=True)
+        _note(notes, message)
         return index
 
-    units, nested = _definition_parts(reference, depth)
+    units, nested = _definition_parts(reference, depth, notes=notes)
     resolved = {}
     ref_def = []
     transforms = []
@@ -1042,15 +1174,18 @@ def _serialize_definition(reference, sections, attributes, definitions, depth):
         child = resolved.get(id(child_reference))
         if child is None:
             child = _serialize_definition(
-                child_reference, sections, attributes, definitions, depth + 1
+                child_reference, sections, attributes, definitions, depth + 1,
+                notes=notes,
             )
             resolved[id(child_reference)] = child
         ref_def.append(child)
         transforms.extend(matrix)
 
     for unit in units:
-        _serialize_geometry(unit, sections, attributes, prefix=prefix, definition=index)
-        for child_reference, matrix in (_instance_rows(unit) or []):
+        _serialize_geometry(
+            unit, sections, attributes, prefix=prefix, definition=index, notes=notes
+        )
+        for child_reference, matrix in (_instance_rows(unit, notes=notes) or []):
             resolve(child_reference, matrix)
     for child_reference, matrix in nested:
         resolve(child_reference, matrix)
@@ -1064,7 +1199,7 @@ def _serialize_definition(reference, sections, attributes, definitions, depth):
     return index
 
 
-def _serialize_instances(geometry, sections, attributes, definitions, depth):
+def _serialize_instances(geometry, sections, attributes, definitions, depth, notes=None):
     """Serialize a GeometrySet's instances component.
 
     Returns ``(ref_def, transforms)`` — the definition index per row and the
@@ -1072,11 +1207,13 @@ def _serialize_instances(geometry, sections, attributes, definitions, depth):
     definitions the rows reference are appended to the shared flat table
     (``definitions``); a definition that holds instances of its own recurses.
     """
-    rows = _instance_rows(geometry)
+    rows = _instance_rows(geometry, notes=notes)
     if not rows:
         return None
     if depth >= MAX_INSTANCE_DEPTH:
-        prefs.log("[stageloom] instance nesting deeper than %d skipped" % MAX_INSTANCE_DEPTH, flush=True)
+        message = "instance nesting deeper than %d was skipped" % MAX_INSTANCE_DEPTH
+        prefs.log("[stageloom] " + message, flush=True)
+        _note(notes, message)
         return None
 
     local = {}
@@ -1086,7 +1223,8 @@ def _serialize_instances(geometry, sections, attributes, definitions, depth):
         index = local.get(id(reference))
         if index is None:
             index = _serialize_definition(
-                reference, sections, attributes, definitions, depth + 1
+                reference, sections, attributes, definitions, depth + 1,
+                notes=notes,
             )
             local[id(reference)] = index
         ref_def.append(index)
@@ -1101,7 +1239,8 @@ def _reference_name(reference):
     return name if isinstance(name, str) else ""
 
 
-def curves_component_to_sections(curves, index0=0, prefix="", definition=None):
+def curves_component_to_sections(curves, index0=0, prefix="", definition=None,
+                                 notes=None):
     """Read a GeometrySet's curve component into ``crv.*`` sections and attributes.
 
     The component is the new Curves type: per-curve attributes carry the kind
@@ -1116,10 +1255,10 @@ def curves_component_to_sections(curves, index0=0, prefix="", definition=None):
     ``(sections, attributes)``.
 
     Catmull-Rom components have no wire representation (our protocol has poly,
-    Bezier, and NURBS); they are skipped with a log line. A Bezier curve's wire
-    points are its control net, not its original points, so per-point attributes
-    are skipped for the whole component when a Bezier curve is present; a 1:1
-    point mapping does not exist.
+    Bezier, and NURBS); they are skipped and ``notes`` names the count. A Bezier
+    curve's wire points are its control net, not its original points, so
+    per-point attributes are skipped for the whole component when a Bezier curve
+    is present; a 1:1 point mapping does not exist.
     """
     attrs = curves.attributes
     positions = attrs["position"].data
@@ -1140,17 +1279,24 @@ def curves_component_to_sections(curves, index0=0, prefix="", definition=None):
     curve_indices = []
     point_indices = []
     has_bezier = False
+    catmull = 0
+    missing_handles = 0
+    short_curves = 0
+    unsupported_nurbs = 0
+    unknown_types = 0
 
     for curve in curves.curves:
         first = curve.first_point_index
         length = curve.points_length
-        if length < 2:
-            continue
         index = curve.index
+        if length < 2:
+            short_curves += 1
+            continue
         ctype = int(type_attr.data[index].value) if type_attr is not None else CURVE_TYPE_POLY
         is_cyclic = bool(cyclic_attr.data[index].value) if cyclic_attr is not None else False
 
         if ctype == CURVE_TYPE_CATMULL_ROM:
+            catmull += 1
             prefs.log(
                 "[stageloom] Catmull-Rom curve component skipped: no wire representation",
                 flush=True,
@@ -1160,6 +1306,11 @@ def curves_component_to_sections(curves, index0=0, prefix="", definition=None):
         if ctype == CURVE_TYPE_BEZIER:
             net = _component_bezier_net(positions, handle_left, handle_right, first, length, is_cyclic)
             if net is None:
+                missing_handles += 1
+                prefs.log(
+                    "[stageloom] Bezier curve component skipped: no handles",
+                    flush=True,
+                )
                 continue
             points.extend(net)
             counts.append(len(net))
@@ -1180,22 +1331,56 @@ def curves_component_to_sections(curves, index0=0, prefix="", definition=None):
         if ctype == CURVE_TYPE_NURBS:
             order = int(order_attr.data[index].value) if order_attr is not None else 4
             mode = int(knots_attr.data[index].value) if knots_attr is not None else KNOTS_NORMAL
+            weights_valid = all(
+                np.isfinite(point[3]) and point[3] > 0.0 for point in chunk
+            )
+            if order < 2 or order > 6 or order > length or mode > 2 or not weights_valid:
+                unsupported_nurbs += 1
+                prefs.log(
+                    "[stageloom] NURBS curve component skipped: order %d, mode %d, "
+                    "or a non-positive weight is not representable" % (order, mode),
+                    flush=True,
+                )
+                continue
             points.extend(chunk)
             counts.append(length)
             types.append(CURVE_NURBS)
             orders.append(order)
             modes.append(mode)
             cyclic.append(1 if is_cyclic else 0)
-        else:  # CURVE_TYPE_POLY
+        elif ctype == CURVE_TYPE_POLY:
             points.extend(chunk)
             counts.append(length)
             types.append(CURVE_POLY)
             orders.append(0)
             modes.append(0)
             cyclic.append(1 if is_cyclic else 0)
+        else:
+            unknown_types += 1
+            prefs.log(
+                "[stageloom] curve component type %d skipped: not a wire curve type" % ctype,
+                flush=True,
+            )
+            continue
 
         curve_indices.append(index)
         point_indices.extend(range(first, first + length))
+
+    _count_note(notes, catmull,
+                "Catmull-Rom curve component has no wire representation and was skipped",
+                "Catmull-Rom curve components have no wire representation and were skipped")
+    _count_note(notes, missing_handles,
+                "Bezier curve component had no handles and was skipped",
+                "Bezier curve components had no handles and were skipped")
+    _count_note(notes, short_curves,
+                "curve component had fewer than two points and was skipped",
+                "curve components had fewer than two points and were skipped")
+    _count_note(notes, unsupported_nurbs,
+                "NURBS curve component had an unsupported order, mode or weight and was skipped",
+                "NURBS curve components had an unsupported order, mode or weight and were skipped")
+    _count_note(notes, unknown_types,
+                "curve component had an unknown type and was skipped",
+                "curve components had an unknown type and were skipped")
 
     if not counts:
         return [], []
@@ -1211,13 +1396,13 @@ def curves_component_to_sections(curves, index0=0, prefix="", definition=None):
     ]
     attribute_sections, attributes = curves_component_attributes(
         curves, curve_indices, point_indices, has_bezier,
-        index0=index0, prefix=prefix, definition=definition,
+        index0=index0, prefix=prefix, definition=definition, notes=notes,
     )
     return sections + attribute_sections, attributes
 
 
 def curves_component_attributes(curves, curve_indices, point_indices, has_bezier,
-                                index0=0, prefix="", definition=None):
+                                index0=0, prefix="", definition=None, notes=None):
     """Reindex a Curves component's user attributes onto the emitted curves.
 
     Per-curve values become domain ``CURVE``; per-point values become domain
@@ -1258,6 +1443,11 @@ def curves_component_attributes(curves, curve_indices, point_indices, has_bezier
                     "[stageloom] curve point attribute %r skipped: a Bezier control "
                     "net has no 1:1 point mapping" % name,
                     flush=True,
+                )
+                _note(
+                    notes,
+                    "curve point attribute %r was skipped: a Bezier control net "
+                    "has no 1:1 point mapping" % name,
                 )
                 continue
             mapped = _take_attribute_values(values, point_indices, comps)
@@ -1304,30 +1494,76 @@ def _component_bezier_net(positions, handle_left, handle_right, first, length, i
 # -------------------------------------------------------------------- write
 
 
-def sections_to_mesh(mesh, sections):
+def select_mesh_group(by_name):
+    """One complete ``mesh.*`` or ``subd.*`` group, already chosen as a unit.
+
+    This is the Blender twin of the C# Q7b1 selector: both complete groups mean
+    the plain mesh wins; a partial group is an error even when the other group
+    is complete. The two groups describe different topology sets, so vertices
+    and faces are never paired across them.
+    """
+    mesh_names = ("mesh.verts", "mesh.face_counts", "mesh.face_indices")
+    subd_names = ("subd.verts", "subd.face_counts", "subd.face_indices")
+    mesh_any = any(
+        name in by_name
+        for name in mesh_names + ("mesh.colors",)
+    )
+    mesh_complete = all(name in by_name for name in mesh_names)
+    subd_any = any(name in by_name for name in subd_names)
+    subd_complete = all(name in by_name for name in subd_names)
+
+    if mesh_any and not mesh_complete:
+        missing = ", ".join(name for name in mesh_names if name not in by_name)
+        raise GeometryIOError("mesh group is incomplete: %s missing" % missing)
+    if subd_any and not subd_complete:
+        missing = ", ".join(name for name in subd_names if name not in by_name)
+        raise GeometryIOError("subd group is incomplete: %s missing" % missing)
+
+    if mesh_complete:
+        return "mesh"
+    if subd_complete:
+        return "subd"
+    return None
+
+
+def sections_to_mesh(mesh, sections, notes=None):
     """Update ``mesh`` from sections, in place.
 
-    Positions are written with ``foreach_set`` when the vertex count matches;
-    otherwise the mesh is rebuilt with ``clear_geometry`` + ``from_pydata``.
-    Colours and creases are written to attributes. Extra sections (curves, points)
-    are ignored here; they belong to other components.
+    Exactly one complete group is selected first (``select_mesh_group``). Its
+    positions are written with ``foreach_set`` only when the full topology
+    signature — vertex count, face counts and face indices — matches; otherwise
+    the mesh is rebuilt with ``clear_geometry`` + ``from_pydata``. Colours and
+    creases follow the selected group. Extra sections (curves, points) are
+    ignored here; they belong to other components.
     """
     by_name = {}
     for name, dtype, values in sections:
         by_name[name] = values
 
-    verts = by_name.get("mesh.verts", by_name.get("subd.verts"))
-    counts = by_name.get("mesh.face_counts", by_name.get("subd.face_counts"))
-    indices = by_name.get("mesh.face_indices", by_name.get("subd.face_indices"))
-    if verts is None or counts is None or indices is None:
+    group = select_mesh_group(by_name)
+    if group is None:
         raise GeometryIOError("sections need verts, face_counts and face_indices")
+    prefix = group + "."
 
-    verts = np.ascontiguousarray(verts, dtype=np.float32)
-    counts = np.ascontiguousarray(counts, dtype=np.uint32)
-    indices = np.ascontiguousarray(indices, dtype=np.uint32)
-    if len(indices) != int(counts.sum()):
+    try:
+        verts = np.ascontiguousarray(by_name[prefix + "verts"], dtype=np.float32).reshape(-1, 3)
+        counts = np.ascontiguousarray(by_name[prefix + "face_counts"], dtype=np.uint32).reshape(-1)
+        indices = np.ascontiguousarray(by_name[prefix + "face_indices"], dtype=np.uint32).reshape(-1)
+    except (TypeError, ValueError):
         raise GeometryIOError(
-            "face_indices length %d != sum(face_counts) %d" % (len(indices), int(counts.sum()))
+            "%sverts must be N x 3 floats and face arrays flat integers" % prefix
+        )
+    total = int(counts.sum())
+    if len(indices) != total:
+        raise GeometryIOError(
+            "face_indices length %d != sum(face_counts) %d" % (len(indices), total)
+        )
+    if len(counts) and int(counts.min()) < 3:
+        raise GeometryIOError("face_counts must be at least 3 vertices per face")
+    if len(indices) and int(indices.max()) >= len(verts):
+        raise GeometryIOError(
+            "face_indices refer to vertex %d, but only %d vertices were sent"
+            % (int(indices.max()), len(verts))
         )
 
     same_topology = (
@@ -1335,6 +1571,15 @@ def sections_to_mesh(mesh, sections):
         and len(mesh.polygons) == len(counts)
         and len(mesh.loops) == len(indices)
     )
+    if same_topology:
+        current_counts = np.empty(len(mesh.polygons), dtype=np.uint32)
+        mesh.polygons.foreach_get("loop_total", current_counts)
+        current_indices = np.empty(len(mesh.loops), dtype=np.uint32)
+        mesh.loops.foreach_get("vertex_index", current_indices)
+        same_topology = bool(
+            np.array_equal(current_counts, counts)
+            and np.array_equal(current_indices, indices)
+        )
 
     if same_topology:
         mesh.vertices.foreach_set("co", verts.reshape(-1))
@@ -1343,18 +1588,22 @@ def sections_to_mesh(mesh, sections):
         faces = _faces_from(counts, indices)
         mesh.from_pydata(verts.tolist(), [], faces)
 
-    colors = by_name.get("mesh.colors")
+    colors = by_name.get("mesh.colors") if group == "mesh" else None
     write_colors(
         mesh,
-        None if colors is None else np.asarray(colors, dtype=np.uint8),
+        None if colors is None else np.asarray(colors, dtype=np.uint8).reshape(-1, 4),
     )
 
     creases = None
-    if "subd.crease_edges" in by_name and "subd.crease_values" in by_name:
-        creases = (by_name["subd.crease_edges"], by_name["subd.crease_values"])
-    elif "mesh.crease_edges" in by_name and "mesh.crease_values" in by_name:
-        creases = (by_name["mesh.crease_edges"], by_name["mesh.crease_values"])
-    write_creases(mesh, creases)
+    edge_name = prefix + "crease_edges"
+    value_name = prefix + "crease_values"
+    if edge_name in by_name or value_name in by_name:
+        if edge_name not in by_name or value_name not in by_name:
+            raise GeometryIOError(
+                "%s and %s must be sent together" % (edge_name, value_name)
+            )
+        creases = (by_name[edge_name], by_name[value_name])
+    write_creases(mesh, creases, notes=notes)
 
     mesh.update()
     return mesh
@@ -1397,10 +1646,15 @@ def write_colors(mesh, colors):
     mesh.color_attributes.active_color = attr
 
 
-def write_creases(mesh, creases):
+def write_creases(mesh, creases, notes=None):
     """Create or update the crease attribute. ``creases`` is (edges, values) or None,
     in which case a zeroed attribute is still created so the mesh is explicitly
-    uncreased rather than silently stale."""
+    uncreased rather than silently stale.
+
+    Edges named by the frame that no longer exist on the rebuilt mesh are
+    dropped; ``notes`` receives their count instead of hiding the loss in the
+    console.
+    """
     attr = mesh.attributes.get(CREASE_ATTRIBUTE)
     if attr is None or attr.domain != "EDGE" or attr.data_type != "FLOAT":
         if attr is not None and attr.name == CREASE_ATTRIBUTE:
@@ -1420,11 +1674,17 @@ def write_creases(mesh, creases):
         for i in range(len(edge_verts)):
             a, b = int(edge_verts[i][0]), int(edge_verts[i][1])
             lookup[(min(a, b), max(a, b))] = i
+        missing = 0
         for k in range(len(edges)):
             a, b = int(edges[k][0]), int(edges[k][1])
             idx = lookup.get((min(a, b), max(a, b)))
             if idx is not None:
                 values[idx] = cv[k]
+            else:
+                missing += 1
+        _count_note(notes, missing,
+                    "crease edge did not match the rebuilt mesh and was dropped",
+                    "crease edges did not match the rebuilt mesh and were dropped")
     attr.data.foreach_set("value", values)
 
 
@@ -1432,26 +1692,114 @@ def write_creases(mesh, creases):
 
 
 def sections_to_curve(curve, sections):
-    """Rebuild a Blender Curve datablock from ``crv.*`` sections, in place."""
+    """Rebuild a Blender Curve datablock from ``crv.*`` sections, in place.
+
+    The whole group is validated before ``curve`` is touched: section lengths,
+    the points/counts sum, per-curve type, order, knot mode, cyclic flag and
+    weight. A malformed group raises ``GeometryIOError``; it is never truncated
+    or completed with an invented zero weight.
+    """
     by_name = {}
     for name, dtype, values in sections:
         by_name[name] = values
 
-    points = by_name.get("crv.points")
-    counts = by_name.get("crv.counts")
-    if points is None or counts is None:
+    names = (
+        "crv.points", "crv.counts", "crv.types", "crv.orders",
+        "crv.knots_mode", "crv.cyclic",
+    )
+    if not any(name in by_name for name in names):
         raise GeometryIOError("curve sections need crv.points and crv.counts")
-    points = np.asarray(points, dtype=np.float32).reshape(-1, 4)
-    counts = np.asarray(counts, dtype=np.uint32).reshape(-1)
-    if int(counts.sum()) != len(points):
-        raise GeometryIOError(
-            "crv.points length %d != sum(crv.counts) %d" % (len(points), int(counts.sum()))
-        )
+    if "crv.points" not in by_name or "crv.counts" not in by_name:
+        raise GeometryIOError("curve group is incomplete: crv.points/crv.counts missing")
+
+    try:
+        points = np.asarray(by_name["crv.points"], dtype=np.float32)
+        if points.size % 4:
+            raise ValueError
+        points = points.reshape(-1, 4)
+        counts = np.asarray(by_name["crv.counts"], dtype=np.uint32).reshape(-1)
+    except (TypeError, ValueError):
+        raise GeometryIOError("crv.points must be N x 4 floats and crv.counts a u32 list")
+
     n_curves = len(counts)
-    types = _u8(by_name.get("crv.types"), n_curves)
-    orders = _u8(by_name.get("crv.orders"), n_curves)
-    modes = _u8(by_name.get("crv.knots_mode"), n_curves)
-    cyclic = _u8(by_name.get("crv.cyclic"), n_curves)
+    arrays = {}
+    for name in names[2:]:
+        if name not in by_name:
+            if n_curves == 0:
+                arrays[name] = np.zeros(0, dtype=np.uint8)
+                continue
+            raise GeometryIOError("%s is missing for %d curves" % (name, n_curves))
+        try:
+            values = np.asarray(by_name[name]).reshape(-1)
+            if len(values) != n_curves:
+                raise GeometryIOError(
+                    "%s has %d entries for %d curves" % (name, len(values), n_curves)
+                )
+            if len(values) and (values.min() < 0 or values.max() > 255):
+                raise GeometryIOError("%s has a value outside u8 range" % name)
+            arrays[name] = values.astype(np.uint8)
+        except GeometryIOError:
+            raise
+        except (TypeError, ValueError) as exc:
+            raise GeometryIOError("%s is not a u8 list: %s" % (name, exc))
+
+    types = arrays["crv.types"]
+    orders = arrays["crv.orders"]
+    modes = arrays["crv.knots_mode"]
+    cyclic = arrays["crv.cyclic"]
+
+    total = int(counts.sum())
+    if total != len(points):
+        raise GeometryIOError(
+            "crv.points length %d != sum(crv.counts) %d" % (len(points), total)
+        )
+
+    at = 0
+    for i in range(n_curves):
+        raw_count = int(counts[i])
+        if raw_count < 2:
+            raise GeometryIOError(
+                "curve %d has %d points; at least 2 are required" % (i, raw_count)
+            )
+        chunk = points[at : at + raw_count]
+        at += raw_count
+        type_value = int(types[i])
+        mode = int(modes[i])
+        order = int(orders[i])
+        if type_value > CURVE_NURBS:
+            raise GeometryIOError("curve %d has type %d" % (i, type_value))
+        if mode > KNOTS_BEZIER:
+            raise GeometryIOError("curve %d has knot mode %d" % (i, mode))
+        if cyclic[i] > 1:
+            raise GeometryIOError("curve %d cyclic flag is %d" % (i, cyclic[i]))
+
+        bezier = type_value == CURVE_BEZIER or (
+            type_value == CURVE_NURBS and mode == KNOTS_BEZIER
+        )
+        if bezier:
+            if raw_count < 4 or (raw_count - 1) % 3:
+                raise GeometryIOError(
+                    "curve %d is a Bezier net with %d points; expected 3k+1"
+                    % (i, raw_count)
+                )
+        elif type_value == CURVE_NURBS:
+            if order < 2 or order > 6:
+                raise GeometryIOError(
+                    "curve %d NURBS order is %d; expected 2..6" % (i, order)
+                )
+            if order > raw_count:
+                raise GeometryIOError(
+                    "curve %d NURBS order %d exceeds its %d control points"
+                    % (i, order, raw_count)
+                )
+
+        weights = chunk[:, 3]
+        if not np.all(np.isfinite(weights)) or not np.all(weights > 0.0):
+            bad = int(np.nonzero(~np.isfinite(weights) | (weights <= 0.0))[0][0])
+            raise GeometryIOError(
+                "curve %d point %d has weight %r; weights must be finite and positive"
+                % (i, bad, float(weights[bad]))
+            )
 
     curve.splines.clear()
     at = 0
@@ -1459,8 +1807,6 @@ def sections_to_curve(curve, sections):
         n = int(counts[i])
         chunk = points[at : at + n]
         at += n
-        if n < 2:
-            continue
         if types[i] == CURVE_POLY:
             _poly_spline(curve, chunk, bool(cyclic[i]))
         elif modes[i] == KNOTS_BEZIER or types[i] == CURVE_BEZIER:
@@ -1471,12 +1817,6 @@ def sections_to_curve(curve, sections):
     return curve
 
 
-def _u8(values, count):
-    if values is None:
-        return np.zeros(count, dtype=np.uint8)
-    return np.asarray(values, dtype=np.uint8).reshape(-1)
-
-
 def _poly_spline(curve, chunk, cyclic):
     spline = curve.splines.new("POLY")
     spline.points.add(len(chunk) - 1)
@@ -1485,9 +1825,11 @@ def _poly_spline(curve, chunk, cyclic):
 
 
 def _nurbs_spline(curve, chunk, order, mode, cyclic):
+    """One NURBS spline. ``order`` is validated by ``sections_to_curve``; it is
+    deliberately not clamped here, so a bad frame cannot silently change shape."""
     spline = curve.splines.new("NURBS")
     spline.points.add(len(chunk) - 1)
-    spline.order_u = max(2, min(6, int(order)))
+    spline.order_u = int(order)
     spline.use_endpoint_u = mode == KNOTS_ENDPOINT
     spline.use_cyclic_u = cyclic
     spline.points.foreach_set("co", chunk.reshape(-1))
@@ -1524,31 +1866,47 @@ def _bezier_spline(curve, chunk):
 
 
 def sections_to_points(cloud, sections):
-    """Rebuild a point cloud from ``pts.*`` sections, in place."""
+    """Rebuild a point cloud from ``pts.*`` sections, in place.
+
+    Absent ``pts.radii`` means "no per-point radii": every radius is reset to
+    Blender's default rather than keeping a previous response's values.
+    """
     by_name = {}
     for name, dtype, values in sections:
         by_name[name] = values
 
     positions = by_name.get("pts.positions")
     if positions is None:
+        if any(name.startswith("pts.") for name in by_name):
+            raise GeometryIOError("point group is incomplete: pts.positions is missing")
         cloud.resize(0)
         return cloud
-    positions = np.asarray(positions, dtype=np.float32).reshape(-1, 3)
+    try:
+        positions = np.asarray(positions, dtype=np.float32).reshape(-1, 3)
+    except (TypeError, ValueError):
+        raise GeometryIOError("pts.positions must be N x 3 floats")
     n = len(positions)
     cloud.resize(n)
     cloud.points.foreach_set("co", positions.reshape(-1))
 
     radii = by_name.get("pts.radii")
-    if radii is not None:
+    if radii is None:
+        cloud.points.foreach_set(
+            "radius", np.full(n, POINT_RADIUS_DEFAULT, dtype=np.float32)
+        )
+    else:
         radii = np.asarray(radii, dtype=np.float32).reshape(-1)
-        if len(radii) == n:
-            cloud.points.foreach_set("radius", radii)
+        if len(radii) != n:
+            raise GeometryIOError(
+                "pts.radii has %d entries for %d points" % (len(radii), n)
+            )
+        cloud.points.foreach_set("radius", radii)
     cloud.points.update()
 
     colors = by_name.get("pts.colors")
     write_point_colors(
         cloud,
-        None if colors is None else np.asarray(colors, dtype=np.uint8),
+        None if colors is None else np.asarray(colors, dtype=np.uint8).reshape(-1, 4),
     )
     return cloud
 
@@ -1582,7 +1940,7 @@ def write_point_colors(cloud, colors):
 # ------------------------------------------------------------------ helpers
 
 
-def object_to_sections(obj, as_subd=False):
+def object_to_sections(obj, as_subd=False, notes=None):
     """Protocol sections and attribute descriptors for an object's base
     geometry, by object type. Returns ``(sections, attributes)``.
 
@@ -1590,35 +1948,38 @@ def object_to_sections(obj, as_subd=False):
     SubD cage), curves as ``crv.*``, point clouds as ``pts.*``. A Blender
     surface is meshed first: Blender has no B-rep to send, so the surface
     arrives on the GH side as a mesh (lossy, like a Rhino Brep going the other
-    way).
+    way); ``notes`` names that conversion. ``notes`` also collects curve and
+    attribute losses from the readers.
     """
     if obj.type == "MESH":
         mesh = obj.data
         if not as_subd and len(mesh.polygons) == 0:
-            return wire_mesh_to_sections(mesh)
+            return wire_mesh_to_sections(mesh, notes=notes)
         attribute_sections, attributes = mesh_attributes(mesh, as_subd=as_subd)
-        sections = mesh_to_sections(mesh, as_subd=as_subd) + attribute_sections
+        sections = mesh_to_sections(mesh, as_subd=as_subd, notes=notes) + attribute_sections
         if not as_subd:
             wire_sections, wire_attrs = wire_mesh_to_sections(
-                mesh, index0=len(attributes),
+                mesh, index0=len(attributes), notes=notes,
             )
             sections += wire_sections
             attributes += wire_attrs
         return sections, attributes
     if obj.type == "CURVE":
-        return curve_to_sections(obj.data), []
+        return curve_to_sections(obj.data, notes=notes), []
     if obj.type == "POINTCLOUD":
         attribute_sections, attributes = points_attributes(obj.data)
-        return points_to_sections(obj.data) + attribute_sections, attributes
+        return points_to_sections(obj.data, notes=notes) + attribute_sections, attributes
     if obj.type == "SURFACE":
         import bpy
 
+        _note(notes, "surface was meshed; Blender has no B-rep to send exactly")
         mesh = surface_to_mesh(obj)
         try:
             attribute_sections, attributes = mesh_attributes(mesh, as_subd=False)
             return mesh_to_sections(mesh, as_subd=False) + attribute_sections, attributes
         finally:
             bpy.data.meshes.remove(mesh)
+    _note(notes, "%s object has no wire geometry and was skipped" % obj.type)
     return [], []
 
 

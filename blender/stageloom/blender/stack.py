@@ -194,6 +194,10 @@ class StageloomStage(bpy.types.PropertyGroup):
     applied_out_hash: StringProperty(name="Applied output hash", default="")
     error: StringProperty(name="Last error", default="")
     warnings: StringProperty(name="Warnings", default="")
+    # Outbound conversion losses from this stage's prefix (Catmull-Rom comps,
+    # missing Bezier handles, unmatched creases, ...). Runtime-only: response
+    # warnings stay in `warnings` and are never overwritten by this channel.
+    input_warnings: StringProperty(name="Input warnings", default="")
     params: CollectionProperty(type=StageloomParam)
 
 

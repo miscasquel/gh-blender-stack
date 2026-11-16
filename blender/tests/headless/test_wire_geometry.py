@@ -101,6 +101,17 @@ class WireMeshTests(unittest.TestCase):
         self.assertIsNotNone(descriptor(attributes, "crv", "Top"))
         self.assertIsNotNone(descriptor(attributes, "pts", "endpoints"))
 
+    def test_wire_mesh_crease_loss_is_noted(self):
+        obj = new_wire_object()
+        crease = obj.data.attributes.new("crease_edge", "FLOAT", "EDGE")
+        for index, element in enumerate(crease.data):
+            element.value = 1.0 if index in (0, 2) else 0.0
+        notes = []
+        sections, _attributes = geometry_io.object_to_sections(obj, notes=notes)
+        by = by_name(sections)
+        self.assertNotIn("mesh.crease_edges", by)
+        self.assertTrue(any("2 crease edges" in note for note in notes), notes)
+
     def test_mixed_mesh_keeps_faces_and_adds_the_loose_remainder(self):
         mesh = bpy.data.meshes.new("mixed")
         mesh.from_pydata(
@@ -196,6 +207,66 @@ class CurveComponentTests(unittest.TestCase):
         names = [entry["name"] for entry in attributes]
         self.assertNotIn("curve_type", names)
         self.assertNotIn("position", names)
+
+
+class CurveComponentLossNoteTests(unittest.TestCase):
+    """Outbound curve losses carry a counted note for the stage panel."""
+
+    def setUp(self):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+
+    def component(self, name, curve_type, order=None):
+        curves = bpy.data.hair_curves.new(name)
+        curves.add_curves([4, 4])
+        kind = curves.attributes.new("curve_type", "INT", "CURVE")
+        for element in kind.data:
+            element.value = curve_type
+        if order is not None:
+            orders = curves.attributes.new("nurbs_order", "INT", "CURVE")
+            for element in orders.data:
+                element.value = order
+        return curves
+
+    def test_catmull_rom_components_are_counted(self):
+        curves = self.component("catmull", geometry_io.CURVE_TYPE_CATMULL_ROM)
+        notes = []
+        sections, _attributes = geometry_io.curves_component_to_sections(
+            curves, notes=notes
+        )
+        self.assertEqual(sections, [])
+        self.assertTrue(
+            any("2 Catmull-Rom" in note for note in notes), notes
+        )
+
+    def test_bezier_components_without_handles_are_counted(self):
+        curves = self.component("bezier-no-handles", geometry_io.CURVE_TYPE_BEZIER)
+        notes = []
+        sections, _attributes = geometry_io.curves_component_to_sections(
+            curves, notes=notes
+        )
+        self.assertEqual(sections, [])
+        self.assertTrue(any("2 Bezier" in note for note in notes), notes)
+
+    def test_unsupported_nurbs_components_are_counted(self):
+        curves = self.component(
+            "nurbs-order", geometry_io.CURVE_TYPE_NURBS, order=7
+        )
+        notes = []
+        sections, _attributes = geometry_io.curves_component_to_sections(
+            curves, notes=notes
+        )
+        self.assertEqual(sections, [])
+        self.assertTrue(any("2 NURBS" in note for note in notes), notes)
+
+    def test_geometry_set_collects_the_component_notes(self):
+        curves = self.component("catmull-set", geometry_io.CURVE_TYPE_CATMULL_ROM)
+        obj = bpy.data.objects.new("catmull-set", curves)
+        bpy.context.scene.collection.objects.link(obj)
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        geometry = obj.evaluated_get(depsgraph).evaluated_geometry()
+        notes = []
+        geometry_io.geometry_set_to_sections(geometry, notes=notes)
+        self.assertTrue(any("Catmull-Rom" in note for note in notes), notes)
 
 
 if __name__ == "__main__":

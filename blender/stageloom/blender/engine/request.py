@@ -14,6 +14,30 @@ def _set(stage, field, value):
     return False
 
 
+def _set_input_warnings(stage, notes):
+    """Publish this prefix read's conversion notes when they changed.
+
+    ``input_warnings`` is runtime display state, never part of the request or
+    the hash. An unchanged string is not rewritten, so a quiet pass does not
+    tag the UI.
+    """
+    text = "\n".join(note for note in (notes or []) if note)
+    engine._set(stage, "input_warnings", text)
+
+
+def _prefix_result(result):
+    """``(sections, attributes, definitions, notes)`` from a prefix read.
+
+    Batch/memo entries written before the notes channel may be three-tuples;
+    treating them as note-less keeps old session state and test fixtures valid.
+    """
+    if len(result) >= 4:
+        return result[0], result[1], result[2], result[3] or []
+    if len(result) >= 3:
+        return result[0], result[1], result[2], []
+    return {}, [], [], []
+
+
 def _rest_state(stage):
     """The state a stage settles into after an answer. A frozen stage stays
     frozen through a Pull; it owns the state."""
@@ -322,11 +346,16 @@ def _prefix_sections(obj, record, stage):
     geometry edits therefore cannot move its request id.
     """
     if engine.stack_mod.is_generator(stage):
+        _set_input_warnings(stage, [])
         return [], _empty_geometry_hash(), [], []
 
     if obj.type == "SURFACE":
         subd = bool(record.subd)
-        sections, attributes = engine.geometry_io.object_to_sections(obj, as_subd=subd)
+        notes = []
+        sections, attributes = engine.geometry_io.object_to_sections(
+            obj, as_subd=subd, notes=notes
+        )
+        _set_input_warnings(stage, notes)
         return sections, engine._sections_hash(sections, attributes), attributes, []
 
     modifier = engine.nodes.modifier_of(obj, stage)
@@ -338,6 +367,7 @@ def _prefix_sections(obj, record, stage):
     memo = engine._prefix_memo.get(memo_key)
     if memo is not None and memo["revision"] == revision:
         engine.stats["prefix_memo_hits"] += 1
+        _set_input_warnings(stage, memo.get("notes"))
         return memo["sections"], memo["geom_hash"], memo["attributes"], memo["definitions"]
 
     subd = bool(record.subd)
@@ -349,10 +379,11 @@ def _prefix_sections(obj, record, stage):
             engine._build_prefix_batch(obj, record, stage)
             batched = engine._prefix_batch.get((pointer, stage.key))
     if batched is not None:
-        sections, attributes, definitions = batched
+        sections, attributes, definitions, notes = _prefix_result(batched)
     else:
+        notes = []
         sections, attributes, definitions = engine._clone_prefix(
-            obj, index, subd, stage.key
+            obj, index, subd, stage.key, notes=notes
         )
         engine.stats["prefix_clones"] += 1
 
@@ -374,8 +405,10 @@ def _prefix_sections(obj, record, stage):
         sections = memo["sections"]
         attributes = memo["attributes"]
         definitions = memo["definitions"]
+        notes = memo.get("notes") or []
         geom_hash = memo["geom_hash"]
         memo["revision"] = revision
+        _set_input_warnings(stage, notes)
         return sections, geom_hash, attributes, definitions
 
     geom_hash = engine._sections_hash(sections, attributes, definitions)
@@ -385,7 +418,9 @@ def _prefix_sections(obj, record, stage):
         "geom_hash": geom_hash,
         "attributes": attributes,
         "definitions": definitions,
+        "notes": notes,
     }
+    _set_input_warnings(stage, notes)
     return sections, geom_hash, attributes, definitions
 
 
@@ -505,12 +540,13 @@ def _clone_prefixes(obj, stages, subd):
         depsgraph = engine.bpy.context.evaluated_depsgraph_get()
         for stage, clone, _owned_data in clones:
             geometry = clone.evaluated_get(depsgraph).evaluated_geometry()
+            notes = []
             sections, attributes, definitions = (
                 engine.geometry_io.geometry_set_to_sections(
-                    geometry, as_subd=subd
+                    geometry, as_subd=subd, notes=notes
                 )
             )
-            results[stage.key] = (sections, attributes, definitions)
+            results[stage.key] = (sections, attributes, definitions, notes)
     finally:
         primary_failed = engine.sys.exc_info()[0] is not None
         cleanup_failure = None
@@ -547,7 +583,7 @@ def _clone_prefixes(obj, stages, subd):
     return results
 
 
-def _clone_prefix(obj, index, subd, stage_key=None):
+def _clone_prefix(obj, index, subd, stage_key=None, notes=None):
     """The evaluated prefix of one stage: the object just before its modifier.
 
     The copy is linked, evaluated and removed inside the ``_evaluating`` guard:
@@ -556,7 +592,8 @@ def _clone_prefix(obj, index, subd, stage_key=None):
     guard drops everything, the timer drains the depsgraph first. In Edit Mode
     the clone gets a private copy of the flushed datablock — a shared copy
     evaluates empty. The cleanup resets the guard even if a step fails; the
-    owner is recorded for the watchdog.
+    owner is recorded for the watchdog. ``notes`` collects outbound conversion
+    losses without changing the returned section tuple.
     """
     clone = obj.copy()
     # A copy that shares an Edit Mode mesh evaluates empty: the depsgraph hands
@@ -578,7 +615,7 @@ def _clone_prefix(obj, index, subd, stage_key=None):
         depsgraph = engine.bpy.context.evaluated_depsgraph_get()
         geometry = clone.evaluated_get(depsgraph).evaluated_geometry()
         sections, attributes, definitions = engine.geometry_io.geometry_set_to_sections(
-            geometry, as_subd=subd
+            geometry, as_subd=subd, notes=notes
         )
     finally:
         # The primary failure, if any, is captured before cleanup runs: a

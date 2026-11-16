@@ -338,6 +338,90 @@ class CurveRoundTripTests(unittest.TestCase):
         )
 
 
+class CurveValidationTests(unittest.TestCase):
+    """A malformed crv.* group is a classified error, never a short rebuild."""
+
+    def setUp(self):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+
+    def sections(self, n=3, types=(geometry_io.CURVE_NURBS,), orders=(3,),
+                 modes=(geometry_io.KNOTS_ENDPOINT,), cyclic=(0,), weights=None):
+        counts = np.full(len(types), n, dtype=np.uint32)
+        total = int(counts.sum())
+        points = np.ones((total, 4), dtype=np.float32)
+        if weights is not None:
+            points[:, 3] = np.asarray(weights, dtype=np.float32)
+        return [
+            ("crv.points", "f32", points),
+            ("crv.counts", "u32", counts),
+            ("crv.types", "u8", np.asarray(types, dtype=np.uint8)),
+            ("crv.orders", "u8", np.asarray(orders, dtype=np.uint8)),
+            ("crv.knots_mode", "u8", np.asarray(modes, dtype=np.uint8)),
+            ("crv.cyclic", "u8", np.asarray(cyclic, dtype=np.uint8)),
+        ]
+
+    def assert_invalid(self, sections, target=None):
+        target = target or bpy.data.curves.new("invalid-dst", "CURVE")
+        with self.assertRaises(geometry_io.GeometryIOError):
+            geometry_io.sections_to_curve(target, sections)
+
+    def test_nurbs_order_out_of_range_is_rejected_not_clamped(self):
+        for order in (1, 7):
+            with self.subTest(order=order):
+                self.assert_invalid(self.sections(n=4, orders=(order,)))
+
+    def test_nurbs_order_above_the_control_point_count_is_rejected(self):
+        self.assert_invalid(self.sections(n=3, orders=(4,)))
+
+    def test_array_lengths_and_counts_are_validated(self):
+        good = self.sections(n=3)
+        cases = {
+            "missing_counts": [entry for entry in good if entry[0] != "crv.counts"],
+            "short_types": [
+                (name, dtype, values[:0] if name == "crv.types" else values)
+                for name, dtype, values in good
+            ],
+            "count_sum_mismatch": [
+                (name, dtype, np.array([4], dtype=np.uint32) if name == "crv.counts" else values)
+                for name, dtype, values in good
+            ],
+            "point_not_xyz w": [
+                (name, dtype, values.reshape(-1)[:11] if name == "crv.points" else values)
+                for name, dtype, values in good
+            ],
+        }
+        for label, sections in cases.items():
+            with self.subTest(case=label):
+                self.assert_invalid(sections)
+
+    def test_type_mode_cyclic_and_bezier_shape_are_validated(self):
+        cases = {
+            "type": self.sections(types=(3,)),
+            "mode": self.sections(modes=(3,)),
+            "cyclic": self.sections(cyclic=(2,)),
+            "bezier_shape": self.sections(
+                n=3, types=(geometry_io.CURVE_NURBS,),
+                modes=(geometry_io.KNOTS_BEZIER,),
+            ),
+        }
+        for label, sections in cases.items():
+            with self.subTest(case=label):
+                self.assert_invalid(sections)
+
+    def test_weights_must_be_finite_and_positive(self):
+        for weight in (0.0, -1.0, float("nan"), float("inf")):
+            with self.subTest(weight=weight):
+                self.assert_invalid(self.sections(n=3, weights=[1.0, weight, 1.0]))
+
+    def test_a_malformed_group_leaves_the_destination_untouched(self):
+        target = bpy.data.curves.new("kept", "CURVE")
+        spline = target.splines.new("POLY")
+        spline.points.add(1)
+        self.assertEqual(len(target.splines), 1)
+        self.assert_invalid(self.sections(n=1), target=target)
+        self.assertEqual(len(target.splines), 1, "a rejected group cleared the target")
+
+
 class PointRoundTripTests(unittest.TestCase):
     def setUp(self):
         bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -361,6 +445,19 @@ class PointRoundTripTests(unittest.TestCase):
         got_r = np.empty(3, dtype=np.float32)
         target.points.foreach_get("radius", got_r)
         np.testing.assert_allclose(got_r, np.asarray(radii, dtype=np.float32))
+
+    def test_absent_radii_clear_a_previous_response(self):
+        obj = new_pointcloud_object("pts-radii-clear", [(0, 0, 0), (1, 0, 0)], [2.0, 3.0])
+        sections = geometry_io.points_to_sections(obj.data)
+        self.assertIn("pts.radii", by_name(sections))
+
+        without_radii = [entry for entry in sections if entry[0] != "pts.radii"]
+        geometry_io.sections_to_points(obj.data, without_radii)
+        got = np.empty(2, dtype=np.float32)
+        obj.data.points.foreach_get("radius", got)
+        np.testing.assert_allclose(
+            got, np.full(2, geometry_io.POINT_RADIUS_DEFAULT, dtype=np.float32)
+        )
 
     def test_empty_points_clear(self):
         obj = new_pointcloud_object("pts-clear", [(1, 1, 1)], [0.1])
@@ -549,6 +646,124 @@ class MixedEngineTests(unittest.TestCase):
         pointcloud = geometry.pointcloud
         self.assertIsNotNone(pointcloud, "no point component in the evaluated geometry")
         self.assertGreaterEqual(len(pointcloud.points), 1)
+
+
+class InputWarningsEngineTests(unittest.TestCase):
+    """The prefix read owns ``stage.input_warnings``; response warnings do not."""
+
+    @classmethod
+    def setUpClass(cls):
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        bpy.ops.preferences.addon_enable(module="stageloom")
+        cls.enterClassContext(isolate_data_root("stageloom-input-warnings-"))
+        import stageloom.blender.engine as engine
+
+        cls.engine = engine
+        bpy.ops.mesh.primitive_cube_add(size=1.0)
+        cls.obj = bpy.context.object
+        cls.obj.name = "InputWarnings"
+        bpy.ops.stageloom.add_stage(label="Warnings")
+        cls.stage = cls.obj.gh_stack.stages[0]
+
+    @classmethod
+    def tearDownClass(cls):
+        bpy.ops.preferences.addon_disable(module="stageloom")
+
+    def setUp(self):
+        self.engine._prefix_memo.clear()
+        self.engine._prefix_batch.clear()
+        self.engine._prefix_batch_built = False
+        self.stage.input_warnings = ""
+
+    def _read(self, appended_notes):
+        module = self.engine.geometry_io
+        real = module.geometry_set_to_sections
+
+        def with_notes(geometry, as_subd=False, notes=None):
+            result = real(geometry, as_subd=as_subd, notes=notes)
+            if notes is not None:
+                notes.extend(appended_notes)
+            return result
+
+        module.geometry_set_to_sections = with_notes
+        try:
+            return self.engine._prefix_sections(
+                self.obj, self.obj.gh_stack, self.stage
+            )
+        finally:
+            module.geometry_set_to_sections = real
+
+    def test_notes_reach_the_stage_and_clear_when_absent(self):
+        self._read(["2 Catmull-Rom curve components were skipped"])
+        self.assertEqual(
+            self.stage.input_warnings,
+            "2 Catmull-Rom curve components were skipped",
+        )
+
+        self.engine._prefix_memo.clear()
+        self._read([])
+        self.assertEqual(self.stage.input_warnings, "")
+
+    def test_catmull_rom_notes_reach_the_stage_from_real_geometry(self):
+        curves = bpy.data.hair_curves.new("catmull-prefix-src")
+        curves.add_curves([4, 4])
+        kind = curves.attributes.new("curve_type", "INT", "CURVE")
+        for element in kind.data:
+            element.value = geometry_io.CURVE_TYPE_CATMULL_ROM
+        source = bpy.data.objects.new("catmull-prefix-src", curves)
+        bpy.context.scene.collection.objects.link(source)
+
+        group = bpy.data.node_groups.new("catmull-prefix", "GeometryNodeTree")
+        group.interface.new_socket(
+            name="Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry"
+        )
+        output = group.nodes.new("NodeGroupOutput")
+        info = group.nodes.new("GeometryNodeObjectInfo")
+        info.inputs["Object"].default_value = source
+        info.transform_space = "ORIGINAL"
+        group.links.new(info.outputs["Geometry"], output.inputs[0])
+        modifier = self.obj.modifiers.new("catmull-prefix", "NODES")
+        modifier.node_group = group
+        self.obj.modifiers.move(
+            [entry.name for entry in self.obj.modifiers].index(modifier.name), 0
+        )
+        try:
+            self.engine._prefix_memo.clear()
+            self.engine._prefix_batch.clear()
+            self.engine._prefix_batch_built = False
+            self.engine._prefix_sections(
+                self.obj, self.obj.gh_stack, self.stage
+            )
+            self.assertIn("2 Catmull-Rom", self.stage.input_warnings)
+        finally:
+            self.obj.modifiers.remove(modifier)
+            bpy.data.objects.remove(source, do_unlink=True)
+            bpy.data.hair_curves.remove(curves)
+            bpy.data.node_groups.remove(group)
+
+    def test_an_unchanged_read_does_not_rewrite_the_channel(self):
+        self._read(["1 conversion note"])
+        writes = []
+        real_set = self.engine._set
+
+        def counting(stage, field, value):
+            if field == "input_warnings" and getattr(stage, field) != value:
+                writes.append(value)
+            return real_set(stage, field, value)
+
+        self.engine._set = counting
+        try:
+            self._read(["1 conversion note"])
+        finally:
+            self.engine._set = real_set
+
+        self.assertEqual(writes, [], "an unchanged prefix rewrote input_warnings")
+
+    def test_response_warnings_are_a_separate_field(self):
+        self.stage.warnings = "response warning"
+        self._read(["input note"])
+        self.assertEqual(self.stage.warnings, "response warning")
+        self.assertEqual(self.stage.input_warnings, "input note")
 
 
 if __name__ == "__main__":

@@ -150,6 +150,11 @@ class STAGELOOM_PT_panel(bpy.types.Panel):
         for line in (stage.warnings or "").split("\n"):
             if line:
                 box.label(text=line, icon="INFO")
+        input_warnings = [line for line in (stage.input_warnings or "").split("\n") if line]
+        if input_warnings:
+            box.label(text="Input conversion notes", icon="INFO")
+            for line in input_warnings:
+                box.label(text=line, icon="INFO")
 
         if stage.params:
             params_box = box.box()

@@ -149,6 +149,31 @@ class AttributeIOTests(unittest.TestCase):
         self.assertIsNone(target.attributes.get("short_string"))
         self.assertIsNotNone(target.attributes.get("weight"))
 
+    def test_native_colour_write_is_always_byte_srgb(self):
+        """An existing FLOAT_COLOR channel is replaced by the byte channel; the
+        write is sRGB, so the bytes read back exactly."""
+        mesh = quad_mesh("float-native")
+        old = mesh.color_attributes.new("Col", "FLOAT_COLOR", "POINT")
+        for element in old.data:
+            element.color = (0.5, 0.25, 1.0, 1.0)
+        mesh.color_attributes.active_color = old
+        wire = np.array(
+            [[0, 64, 128, 255], [255, 32, 0, 128],
+             [10, 20, 30, 40], [200, 100, 50, 255]],
+            dtype=np.uint8,
+        )
+        geometry_io.write_colors(mesh, wire)
+
+        attr = mesh.color_attributes[geometry_io.COLOR_ATTRIBUTE]
+        self.assertEqual(attr.data_type, "BYTE_COLOR")
+        self.assertEqual(attr.domain, "POINT")
+        floats = np.empty(len(mesh.vertices) * 4, dtype=np.float32)
+        attr.data.foreach_get("color_srgb", floats)
+        back = np.clip(
+            np.rint(floats * 255.0), 0.0, 255.0
+        ).astype(np.uint8).reshape(-1, 4)
+        np.testing.assert_array_equal(back, wire)
+
     def test_native_channels_travel_once(self):
         """The active colour attribute and the crease attribute go through
         mesh.colors / the crease sections, never as generic attributes."""
