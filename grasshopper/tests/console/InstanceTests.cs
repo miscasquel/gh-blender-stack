@@ -91,8 +91,8 @@ namespace Stageloom.Tests.Console
             var notes = new List<string>();
             DecodedFrame single = Load(root, "request-instances");
             var singleBuilder = Builder(single, notes, AttributesOf(single));
-            Instances.DefinitionPlan panel = singleBuilder.Plan(0);
-            Instances.DefinitionPlan cluster = singleBuilder.Plan(1);
+            DefinitionPlan panel = singleBuilder.Plan(0);
+            DefinitionPlan cluster = singleBuilder.Plan(1);
             Check("single fixture: definition 0 keeps the single-part namespace",
                 panel != null && panel.PartCount == 1 && panel.Parts.Count == 1
                 && panel.Parts[0].Part == -1
@@ -109,8 +109,8 @@ namespace Stageloom.Tests.Console
             notes = new List<string>();
             DecodedFrame multi = Load(root, "response-instances-multipart");
             var multiBuilder = Builder(multi, notes, AttributesOf(multi));
-            Instances.DefinitionPlan assembly = multiBuilder.Plan(0);
-            Instances.DefinitionPlan bolt = multiBuilder.Plan(1);
+            DefinitionPlan assembly = multiBuilder.Plan(0);
+            DefinitionPlan bolt = multiBuilder.Plan(1);
             Check("multi fixture: definition 0 has two ordered part namespaces",
                 assembly != null && assembly.PartCount == 2 && assembly.Parts.Count == 2
                 && assembly.Parts[0].Part == 0 && assembly.Parts[0].Prefix == "idef.0.0."
@@ -150,7 +150,7 @@ namespace Stageloom.Tests.Console
         private static void CheckTableValidation()
         {
             var notes = new List<string>();
-            Instances.DefinitionBuilder builder = Builder(Frame(new List<object> { 7L }, null), notes);
+            DefinitionBuilder builder = Builder(Frame(new List<object> { 7L }, null), notes);
             Check("table: a non-object entry is rejected",
                 builder.Plan(0) == null && HasNote(notes, "not an object"), Notes(notes));
 
@@ -197,7 +197,7 @@ namespace Stageloom.Tests.Console
 
             notes = new List<string>();
             builder = Builder(Frame(new List<object> { DefParts("pair", 2L) }, null), notes);
-            Instances.DefinitionPlan pair = builder.Plan(0);
+            DefinitionPlan pair = builder.Plan(0);
             Check("table: a valid parts count plans every part",
                 pair != null && pair.PartCount == 2 && pair.Parts.Count == 2
                 && pair.Parts[0].Prefix == "idef.0.0."
@@ -310,7 +310,7 @@ namespace Stageloom.Tests.Console
             var emptyNotes = new List<string>();
             var empty = Builder(Frame(new List<object> { DefParts("Three", 3L) },
                 MeshSections("idef.0.1.")), emptyNotes);
-            Instances.DefinitionPlan three = empty.Plan(0);
+            DefinitionPlan three = empty.Plan(0);
             Check("namespace: empty parts are legal and keep their order",
                 three != null && three.PartCount == 3 && three.Parts.Count == 3
                 && three.Parts[0].Part == 0 && three.Parts[1].Part == 1
@@ -326,9 +326,9 @@ namespace Stageloom.Tests.Console
                                                long index = 0)
         {
             var notes = new List<string>();
-            Instances.DefinitionBuilder builder = Builder(
+            DefinitionBuilder builder = Builder(
                 Frame(definitions, sections == null ? new List<Section>() : sections), notes);
-            Instances.DefinitionPlan plan = builder.Plan(index);
+            DefinitionPlan plan = builder.Plan(index);
             Check(what, plan == null && HasNote(notes, noteText),
                 (plan == null ? "plan null" : DescribePlan(plan)) + "; notes: " + Notes(notes));
         }
@@ -433,7 +433,7 @@ namespace Stageloom.Tests.Console
             var sections = new List<Section>();
             Rows(sections, "idef.0.", 1);
             Rows(sections, "idef.1.", 0);
-            Instances.DefinitionBuilder builder = Builder(Frame(definitions, sections), notes);
+            DefinitionBuilder builder = Builder(Frame(definitions, sections), notes);
             bool ok = builder.Preflight(0);
             Check("preflight: a two-definition cycle is noted and cut",
                 ok && HasNote(notes, "inside itself"), Notes(notes));
@@ -474,7 +474,7 @@ namespace Stageloom.Tests.Console
             sections.Add(AttrValue("idef.0.attr.0.values", 1f));
             var frame = DecodedFrame.FromSections(header, sections);
             var notes = new List<string>();
-            Instances.DefinitionBuilder builder = Builder(frame, notes);
+            DefinitionBuilder builder = Builder(frame, notes);
             string single = builder.ContentHash(0);
             Check("hash: a single-part definition keeps the old content hash",
                 single == LegacySingleHash(frame, 0, 1.0, new List<string>()),
@@ -566,7 +566,7 @@ namespace Stageloom.Tests.Console
                 Descriptor("mesh", "wrong_section", "FLOAT", "POINT", 1,
                     "idef.0.mesh.verts", 0, null),
             };
-            Instances.DefinitionBuilder builder = Builder(
+            DefinitionBuilder builder = Builder(
                 Frame(new List<object> { Def("Single") }, sections), notes, descriptors);
             builder.Plan(0);
             Check("descriptors: a geometry section is not an attribute section",
@@ -785,13 +785,13 @@ namespace Stageloom.Tests.Console
             var attributes = new List<Dictionary<string, object>>();
             var definitions = new List<Dictionary<string, object>>();
             var warnings = new List<WireWarning>();
-            var table = new Instances.DefinitionTableWriter(
+            var table = new DefinitionTableWriter(
                 sections, attributes, definitions, warnings, true);
 
-            Instances.DefinitionTableWriter.Part part =
+            DefinitionTableWriter.Part part =
                 OutPart(0f, "load", null);
             int[] indices = table.Write("id:single", "",
-                new List<Instances.DefinitionTableWriter.Part> { part }, null);
+                new List<DefinitionTableWriter.Part> { part }, null);
 
             Check("outbound single-part: one legacy table entry",
                 indices != null && indices.Length == 1 && indices[0] == 0
@@ -836,17 +836,17 @@ namespace Stageloom.Tests.Console
             attributes = new List<Dictionary<string, object>>();
             definitions = new List<Dictionary<string, object>>();
             warnings = new List<WireWarning>();
-            table = new Instances.DefinitionTableWriter(
+            table = new DefinitionTableWriter(
                 sections, attributes, definitions, warnings, true);
             int[] child = table.Write("id:child", "Bolt",
-                new List<Instances.DefinitionTableWriter.Part> { OutPart(2f, null, null) }, null);
-            var rows = new List<Instances.DefinitionTableWriter.NestedRow>
+                new List<DefinitionTableWriter.Part> { OutPart(2f, null, null) }, null);
+            var rows = new List<DefinitionTableWriter.NestedRow>
             {
-                new Instances.DefinitionTableWriter.NestedRow(
+                new DefinitionTableWriter.NestedRow(
                     IdentityWire(), "id:child", delegate { return child; }),
             };
             table.Write("id:parent", "Parent",
-                new List<Instances.DefinitionTableWriter.Part> { OutPart(3f, null, null) }, rows);
+                new List<DefinitionTableWriter.Part> { OutPart(3f, null, null) }, rows);
             Check("outbound single-part: a nested row stays at definition level",
                 definitions.Count == 2 && !definitions[1].ContainsKey("parts")
                 && Find(sections, "idef.1.inst.ref_def") != null
@@ -860,17 +860,17 @@ namespace Stageloom.Tests.Console
             var attributes = new List<Dictionary<string, object>>();
             var definitions = new List<Dictionary<string, object>>();
             var warnings = new List<WireWarning>();
-            var table = new Instances.DefinitionTableWriter(
+            var table = new DefinitionTableWriter(
                 sections, attributes, definitions, warnings, true);
 
             int[] child = table.Write("id:bolt", "Bolt",
-                new List<Instances.DefinitionTableWriter.Part> { OutPart(9f, null, null) }, null);
-            var rows = new List<Instances.DefinitionTableWriter.NestedRow>
+                new List<DefinitionTableWriter.Part> { OutPart(9f, null, null) }, null);
+            var rows = new List<DefinitionTableWriter.NestedRow>
             {
-                new Instances.DefinitionTableWriter.NestedRow(
+                new DefinitionTableWriter.NestedRow(
                     IdentityWire(), "id:bolt", delegate { return child; }),
             };
-            var parts = new List<Instances.DefinitionTableWriter.Part>
+            var parts = new List<DefinitionTableWriter.Part>
             {
                 OutPart(0f, "first", 0),
                 OutPart(1f, "second", 1),
@@ -921,12 +921,12 @@ namespace Stageloom.Tests.Console
             sections = new List<Section>();
             attributes = new List<Dictionary<string, object>>();
             definitions = new List<Dictionary<string, object>>();
-            table = new Instances.DefinitionTableWriter(
+            table = new DefinitionTableWriter(
                 sections, attributes, definitions, new List<WireWarning>(), true);
-            parts = new List<Instances.DefinitionTableWriter.Part>
+            parts = new List<DefinitionTableWriter.Part>
             {
                 OutPart(0f, "only", 0),
-                new Instances.DefinitionTableWriter.Part(),
+                new DefinitionTableWriter.Part(),
             };
             table.Write("id:empty-part", "EmptyPart", parts, null);
             Check("outbound multi-part: an empty part keeps its index",
@@ -943,17 +943,17 @@ namespace Stageloom.Tests.Console
             var attributes = new List<Dictionary<string, object>>();
             var definitions = new List<Dictionary<string, object>>();
             var warnings = new List<WireWarning>();
-            var table = new Instances.DefinitionTableWriter(
+            var table = new DefinitionTableWriter(
                 sections, attributes, definitions, warnings, false);
 
             int[] child = table.Write("id:bolt", "Bolt",
-                new List<Instances.DefinitionTableWriter.Part> { OutPart(9f, null, null) }, null);
-            var rows = new List<Instances.DefinitionTableWriter.NestedRow>
+                new List<DefinitionTableWriter.Part> { OutPart(9f, null, null) }, null);
+            var rows = new List<DefinitionTableWriter.NestedRow>
             {
-                new Instances.DefinitionTableWriter.NestedRow(
+                new DefinitionTableWriter.NestedRow(
                     IdentityWire(), "id:bolt", delegate { return child; }),
             };
-            var parts = new List<Instances.DefinitionTableWriter.Part>
+            var parts = new List<DefinitionTableWriter.Part>
             {
                 OutPart(0f, "first", null),
                 OutPart(1f, "second", null),
@@ -999,7 +999,7 @@ namespace Stageloom.Tests.Console
 
             // The same definition reached under another identity dedupes by
             // content; its rows still fan out to both part definitions.
-            var again = new List<Instances.DefinitionTableWriter.Part>
+            var again = new List<DefinitionTableWriter.Part>
             {
                 OutPart(0f, "first", null),
                 OutPart(1f, "second", null),
@@ -1015,7 +1015,7 @@ namespace Stageloom.Tests.Console
             sections = new List<Section>();
             attributes = new List<Dictionary<string, object>>();
             definitions = new List<Dictionary<string, object>>();
-            table = new Instances.DefinitionTableWriter(
+            table = new DefinitionTableWriter(
                 sections, attributes, definitions, new List<WireWarning>(), true);
             int[] supported = table.Write("id:assembly", "Assembly", OutPartsTwo(), null);
             Check("outbound capability: the same content becomes one multi-part definition",
@@ -1028,13 +1028,13 @@ namespace Stageloom.Tests.Console
             // An empty part survives the fallback as well.
             sections = new List<Section>();
             definitions = new List<Dictionary<string, object>>();
-            table = new Instances.DefinitionTableWriter(
+            table = new DefinitionTableWriter(
                 sections, new List<Dictionary<string, object>>(), definitions,
                 new List<WireWarning>(), false);
-            var emptyPart = new List<Instances.DefinitionTableWriter.Part>
+            var emptyPart = new List<DefinitionTableWriter.Part>
             {
                 OutPart(0f, null, null),
-                new Instances.DefinitionTableWriter.Part(),
+                new DefinitionTableWriter.Part(),
             };
             int[] split = table.Write("id:empty-part", "EmptyPart", emptyPart, null);
             Check("outbound fallback: an empty part still gets its definition",
@@ -1047,11 +1047,11 @@ namespace Stageloom.Tests.Console
             // two colliding empty names.
             sections = new List<Section>();
             definitions = new List<Dictionary<string, object>>();
-            table = new Instances.DefinitionTableWriter(
+            table = new DefinitionTableWriter(
                 sections, new List<Dictionary<string, object>>(), definitions,
                 new List<WireWarning>(), false);
             table.Write("id:unnamed-split", "",
-                new List<Instances.DefinitionTableWriter.Part>
+                new List<DefinitionTableWriter.Part>
                 {
                     OutPart(0f, null, null),
                     OutPart(1f, null, null),
@@ -1069,7 +1069,7 @@ namespace Stageloom.Tests.Console
         {
             var sections = new List<Section>();
             var definitions = new List<Dictionary<string, object>>();
-            var table = new Instances.DefinitionTableWriter(
+            var table = new DefinitionTableWriter(
                 sections, new List<Dictionary<string, object>>(), definitions,
                 new List<WireWarning>(), true);
 
@@ -1085,7 +1085,7 @@ namespace Stageloom.Tests.Console
                 && firstName.StartsWith(Instances.DefinitionPrefix, StringComparison.Ordinal),
                 firstName);
 
-            var changedPart = new List<Instances.DefinitionTableWriter.Part>
+            var changedPart = new List<DefinitionTableWriter.Part>
             {
                 OutPart(0f, "first", 0),
                 OutPart(2f, "second", 1),
@@ -1097,7 +1097,7 @@ namespace Stageloom.Tests.Console
                 && changedName != firstName,
                 changedName + " vs " + firstName);
 
-            var changedAttribute = new List<Instances.DefinitionTableWriter.Part>
+            var changedAttribute = new List<DefinitionTableWriter.Part>
             {
                 OutPart(0f, "first", 0),
                 OutPart(1f, "renamed", 1),
@@ -1107,7 +1107,7 @@ namespace Stageloom.Tests.Console
                 attribute != null && attribute[0] != first[0] && definitions.Count == 3,
                 definitions.Count + " definition(s)");
 
-            var changedCount = new List<Instances.DefinitionTableWriter.Part>
+            var changedCount = new List<DefinitionTableWriter.Part>
             {
                 OutPart(0f, "first", 0),
                 OutPart(1f, "second", 1),
@@ -1118,19 +1118,19 @@ namespace Stageloom.Tests.Console
                 count != null && count[0] != first[0] && definitions.Count == 4,
                 definitions.Count + " definition(s)");
 
-            var rowA = new Instances.DefinitionTableWriter.NestedRow(
+            var rowA = new DefinitionTableWriter.NestedRow(
                 IdentityWire(), "id:child", null);
-            var rowB = new Instances.DefinitionTableWriter.NestedRow(
+            var rowB = new DefinitionTableWriter.NestedRow(
                 TranslationWire(1f, 0f, 0f), "id:child", null);
             sections = new List<Section>();
             definitions = new List<Dictionary<string, object>>();
-            table = new Instances.DefinitionTableWriter(
+            table = new DefinitionTableWriter(
                 sections, new List<Dictionary<string, object>>(), definitions,
                 new List<WireWarning>(), true);
             table.Write("id:nested-a", "", OutPartsTwo(),
-                new List<Instances.DefinitionTableWriter.NestedRow> { rowA });
+                new List<DefinitionTableWriter.NestedRow> { rowA });
             table.Write("id:nested-b", "", OutPartsTwo(),
-                new List<Instances.DefinitionTableWriter.NestedRow> { rowB });
+                new List<DefinitionTableWriter.NestedRow> { rowB });
             Check("outbound hash: changing a nested placement changes the key",
                 definitions.Count == 2
                 && (string)definitions[0]["name"] != (string)definitions[1]["name"],
@@ -1139,7 +1139,7 @@ namespace Stageloom.Tests.Console
             // The fallback name is stable across two independent writes.
             sections = new List<Section>();
             definitions = new List<Dictionary<string, object>>();
-            table = new Instances.DefinitionTableWriter(
+            table = new DefinitionTableWriter(
                 sections, new List<Dictionary<string, object>>(), definitions,
                 new List<WireWarning>(), true);
             table.Write("id:stable", "", OutPartsTwo(), null);
@@ -1152,12 +1152,12 @@ namespace Stageloom.Tests.Console
             // their name stays empty, exactly as before Q10b2b.
             sections = new List<Section>();
             definitions = new List<Dictionary<string, object>>();
-            table = new Instances.DefinitionTableWriter(
+            table = new DefinitionTableWriter(
                 sections, new List<Dictionary<string, object>>(), definitions,
                 new List<WireWarning>(), true);
-            table.Write("id:a", "", new List<Instances.DefinitionTableWriter.Part>
+            table.Write("id:a", "", new List<DefinitionTableWriter.Part>
                 { OutPart(0f, "load", null) }, null);
-            table.Write("id:b", "", new List<Instances.DefinitionTableWriter.Part>
+            table.Write("id:b", "", new List<DefinitionTableWriter.Part>
                 { OutPart(0f, "load", null) }, null);
             Check("outbound hash: single-part definitions keep the old identity key",
                 definitions.Count == 2 && (string)definitions[0]["name"] == ""
@@ -1172,23 +1172,23 @@ namespace Stageloom.Tests.Console
             var sections = new List<Section>();
             var definitions = new List<Dictionary<string, object>>();
             var warnings = new List<WireWarning>();
-            var table = new Instances.DefinitionTableWriter(
+            var table = new DefinitionTableWriter(
                 sections, new List<Dictionary<string, object>>(), definitions,
                 warnings, true);
 
-            var parts = new List<Instances.DefinitionTableWriter.Part>
+            var parts = new List<DefinitionTableWriter.Part>
                 { OutPart(0f, null, null) };
             System.Func<int[]> loop = null;
-            var self = new Instances.DefinitionTableWriter.NestedRow(
+            var self = new DefinitionTableWriter.NestedRow(
                 IdentityWire(), "id:self", delegate { return loop(); });
             loop = delegate
             {
                 return table.Write("id:self", "Loop", parts,
-                    new List<Instances.DefinitionTableWriter.NestedRow> { self });
+                    new List<DefinitionTableWriter.NestedRow> { self });
             };
 
             int[] outer = table.Write("id:self", "Loop", parts,
-                new List<Instances.DefinitionTableWriter.NestedRow> { self });
+                new List<DefinitionTableWriter.NestedRow> { self });
             bool noted = false;
             foreach (WireWarning warning in warnings)
                 if (warning.Message.IndexOf("nests inside itself", StringComparison.Ordinal) >= 0)
@@ -1330,16 +1330,16 @@ namespace Stageloom.Tests.Console
                 "geometry " + geometry.Count + "; notes " + Notes(notes));
         }
 
-        private static List<Instances.DefinitionTableWriter.Part> OutPartsTwo()
+        private static List<DefinitionTableWriter.Part> OutPartsTwo()
         {
-            return new List<Instances.DefinitionTableWriter.Part>
+            return new List<DefinitionTableWriter.Part>
             {
                 OutPart(0f, "first", 0),
                 OutPart(1f, "second", 1),
             };
         }
 
-        private static Instances.DefinitionTableWriter.Part OutPart(
+        private static DefinitionTableWriter.Part OutPart(
             float x, string attributeName, long? part)
         {
             var sections = new List<Section>
@@ -1358,7 +1358,7 @@ namespace Stageloom.Tests.Console
                 descriptors.Add(Descriptor("mesh", attributeName, "FLOAT", "POINT", 1,
                     "attr.0.values", 0L, part));
             }
-            return new Instances.DefinitionTableWriter.Part(sections, descriptors);
+            return new DefinitionTableWriter.Part(sections, descriptors);
         }
 
         private static float[] IdentityWire()
@@ -1715,11 +1715,11 @@ namespace Stageloom.Tests.Console
 
         // ------------------------------------------------------------- helpers
 
-        private static Instances.DefinitionBuilder Builder(DecodedFrame frame,
+        private static DefinitionBuilder Builder(DecodedFrame frame,
                                                            List<string> notes,
                                                            List<Dictionary<string, object>> attributes = null)
         {
-            return new Instances.DefinitionBuilder(frame, 1.0, attributes,
+            return new DefinitionBuilder(frame, 1.0, attributes,
                 delegate(string text) { notes.Add(text); });
         }
 
@@ -1861,11 +1861,11 @@ namespace Stageloom.Tests.Console
             return notes.Count == 0 ? "(none)" : string.Join(" | ", notes.ToArray());
         }
 
-        private static string DescribePlan(Instances.DefinitionPlan plan)
+        private static string DescribePlan(DefinitionPlan plan)
         {
             if (plan == null) return "no plan";
             string parts = "";
-            foreach (Instances.PartPlan part in plan.Parts)
+            foreach (PartPlan part in plan.Parts)
                 parts += (parts.Length > 0 ? "," : "") + part.Part + "=" + part.Prefix;
             return "name=" + plan.Name + " parts=" + plan.PartCount
                 + " [" + parts + "] nested=" + plan.NestedPrefix;

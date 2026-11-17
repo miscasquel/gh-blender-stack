@@ -125,6 +125,12 @@ if [ -f "$GH_DLL" ] && [ -f "$GHIO_DLL" ] && [ -f "$RC_DLL" ]; then
     "$(win_path "$REPO/grasshopper/src/gh/EndpointSettings.cs")" \
     "$(win_path "$REPO/grasshopper/src/gh/MiniWsClient.cs")" \
     "$(win_path "$REPO/grasshopper/src/gh/Instances.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/DefinitionTable.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/DefinitionIdentity.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/InstancePlan.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/InstanceBuild.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/InstanceEmit.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/DefinitionTableWriter.cs")" \
     "$(win_path "$REPO/grasshopper/tests/console/FakeServer.cs")" \
     "$(win_path "$REPO/grasshopper/tests/console/LinkTests.cs")"
   [ -f "$LINK_OUT" ] || { echo "build failed: $LINK_OUT not produced" >&2; exit 1; }
@@ -176,6 +182,12 @@ if [ -f "$GH_DLL" ] && [ -f "$GHIO_DLL" ] && [ -f "$RC_DLL" ]; then
     "$(win_path "$REPO/grasshopper/src/core/Conversion.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Attributes.cs")" \
     "$(win_path "$REPO/grasshopper/src/gh/Instances.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/DefinitionTable.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/DefinitionIdentity.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/InstancePlan.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/InstanceBuild.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/InstanceEmit.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/DefinitionTableWriter.cs")" \
     "$(win_path "$REPO/grasshopper/tests/console/InstanceTests.cs")"
   [ -f "$INSTANCE_OUT" ] || { echo "build failed: $INSTANCE_OUT not produced" >&2; exit 1; }
   echo "built $INSTANCE_OUT ($(stat -c%s "$INSTANCE_OUT") bytes)"

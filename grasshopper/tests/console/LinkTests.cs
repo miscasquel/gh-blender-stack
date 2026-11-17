@@ -644,16 +644,12 @@ namespace Stageloom.Tests.Console
         private static void RunDefinitionContentGuard()
         {
             System.Console.WriteLine("instance definition content guard");
-            var noRows = new List<GH_InstanceReference>();
-            Check("all-null definition has no content",
-                !Instances.HasDefinitionContent(
-                    new List<Mesh>(), new List<Curve>(), new List<Point3d>(),
-                    new List<SubD>(), new List<Brep>(), noRows), "");
-            Check("a null nested row is not content",
-                !Instances.HasDefinitionContent(
-                    new List<Mesh>(), new List<Curve>(), new List<Point3d>(),
-                    new List<SubD>(), new List<Brep>(),
-                    new List<GH_InstanceReference> { null }), "");
+            var empty = new InstanceEmit.DefinitionContent();
+            empty.Parts.Add(new InstanceEmit.GeometryPart());
+            Check("all-null definition has no content", !empty.HasContent, "");
+            var nullRow = new InstanceEmit.DefinitionContent();
+            nullRow.Nested.Add(null);
+            Check("a null nested row is not content", !nullRow.HasContent, "");
         }
 
         // ------------------------------------------------------------ helpers

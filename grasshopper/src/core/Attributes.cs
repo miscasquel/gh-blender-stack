@@ -33,17 +33,43 @@ namespace Stageloom.Core
         // attributes stored by older components still read back.
         public const string RootKey = "GHStack.Attributes";
 
-        // Blender data type -> storage kind, components per element, wire
-        // dtype and the name Blender's own UI uses. The wire keeps the
-        // internal ids; the label is what the graph sees.
+        // Blender data type -> storage kind, components, wire dtype and UI label.
+        // Each kind carries its own check/decode/encode/slice behaviour.
+        private sealed class StorageKind
+        {
+            public readonly string Name;
+            public readonly Func<object, int> Length;
+            public readonly Func<object, string> ItemProblem;
+            public readonly Func<Section, object> Decode;
+            public readonly Func<string, object, Section> Encode;
+            public readonly Action<ArchivableDictionary, object> Store;
+            public readonly Func<object, int, int, int, object> Slice;
+
+            public StorageKind(string name, Func<object, int> length,
+                               Func<object, string> itemProblem,
+                               Func<Section, object> decode,
+                               Func<string, object, Section> encode,
+                               Action<ArchivableDictionary, object> store,
+                               Func<object, int, int, int, object> slice)
+            {
+                Name = name;
+                Length = length;
+                ItemProblem = itemProblem;
+                Decode = decode;
+                Encode = encode;
+                Store = store;
+                Slice = slice;
+            }
+        }
+
         private sealed class TypeInfo
         {
-            public readonly string Kind;
+            public readonly StorageKind Kind;
             public readonly int Components;
             public readonly string Label;
             public readonly string Dtype;
 
-            public TypeInfo(string kind, int components, string label, string dtype)
+            public TypeInfo(StorageKind kind, int components, string label, string dtype)
             {
                 Kind = kind;
                 Components = components;
@@ -52,22 +78,111 @@ namespace Stageloom.Core
             }
         }
 
+        private static int LengthOf<T>(object values)
+        {
+            T[] array = values as T[];
+            return array == null ? -1 : array.Length;
+        }
+
+        private static string StringItems(object values)
+        {
+            foreach (string item in (string[])values)
+                if (item == null) return "STRING values must not be null";
+            return null;
+        }
+
+        private static readonly StorageKind DoubleKind = new StorageKind(
+            "double", LengthOf<double>, null,
+            delegate(Section values)
+            {
+                float[] raw = values.ToFloats();
+                var target = new double[raw.Length];
+                for (int i = 0; i < raw.Length; i++) target[i] = raw[i];
+                return target;
+            },
+            delegate(string name, object values)
+            {
+                double[] raw = (double[])values;
+                var target = new float[raw.Length];
+                for (int i = 0; i < raw.Length; i++) target[i] = (float)raw[i];
+                return Section.Floats(name, target);
+            },
+            delegate(ArchivableDictionary record, object values)
+            { record.Set("values", (double[])values); },
+            delegate(object flat, int start, int count, int components)
+            { return SliceArray((double[])flat, start, count, components); });
+
+        private static readonly StorageKind IntKind = new StorageKind(
+            "int", LengthOf<int>, null,
+            delegate(Section values) { return values.ToI32(); },
+            delegate(string name, object values) { return Section.Ints(name, (int[])values); },
+            delegate(ArchivableDictionary record, object values)
+            { record.Set("values", (int[])values); },
+            delegate(object flat, int start, int count, int components)
+            { return SliceArray((int[])flat, start, count, components); });
+
+        private static readonly StorageKind BoolKind = new StorageKind(
+            "bool", LengthOf<bool>, null,
+            delegate(Section values)
+            {
+                byte[] raw = values.Raw;
+                var target = new bool[raw.Length];
+                for (int i = 0; i < raw.Length; i++) target[i] = raw[i] != 0;
+                return target;
+            },
+            delegate(string name, object values)
+            {
+                bool[] raw = (bool[])values;
+                var target = new byte[raw.Length];
+                for (int i = 0; i < raw.Length; i++) target[i] = raw[i] ? (byte)1 : (byte)0;
+                return Section.Bytes(name, target);
+            },
+            delegate(ArchivableDictionary record, object values)
+            { record.Set("values", (bool[])values); },
+            delegate(object flat, int start, int count, int components)
+            { return SliceArray((bool[])flat, start, count, components); });
+
+        private static readonly StorageKind ByteKind = new StorageKind(
+            "byte", LengthOf<byte>, null,
+            delegate(Section values) { return values.Raw; },
+            delegate(string name, object values) { return Section.Bytes(name, (byte[])values); },
+            delegate(ArchivableDictionary record, object values)
+            { record.Set("values", (byte[])values); },
+            delegate(object flat, int start, int count, int components)
+            { return SliceArray((byte[])flat, start, count, components); });
+
+        private static readonly StorageKind StringKind = new StorageKind(
+            "string", LengthOf<string>, StringItems,
+            delegate(Section values) { return null; }, // DecodeValues splits STRING
+            delegate(string name, object values)
+            {
+                var lines = (string[])values;
+                var bytes = new List<byte>();
+                foreach (string item in lines)
+                    bytes.AddRange(Encoding.UTF8.GetBytes(item));
+                return Section.Bytes(name, bytes.ToArray());
+            },
+            delegate(ArchivableDictionary record, object values)
+            { record.Set("values", (string[])values); },
+            delegate(object flat, int start, int count, int components)
+            { return SliceArray((string[])flat, start, count, components); });
+
         private static readonly Dictionary<string, TypeInfo> Types = new Dictionary<string, TypeInfo>
         {
-            { "FLOAT", new TypeInfo("double", 1, "Float", "f32") },
-            { "INT", new TypeInfo("int", 1, "Integer", "i32") },
-            { "BOOLEAN", new TypeInfo("bool", 1, "Boolean", "u8") },
-            { "FLOAT_VECTOR", new TypeInfo("double", 3, "Vector", "f32") },
-            { "FLOAT2", new TypeInfo("double", 2, "2D Vector", "f32") },
-            { "FLOAT4", new TypeInfo("double", 4, "4D Vector", "f32") },
-            { "FLOAT_COLOR", new TypeInfo("double", 4, "Color", "f32") },
-            { "BYTE_COLOR", new TypeInfo("byte", 4, "Byte Color", "u8") },
-            { "QUATERNION", new TypeInfo("double", 4, "Quaternion", "f32") },
-            { "FLOAT4X4", new TypeInfo("double", 16, "4x4 Matrix", "f32") },
-            { "INT8", new TypeInfo("int", 1, "8-Bit Integer", "i32") },
-            { "INT16_2D", new TypeInfo("int", 2, "2D Integer Vector", "i32") },
-            { "INT32_2D", new TypeInfo("int", 2, "2D Integer Vector", "i32") },
-            { "STRING", new TypeInfo("string", 1, "String", "u8") },
+            { "FLOAT", new TypeInfo(DoubleKind, 1, "Float", "f32") },
+            { "INT", new TypeInfo(IntKind, 1, "Integer", "i32") },
+            { "BOOLEAN", new TypeInfo(BoolKind, 1, "Boolean", "u8") },
+            { "FLOAT_VECTOR", new TypeInfo(DoubleKind, 3, "Vector", "f32") },
+            { "FLOAT2", new TypeInfo(DoubleKind, 2, "2D Vector", "f32") },
+            { "FLOAT4", new TypeInfo(DoubleKind, 4, "4D Vector", "f32") },
+            { "FLOAT_COLOR", new TypeInfo(DoubleKind, 4, "Color", "f32") },
+            { "BYTE_COLOR", new TypeInfo(ByteKind, 4, "Byte Color", "u8") },
+            { "QUATERNION", new TypeInfo(DoubleKind, 4, "Quaternion", "f32") },
+            { "FLOAT4X4", new TypeInfo(DoubleKind, 16, "4x4 Matrix", "f32") },
+            { "INT8", new TypeInfo(IntKind, 1, "8-Bit Integer", "i32") },
+            { "INT16_2D", new TypeInfo(IntKind, 2, "2D Integer Vector", "i32") },
+            { "INT32_2D", new TypeInfo(IntKind, 2, "2D Integer Vector", "i32") },
+            { "STRING", new TypeInfo(StringKind, 1, "String", "u8") },
         };
 
         /// <summary>The Blender UI name of a wire type id ("FLOAT" -> "Float").</summary>
@@ -91,11 +206,17 @@ namespace Stageloom.Core
 
         /// <summary>The protocol pool a geometry object belongs to, or null when
         /// attributes cannot be attached to it.</summary>
+        private static readonly KeyValuePair<Type, string>[] Groups =
+        {
+            new KeyValuePair<Type, string>(typeof(Mesh), "mesh"),
+            new KeyValuePair<Type, string>(typeof(SubD), "subd"),
+            new KeyValuePair<Type, string>(typeof(PointCloud), "pts"),
+        };
+
         public static string GroupOf(GeometryBase geometry)
         {
-            if (geometry is Mesh) return "mesh";
-            if (geometry is SubD) return "subd";
-            if (geometry is PointCloud) return "pts";
+            foreach (KeyValuePair<Type, string> group in Groups)
+                if (group.Key.IsInstanceOfType(geometry)) return group.Value;
             return null;
         }
 
@@ -184,7 +305,7 @@ namespace Stageloom.Core
             record.Set("type", type);
             record.Set("domain", domain ?? "");
             record.Set("components", Types[type].Components);
-            SetValues(record, values);
+            Types[type].Kind.Store(record, values);
             root.Set(name, record);
         }
 
@@ -196,37 +317,16 @@ namespace Stageloom.Core
             problem = null;
             if (values == null) { problem = "values are missing"; return false; }
             TypeInfo info = Types[type];
-            int length;
-            switch (info.Kind)
+            int length = info.Kind.Length(values);
+            if (length < 0)
             {
-                case "double":
-                    if (!(values is double[])) { problem = "values must be double[] for " + type; return false; }
-                    length = ((double[])values).Length;
-                    break;
-                case "int":
-                    if (!(values is int[])) { problem = "values must be int[] for " + type; return false; }
-                    length = ((int[])values).Length;
-                    break;
-                case "bool":
-                    if (!(values is bool[])) { problem = "values must be bool[] for " + type; return false; }
-                    length = ((bool[])values).Length;
-                    break;
-                case "byte":
-                    if (!(values is byte[])) { problem = "values must be byte[] for " + type; return false; }
-                    length = ((byte[])values).Length;
-                    break;
-                case "string":
-                    {
-                        var strings = values as string[];
-                        if (strings == null) { problem = "values must be string[] for " + type; return false; }
-                        foreach (string item in strings)
-                            if (item == null) { problem = "STRING values must not be null"; return false; }
-                        count = strings.Length;
-                        return true;
-                    }
-                default:
-                    problem = "unknown storage kind " + info.Kind;
-                    return false;
+                problem = "values must be " + info.Kind.Name + "[] for " + type;
+                return false;
+            }
+            if (info.Kind.ItemProblem != null)
+            {
+                problem = info.Kind.ItemProblem(values);
+                if (problem != null) return false;
             }
             if (length % info.Components != 0)
             {
@@ -265,21 +365,6 @@ namespace Stageloom.Core
             return true;
         }
 
-        private static void SetValues(ArchivableDictionary record, object values)
-        {
-            var doubles = values as double[];
-            if (doubles != null) { record.Set("values", doubles); return; }
-            var ints = values as int[];
-            if (ints != null) { record.Set("values", ints); return; }
-            var bools = values as bool[];
-            if (bools != null) { record.Set("values", bools); return; }
-            var bytes = values as byte[];
-            if (bytes != null) { record.Set("values", bytes); return; }
-            var strings = values as string[];
-            if (strings != null) { record.Set("values", strings); return; }
-            throw new FrameException("bad_attribute", "attribute values must be a flat array");
-        }
-
         // ------------------------------------------------- wire -> dictionary
 
         /// <summary>One descriptor's fields, read with typed access.</summary>
@@ -313,85 +398,106 @@ namespace Stageloom.Core
 
             foreach (Dictionary<string, object> descriptor in descriptors)
             {
-                if (descriptor == null)
-                {
-                    AddNote(note, null, "descriptor is null");
-                    continue;
-                }
-
-                string descriptorGroup, groupProblem;
-                if (!TryGroup(descriptor, out descriptorGroup, out groupProblem))
-                {
-                    AddNote(note, NameText(descriptor), groupProblem);
-                    continue;
-                }
-                if (descriptorGroup != group) continue;
-
-                long marker;
-                string definitionProblem;
-                if (!TryDefinition(descriptor, out marker, out definitionProblem))
-                {
-                    AddNote(note, NameText(descriptor), definitionProblem);
-                    continue;
-                }
-                if (marker != (definition ?? -1)) continue;
-
-                long descriptorPart;
-                bool hasPart;
-                string partProblem;
-                if (!TryPart(descriptor, out descriptorPart, out hasPart, out partProblem))
-                {
-                    AddNote(note, NameText(descriptor), partProblem);
-                    continue;
-                }
-                if (hasPart && !definition.HasValue)
-                {
-                    AddNote(note, NameText(descriptor),
-                        "part " + descriptorPart + " has no definition");
-                    continue;
-                }
-                if (part.HasValue)
-                {
-                    if (!hasPart)
-                    {
-                        AddNote(note, NameText(descriptor), "has no part; definition "
-                            + definition + " part " + part + " was skipped");
-                        continue;
-                    }
-                    if (descriptorPart != part.Value) continue;
-                }
-                else if (hasPart)
-                {
-                    AddNote(note, NameText(descriptor),
-                        "part " + descriptorPart + " is not valid on single-part definition "
-                        + marker);
-                    continue;
-                }
-
                 DescriptorFields fields;
-                string problem = ReadDescriptor(descriptor, out fields);
-                if (problem != null)
-                {
-                    AddNote(note, fields.Name, problem);
+                if (!SelectDescriptor(descriptor, group, definition, part, note, out fields))
                     continue;
-                }
-
-                problem = DomainProblem(group, fields.Domain);
-                if (problem != null)
-                {
-                    AddNote(note, fields.Name, problem);
-                    continue;
-                }
 
                 object flat;
-                problem = DecodeValues(fields, byName, out flat);
-                if (problem != null)
-                {
-                    AddNote(note, fields.Name, problem);
-                    continue;
-                }
+                if (!DecodeSelected(fields, group, byName, note, out flat)) continue;
                 Store(root, fields.Name, fields.Type, fields.Domain, flat);
             }
+        }
+
+        /// <summary>Decode a selected descriptor with the one note path both
+        /// attachments use.</summary>
+        private static bool DecodeSelected(DescriptorFields fields, string group,
+                                           Dictionary<string, Section> byName,
+                                           Action<string> note, out object flat)
+        {
+            flat = null;
+            string problem = DomainProblem(group, fields.Domain);
+            if (problem != null)
+            {
+                AddNote(note, fields.Name, problem);
+                return false;
+            }
+            problem = DecodeValues(fields, byName, out flat);
+            if (problem != null)
+            {
+                AddNote(note, fields.Name, problem);
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>The one descriptor filter for mesh/subd/pts and curves.</summary>
+        private static bool SelectDescriptor(Dictionary<string, object> descriptor, string group,
+                                             long? definition, long? part, Action<string> note,
+                                             out DescriptorFields fields)
+        {
+            fields = null;
+            if (descriptor == null)
+            {
+                AddNote(note, null, "descriptor is null");
+                return false;
+            }
+
+            string descriptorGroup, groupProblem;
+            if (!TryGroup(descriptor, out descriptorGroup, out groupProblem))
+            {
+                AddNote(note, NameText(descriptor), groupProblem);
+                return false;
+            }
+            if (descriptorGroup != group) return false;
+
+            long marker;
+            string definitionProblem;
+            if (!TryDefinition(descriptor, out marker, out definitionProblem))
+            {
+                AddNote(note, NameText(descriptor), definitionProblem);
+                return false;
+            }
+            if (marker != (definition ?? -1)) return false;
+
+            long descriptorPart;
+            bool hasPart;
+            string partProblem;
+            if (!TryPart(descriptor, out descriptorPart, out hasPart, out partProblem))
+            {
+                AddNote(note, NameText(descriptor), partProblem);
+                return false;
+            }
+            if (hasPart && !definition.HasValue)
+            {
+                AddNote(note, NameText(descriptor),
+                    "part " + descriptorPart + " has no definition");
+                return false;
+            }
+            if (part.HasValue)
+            {
+                if (!hasPart)
+                {
+                    AddNote(note, NameText(descriptor), "has no part; definition "
+                        + definition + " part " + part + " was skipped");
+                    return false;
+                }
+                if (descriptorPart != part.Value) return false;
+            }
+            else if (hasPart)
+            {
+                AddNote(note, NameText(descriptor),
+                    "part " + descriptorPart + " is not valid on single-part definition "
+                    + marker);
+                return false;
+            }
+
+            string problem = ReadDescriptor(descriptor, out fields);
+            if (problem != null)
+            {
+                AddNote(note, fields.Name, problem);
+                return false;
+            }
+            return true;
         }
 
         private static Dictionary<string, Section> SectionMap(List<Section> sections)
@@ -536,31 +642,37 @@ namespace Stageloom.Core
             return null;
         }
 
-        /// <summary>The protocol domains a group's attributes can name. A
-        /// string domain outside this set would make the peer invent a domain
-        /// or drop the values, so it is skipped with a note.</summary>
+        /// <summary>The protocol domains a group's attributes can name.</summary>
+        private sealed class DomainSet
+        {
+            public readonly HashSet<string> Domains;
+            public readonly string Description;
+
+            public DomainSet(string description, params string[] domains)
+            {
+                Description = description;
+                Domains = new HashSet<string>(domains);
+            }
+        }
+
+        private static readonly Dictionary<string, DomainSet> Domains =
+            new Dictionary<string, DomainSet>
+        {
+            { "mesh", new DomainSet("mesh", "POINT", "EDGE", "FACE", "CORNER") },
+            { "subd", new DomainSet("subd", "POINT", "EDGE", "FACE", "CORNER") },
+            { "pts", new DomainSet("point-cloud", "POINT") },
+            { "crv", new DomainSet("curve", "CURVE", "EDGE", "POINT", "CURVE_POINT") },
+        };
+
         private static string DomainProblem(string group, string domain)
         {
-            switch (group)
-            {
-                case "mesh":
-                case "subd":
-                    if (domain == "POINT" || domain == "EDGE"
-                        || domain == "FACE" || domain == "CORNER") return null;
-                    return "\"" + domain + "\" is not a " + group + " attribute domain";
-                case "pts":
-                    if (domain == "POINT") return null;
-                    return "\"" + domain + "\" is not a point-cloud attribute domain";
-                case "crv":
-                    // CURVE_POINT is the curve-local storage name for a
-                    // per-point list; a peer that sends it means the same
-                    // slicing as POINT.
-                    if (domain == "CURVE" || domain == "EDGE"
-                        || domain == "POINT" || domain == "CURVE_POINT") return null;
-                    return "\"" + domain + "\" is not a curve attribute domain";
-                default:
-                    return "unsupported attribute group " + group;
-            }
+            DomainSet set;
+            if (!Domains.TryGetValue(group, out set))
+                return "unsupported attribute group " + group;
+            // CURVE_POINT is the curve-local storage name for a per-point
+            // list; a peer that sends it means the same slicing as POINT.
+            if (set.Domains.Contains(domain)) return null;
+            return "\"" + domain + "\" is not a " + set.Description + " attribute domain";
         }
 
         /// <summary>Check a section's dtype and byte length before any decoder
@@ -617,8 +729,8 @@ namespace Stageloom.Core
             string dtypeProblem = SectionProblem(values, Types[fields.Type].Dtype);
             if (dtypeProblem != null) return dtypeProblem;
 
-            flat = Decode(fields.Type, values);
-            long length = LengthOf(flat);
+            flat = Types[fields.Type].Kind.Decode(values);
+            long length = Types[fields.Type].Kind.Length(flat);
             long expected;
             if (!TryMultiply(fields.Count, components, out expected))
                 return "count " + fields.Count + " is too large";
@@ -640,43 +752,6 @@ namespace Stageloom.Core
             if (count > long.MaxValue / components) return false;
             product = count * components;
             return true;
-        }
-
-        private static long LengthOf(object values)
-        {
-            if (values is double[]) return ((double[])values).Length;
-            if (values is int[]) return ((int[])values).Length;
-            if (values is bool[]) return ((bool[])values).Length;
-            if (values is byte[]) return ((byte[])values).Length;
-            if (values is string[]) return ((string[])values).Length;
-            return -1;
-        }
-
-        private static object Decode(string type, Section values)
-        {
-            switch (Types[type].Kind)
-            {
-                case "double":
-                    {
-                        float[] raw = values.ToFloats();
-                        var target = new double[raw.Length];
-                        for (int i = 0; i < raw.Length; i++) target[i] = raw[i];
-                        return target;
-                    }
-                case "int":
-                    return values.ToI32();
-                case "bool":
-                    {
-                        byte[] raw = values.Raw;
-                        var target = new bool[raw.Length];
-                        for (int i = 0; i < raw.Length; i++) target[i] = raw[i] != 0;
-                        return target;
-                    }
-                case "byte":
-                    return values.Raw;
-                default: // strings are split by DecodeValues, which owns the notes
-                    return null;
-            }
         }
 
         // A STRING value that is not valid UTF-8 cannot become a .NET string
@@ -791,7 +866,7 @@ namespace Stageloom.Core
                 if (part.HasValue) entry["part"] = part.Value;
 
                 string offsetsName = prefix + "attr." + index + ".offsets";
-                Section valueSection = Encode(type, values, sectionName);
+                Section valueSection = Types[type].Kind.Encode(sectionName, values);
                 sections.Add(valueSection);
                 if (type == "STRING")
                 {
@@ -802,41 +877,6 @@ namespace Stageloom.Core
                     entry["offsets"] = offsetsName;
                 }
                 descriptors.Add(entry);
-            }
-        }
-
-        /// <summary>Encode values TryValues has already checked, so the casts
-        /// below cannot fail.</summary>
-        private static Section Encode(string type, object values, string name)
-        {
-            switch (Types[type].Kind)
-            {
-                case "double":
-                    {
-                        double[] raw = (double[])values;
-                        var target = new float[raw.Length];
-                        for (int i = 0; i < raw.Length; i++) target[i] = (float)raw[i];
-                        return Section.Floats(name, target);
-                    }
-                case "int":
-                    return Section.Ints(name, (int[])values);
-                case "bool":
-                    {
-                        bool[] raw = (bool[])values;
-                        var target = new byte[raw.Length];
-                        for (int i = 0; i < raw.Length; i++) target[i] = raw[i] ? (byte)1 : (byte)0;
-                        return Section.Bytes(name, target);
-                    }
-                case "byte":
-                    return Section.Bytes(name, (byte[])values);
-                default: // string
-                    {
-                        var lines = (string[])values;
-                        var bytes = new List<byte>();
-                        foreach (string item in lines)
-                            bytes.AddRange(Encoding.UTF8.GetBytes(item));
-                        return Section.Bytes(name, bytes.ToArray());
-                    }
             }
         }
 
@@ -905,83 +945,12 @@ namespace Stageloom.Core
 
             foreach (Dictionary<string, object> descriptor in descriptors)
             {
-                if (descriptor == null)
-                {
-                    AddNote(note, null, "descriptor is null");
-                    continue;
-                }
-
-                string descriptorGroup, groupProblem;
-                if (!TryGroup(descriptor, out descriptorGroup, out groupProblem))
-                {
-                    AddNote(note, NameText(descriptor), groupProblem);
-                    continue;
-                }
-                if (descriptorGroup != "crv") continue;
-
-                long marker;
-                string definitionProblem;
-                if (!TryDefinition(descriptor, out marker, out definitionProblem))
-                {
-                    AddNote(note, NameText(descriptor), definitionProblem);
-                    continue;
-                }
-                if (marker != (definition ?? -1)) continue;
-
-                long descriptorPart;
-                bool hasPart;
-                string partProblem;
-                if (!TryPart(descriptor, out descriptorPart, out hasPart, out partProblem))
-                {
-                    AddNote(note, NameText(descriptor), partProblem);
-                    continue;
-                }
-                if (hasPart && !definition.HasValue)
-                {
-                    AddNote(note, NameText(descriptor),
-                        "part " + descriptorPart + " has no definition");
-                    continue;
-                }
-                if (part.HasValue)
-                {
-                    if (!hasPart)
-                    {
-                        AddNote(note, NameText(descriptor), "has no part; definition "
-                            + definition + " part " + part + " was skipped");
-                        continue;
-                    }
-                    if (descriptorPart != part.Value) continue;
-                }
-                else if (hasPart)
-                {
-                    AddNote(note, NameText(descriptor),
-                        "part " + descriptorPart + " is not valid on single-part definition "
-                        + marker);
-                    continue;
-                }
-
                 DescriptorFields fields;
-                string problem = ReadDescriptor(descriptor, out fields);
-                if (problem != null)
-                {
-                    AddNote(note, fields.Name, problem);
+                if (!SelectDescriptor(descriptor, "crv", definition, part, note, out fields))
                     continue;
-                }
-
-                problem = DomainProblem("crv", fields.Domain);
-                if (problem != null)
-                {
-                    AddNote(note, fields.Name, problem);
-                    continue;
-                }
 
                 object flat;
-                problem = DecodeValues(fields, byName, out flat);
-                if (problem != null)
-                {
-                    AddNote(note, fields.Name, problem);
-                    continue;
-                }
+                if (!DecodeSelected(fields, "crv", byName, note, out flat)) continue;
 
                 int components = Types[fields.Type].Components;
                 if (fields.Domain == "CURVE" || fields.Domain == "EDGE")
@@ -998,7 +967,7 @@ namespace Stageloom.Core
                     bool attached = true;
                     for (int i = 0; i < roots.Count; i++)
                     {
-                        slices[i] = Slice(flat, i, 1, components);
+                        slices[i] = Types[fields.Type].Kind.Slice(flat, i, 1, components);
                         if (slices[i] == null)
                         {
                             AddNote(note, fields.Name, "cannot slice per-curve values");
@@ -1031,7 +1000,7 @@ namespace Stageloom.Core
                     for (int i = 0; i < roots.Count; i++)
                     {
                         int n = (int)counts[i];
-                        slices[i] = Slice(flat, at, n, components);
+                        slices[i] = Types[fields.Type].Kind.Slice(flat, at, n, components);
                         if (slices[i] == null)
                         {
                             AddNote(note, fields.Name, "cannot slice curve point values");
@@ -1047,32 +1016,9 @@ namespace Stageloom.Core
             }
         }
 
-        /// <summary>One curve's slice, with every range checked before
-        /// Array.Copy. A short slice is never returned as data.</summary>
-        private static object Slice(object flat, int start, int count, int components)
-        {
-            if (start < 0 || count < 0 || components <= 0) return null;
-            var doubles = flat as double[];
-            if (doubles != null) return SliceArray(doubles, start, count, components);
-            var ints = flat as int[];
-            if (ints != null) return SliceArray(ints, start, count, components);
-            var bools = flat as bool[];
-            if (bools != null) return SliceArray(bools, start, count, components);
-            var bytes = flat as byte[];
-            if (bytes != null) return SliceArray(bytes, start, count, components);
-            var strings = flat as string[];
-            if (strings != null)
-            {
-                if (count > strings.Length - start) return null;
-                var result = new string[count];
-                Array.Copy(strings, start, result, 0, count);
-                return result;
-            }
-            return null;
-        }
-
         private static T[] SliceArray<T>(T[] source, int start, int count, int components)
         {
+            if (start < 0 || count < 0 || components <= 0) return null;
             long first = (long)start * components;
             long length = (long)count * components;
             if (first > source.Length || length > source.Length - first) return null;

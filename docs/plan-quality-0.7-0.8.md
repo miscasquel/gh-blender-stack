@@ -1,10 +1,10 @@
 # Stageloom 0.7.0 / 0.8.0 — quality plan (rev. 2)
 
 **Status:** 0.7.0 complete, 2026-11-16. 0.8.0 is in progress: T1 (baseline,
-performance gate, code health) through T6 (`GhLink` split) are complete and
-recorded below. W7's `geometry_io`, engine-object and `GhLink` splits are done;
-the `Instances`/table-driven conversion split (T7) and W8 (performance, T8)
-remain, with the remaining W9/W10 items.
+performance gate, code health) through T7 (`Instances` split and table-driven
+conversion) are complete and recorded below. W7's `geometry_io`, engine-object,
+`GhLink` and `Instances` splits are done; W8 (performance, T8) remains, with the
+remaining W9/W10 items.
 **Baseline:** v0.6.0 plus the 2026-11-15 audit (seven module reviews), plus the
 post-audit bake/upstream work (`102f9c8..254d796`). That was the starting point:
 305 Blender headless tests in ~86 s, 57 core tests, C# and extension suites
@@ -61,6 +61,19 @@ largest link type is `StageRegistry` at 810. The 454 Blender tests are unchanged
 the C# runtime count is **685** (+4 direct owner guards). The full gate passed
 26/26 in **173.1 s**; the worst positive p50 is +1.49% (p95 +1.14% on the
 untouched 100k in-place apply) and no metric exceeds +5%. See [`seams-0.8.md`](seams-0.8.md) §3 and the ledger.
+T7 then split `Instances.cs` into `InstanceBuild`/`InstancePlan`, `InstanceEmit`,
+`DefinitionTableWriter`, `DefinitionTable`, `DefinitionIdentity` and a 36-code-line
+facade, and replaced the `Conversion`/`Attributes` kind switches with tables.
+Production is **24,711 physical / 19,800 code lines across 69 files** (−8 physical;
++86 code for the explicit owner boundaries, offset by removed curve appenders
+and type/kind dispatch). The former 2,135-line `Instances` type is
+gone; the largest instance type is `InstanceEmit` at 450 and `DefinitionBuilder`
+dropped from 940 to 424. The 454 Blender tests are unchanged and the C# runtime
+count is **685**. The full gate passed 26/26 in **176.1 s**; the worst positive
+p50 is +2.55% (`total_ms`, p95 +3.36%) and no metric exceeds +5%. A native Rhino
+probe built and emitted a real mesh/curve/point definition, round-tripped it and
+checked the `blocks/2` fallback; the wine harness still prints the native skips.
+See [`seams-0.8.md`](seams-0.8.md) §4 and the ledger.
 
 **0.7.0 completion record (2026-11-16).** Q1–Q19 are complete; Q5 was merged
 into Q4 (the cache and the `Live` toggle were one removal). The release was
@@ -836,7 +849,7 @@ acceptance criteria, then committed before the next starts.
 | T4 | `geometry_io` package split | one responsibility per module; no production net growth; full gate; in-place benchmarks within 5% | Done 2026-11-17 |
 | T5 | Blender engine object | explicit `Engine`/runtime records; no package-global hub; lifecycle/playback/bake tests unchanged | Done 2026-11-17; 26/26 on the 2026-11-17 best baseline |
 | T6 | `GhLink` split | registry/connection/scheduler/protocol/publication/slots split; document isolation and threading preserved | Done 2026-11-17; 685 C# checks, 26/26 in 173.1 s |
-| T7 | `Instances` split and table-driven conversion | single-part/multi-part/nested/attribute round trips unchanged; production LOC down or flat | Pending |
+| T7 | `Instances` split and table-driven conversion | single-part/multi-part/nested/attribute round trips unchanged; production LOC down or flat | Done 2026-11-17; 685 C# checks, 26/26 in 176.1 s; native probe green |
 | T8 | Performance follow-through | playback resolved or traded; p50/p95 within 5%; each fixed path measured | Pending |
 | T9 | Lean/docs/CI/build/framework | protocol tables generated; docs/ADR truth pass; reproducible artifacts; framework go/no-go | Pending |
 | T10 | Verification | fuzz, coverage, scale and 1-hour soak green | Pending |

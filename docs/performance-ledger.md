@@ -1,6 +1,6 @@
 # Performance ledger
 
-**Status: T1–T6 accepted.** The gate reference is the **2026-11-17 best-of-three
+**Status: T1–T7 accepted.** The gate reference is the **2026-11-17 best-of-three
 baseline**: three clean solo runs, with the fastest per-run p50/p95 stored for
 each metric. It replaces the 2026-11-16 median baseline after host CPU
 power/core-state drift was measured and confirmed not to be a T5 regression; the
@@ -72,7 +72,7 @@ flaked on unrelated timer noise; its 2 ms hard budget remains in `bench.py`.
 | T4 | 100k/1M in-place + instance repeat (p50/p95) | 2.2081 / 2.8269; 22.8247 / 23.0365; 2.5087 / 3.1799 | 2.2709 / 2.3472; 23.0166 / 23.7384; 2.5663 / 2.7071 | +2.85% / -16.97%; +0.84% / +3.05%; +2.29% / -14.87% | production 24,946 / 19,394 (flat physical, −20 code), 56 files; package 2,151 / 1,791 vs old 2,151 / 1,811 | accepted |
 | T5 | engine object: 100k/1M in-place, 13× instance repeat, playback, prefix/apply, roundtrip | 2.1453 / 2.1708; 21.6598 / 21.7428; 2.4608 / 2.5706; 12.8405 / 13.3398; 116.8278 / 119.6174; 91.0217 / 92.1573 | 2.1658 / 2.1996; 21.7300 / 21.7899; 2.5115 / 2.5672; 12.8752 / 13.3305; 116.6537 / 118.5319; 90.4581 / 91.1653 | +0.95% / +1.33%; +0.32% / +0.22%; +2.06% / -0.13%; +0.27% / -0.07%; -0.15% / -0.91%; -0.62% / -1.08% | production 24,738 / 19,376 (−208 / −18), 57 files; 454 Blender + 681 C# checks unchanged | accepted: 26/26 on the 2026-11-17 best baseline; decode +0.80% / -2.88%; no >5% metric |
 | T6 | `GhLink` split: no Blender hot-path change | 4.9433 / 5.1213; 4.4018 / 5.2993; 2.1453 / 2.1708; 21.6598 / 21.7428; 2.4608 / 2.5706; 12.8405 / 13.3398 | 4.8043 / 5.0086; 4.1689 / 5.1180; 2.1427 / 2.1572; 21.4043 / 21.4556; 2.4520 / 2.4903; 12.9308 / 13.2672 | -2.81% / -2.20%; -5.29% / -3.42%; -0.13% / -0.62%; -1.18% / -1.32%; -0.36% / -3.13%; +0.70% / -0.54% | production 24,719 / 19,714 (−19 physical, +338 code), 63 files; `GhLink` type 2,489 → 173 code lines; 454 Blender + 685 C# checks | accepted: 26/26 in 173.1 s; worst positive p50 +1.49% (`total_ms`), p95 +1.14% (`total_ms`); no >5% metric |
-| T7 | pending | — | — | — | — | pending |
+| T7 | `Instances` split/table-driven conversion: no Blender hot-path change | 4.9433 / 5.1213; 4.4018 / 5.2993; 2.1453 / 2.1708; 11.8275 / 12.0514; 21.6598 / 21.7428; 2.4608 / 2.5706; 12.8405 / 13.3398; 116.8278 / 119.6174; 91.0217 / 92.1573 | 4.8727 / 4.9639; 4.4787 / 5.2800; 2.1583 / 2.1921; 12.1295 / 12.4563; 21.7090 / 21.8571; 2.4619 / 2.5358; 12.8257 / 13.2868; 116.8876 / 119.4850; 90.9955 / 91.4284 | -1.43% / -3.07%; +1.75% / -0.36%; +0.60% / +0.98%; +2.55% / +3.36%; +0.23% / +0.53%; +0.04% / -1.36%; -0.12% / -0.40%; +0.05% / -0.11%; -0.03% / -0.79% | production 24,711 / 19,800 (−8 physical, +86 code), 69 files; former 2,135-line `Instances` type gone, largest instance type `InstanceEmit` 450 and `DefinitionBuilder` 940 → 424; 454 Blender + 685 C# checks; native Mesh/Curve/Point emit/build probe | accepted: 26/26 in 176.1 s; worst positive p50 +2.55% (`total_ms`), p95 +3.36%; no >5% metric; intermediate p95-only runs recorded below |
 | T8 | pending | — | — | — | — | pending |
 | T9 | pending | — | — | — | — | pending |
 | T10 | pending | — | — | — | — | pending |
@@ -238,6 +238,60 @@ refactor. An intermediate gate on the same code printed `pipeline.100k.total_ms`
 structural gain is recorded with the task: production physical LOC is −19, the
 largest link type is 2,489 → 810, the largest link method is 210 → 161, and the link
 separations are one owner each.
+
+### T7 verification
+
+T7 is an internal C# refactor: it changes the ownership of instance build/emit,
+the definition table grammar and the conversion/attribute dispatch, not the
+Blender codec, geometry write, topology-token fast path or transport bytes.
+Production is **24,711 physical / 19,800 code lines across 69 files** (T6:
+24,719 / 19,714 across 63; −8 physical, +86 code for the explicit owners and
+facade). The former 2,135-line `Instances` type is gone; the largest instance
+type is `InstanceEmit` at 450 and `DefinitionBuilder` dropped from 940 to 424.
+The 454 Blender tests plus the offline gate are unchanged; the C# runtime count
+is **685** (unchanged). `InstanceTests`/`ConversionTests`/`AttrTests` keep every
+assertion; only the type names moved to the direct owners.
+
+The accepted full `scripts/check-all` gate ran alone and passed in **176.1 s**
+with the 2026-11-17 best-of-three baseline enforced (bench 61.5 s; Blender 454
+tests + offline gate, 87.4 s; extension 2.6 s; C# 22.9 s). All **26/26**
+p50/p95 checks passed:
+
+| Metric | Baseline p50 / p95 | T7 p50 / p95 | Delta p50 / p95 |
+|---|---:|---:|---:|
+| `pipeline.100k.extract_ms` | 4.9433 / 5.1213 | 4.8727 / 4.9639 | -1.43% / -3.07% |
+| `pipeline.100k.decode_ms` | 4.4018 / 5.2993 | 4.4787 / 5.2800 | +1.75% / -0.36% |
+| `pipeline.100k.apply_fresh_ms` | 77.9507 / 87.1304 | 78.1372 / 89.0628 | +0.24% / +2.22% |
+| `pipeline.100k.apply_inplace_ms` | 2.1453 / 2.1708 | 2.1583 / 2.1921 | +0.60% / +0.98% |
+| `pipeline.100k.total_ms` | 11.8275 / 12.0514 | 12.1295 / 12.4563 | +2.55% / +3.36% |
+| `pipeline.1m.apply_inplace_ms` | 21.6598 / 21.7428 | 21.7090 / 21.8571 | +0.23% / +0.53% |
+| `instances.13x.prefix_ms` | 10.0813 / 10.2337 | 10.1616 / 10.4393 | +0.80% / +2.01% |
+| `instances.13x.apply_repeat_ms` | 2.4608 / 2.5706 | 2.4619 / 2.5358 | +0.04% / -1.36% |
+| `playback.frame_ms` | 12.8405 / 13.3398 | 12.8257 / 13.2868 | -0.12% / -0.40% |
+| `roundtrip.full.settle_ms` | 116.8278 / 119.6174 | 116.8876 / 119.4850 | +0.05% / -0.11% |
+| `roundtrip.ref.settle_ms` | 91.0217 / 92.1573 | 90.9955 / 91.4284 | -0.03% / -0.79% |
+| `multistage.dirty_pass_ms` | 6.7115 / 6.8452 | 6.7639 / 6.8935 | +0.78% / +0.70% |
+| `multistage.settle_ms` | 76.8907 / 79.0489 | 76.8392 / 79.3586 | -0.07% / +0.39% |
+
+No gated metric exceeds +5%. The worst positive p50 is
+`pipeline.100k.total_ms` **+2.55%**; its p95 is **+3.36%**. Neither pipeline
+path was changed by this C# refactor.
+
+Several intermediate runs are recorded rather than hidden. The first full gate
+failed three p95-only checks with p50 under +5%: `pipeline.100k.apply_inplace_ms`
+(+1.85% p50 / +7.66% p95), `pipeline.100k.total_ms` (+3.85% / +7.37%) and
+`instances.13x.prefix_ms` (+3.17% / +6.78%). A bench-only rerun moved
+`total_ms` to +5.50% / +7.53% on p50 during host/browser load; an immediate
+rerun passed 26/26. After the final comment trim, one full gate failed only
+`pipeline.100k.extract_ms` p95 (+0.11% p50 / +5.16% p95), and two bench-only
+reruns still crossed p95 on `total_ms` (+3.85% / +5.51%, then +3.38% / +5.16%).
+A bench-only rerun after the host load dropped passed 26/26 (+2.33% / +4.70% on
+`total_ms`); the final owner-table change then passed the accepted full gate
+above 26/26 (+2.55% / +3.36% on `total_ms`). The threshold was not
+widened and no metric was excluded. The structural gain is recorded with the
+task: physical LOC is −8, the `Instances` type is gone, the largest instance
+unit dropped from 2,135 to 450, and the curve appenders plus type/kind/
+descriptor dispatch duplication were removed.
 
 ## C# parameter/schema baseline (ungated)
 

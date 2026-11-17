@@ -610,12 +610,7 @@ namespace Stageloom.Core
             IList<Curve> curves, double scale, List<WireWarning> warnings, out int approximated)
         {
             approximated = 0;
-            var pts = new List<float>();
-            var counts = new List<uint>();
-            var types = new List<byte>();
-            var orders = new List<byte>();
-            var modes = new List<byte>();
-            var cyclic = new List<byte>();
+            var buffer = new CurveBuffer(scale);
             int sampled = 0;
             int nullCurves = 0;
             int unrepresentable = 0;
@@ -635,8 +630,7 @@ namespace Stageloom.Core
                     var list = new List<Point3d>(poly);
                     bool closed = list[0].DistanceTo(list[list.Count - 1]) < 1e-9;
                     if (closed && list.Count > 2) list.RemoveAt(list.Count - 1);
-                    AppendCurveSection(list, null, 0, 0, 0, closed, scale,
-                        pts, counts, types, orders, modes, cyclic);
+                    buffer.AddPolyline(list, closed);
                     continue;
                 }
 
@@ -659,8 +653,7 @@ namespace Stageloom.Core
                 List<ControlPoint> directPoints;
                 if (TryBlenderNurbs(nurbs, out directMode, out directCyclic, out directPoints))
                 {
-                    AppendNurbs(directPoints, (byte)nurbs.Order, directMode, directCyclic, scale,
-                        pts, counts, types, orders, modes, cyclic);
+                    buffer.AddNurbs(directPoints, (byte)nurbs.Order, directMode, directCyclic);
                     continue;
                 }
 
@@ -672,8 +665,7 @@ namespace Stageloom.Core
                     && piece.Points.Count == spans * degree + 1 && WeightsPositive(piece))
                 {
                     for (int s = 0; s < spans; s++)
-                        AppendNurbsSpan(piece, s * degree, degree + 1, scale,
-                            pts, counts, types, orders, modes, cyclic);
+                        buffer.AddSpan(piece, s * degree, degree + 1);
                     continue;
                 }
 
@@ -694,7 +686,7 @@ namespace Stageloom.Core
                 }
                 if (nets.Count == 0 || fittedNets.Count != nets.Count)
                 {
-                    AppendSampled(curve, scale, pts, counts, types, orders, modes, cyclic);
+                    AppendSampled(curve, buffer);
                     sampled++;
                     continue;
                 }
@@ -702,8 +694,7 @@ namespace Stageloom.Core
                 {
                     double deviation = SpanDeviation(nurbs, fittedNets[i], 24);
                     if (deviation > maxDeviation) maxDeviation = deviation;
-                    AppendCurveSection(nets[i], null, 2, 4, 2, false, scale,
-                        pts, counts, types, orders, modes, cyclic);
+                    buffer.AddBezierNet(nets[i]);
                 }
                 approximated++;
             }
@@ -733,55 +724,83 @@ namespace Stageloom.Core
                     string.Join(" and ", parts.ToArray()) + " were skipped"));
             }
 
-            return CurveDataSections(new CurveData(pts.ToArray(), counts.ToArray(),
-                types.ToArray(), orders.ToArray(), modes.ToArray(), cyclic.ToArray()));
+            return buffer.Sections();
         }
 
-        private static void AppendCurveSection(
-            List<Point3d> points, List<double> weights, byte type, byte order, byte mode, bool cyclic,
-            double scale, List<float> pts, List<uint> counts, List<byte> types, List<byte> orders,
-            List<byte> modes, List<byte> cyc)
+        /// <summary>The one wire-curve builder: points, weights and indices together.</summary>
+        private sealed class CurveBuffer
         {
-            foreach (Point3d p in points)
-            {
-                pts.Add((float)(p.X / scale));
-                pts.Add((float)(p.Y / scale));
-                pts.Add((float)(p.Z / scale));
-                pts.Add(1.0f);
-            }
-            counts.Add((uint)points.Count);
-            types.Add(type);
-            orders.Add(order);
-            modes.Add(mode);
-            cyc.Add((byte)(cyclic ? 1 : 0));
-        }
+            private readonly double _scale;
+            private readonly List<float> _points = new List<float>();
+            private readonly List<uint> _counts = new List<uint>();
+            private readonly List<byte> _types = new List<byte>();
+            private readonly List<byte> _orders = new List<byte>();
+            private readonly List<byte> _modes = new List<byte>();
+            private readonly List<byte> _cyclic = new List<byte>();
 
-        /// <summary>One Bezier span as its own wire curve: a single-span NURBS
-        /// whose order is its control-point count, weights included, so Blender
-        /// reproduces it exactly.
-        ///
-        /// The wire carries Euclidean coordinates plus a weight (Blender's native
-        /// form); Rhino stores homogeneous coordinates (Euclidean * weight), so the
-        /// Euclidean location comes from ControlPoint.Location. Mixing the two made
-        /// every rational curve arrive as a parabola.</summary>
-        private static void AppendNurbsSpan(
-            NurbsCurve piece, int start, int count, double scale, List<float> pts, List<uint> counts,
-            List<byte> types, List<byte> orders, List<byte> modes, List<byte> cyclic)
-        {
-            for (int i = start; i < start + count; i++)
+            public CurveBuffer(double scale)
             {
-                ControlPoint cp = piece.Points[i];
-                Point3d location = cp.Location;
-                pts.Add((float)(location.X / scale));
-                pts.Add((float)(location.Y / scale));
-                pts.Add((float)(location.Z / scale));
-                pts.Add((float)cp.Weight);
+                _scale = scale;
             }
-            counts.Add((uint)count);
-            types.Add(2);
-            orders.Add((byte)count);
-            modes.Add(1);
-            cyclic.Add(0);
+
+            public void AddPolyline(IList<Point3d> points, bool closed)
+            {
+                Add(points, null, 0, 0, 0, closed);
+            }
+
+            public void AddBezierNet(IList<Point3d> points)
+            {
+                Add(points, null, 2, 4, 2, false);
+            }
+
+            public void AddNurbs(IList<ControlPoint> points, byte order, byte mode, bool cyclic)
+            {
+                var locations = new List<Point3d>(points.Count);
+                var weights = new List<double>(points.Count);
+                foreach (ControlPoint cp in points)
+                {
+                    locations.Add(cp.Location);
+                    weights.Add(cp.Weight);
+                }
+                Add(locations, weights, 2, order, mode, cyclic);
+            }
+
+            public void AddSpan(NurbsCurve piece, int start, int count)
+            {
+                var locations = new List<Point3d>(count);
+                var weights = new List<double>(count);
+                for (int i = start; i < start + count; i++)
+                {
+                    ControlPoint cp = piece.Points[i];
+                    locations.Add(cp.Location);
+                    weights.Add(cp.Weight);
+                }
+                Add(locations, weights, 2, (byte)count, 1, false);
+            }
+
+            private void Add(IList<Point3d> points, IList<double> weights, byte type,
+                             byte order, byte mode, bool cyclic)
+            {
+                for (int i = 0; i < points.Count; i++)
+                {
+                    Point3d p = points[i];
+                    _points.Add((float)(p.X / _scale));
+                    _points.Add((float)(p.Y / _scale));
+                    _points.Add((float)(p.Z / _scale));
+                    _points.Add(weights == null ? 1.0f : (float)weights[i]);
+                }
+                _counts.Add((uint)points.Count);
+                _types.Add(type);
+                _orders.Add(order);
+                _modes.Add(mode);
+                _cyclic.Add((byte)(cyclic ? 1 : 0));
+            }
+
+            public List<Section> Sections()
+            {
+                return CurveDataSections(new CurveData(_points.ToArray(), _counts.ToArray(),
+                    _types.ToArray(), _orders.ToArray(), _modes.ToArray(), _cyclic.ToArray()));
+            }
         }
 
         /// <summary>Whether the curve's knot structure is one of Blender's NURBS
@@ -855,29 +874,6 @@ namespace Stageloom.Core
             return true;
         }
 
-        /// <summary>One Blender-expressible NURBS as its own wire curve: Euclidean
-        /// coordinates plus weight, order, knot mode and the cyclic flag — the
-        /// same form Blender sent, and the one it rebuilds exactly.</summary>
-        private static void AppendNurbs(
-            List<ControlPoint> points, byte order, byte mode, bool cyclic, double scale,
-            List<float> pts, List<uint> counts, List<byte> types, List<byte> orders,
-            List<byte> modes, List<byte> cyc)
-        {
-            foreach (ControlPoint cp in points)
-            {
-                Point3d location = cp.Location;
-                pts.Add((float)(location.X / scale));
-                pts.Add((float)(location.Y / scale));
-                pts.Add((float)(location.Z / scale));
-                pts.Add((float)cp.Weight);
-            }
-            counts.Add((uint)points.Count);
-            types.Add(2);
-            orders.Add(order);
-            modes.Add(mode);
-            cyc.Add((byte)(cyclic ? 1 : 0));
-        }
-
         private static bool WeightsPositive(NurbsCurve curve)
         {
             for (int i = 0; i < curve.Points.Count; i++)
@@ -885,9 +881,7 @@ namespace Stageloom.Core
             return true;
         }
 
-        private static void AppendSampled(
-            Curve curve, double scale, List<float> pts, List<uint> counts, List<byte> types,
-            List<byte> orders, List<byte> modes, List<byte> cyclic)
+        private static void AppendSampled(Curve curve, CurveBuffer buffer)
         {
             int segments = Math.Max(8, curve.SpanCount * 8);
             double[] ts = curve.DivideByCount(segments, true);
@@ -900,8 +894,7 @@ namespace Stageloom.Core
                 list.Add(curve.PointAtStart);
                 list.Add(curve.PointAtEnd);
             }
-            AppendCurveSection(list, null, 0, 0, 0, curve.IsClosed, scale,
-                pts, counts, types, orders, modes, cyclic);
+            buffer.AddPolyline(list, curve.IsClosed);
         }
 
         /// <summary>0.1 mm on the wire (default budget), in meters.</summary>
@@ -1452,19 +1445,56 @@ namespace Stageloom.Core
 
         // ------------------------------------------------------- stage out glue
 
-        /// <summary>Everything a Stage Out can receive, turned into sections.
-        /// Meshes are joined; Breps are meshed (warned); multiple SubDs are
-        /// joined. counts feeds the response header.</summary>
+        /// <summary>Everything a Stage Out can receive, turned into sections by
+        /// the ordered kind table; counts feeds the response header.</summary>
         public static List<Section> SectionsFromGeometry(
             IList<Mesh> meshes, IList<Curve> curves, IList<Point3d> points, IList<SubD> subds,
             IList<Brep> breps, double scale, List<WireWarning> warnings, out Dictionary<string, object> counts)
         {
+            var batch = new GeometryBatch
+            {
+                Meshes = meshes,
+                Curves = curves,
+                Points = points,
+                Subds = subds,
+                Breps = breps,
+            };
             var sections = new List<Section>();
+            foreach (GeometryEncoder encoder in GeometryEncoders)
+                encoder(batch, scale, warnings, sections);
+            batch.Counts["approximated_curves"] = (long)batch.Approximated;
+            counts = batch.Counts;
+            return sections;
+        }
+
+        /// <summary>One Stage Out input set for the ordered kind encoders.</summary>
+        private sealed class GeometryBatch
+        {
+            public IList<Mesh> Meshes;
+            public IList<Curve> Curves;
+            public IList<Point3d> Points;
+            public IList<SubD> Subds;
+            public IList<Brep> Breps;
+            public readonly Dictionary<string, object> Counts = new Dictionary<string, object>();
+            public int Approximated;
+        }
+
+        private delegate void GeometryEncoder(GeometryBatch batch, double scale,
+                                              List<WireWarning> warnings, List<Section> sections);
+
+        private static readonly GeometryEncoder[] GeometryEncoders =
+        {
+            EncodeMeshes, EncodeSubds, EncodeCurves, EncodePoints,
+        };
+
+        private static void EncodeMeshes(GeometryBatch batch, double scale,
+                                         List<WireWarning> warnings, List<Section> sections)
+        {
             var allMeshes = new List<Mesh>();
-            foreach (Mesh m in meshes)
+            foreach (Mesh m in batch.Meshes)
                 if (m != null && m.Vertices.Count > 0) allMeshes.Add(m);
 
-            foreach (Brep b in breps)
+            foreach (Brep b in batch.Breps)
             {
                 if (b == null) continue;
                 Mesh[] ms = Mesh.CreateFromBrep(b, MeshingParameters.Default);
@@ -1472,9 +1502,9 @@ namespace Stageloom.Core
                 foreach (Mesh m in ms)
                     if (m != null && m.Vertices.Count > 0) allMeshes.Add(m);
             }
-            if (breps.Count > 0)
+            if (batch.Breps.Count > 0)
                 warnings.Add(new WireWarning(WarningCodes.BrepMeshed,
-                    breps.Count + " surface(s)/Brep(s) converted to mesh; Blender has no B-rep"));
+                    batch.Breps.Count + " surface(s)/Brep(s) converted to mesh; Blender has no B-rep"));
 
             int meshCount = 0;
             if (allMeshes.Count > 0)
@@ -1489,19 +1519,23 @@ namespace Stageloom.Core
                 sections.AddRange(MeshSections(joined, scale, "mesh", true, warnings));
                 meshCount = 1;
             }
+            batch.Counts["meshes"] = (long)meshCount;
+        }
 
+        private static void EncodeSubds(GeometryBatch batch, double scale,
+                                        List<WireWarning> warnings, List<Section> sections)
+        {
             var validSubds = new List<SubD>();
-            foreach (SubD candidate in subds)
+            foreach (SubD candidate in batch.Subds)
                 if (candidate != null) validSubds.Add(candidate);
-            subds = validSubds;
 
             int subdCount = 0;
-            if (subds.Count > 0)
+            if (validSubds.Count > 0)
             {
-                SubD subd = subds[0];
-                if (subds.Count > 1)
+                SubD subd = validSubds[0];
+                if (validSubds.Count > 1)
                 {
-                    SubD[] joined = SubD.JoinSubDs(subds, RhinoMath.ZeroTolerance, false);
+                    SubD[] joined = SubD.JoinSubDs(validSubds, RhinoMath.ZeroTolerance, false);
                     if (joined != null && joined.Length == 1) subd = joined[0];
                     else warnings.Add(new WireWarning(WarningCodes.SubdJoined,
                         "Several SubDs arrived; only the first was sent"));
@@ -1509,21 +1543,25 @@ namespace Stageloom.Core
                 sections.AddRange(SectionsFromSubD(subd, scale, warnings));
                 subdCount = 1;
             }
+            batch.Counts["subd"] = (long)subdCount;
+        }
 
+        private static void EncodeCurves(GeometryBatch batch, double scale,
+                                         List<WireWarning> warnings, List<Section> sections)
+        {
             int approximated = 0;
-            if (curves.Count > 0)
-                sections.AddRange(SectionsFromCurves(curves, scale, warnings, out approximated));
+            if (batch.Curves.Count > 0)
+                sections.AddRange(SectionsFromCurves(batch.Curves, scale, warnings, out approximated));
+            batch.Approximated = approximated;
+            batch.Counts["curves"] = (long)EmittedCurveCount(sections);
+        }
 
-            if (points.Count > 0)
-                sections.AddRange(SectionsFromPoints(points, scale));
-
-            counts = new Dictionary<string, object>();
-            counts["meshes"] = (long)meshCount;
-            counts["subd"] = (long)subdCount;
-            counts["curves"] = (long)EmittedCurveCount(sections);
-            counts["points"] = (long)points.Count;
-            counts["approximated_curves"] = (long)approximated;
-            return sections;
+        private static void EncodePoints(GeometryBatch batch, double scale,
+                                         List<WireWarning> warnings, List<Section> sections)
+        {
+            if (batch.Points.Count > 0)
+                sections.AddRange(SectionsFromPoints(batch.Points, scale));
+            batch.Counts["points"] = (long)batch.Points.Count;
         }
 
         /// <summary>Curves actually written, not the input goo count:

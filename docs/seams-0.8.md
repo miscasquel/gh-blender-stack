@@ -1,12 +1,13 @@
-# Refactor seams — 0.8.0 characterization map (T3–T6)
+# Refactor seams — 0.8.0 characterization map (T3–T7)
 
-**Status:** T3, the T4 `geometry_io` split, the T5 engine-object refactor and
-the T6 `GhLink` split are complete. This document is the contract for T4–T7:
-every seam the four refactor tasks may move, its owner, the behavior that must
-not change, and the tests that pin it. T3 changed no production code; T4 moved
-`geometry_io.py` into a package behind the same facade; T5 replaced the engine
-hub with `ENGINE`/`StageRuntime`; T6 split `GhLink.cs` into explicit owners with
-`GhLink` as a facade. T7 remains.
+**Status:** T3 and the T4–T7 refactors are complete. This document is the
+contract for T4–T7: every seam the four refactor tasks may move, its owner, the
+behavior that must not change, and the tests that pin it. T3 changed no
+production code; T4 moved `geometry_io.py` into a package behind the same
+facade; T5 replaced the engine hub with `ENGINE`/`StageRuntime`; T6 split
+`GhLink.cs` into explicit owners with `GhLink` as a facade; T7 split
+`Instances.cs` into build/plan, emit, table-writer and identity owners and
+table-drove the `Conversion`/`Attributes` kind dispatch.
 
 **Measured at T3 (same machine, 2026-11-16):**
 
@@ -67,6 +68,31 @@ hub with `ENGINE`/`StageRuntime`; T6 split `GhLink.cs` into explicit owners with
   `pipeline.100k.total_ms` **+1.14%**. In-place p50 is −0.13%, 1M −1.18%,
   instance repeat −0.36%, playback +0.70%. No metric exceeds +5%.
 
+**Measured at T7 (same machine, 2026-11-17):**
+
+- **454** Blender headless tests plus the offline gate, unchanged.
+- **685** passing C# checks (T6: 685). `InstanceTests`, `ConversionTests` and
+  `AttrTests` keep every assertion; the checks that used the old nested type
+  names now name the direct owners.
+- Production: **24,711 physical / 19,800 code lines across 69 files** (T6:
+  24,719 / 19,714 across 63; −8 physical, +86 code). The code delta is the
+  facade and six owner files; the removed curve appenders, type/kind switches
+  and duplicated descriptor filters offset most of it. The former 2,135-line
+  `Instances` type is gone; the largest instance type is `InstanceEmit` at 450
+  and `DefinitionBuilder` dropped from 940 to 424.
+- Fourteen golden fixtures; `out_hash`, protocol and fixtures untouched.
+- Performance: the accepted full gate passed **26/26** in 176.1 s. The worst
+  positive p50 is `pipeline.100k.total_ms` **+2.55%**; its p95 is **+3.36%**;
+  100k in-place is +0.60% / +0.98%, 1M +0.23% / +0.53%, instance repeat +0.04%
+  / -1.36%, playback -0.12% / -0.40%. No metric exceeds +5%. Several intermediate
+  runs failed p95-only checks while their p50 stayed under +5%; they are
+  recorded in the ledger and the accepted run is the final clean one.
+- Native probe: Rhino 8 (wine prefix, Rhino MCP `run_csharp`) loaded the built
+  T7 `.gha`, emitted a three-part definition containing a real Mesh, Curve and
+  Point, built it back to three objects and checked the single-part legacy
+  namespace and the `blocks/2` fallback split. The wine `scripts/test-gha`
+  harness still prints the native skips.
+
 Notation: a Python test is `file.py::Class.test_name`; a C# check is
 `Suite::Check("…")` as printed by the console suite. Where a group of checks is
 named as `Suite::CheckGroup`, that means every `Check(...)` inside the group.
@@ -83,7 +109,11 @@ T4 is complete: `mesh.py`, `attributes.py`, `curves.py`, `points.py`,
 The T4 rows below keep the original coverage map. T6 is complete:
 `StageRegistry.cs`, `LinkConnection.cs`, `RequestScheduler.cs`,
 `ProtocolHandler.cs`, `Publication.cs` and `StageSlot.cs` own the link, and
-`GhLink.cs` is a 173-code-line facade.
+`GhLink.cs` is a 173-code-line facade. T7 is complete: `InstanceBuild.cs` and
+`InstancePlan.cs` own inbound rows/planning, `InstanceEmit.cs` owns outbound
+gathering, `DefinitionTableWriter.cs` owns the table grammar,
+`DefinitionTable.cs` and `DefinitionIdentity.cs` own the primitives/identity,
+and `Instances.cs` is a 36-code-line facade.
 
 | Task | Seam | Coverage | T3 additions |
 |---|---|---|---|
@@ -1160,17 +1190,22 @@ lines (was `GhLink` 2,489).
 
 ## 4. T7 — `Instances` split / table-driven conversion
 
-**Current owner:** `grasshopper/src/gh/Instances.cs` (2,185 physical lines:
-`Instances`, `DefinitionBuilder`, `DefinitionPlan`/`PartPlan`,
-`DefinitionTableWriter`, `DefinitionWriter`, `GeometryPart`,
-`DefinitionContent`, `TableEntry`, `DefinitionSection`, `NestedRow`), plus
-`core/Conversion.cs` (1,609) and `core/Attributes.cs` (1,114).
+**Current owner (T7 complete):** `grasshopper/src/gh/Instances.cs` is a
+36-code-line facade over `InstanceBuild.cs` (rows, `Build`, `DefinitionBuilder`),
+`InstancePlan.cs` (`DefinitionPlan`/`PartPlan`, table/namespace/part validation,
+section-group read dispatch), `InstanceEmit.cs` (`Emit`, `DefinitionWriter`,
+`GeometryPart`, `DefinitionContent`), `DefinitionTableWriter.cs` (table grammar,
+content keys, `Part`/`NestedRow`), `DefinitionTable.cs` (`TableEntry`,
+`DefinitionSection`, parsing) and `DefinitionIdentity.cs` (names, fallback
+names, content hashing). `core/Conversion.cs` is 1,647 physical lines and
+`core/Attributes.cs` is 1,060; both keep their public entry points.
 
 ### 4.1 Build (inbound) and definition plan
 
 **Entry points:** `Instances.Build`, `Instances.ReadRows`,
-`Instances.DefinitionBuilder` (`Plan`, `Definition`, `Preflight`,
-`ContentHash`, `ReferenceId`), `TableEntry`, `DefinitionSection`.
+`InstanceBuild.ReadRows`, `DefinitionBuilder` (`Plan`, `Definition`, `Preflight`,
+`ContentHash`, `ReferenceId`), `DefinitionPlanner`, `DefinitionGroupValidation`,
+`DefinitionTable.Entry`, `DefinitionTable.SectionRef`.
 
 **Must not change:**
 
@@ -1208,20 +1243,21 @@ lines (was `GhLink` 2,489).
 **T3 additions:** `InstanceTests::Check("build: a definitions table without
 rows is noted")`, `Check("build: no definitions table is a no-op")`.
 
-**T7 may move:** `DefinitionBuilder` and its plan/section types into an inbound
-builder module. The validation order and note text are the contract;
-`CheckFixturePlans`/`CheckTableValidation`/`CheckRows`/`CheckPreflight` move
-with the builder.
+**T7 move (complete):** `DefinitionBuilder` and its plan types moved to
+`InstanceBuild.cs`/`InstancePlan.cs`; `DefinitionPlanner` owns table/namespace
+validation and `DefinitionGroupValidation` owns the section-group read dispatch.
+The validation order and note text are unchanged; `CheckFixturePlans`/
+`CheckTableValidation`/`CheckRows`/`CheckPreflight` now name the direct owners.
 
-**Gaps:** native build under wine is skipped (see §5). The managed grammar
-tests still cover the full inbound matrix; they do not prove Rhino object
-construction.
+**Gaps:** native build under wine is skipped (see §5). The T7 native probe
+built a fixture-shaped single-part definition and read its real Mesh; the
+managed grammar tests still cover the full inbound matrix.
 
 ### 4.2 Emit (outbound), `DefinitionWriter`, `DefinitionTableWriter`
 
-**Entry points:** `Instances.Emit`, `Instances.HasDefinitionContent`,
-`DefinitionWriter.Definition`, `DefinitionTableWriter.Write/TryGet/
-AttributeCount/PeerSupportsParts`, `NestedRow`.
+**Entry points:** `Instances.Emit`, `InstanceEmit.Emit`, `DefinitionWriter.Definition`,
+`DefinitionTableWriter.Write/TryGet/AttributeCount/PeerSupportsParts`,
+`NestedRow`, `DefinitionContent`/`GeometryPart`.
 
 **Must not change:**
 
@@ -1274,17 +1310,19 @@ AttributeCount/PeerSupportsParts`, `NestedRow`.
 cover the `Emit` entry guard the managed `DefinitionTableWriter` tests do not
 reach.
 
-**T7 may move:** `Emit`/`DefinitionWriter` into an outbound module;
-`DefinitionTableWriter` remains the grammar/table owner. `Conversion`/
-`Attributes` per-kind dispatch may become tables, but the section names,
-dtypes, descriptor fields and warning codes are the contract.
+**T7 move (complete):** `Emit` and `DefinitionWriter` moved to
+`InstanceEmit.cs`; `DefinitionTableWriter` remains the table grammar owner.
+`InstanceEmit` now classifies a definition's geometry through one
+`GeometryKind` table instead of a six-way cast chain. `DefinitionIdentity` owns
+fallback and split names; the single-part bytes and every fallback name are
+unchanged.
 
-**Gaps:** `Emit`'s real-geometry rows (a constructed `GH_InstanceReference`
-and paired definition), single-part byte compatibility through `Emit` itself,
-multi-part/fallback through `Emit`, and graph-side cycles are only covered by
-`CheckNativeEmit`, which is skipped under wine. The table writer half is
-covered; T7 must keep the native probe green where RhinoCore is available and
-must not claim it locally.
+**Gaps:** `Emit`'s real-geometry rows are covered by the native probe, not by
+the wine suite. The T7 probe emitted a three-part definition containing a real
+Mesh, Curve and Point, built it back to three objects and checked the
+single-part legacy namespace and the `blocks/2` fallback split. `CheckNativeEmit`
+still skips under wine; the managed `DefinitionTableWriter` tests remain the
+local grammar proof.
 
 ### 4.3 Conversion/Attributes per-kind dispatch
 
@@ -1322,14 +1360,21 @@ must not claim it locally.
 **T3 additions:** none; the type corpus and descriptor grammar are already the
 strongest coverage in the C# suite.
 
-**T7 may move:** the per-kind switches into tables; keep one `WIRE_TYPES`
-vocabulary and one descriptor emitter. `Attributes.cs`/`Conversion.cs` keep
-their public names so the component tests and live Stage In/Out do not change.
+**T7 move (complete):** the per-kind switches are tables. `Conversion` owns the
+ordered `GeometryEncoder` table (`EncodeMeshes`, `EncodeSubds`, `EncodeCurves`,
+`EncodePoints`) and one `CurveBuffer` for every curve appender;
+`InstancePlan` owns `DefinitionGroupValidation`'s mesh/curve/point read table.
+`Attributes` owns `StorageKind` (check/decode/encode/store/slice), the
+`DomainSet` group table and the `Groups` geometry-kind table, with one
+`SelectDescriptor`/`DecodeSelected` path for mesh/subd/pts and curves. Public
+methods, section names, dtypes, descriptor fields and warning codes are
+unchanged.
 
-**Gaps:** native mesh/curve/point construction is skipped under wine; the
-managed section-boundary half and the golden fixtures are the local proof. A
-real Rhino bake of a point/curve definition member is a T7 native acceptance
-item, not a local test.
+**Gaps:** native mesh/curve/point construction still skips under wine; the
+managed section-boundary half and the golden fixtures are the local proof. The
+T7 native probe (Rhino 8 via the Rhino MCP `run_csharp`) covered a real Mesh,
+Curve and Point definition through `Build`/`Emit` and its round trip; it is a
+probe result, not a harness test, and the suite still prints the skips.
 
 ---
 
@@ -1338,8 +1383,11 @@ item, not a local test.
 1. **Native Rhino geometry checks skip under wine (coverage gap).**
    `ConversionTests` prints `SKIP native Rhino geometry round trip: RhinoCore is
    unavailable in this harness`; `InstanceTests` prints `SKIP native instance
-   build`. Those checks are not executed locally. Do not count them as T3/T4
-   coverage; T7's native acceptance must run where RhinoCore loads.
+   build`. Those checks are not executed by the wine harness. T7 ran a native
+   probe through the Rhino MCP (`run_csharp`) with the deployed `.gha`: a real
+   Mesh/Curve/Point definition emitted, built back and round-tripped, and the
+   single-part/fallback paths checked. That is evidence for the tagged code, but
+   it is not a CI test and does not make the wine suite native-green.
 2. **A bind failure's cause is overwritten (low/medium, report only).**
    `GhServer._serve` sets `bridge.state["error"] = "cannot listen on …"`; the
    worker's `_run` finally then calls `set_disconnected("server stopped")`,
@@ -1372,7 +1420,7 @@ item, not a local test.
 
 ---
 
-## 6. T3–T6 verification commands
+## 6. T3–T7 verification commands
 
 ```bash
 scripts/test-blender     # 454 tests + offline gate, PASS
@@ -1385,9 +1433,9 @@ scripts/code-health --check
 ```
 
 T4's full gate passed alone in 179.5 s with the baseline enforced; T5 passed
-26/26 in 174.1 s. T6's full gate passed alone in **173.1 s** with the
-best-of-three baseline enforced: 454 Blender tests plus the offline gate, 685
-C# checks, fourteen fixtures and the installed extension round trip. Production
-is **24,719 physical / 19,714 code across 63 files** (T5: 24,738 / 19,376
-across 57; −19 physical, +338 code). The topology-token path is unchanged and
-no protocol, fixture or `out_hash` change was made.
+26/26 in 174.1 s; T6 passed 26/26 in **173.1 s**. T7's accepted full gate passed
+26/26 in **176.1 s**: 454 Blender tests plus the offline gate, 685 C# checks,
+fourteen fixtures and the installed extension round trip. Production is
+**24,711 physical / 19,800 code across 69 files** (T6: 24,719 / 19,714 across
+63; −8 physical, +86 code for explicit owners). The topology-token path is
+unchanged and no protocol, fixture or `out_hash` change was made.
