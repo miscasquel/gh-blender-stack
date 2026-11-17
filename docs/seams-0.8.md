@@ -1,11 +1,12 @@
-# Refactor seams — 0.8.0 characterization map (T3, T4)
+# Refactor seams — 0.8.0 characterization map (T3–T6)
 
-**Status:** T3, the T4 `geometry_io` split and the T5 engine-object
-refactor are complete. This document is the contract for T4–T7: every seam the
-four refactor tasks may move, its owner, the behavior that must not change, and
-the tests that pin it. T3 changed no production code; T4 moved
+**Status:** T3, the T4 `geometry_io` split, the T5 engine-object refactor and
+the T6 `GhLink` split are complete. This document is the contract for T4–T7:
+every seam the four refactor tasks may move, its owner, the behavior that must
+not change, and the tests that pin it. T3 changed no production code; T4 moved
 `geometry_io.py` into a package behind the same facade; T5 replaced the engine
-hub with `ENGINE`/`StageRuntime` without changing behavior. T6–T7 remain.
+hub with `ENGINE`/`StageRuntime`; T6 split `GhLink.cs` into explicit owners with
+`GhLink` as a facade. T7 remains.
 
 **Measured at T3 (same machine, 2026-11-16):**
 
@@ -49,6 +50,23 @@ hub with `ENGINE`/`StageRuntime` without changing behavior. T6–T7 remain.
   confirmed by a pinned T4/T5 A/B (4.5736 vs 4.5491 ms decode) and replaced by
   the new baseline, not waived.
 
+**Measured at T6 (same machine, 2026-11-17):**
+
+- **454** Blender headless tests plus the offline gate, unchanged.
+- **685** passing C# checks (T5: 681): four direct owner guards were added to
+  `LinkTests`; no assertion was weakened, deleted or duplicated.
+- Production: **24,719 physical / 19,714 code lines across 63 files** (T5:
+  24,738 / 19,376 across 57; −19 physical, +338 code). Physical is flat; the
+  1.7% code growth is the explicit facade plus owner-boundary accessors. The
+  former 2,489-line `GhLink` type is 173 code lines; the largest link type is now
+  `StageRegistry` at 810 (was `GhLink` 2,489) and the largest link method is
+  `RebuildPublicationLocked` at 161 (was 210).
+- Fourteen golden fixtures; `out_hash`, protocol and fixtures untouched.
+- Performance: the full gate passed **26/26** in 173.1 s. The worst positive
+  p50 is `pipeline.100k.total_ms` **+1.49%**; the largest p95 delta is also
+  `pipeline.100k.total_ms` **+1.14%**. In-place p50 is −0.13%, 1M −1.18%,
+  instance repeat −0.36%, playback +0.70%. No metric exceeds +5%.
+
 Notation: a Python test is `file.py::Class.test_name`; a C# check is
 `Suite::Check("…")` as printed by the console suite. Where a group of checks is
 named as `Suite::CheckGroup`, that means every `Check(...)` inside the group.
@@ -62,7 +80,10 @@ Legend: **E** = existing coverage before T3; **T3** = added by this task;
 
 T4 is complete: `mesh.py`, `attributes.py`, `curves.py`, `points.py`,
 `instances.py` and `dispatch.py` own their kinds; `__init__.py` is the facade.
-The T4 rows below keep the original coverage map.
+The T4 rows below keep the original coverage map. T6 is complete:
+`StageRegistry.cs`, `LinkConnection.cs`, `RequestScheduler.cs`,
+`ProtocolHandler.cs`, `Publication.cs` and `StageSlot.cs` own the link, and
+`GhLink.cs` is a 173-code-line facade.
 
 | Task | Seam | Coverage | T3 additions |
 |---|---|---|---|
@@ -78,13 +99,13 @@ The T4 rows below keep the original coverage map.
 | T5 | playback gate | E | — |
 | T5 | bake and dependent freeze/rollback | E | — |
 | T5 | start/stop server, timer dormancy | E partial | bind failure visible + recovery; dormant tick rate |
-| T6 | `StageRegistry` claims/conflicts/isolation | E | — |
-| T6 | `LinkConnection` start/stop/restart/handshake | E | idempotent Stop, invalid-port Configure |
+| T6 | `StageRegistry` claims/conflicts/isolation | E (ComponentTests) | slot status halves now tested at `StageSlot`/`StageRegistry` |
+| T6 | `LinkConnection` start/stop/restart/handshake | E | idempotent Stop, invalid-port Configure, direct worker-token guard |
 | T6 | `RequestScheduler` one-in-flight/latest-wins | E | — |
-| T6 | `ProtocolHandler` error codes/malformed/caps | E | — |
+| T6 | `ProtocolHandler` error codes/malformed/caps | E | direct `ErrorFrame` field guard |
 | T6 | `Publication` dirty flags/hello/schema | E | — |
-| T6 | `StageSlot`/`HeldFrame` snapshots | E | null slot, empty-frame sentinel |
-| T6 | outbox cap | G (private) | deterministic reflection test (moves with the fields) |
+| T6 | `StageSlot`/`HeldFrame` snapshots | E | null slot, empty-frame sentinel, direct slot tests |
+| T6 | outbox cap | G (private) | deterministic reflection test moved to `LinkOutbox` |
 | T7 | `Build` inbound grammar/rows/cycles | E + G | no-table and table-without-rows guards |
 | T7 | `Emit` outbound rows/definitions | E + G | null/empty entry guards; real-geometry emit is G |
 | T7 | definition writer table/parts/caps/fallback | E | — |
@@ -496,10 +517,10 @@ EngineFacadeTests.test_01_push_with_no_active_object_is_a_noop`,
 `test_trigger_health_is_empty_before_an_event`;
 `test_registration.py::ServerBindFailureTests.test_a_taken_port_is_visible_and_a_later_start_recovers`.
 
-**T5 may move:** the module-level functions into `Engine` methods (or thin
-facade wrappers); `start_server`/diagnostics may move to owned objects. The
-tests call the facade names, so a rename is an explicit migration, not a silent
-break.
+**T5 moved:** the module-level functions/state into `Engine` methods or thin
+facade wrappers; `start_server` and the diagnostics are `ENGINE` methods. The
+tests call the facade names or `ENGINE`, so any rename is an explicit migration,
+not a silent break.
 
 **Known low finding:** `unfreeze(obj, stage)` does not gate on a stack record;
 passing a foreign object still writes the stage state and dirties the object.
@@ -565,9 +586,9 @@ panel; T5 should decide whether to make it symmetric with `freeze`/`request_agai
 pins one handler per hook and one stack object; the dormant diagnostics class
 pins the timer-less state.
 
-**T5 may move:** the index/claims/owners/conflicts and lifecycle handlers into
-`Engine`/runtime records. The stage-key conflict and duplicate-split semantics
-are one owner; tests stay at `engine.*` facade calls.
+**T5 moved:** the index/claims/owners/conflicts into `Engine`; per-stage
+bookkeeping is in `StageRuntime`. The stage-key conflict and duplicate-split
+semantics have one owner; tests use the facade or `ENGINE`.
 
 **Gaps:** native undo/redo in a GUI session, linked-object editing and a real
 file save/reload round trip are not exercised headlessly; the suite drives the
@@ -626,10 +647,9 @@ handlers directly and saves/loads through Blender's file API where practical.
 **T3 additions:** none; the malformed-hello case in §2.1 covers the one
 uncovered trust-boundary shape.
 
-**T5 may move:** request/prefix/apply and message handlers behind explicit
-interfaces; the state table stays the single writer. Tests use
-`engine._handle_response`/`_process_stage` and the public facade, not module
-layout.
+**T5 moved:** request/prefix/apply and message state into `Engine`/runtime
+records; the state table remains the single writer. Tests use the owner modules,
+`ENGINE` and the public facade, not the old hub layout.
 
 **Gaps:** the `_handle_incoming` per-message isolation is covered by
 `test_live_sync` with one injected apply failure; a 10k fuzz corpus is T10.
@@ -674,9 +694,9 @@ layout.
 **T3 additions:** none; the gate and bake matrix is already the release
 blocker coverage.
 
-**T5 may move:** gate state into playback-owned records; bake orchestration
-already has `engine/bake.py` as its intended owner. The frame-scene and
-bake-token rules are one owner each.
+**T5 left** the playback/bake gate flags on `Engine`; bake orchestration remains
+in `engine/bake.py`. A later task may split the gate flags into playback-owned
+records; the frame-scene and bake-token rules already have one owner each.
 
 **Gaps:** real render/scrub playback in a GUI session and native bake data on a
 real Rhino client are not reproducible headless; the suite drives Blender's
@@ -719,19 +739,58 @@ plus lifecycle), which is the intended single owner rather than a second hub.
 
 ---
 
-## 3. T6 — `GhLink` split
+## 3. T6 — `GhLink` split (complete)
 
-**Current owner:** `grasshopper/src/gh/GhLink.cs` (2,642 physical lines).
+**Current owners:** `grasshopper/src/gh/`:
+
+- `StageRegistry.cs` (824 physical / 727 code) — document-scoped
+  registrations, documents, claims, the derived published view, slots,
+  ownership/conflict reconciliation and UI-thread capture.
+- `LinkConnection.cs` (409 / 334) — endpoint, worker generation token
+  (`LinkWorker`), bounded outbox (`LinkOutbox`), Start/Stop/Configure,
+  reconnect/backoff, receiver and sender loops.
+- `RequestScheduler.cs` (451 / 394) — pending and active request contexts, one
+  in-flight solve, latest-wins queueing, retry/watchdog and the SolutionEnd
+  handler.
+- `ProtocolHandler.cs` (261 / 215) — frame decode/validation, peer caps,
+  request/error dispatch and the classified error frame.
+- `Publication.cs` (287 / 242) — hello/schema dirty flags, the UI-thread
+  document units/name snapshot and the 2 s heartbeat.
+- `StageSlot.cs` (190 / 162) — `HeldFrame` and `StageSlot` snapshots, status
+  halves and epoch/rid pinning.
+- `GhLink.cs` (201 / 173) — the stable facade and the bounded note buffer. It
+  has no socket loop, registry implementation or protocol switch.
+
+Dependency direction is one-way except for two explicit notification calls:
+`StageSlot` is a leaf; `StageRegistry` depends on `StageSlot`, the outbox leaf
+and the protocol's pure error-frame factory; `Publication` reads the registry
+snapshot; `ProtocolHandler` depends on the registry, the scheduler and the
+outbox leaf; `RequestScheduler` depends on the registry, the worker token and
+`Publication` for the post-solve publication; `LinkConnection` is the
+composition root for the loops and depends on the protocol, scheduler and
+publication. The back-calls are `RebuildPublicationLocked` asking
+`RequestScheduler` to drop a key that just became conflicted or removed, and the
+transport leaves (`LinkSync`, `LinkWorker`, `LinkOutbox`) that let any owner
+queue a frame or validate a generation without reaching into the socket loop.
+`GhLink` forwards the public names and coordinates the last-unregister clear.
+
 `LinkTests` is the integration proof (real `GhLink`, scripted fake WebSocket
 server, no Rhino document); `ComponentTests` owns component lifecycle/document
 isolation; `MiniWsTests` owns transport; `StageTests` owns the build guard.
+
+**T6 test migration:** the outbox reflection test now targets `LinkOutbox`; the
+slot status/answer-rid/has-frame unit checks call `StageSlot`/`StageRegistry`
+directly; four direct owner guards cover the error frame fields and the worker
+generation token. The remaining `LinkTests` checks still drive the product
+through `GhLink`, so the facade is the integration surface. No assertion was
+deleted or weakened; the C# runtime count is **685** (was 681).
 
 ### 3.1 `StageRegistry` — claims, conflicts, document isolation
 
 **Entry points:** `Register`/`Unregister`, `RegisterInDocumentForTest`,
 `PublishStageIn`/`PublishStageOut`/`PublishParam`, `Forget`, `Slot`,
 `FindSlot`, `StageConflict`, `IsStageConflicted`, `RebuildPublicationLocked`,
-`ReconcileOwnership`, `RemoveDocumentStateLocked`, `ClearAllLocked`.
+`Reconcile`, `RemoveDocumentStateLocked`, `ClearAll`.
 
 **Must not change:**
 
@@ -775,8 +834,9 @@ isolation; `MiniWsTests` owns transport; `StageTests` owns the build guard.
 **T3 additions:** none; this is the strongest-covered seam. The new
 `link transport guards` checks in §3.2–3.6 do not touch registry isolation.
 
-**T6 may move:** into `StageRegistry`; one owner for claims, owners, conflicts,
-tombstones and slots. `LinkTests` stays the integration proof.
+**T6 moved:** into `StageRegistry`; one owner for claims, owners, conflicts,
+tombstones, slots and the derived published view. `LinkTests` stays the
+integration proof and `ComponentTests` the document-isolation proof.
 
 **Gaps:** a real `GH_Document` cannot be constructed without Rhino, so
 document identity is exercised through `RegisterInDocumentForTest` with
@@ -829,9 +889,11 @@ writer`, `the empty sentinel is not confused with an empty full frame`,
 `configure rejects an out-of-range port`, `a rejected port keeps the endpoint`,
 `Stop is idempotent`, and the outbox-cap checks (§3.6).
 
-**T6 may move:** worker/thread/client/outbox/sender/backoff into
-`LinkConnection`. `ActiveSenders`/`RetryRequests` are diagnostics and may move
-with it; `LinkTests` reads them.
+**T6 moved:** worker/thread/client/outbox/sender/backoff/endpoint into
+`LinkConnection`; `ActiveSenders` stays there and `RetryRequests` moved to
+`RequestScheduler`. `LinkTests` reads both through the facade. The sender,
+receiver and outbox code is in the same file; `LinkWorker` and `LinkOutbox` are
+namespace-level leaves so the other owners never reach into the loop.
 
 **Gaps:** a true OS-level half-open socket and a GUI Rhino document are not
 reproducible in the console harness; `FakeServer` covers the scripted cases.
@@ -881,10 +943,11 @@ reproducible in the console harness; `FakeServer` covers the scripted cases.
 
 **T3 additions:** none; the scheduler matrix is already complete.
 
-**T6 may move:** into `RequestScheduler`; `PendingRequests`/`_activeRequests`/
-`_solveQueued` and their locks move together. `BeginRequestSolveForTest` is a
-test hook; if T6 keeps it, it must keep its semantics, otherwise move the
-LinkTests checks with the scheduler.
+**T6 moved:** into `RequestScheduler`; `PendingRequests`/`_activeRequests`/
+`_solveQueued`, the watchdog and the SolutionEnd handler move together.
+`BeginRequestSolveForTest`/`EndRequestSolveForTest` kept their semantics and
+still drive the same context code; the LinkTests checks moved with them only in
+the sense of direct calls through the facade.
 
 **Gaps:** a real Grasshopper `ScheduleSolution` callback is not available
 without a document; the console suite drives the same context code through the
@@ -934,17 +997,18 @@ hooks.
 
 **T3 additions:** none; the malformed/oversize paths are already covered.
 
-**T6 may move:** into `ProtocolHandler`; `ReadCaps`/header list helpers and
-`ErrorFrame` move with it. Do not add a second frame validator or a second
-`HeldFrame` owner.
+**T6 moved:** into `ProtocolHandler`; `ReadCaps`, the header list helpers and
+`ErrorFrame` moved with it. There is one frame decoder and one `HeldFrame`
+owner. The direct owner guard decodes an `ErrorFrame` and checks the optional
+`stage`/`rid` fields.
 
 **Gaps:** fuzzing 10k mutated frames is T10, not T3.
 
 ### 3.5 `Publication` — hello/schema dirty flags and document snapshot
 
-**Entry points:** `Publish`, `SendPublication`, `StagesChangedLocked`,
-`CaptureDocumentSnapshot`, `ReadDocumentUnits`, `SetUnitsSnapshotForTest`,
-`DocumentScale`, `UnitsName`.
+**Entry points:** `Publish`, `Send`, `SendPublication`, `StagesChangedLocked`,
+`CaptureUnits`, `CaptureDocumentSnapshot`, `ReadDocumentUnits`,
+`SetUnitsSnapshotForTest`, `DocumentScale`.
 
 **Must not change:**
 
@@ -979,8 +1043,10 @@ hooks.
 
 **T3 additions:** none; dirty-flag behavior is fully covered.
 
-**T6 may move:** into `Publication`; keep one canonical JSON signature and one
-last-published snapshot. `_lastSchema`/`_publishedThisConnection` move with it.
+**T6 moved:** into `Publication`; one canonical JSON signature and one
+last-published snapshot. `_lastSchema`/`_publishedThisConnection`/the hello sets
+and the units snapshot live there. `LinkConnection` calls `ConnectionOpened` and
+the heartbeat; the registry supplies the published view.
 
 **Gaps:** the heartbeat republish at 2 s is timing-based; LinkTests observes
 that an unchanged schema is quiet within a 600 ms window, not a long soak.
@@ -1030,14 +1096,65 @@ writer`, `the empty sentinel is not confused with an empty full frame`,
 `the outbox cap has a deterministic observer`, `the outbox drops the oldest
 frame over its byte cap`.
 
-**T6 may move:** `StageSlot`/`HeldFrame` into their own owner; `_peerCaps`,
-outbox and publication state must not drift into the slot. `_activeSenders`
-stays a connection diagnostic.
+**T6 moved:** `StageSlot`/`HeldFrame` into `StageSlot.cs`; `_peerCaps` stayed
+in `ProtocolHandler`, the outbox in `LinkConnection` and publication state in
+`Publication`. `_activeSenders` stays a connection diagnostic. The slot status
+unit tests now call `StageSlot`/`StageRegistry` directly.
 
 **Gaps:** `Enqueue`'s cap and `OutboxBytes` have no public observer while
-disconnected; the T3 test uses reflection and must move with the fields. The
-`StageSlot` null-key path is not part of the product contract (components always
-pass a key), so it is not tested.
+disconnected; the T3 test still uses reflection, now on `LinkOutbox`, and moved
+with the fields. The `StageSlot` null-key path is not part of the product
+contract (components always pass a key), so it is not tested.
+
+### 3.7 T6 implementation record
+
+**Owner:** `grasshopper/src/gh/StageRegistry.cs`, `LinkConnection.cs`,
+`RequestScheduler.cs`, `ProtocolHandler.cs`, `Publication.cs` and
+`StageSlot.cs`; `GhLink.cs` is the facade. `LinkSync` (the two mutexes) lives in
+`LinkConnection.cs`; `LinkNotes` (the bounded diagnostic log) lives in
+`GhLink.cs`; `LinkWorker`/`LinkOutbox` are transport leaves in
+`LinkConnection.cs`.
+
+**Moved out of `GhLink`:** all endpoint/worker/outbox/sender code, the document
+registry and claim reconciliation, the derived published sets, the request
+queue and solve context, the inbound decode/request/error switch, the
+hello/schema builder and units snapshot, and `StageSlot`/`HeldFrame`. `GhLink`
+retains only forwarding members, `LinkNotes`, and the last-unregister
+coordination (Stop, then registry/publication/scheduler clears).
+
+**Threading:** the socket receiver and sender touch only `LinkNotes`, the
+outbox, the registry snapshot/slots and publication state. The only Rhino call
+reachable from the socket path is the captured `RhinoApp.InvokeOnUiThread`
+dispatch that runs `GH_Document.ScheduleSolution` in the UI callback;
+`RunRequestSolve` asserts the UI thread before expiring components. Registration
+captures the document id and units on the UI thread; the units snapshot is the
+only document state publication reads. No `RhinoDoc`/`GH_Document` call runs on
+the socket or sender thread.
+
+**Invariants preserved:** one sender per connection (worker generation token);
+one in-flight request per stage and latest-wins/queued contexts; document-scoped
+slots and strict two-document/role conflicts; tombstoned removed keys; caps and
+`blocks/2`; the five protocol error codes; the `StageSlot.Empty` sentinel and
+the status halves/epoch pinning; MiniWs untouched.
+
+**Tests:** `LinkTests` remains the scripted-server integration proof (142
+`Check` calls, 685 runtime checks with the four direct owner guards);
+`ComponentTests` remains the lifecycle/document-isolation proof; `MiniWsTests`
+the transport; `StageTests` the build guard. The outbox reflection test moved to
+`LinkOutbox`; slot status/rid/frame unit checks moved to
+`StageSlot`/`StageRegistry`.
+
+**Verification:** `scripts/test-gha` PASS, 685 checks; `scripts/check-all` PASS
+26/26 in **173.1 s** with the best-of-three baseline enforced; see
+[`performance-ledger.md`](performance-ledger.md). `scripts/code-health --check`
+passes on the regenerated report.
+
+**Remaining gaps:** the T3 harness gaps stand (native Rhino/GUI, true
+half-open socket, fuzz in T10). The two-document conflict path is exercised with
+synthetic ids, not a GUI Rhino pair. Production physical LOC is flat (−19);
+code is +338 because the facade and the owner-boundary accessors are explicit
+rather than folded into one type. The largest link type is `StageRegistry` at 810
+lines (was `GhLink` 2,489).
 
 ---
 
@@ -1240,9 +1357,9 @@ item, not a local test.
    which passes the owning object. T5 preserved the asymmetry deliberately: it
    is a behavior change that needs its own regression test, so it stays a
    documented gap rather than riding along with the object migration.
-5. **`GhLink.Enqueue`'s cap has no public observer (test-only reflection).**
+5. **`LinkOutbox.Enqueue`'s cap has no public observer (test-only reflection).**
    The T3 check reflects `MaxOutboxBytes`/`OutboxBytes`/`Outbox` while the link
-   is stopped; T6 must move the test with `Publication`/`LinkConnection`.
+   is stopped; T6 moved both the fields and the check to `LinkOutbox`.
 6. **A real Grasshopper document / Rhino GUI is not available (harness gap).**
    Document ids are synthetic (`RegisterInDocumentForTest`), `ScheduleSolution`
    is driven through the request-context hooks, and undo/redo in the plugin is
@@ -1255,20 +1372,22 @@ item, not a local test.
 
 ---
 
-## 6. T3/T4 verification commands
+## 6. T3–T6 verification commands
 
 ```bash
 scripts/test-blender     # 454 tests + offline gate, PASS
-scripts/test-gha         # codec runner + 7 console suites, 681 passing checks; native skips printed
-scripts/check-all        # T4 full gate: PASS 179.5 s, 26/26; bench 63.1 s
+scripts/test-gha         # codec runner + 7 console suites, 685 passing checks; native skips printed
+scripts/check-all        # T6 full gate: PASS 173.1 s, 26/26; bench 60.0 s
 git diff --check
 uvx ruff@0.17.2 check .
 scripts/check-docs
 scripts/code-health --check
 ```
 
-T4's full gate passed alone in 179.5 s with the baseline enforced. The new
-package is 2,151 physical / 1,791 code lines versus the old 2,151 / 1,811;
-production is 24,946 physical / 19,394 code across 56 files (flat physical,
-−20 code). The topology-token path is unchanged and the in-place gates are
-green. No protocol, fixture or `out_hash` change.
+T4's full gate passed alone in 179.5 s with the baseline enforced; T5 passed
+26/26 in 174.1 s. T6's full gate passed alone in **173.1 s** with the
+best-of-three baseline enforced: 454 Blender tests plus the offline gate, 685
+C# checks, fourteen fixtures and the installed extension round trip. Production
+is **24,719 physical / 19,714 code across 63 files** (T5: 24,738 / 19,376
+across 57; −19 physical, +338 code). The topology-token path is unchanged and
+no protocol, fixture or `out_hash` change was made.

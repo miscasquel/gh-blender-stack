@@ -415,6 +415,7 @@ namespace Stageloom.Tests.Console
             RunSolveRetry();
             RunRequestContext();
             RunTransportGuards();
+            RunOwnerGuards();
             RunSlotStatus();
             RunDefinitionContentGuard();
 
@@ -470,13 +471,13 @@ namespace Stageloom.Tests.Console
 
             // The outbox cap is private and has no public drain observer while
             // disconnected. Reflection is the only deterministic way to prove
-            // the drop-oldest policy; T6 moves these fields into Publication
-            // and this test moves with them (see docs/seams-0.8.md).
-            FieldInfo maxField = typeof(GhLink).GetField("MaxOutboxBytes",
+            // the drop-oldest policy; T6 moved these fields into the
+            // LinkConnection outbox and this test moved with them.
+            FieldInfo maxField = typeof(LinkOutbox).GetField("MaxOutboxBytes",
                 BindingFlags.NonPublic | BindingFlags.Static);
-            FieldInfo bytesField = typeof(GhLink).GetField("OutboxBytes",
+            FieldInfo bytesField = typeof(LinkOutbox).GetField("OutboxBytes",
                 BindingFlags.NonPublic | BindingFlags.Static);
-            FieldInfo outboxField = typeof(GhLink).GetField("Outbox",
+            FieldInfo outboxField = typeof(LinkOutbox).GetField("Outbox",
                 BindingFlags.NonPublic | BindingFlags.Static);
             bool fieldsPresent = maxField != null && bytesField != null && outboxField != null;
             Check("the outbox cap has a deterministic observer", fieldsPresent,
@@ -505,6 +506,46 @@ namespace Stageloom.Tests.Console
                 "running=" + GhLink.Running + " connected=" + GhLink.Connected);
         }
 
+        /// <summary>Direct guards for the owner units that moved out of the
+        /// god class: the protocol error frame and the worker generation token.
+        /// They do not need a socket or a GH document.</summary>
+        private static void RunOwnerGuards()
+        {
+            System.Console.WriteLine("link owner guards");
+
+            DecodedFrame bareError = FrameCodec.Decode(
+                ProtocolHandler.ErrorFrame("bad_frame", "boom", null, null));
+            Check("an error frame carries its code and message",
+                (string)Json.Get(bareError.Header, "type") == "error"
+                && (string)Json.Get(bareError.Header, "code") == "bad_frame"
+                && (string)Json.Get(bareError.Header, "message") == "boom",
+                Json.WriteCanonical(bareError.Header));
+            Check("an absent stage and rid are omitted from an error frame",
+                Json.Get(bareError.Header, "stage") == null
+                && Json.Get(bareError.Header, "rid") == null,
+                Json.WriteCanonical(bareError.Header));
+
+            DecodedFrame stagedError = FrameCodec.Decode(
+                ProtocolHandler.ErrorFrame("unknown_stage", "gone", "k9", "sha256:r9"));
+            Check("a named error frame keeps its stage and rid",
+                (string)Json.Get(stagedError.Header, "stage") == "k9"
+                && (string)Json.Get(stagedError.Header, "rid") == "sha256:r9",
+                Json.WriteCanonical(stagedError.Header));
+
+            bool current;
+            bool stale;
+            lock (LinkSync.State)
+            {
+                LinkWorker worker = LinkWorker.BeginLocked();
+                current = LinkWorker.IsCurrentLocked(worker);
+                LinkWorker.ClearLocked();
+                stale = !LinkWorker.IsCurrentLocked(worker)
+                        && !LinkWorker.IsCurrentLocked(null);
+            }
+            Check("a worker token is current only while it owns the link",
+                current && stale, "current=" + current + " stale=" + stale);
+        }
+
         private static void RunSlotStatus()
         {
             var slot = new StageSlot();
@@ -513,7 +554,7 @@ namespace Stageloom.Tests.Console
                 "in=" + slot.InStatus + " out=" + slot.OutStatus);
 
             slot.InStatus = "ok";
-            GhLink.SetOutStatus(slot, "error", "boom");
+            StageSlot.SetOutStatus(slot, "error", "boom");
             Check("out status reaches the out half",
                 slot.OutStatus == "error" && slot.OutMessage == "boom",
                 "out=" + slot.OutStatus + " message=" + slot.OutMessage);
@@ -525,14 +566,14 @@ namespace Stageloom.Tests.Console
                 "status=" + slot.Status + " message=" + slot.Message);
 
             var empty = new StageSlot();
-            Check("answer rid is empty with no request", GhLink.AnswerRid(empty) == "",
-                "rid=" + GhLink.AnswerRid(empty));
+            Check("answer rid is empty with no request", StageSlot.AnswerRid(empty) == "",
+                "rid=" + StageSlot.AnswerRid(empty));
             empty.Rid = "sha256:latest";
-            Check("answer rid falls back to the slot", GhLink.AnswerRid(empty) == "sha256:latest",
-                "rid=" + GhLink.AnswerRid(empty));
+            Check("answer rid falls back to the slot", StageSlot.AnswerRid(empty) == "sha256:latest",
+                "rid=" + StageSlot.AnswerRid(empty));
             empty.SolveRid = "sha256:solving";
-            Check("answer rid uses the pinned rid", GhLink.AnswerRid(empty) == "sha256:solving",
-                "rid=" + GhLink.AnswerRid(empty));
+            Check("answer rid uses the pinned rid", StageSlot.AnswerRid(empty) == "sha256:solving",
+                "rid=" + StageSlot.AnswerRid(empty));
 
             // Stage In owns only the In half; a Stage Out failure must survive a
             // successful import on the same slot.
@@ -543,8 +584,8 @@ namespace Stageloom.Tests.Console
             }, new List<Dictionary<string, object>>(), new List<object>(), "sha256:in");
             split.Frame = inFrame;
             int inEpoch = split.StatusEpoch;
-            GhLink.SetOutStatus(split, "error", "stage out failed");
-            GhLink.SetInStatus(split, inFrame, inEpoch, "ok", "");
+            StageSlot.SetOutStatus(split, "error", "stage out failed");
+            StageRegistry.SetInStatus(split, inFrame, inEpoch, "ok", "");
             Check("in status reaches the in half",
                 split.InStatus == "ok" && split.InMessage == "",
                 "in=" + split.InStatus + " message=" + split.InMessage);
@@ -566,7 +607,7 @@ namespace Stageloom.Tests.Console
             split.InStatus = "waiting";
             split.InMessage = "";
             split.StatusEpoch++;
-            GhLink.SetInStatus(split, inFrame, inEpoch, "error", "late verdict");
+            StageRegistry.SetInStatus(split, inFrame, inEpoch, "error", "late verdict");
             Check("a late in status does not clobber a newer frame",
                 split.InStatus == "waiting" && split.InMessage == "",
                 "in=" + split.InStatus + " message=" + split.InMessage);
@@ -579,13 +620,13 @@ namespace Stageloom.Tests.Console
             epochSlot.InStatus = "unknown_ref";
             epochSlot.InMessage = "refused";
             epochSlot.StatusEpoch++;
-            GhLink.SetInStatus(epochSlot, inFrame, epochBefore, "ok", "");
+            StageRegistry.SetInStatus(epochSlot, inFrame, epochBefore, "ok", "");
             Check("a late in status does not clobber a newer epoch",
                 epochSlot.InStatus == "unknown_ref" && epochSlot.InMessage == "refused",
                 "in=" + epochSlot.InStatus + " message=" + epochSlot.InMessage);
 
             // L3: saved script components call the old public name.
-            GhLink.SetOutStatus(split, "idle", "out-only");
+            StageSlot.SetOutStatus(split, "idle", "out-only");
             Check("SetOutStatus reaches the out half",
                 split.OutStatus == "idle" && split.OutMessage == "out-only",
                 "out=" + split.OutStatus + " message=" + split.OutMessage);

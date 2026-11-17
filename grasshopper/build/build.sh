@@ -116,6 +116,12 @@ if [ -f "$GH_DLL" ] && [ -f "$GHIO_DLL" ] && [ -f "$RC_DLL" ]; then
     "$(win_path "$REPO/grasshopper/src/core/Attributes.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Endpoint.cs")" \
     "$(win_path "$REPO/grasshopper/src/gh/GhLink.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/StageSlot.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/StageRegistry.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/LinkConnection.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/RequestScheduler.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/ProtocolHandler.cs")" \
+    "$(win_path "$REPO/grasshopper/src/gh/Publication.cs")" \
     "$(win_path "$REPO/grasshopper/src/gh/EndpointSettings.cs")" \
     "$(win_path "$REPO/grasshopper/src/gh/MiniWsClient.cs")" \
     "$(win_path "$REPO/grasshopper/src/gh/Instances.cs")" \

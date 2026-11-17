@@ -1,9 +1,10 @@
 # Stageloom 0.7.0 / 0.8.0 — quality plan (rev. 2)
 
 **Status:** 0.7.0 complete, 2026-11-16. 0.8.0 is in progress: T1 (baseline,
-performance gate, code health) and T2 (subtraction before refactor) are complete
-and recorded below. W7 (architecture seams) and W8 (performance) have **not**
-been done and remain the 0.8.0 work, with the remaining W9/W10 items.
+performance gate, code health) through T6 (`GhLink` split) are complete and
+recorded below. W7's `geometry_io`, engine-object and `GhLink` splits are done;
+the `Instances`/table-driven conversion split (T7) and W8 (performance, T8)
+remain, with the remaining W9/W10 items.
 **Baseline:** v0.6.0 plus the 2026-11-15 audit (seven module reviews), plus the
 post-audit bake/upstream work (`102f9c8..254d796`). That was the starting point:
 305 Blender headless tests in ~86 s, 57 core tests, C# and extension suites
@@ -50,7 +51,16 @@ solo runs after the old median baseline was shown to be non-comparable under the
 host CPU power/core state; a pinned T4/T5 A/B showed no T5 regression. The full
 gate passed 26/26 in **174.1 s** (decode +0.80%, 100k in-place +0.95%, 1M
 +0.32%, instance repeat +2.06%). See [`seams-0.8.md`](seams-0.8.md) and the
-ledger.
+ledger. T6 then split `GhLink.cs` into `StageRegistry`, `LinkConnection`,
+`RequestScheduler`, `ProtocolHandler`, `Publication` and `StageSlot`/
+`HeldFrame`, leaving `GhLink` as a 173-code-line facade. Production is
+**24,719 physical / 19,714 code lines across 63 files** (−19 physical, +338
+code against T5; the code delta is the explicit facade and owner-boundary
+accessors); the former 2,489-line `GhLink` type is 173 code lines and the
+largest link type is `StageRegistry` at 810. The 454 Blender tests are unchanged and
+the C# runtime count is **685** (+4 direct owner guards). The full gate passed
+26/26 in **173.1 s**; the worst positive p50 is +1.49% (p95 +1.14% on the
+untouched 100k in-place apply) and no metric exceeds +5%. See [`seams-0.8.md`](seams-0.8.md) §3 and the ledger.
 
 **0.7.0 completion record (2026-11-16).** Q1–Q19 are complete; Q5 was merged
 into Q4 (the cache and the `Live` toggle were one removal). The release was
@@ -825,7 +835,7 @@ acceptance criteria, then committed before the next starts.
 | T3 | Characterization tests for the seams | tests pin `geometry_io`, the engine hub, `GhLink` and `Instances`; no production edits | Done 2026-11-16 |
 | T4 | `geometry_io` package split | one responsibility per module; no production net growth; full gate; in-place benchmarks within 5% | Done 2026-11-17 |
 | T5 | Blender engine object | explicit `Engine`/runtime records; no package-global hub; lifecycle/playback/bake tests unchanged | Done 2026-11-17; 26/26 on the 2026-11-17 best baseline |
-| T6 | `GhLink` split | registry/connection/scheduler/protocol/publication/slots split; document isolation and threading preserved | Pending |
+| T6 | `GhLink` split | registry/connection/scheduler/protocol/publication/slots split; document isolation and threading preserved | Done 2026-11-17; 685 C# checks, 26/26 in 173.1 s |
 | T7 | `Instances` split and table-driven conversion | single-part/multi-part/nested/attribute round trips unchanged; production LOC down or flat | Pending |
 | T8 | Performance follow-through | playback resolved or traded; p50/p95 within 5%; each fixed path measured | Pending |
 | T9 | Lean/docs/CI/build/framework | protocol tables generated; docs/ADR truth pass; reproducible artifacts; framework go/no-go | Pending |

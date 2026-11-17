@@ -1,6 +1,6 @@
 # Performance ledger
 
-**Status: T1–T5 accepted.** The gate reference is the **2026-11-17 best-of-three
+**Status: T1–T6 accepted.** The gate reference is the **2026-11-17 best-of-three
 baseline**: three clean solo runs, with the fastest per-run p50/p95 stored for
 each metric. It replaces the 2026-11-16 median baseline after host CPU
 power/core-state drift was measured and confirmed not to be a T5 regression; the
@@ -71,7 +71,7 @@ flaked on unrelated timer noise; its 2 ms hard budget remains in `bench.py`.
 | T3 | no production hot-path change | — | — | — | no metric regressed; the worst delta was **-0.79%** (`pipeline.100k.extract_ms` p50, an improvement), baseline gate PASS 26/26 | accepted |
 | T4 | 100k/1M in-place + instance repeat (p50/p95) | 2.2081 / 2.8269; 22.8247 / 23.0365; 2.5087 / 3.1799 | 2.2709 / 2.3472; 23.0166 / 23.7384; 2.5663 / 2.7071 | +2.85% / -16.97%; +0.84% / +3.05%; +2.29% / -14.87% | production 24,946 / 19,394 (flat physical, −20 code), 56 files; package 2,151 / 1,791 vs old 2,151 / 1,811 | accepted |
 | T5 | engine object: 100k/1M in-place, 13× instance repeat, playback, prefix/apply, roundtrip | 2.1453 / 2.1708; 21.6598 / 21.7428; 2.4608 / 2.5706; 12.8405 / 13.3398; 116.8278 / 119.6174; 91.0217 / 92.1573 | 2.1658 / 2.1996; 21.7300 / 21.7899; 2.5115 / 2.5672; 12.8752 / 13.3305; 116.6537 / 118.5319; 90.4581 / 91.1653 | +0.95% / +1.33%; +0.32% / +0.22%; +2.06% / -0.13%; +0.27% / -0.07%; -0.15% / -0.91%; -0.62% / -1.08% | production 24,738 / 19,376 (−208 / −18), 57 files; 454 Blender + 681 C# checks unchanged | accepted: 26/26 on the 2026-11-17 best baseline; decode +0.80% / -2.88%; no >5% metric |
-| T6 | pending | — | — | — | — | pending |
+| T6 | `GhLink` split: no Blender hot-path change | 4.9433 / 5.1213; 4.4018 / 5.2993; 2.1453 / 2.1708; 21.6598 / 21.7428; 2.4608 / 2.5706; 12.8405 / 13.3398 | 4.8043 / 5.0086; 4.1689 / 5.1180; 2.1427 / 2.1572; 21.4043 / 21.4556; 2.4520 / 2.4903; 12.9308 / 13.2672 | -2.81% / -2.20%; -5.29% / -3.42%; -0.13% / -0.62%; -1.18% / -1.32%; -0.36% / -3.13%; +0.70% / -0.54% | production 24,719 / 19,714 (−19 physical, +338 code), 63 files; `GhLink` type 2,489 → 173 code lines; 454 Blender + 685 C# checks | accepted: 26/26 in 173.1 s; worst positive p50 +1.49% (`total_ms`), p95 +1.14% (`total_ms`); no >5% metric |
 | T7 | pending | — | — | — | — | pending |
 | T8 | pending | — | — | — | — | pending |
 | T9 | pending | — | — | — | — | pending |
@@ -194,6 +194,50 @@ extension 2.6 s; C# 21.4 s). All **26/26** p50/p95 checks passed. Key deltas:
 No gated metric exceeds +5%; the worst positive p50 is +2.06%
 (`instances.13x.apply_repeat_ms`). The threshold was not widened and no metric
 was excluded.
+
+### T6 verification
+
+T6 is an internal C# refactor: it changes the ownership of the link, not the
+Blender codec, geometry write, topology-token fast path or the transport bytes.
+Production is **24,719 physical / 19,714 code lines across 63 files** (T5:
+24,738 / 19,376 across 57; −19 physical, +338 code, the explicit facade and
+owner-boundary accessors). The 2,489-line `GhLink` type is 173 code lines; the
+largest link type is `StageRegistry` at 810 and the largest link method is
+`RebuildPublicationLocked` at 161. The 454 Blender tests plus the offline gate
+are unchanged; the C# runtime count is **685** (was 681, +4 direct owner guards;
+one assertion moved to `LinkOutbox`, the slot status checks to
+`StageSlot`/`StageRegistry`).
+
+The full `scripts/check-all` gate ran alone and passed in **173.1 s** with the
+2026-11-17 best-of-three baseline enforced (bench 60.0 s; Blender 454 tests +
+offline gate, 87.1 s; extension 2.6 s; C# 21.8 s). All **26/26** p50/p95 checks
+passed:
+
+| Metric | Baseline p50 / p95 | T6 p50 / p95 | Delta p50 / p95 |
+|---|---:|---:|---:|
+| `pipeline.100k.extract_ms` | 4.9433 / 5.1213 | 4.8043 / 5.0086 | -2.81% / -2.20% |
+| `pipeline.100k.decode_ms` | 4.4018 / 5.2993 | 4.1689 / 5.1180 | -5.29% / -3.42% |
+| `pipeline.100k.apply_fresh_ms` | 77.9507 / 87.1304 | 76.9043 / 86.3806 | -1.34% / -0.86% |
+| `pipeline.100k.apply_inplace_ms` | 2.1453 / 2.1708 | 2.1427 / 2.1572 | -0.13% / -0.62% |
+| `pipeline.100k.total_ms` | 11.8275 / 12.0514 | 12.0043 / 12.1882 | +1.49% / +1.14% |
+| `pipeline.1m.apply_inplace_ms` | 21.6598 / 21.7428 | 21.4043 / 21.4556 | -1.18% / -1.32% |
+| `instances.13x.prefix_ms` | 10.0813 / 10.2337 | 10.0127 / 10.1527 | -0.68% / -0.79% |
+| `instances.13x.apply_repeat_ms` | 2.4608 / 2.5706 | 2.4520 / 2.4903 | -0.36% / -3.13% |
+| `playback.frame_ms` | 12.8405 / 13.3398 | 12.9308 / 13.2672 | +0.70% / -0.54% |
+| `roundtrip.full.settle_ms` | 116.8278 / 119.6174 | 115.7273 / 117.7996 | -0.94% / -1.52% |
+| `roundtrip.ref.settle_ms` | 91.0217 / 92.1573 | 90.1575 / 90.7385 | -0.95% / -1.54% |
+| `multistage.dirty_pass_ms` | 6.7115 / 6.8452 | 6.6584 / 6.7434 | -0.79% / -1.49% |
+| `multistage.settle_ms` | 76.8907 / 79.0489 | 74.6381 / 77.1057 | -2.93% / -2.46% |
+
+No gated metric exceeds +5%. The worst positive p50 is
+`pipeline.100k.total_ms` **+1.49%**; the largest p95 delta is also
+`pipeline.100k.total_ms` **+1.14%**; neither path was changed by this C#
+refactor. An intermediate gate on the same code printed `pipeline.100k.total_ms` p95 at
+**+4.44%** with p50 **−0.01%**; the immediate rerun recorded **+0.86% /
++0.02%**, and the final gate above (+1.14% / +1.49%) is the accepted measurement. The threshold was not widened and no metric was excluded. The
+structural gain is recorded with the task: production physical LOC is −19, the
+largest link type is 2,489 → 810, the largest link method is 210 → 161, and the link
+separations are one owner each.
 
 ## C# parameter/schema baseline (ungated)
 
