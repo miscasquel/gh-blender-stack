@@ -1,9 +1,10 @@
-# Refactor seams — 0.8.0 characterization map (T3)
+# Refactor seams — 0.8.0 characterization map (T3, T4)
 
-**Status:** T3 complete. This document is the contract for T4–T7: every seam the
-four refactor tasks may move, its owner today, the behavior that must not
-change, and the tests that pin it. **No production code changed in T3.** The
-suite passes on the pre-refactor tree.
+**Status:** T3 and the T4 `geometry_io` split are complete. This document is the
+contract for T4–T7: every seam the four refactor tasks may move, its owner, the
+behavior that must not change, and the tests that pin it. T3 changed no
+production code; T4 moved `geometry_io.py` into a package behind the same
+facade without changing the contracts below. T5–T7 remain.
 
 **Measured at T3 (same machine, 2026-11-16):**
 
@@ -19,6 +20,20 @@ suite passes on the pre-refactor tree.
   inside loops.
 - Fourteen golden fixtures; `out_hash`, protocol and fixtures untouched.
 
+**Measured at T4 (same machine, 2026-11-17):**
+
+- **454** Blender headless tests plus the offline gate, unchanged.
+- **681** passing C# checks in the codec runner and seven console suites,
+  unchanged (native Rhino halves still skip under wine).
+- Production: **24,946 physical / 19,394 code lines across 56 files** (flat
+  physical, −20 code against the T1 baseline). The new `geometry_io` package is
+  **2,151 physical / 1,791 code lines** in 8 files, replacing the 2,151 /
+  1,811-line `geometry_io.py`.
+- Fourteen golden fixtures; `out_hash`, protocol and fixtures untouched.
+- Performance: the final solo three-run median gate passed **26/26 checks across
+  13 gated metrics**; 100k in-place, 1M in-place and 13× instance repeat are in
+  [`performance-ledger.md`](performance-ledger.md).
+
 Notation: a Python test is `file.py::Class.test_name`; a C# check is
 `Suite::Check("…")` as printed by the console suite. Where a group of checks is
 named as `Suite::CheckGroup`, that means every `Check(...)` inside the group.
@@ -29,6 +44,10 @@ named as `Suite::CheckGroup`, that means every `Check(...)` inside the group.
 
 Legend: **E** = existing coverage before T3; **T3** = added by this task;
 **G** = known gap the local harness cannot cover (see §5).
+
+T4 is complete: `mesh.py`, `attributes.py`, `curves.py`, `points.py`,
+`instances.py` and `dispatch.py` own their kinds; `__init__.py` is the facade.
+The T4 rows below keep the original coverage map.
 
 | Task | Seam | Coverage | T3 additions |
 |---|---|---|---|
@@ -60,8 +79,13 @@ Legend: **E** = existing coverage before T3; **T3** = added by this task;
 
 ## 1. T4 — `geometry_io` package split
 
-**Current owner:** `blender/stageloom/blender/geometry_io.py` (2,151 physical
-lines). The public facade names T4 must keep (or migrate explicitly) are
+**Current owner (T4 complete):** `blender/stageloom/blender/geometry_io/`
+(2,151 physical / 1,791 code lines in 8 files): `common.py`, `attributes.py`,
+`mesh.py`, `curves.py`, `points.py`, `instances.py`, `dispatch.py` and the
+`__init__.py` facade. Dependency direction is one-way:
+`common` <- `attributes` <- `mesh`/`curves`/`points` <- `instances` <-
+`dispatch` <- facade. The facade preserves all 43 non-underscore names; private
+test hooks moved to their owning modules. The public facade names are
 `mesh_to_sections`, `object_to_sections`, `geometry_set_to_sections`,
 `sections_to_mesh`, `sections_to_curve`, `sections_to_points`,
 `write_attributes`, `curve_to_sections`, `points_to_sections`. `GeometryIOError`
@@ -130,10 +154,10 @@ SectionGroupTests.test_a_colours_only_group_is_an_incomplete_mesh`,
 `test_absent_mesh_colours_remove_only_the_native_channel`,
 `test_absent_creases_are_written_as_zero_not_left_stale`.
 
-**T4 may move:** all of the above into `geometry_io/mesh.py` (with
-`select_mesh_group` shared by the attribute writer); the facade re-exports the
-same names. The topology-token branch and `_topology_matches` are one owner and
-must move together.
+**T4 moved:** `geometry_io/mesh.py` now owns this, with
+`select_mesh_group` shared by the attribute writer. The topology-token branch
+and `_topology_matches` stayed together; `test_geometry_io.py` and
+`test_topology_token.py` now patch the mesh module.
 
 **Gaps:** duplicate section names at *apply* time are unreachable from a decoded
 frame (the codec rejects duplicates and `_apply` receives a dict); the aggregate
@@ -187,9 +211,9 @@ writer.
 AttributeWriteBoundaryTests.test_unknown_type_and_domain_are_noted_and_skipped`,
 `test_prune_removes_generic_attributes_but_keeps_native_channels`.
 
-**T4 may move:** into `geometry_io/attributes.py`; keep one `WIRE_TYPES` owner
-and one emitter. `test_every_wire_type_has_a_foreach_spec` reads the private
-`_FOREACH` table; that table and the test move together.
+**T4 moved:** `geometry_io/attributes.py` owns one `_FOREACH`/`WIRE_TYPES`
+vocabulary and one emitter. `test_every_wire_type_has_a_foreach_spec` now reads
+`geometry_io.attributes._FOREACH`.
 
 **Gaps:** the read side silently skips a Blender type absent from
 `WIRE_TYPES`; that is Blender's own vocabulary and cannot be produced through
@@ -235,9 +259,8 @@ RNA in a test, so the write-side note is the observable contract.
 CurveReadLossTests.test_short_and_spanless_splines_are_counted`,
 `test_an_absent_curve_group_is_a_classified_error_not_a_clear`.
 
-**T4 may move:** into `geometry_io/curves.py`; the table-driven curve section
-builders may collapse the four append loops but the validation order and error
-texts stay.
+**T4 moved:** `geometry_io/curves.py`; `_CurveBatch` and `crv_sections` own the
+six-section builder, with the validation order and error texts unchanged.
 
 **Gaps:** the Bezier point-attribute skip note is not directly tested; it is
 reached only with a component that has Bezier handles plus a POINT attribute.
@@ -274,12 +297,11 @@ PointWriteValidationTests.test_an_incomplete_point_group_leaves_the_cloud_untouc
 `test_a_radii_count_mismatch_is_classified`;
 `MeshWriteValidationTests.test_absent_point_colours_remove_only_the_native_channel`.
 
-**T4 may move:** into `geometry_io/points.py`.
+**T4 moved:** `geometry_io/points.py`.
 
 **Gap (finding, low severity):** a radii count mismatch is raised *after*
 `cloud.resize(n)` and the positions write, so that one malformed group is not
-atomic. The T3 test pins the classified error only; an atomic check in T4 is an
-improvement, not a regression. See §5.
+atomic. T4 preserved that behavior; a later task may tighten it. See §5.
 
 ### 1.5 Instances and definition table read/write
 
@@ -332,9 +354,9 @@ improvement, not a regression. See §5.
 **T3 additions:** none (existing coverage is already the deepest in the tree).
 The native skip is recorded as a gap in §5.
 
-**T4 may move:** into `geometry_io/instances.py`; `geometry_set_to_sections`
-and the definitions table builder move together. `MAX_INSTANCE_DEPTH` and the
-duplicate guard must not be duplicated per submodule.
+**T4 moved:** `geometry_io/instances.py`; the `_GEOMETRY_PARTS` table,
+`geometry_set_to_sections`, the definitions builder, `MAX_INSTANCE_DEPTH` and
+the duplicate guard each have one owner.
 
 ### 1.6 Dispatch/facade, surface, empty geometry, duplicate guard
 
@@ -365,9 +387,11 @@ ObjectDispatchTests.test_a_surface_is_meshed_with_a_note`,
 `SectionGroupTests.test_duplicate_section_names_are_rejected` (the private guard
 is the only deterministic observer and moves with it).
 
-**T4 may move:** `object_to_sections`/`surface_to_mesh`/`geometry_set_to_sections`
-into `geometry_io/dispatch.py`; `geometry_io/__init__.py` becomes the facade.
-The private guard may move with the aggregate writer; the test moves with it.
+**T4 moved:** `object_to_sections` and `surface_to_mesh` into
+`geometry_io/dispatch.py` behind the `_OBJECT_READERS` table;
+`geometry_set_to_sections` lives in `instances.py` with the private duplicate
+guard, and `test_geometry_io_edges.py` imports the guard from there. The facade
+re-exports the public names.
 
 **Gaps:** a duplicate section name cannot be produced through the public
 builders today (each kind owns its namespace), so the guard is tested directly.
@@ -1123,12 +1147,12 @@ item, not a local test.
 
 ---
 
-## 5. Known gaps and findings (not fixed in T3)
+## 5. Known gaps and findings (not fixed in T3/T4)
 
 1. **Native Rhino geometry checks skip under wine (coverage gap).**
    `ConversionTests` prints `SKIP native Rhino geometry round trip: RhinoCore is
    unavailable in this harness`; `InstanceTests` prints `SKIP native instance
-   build`. Those checks are not executed locally. Do not count them as T3
+   build`. Those checks are not executed locally. Do not count them as T3/T4
    coverage; T7's native acceptance must run where RhinoCore loads.
 2. **A bind failure's cause is overwritten (low/medium, report only).**
    `GhServer._serve` sets `bridge.state["error"] = "cannot listen on …"`; the
@@ -1139,7 +1163,8 @@ item, not a local test.
 3. **`sections_to_points` is not atomic on a radii count mismatch (low).**
    It resizes and writes positions before validating `pts.radii`, then raises
    `GeometryIOError`. Incomplete/no-positions and malformed positions are
-   atomic. The T3 test pins the classified error only; T4 may tighten it.
+   atomic. The T3 test pins the classified error only; T4 preserved it, and a
+   later task may tighten it.
 4. **`engine.unfreeze(obj, stage)` does not gate on a stack record (low).**
    Unlike `freeze`/`request_again`, it writes the stage state and dirties the
    object even when `obj` has no stage record. Not reachable from the panel,
@@ -1159,17 +1184,20 @@ item, not a local test.
 
 ---
 
-## 6. T3 verification commands
+## 6. T3/T4 verification commands
 
 ```bash
-scripts/test-blender     # 454 tests + offline gate
+scripts/test-blender     # 454 tests + offline gate, PASS
 scripts/test-gha         # codec runner + 7 console suites, 681 passing checks; native skips printed
-scripts/check-all        # full gate alone, including the 3-run bench baseline
+scripts/check-all        # T4 full gate: PASS 179.5 s, 26/26; bench 63.1 s
 git diff --check
 uvx ruff@0.17.2 check .
 scripts/check-docs
 scripts/code-health --check
 ```
 
-No production file under `blender/stageloom/**` or `grasshopper/src/**` changed.
-No protocol, fixture or `out_hash` change.
+T4's full gate passed alone in 179.5 s with the baseline enforced. The new
+package is 2,151 physical / 1,791 code lines versus the old 2,151 / 1,811;
+production is 24,946 physical / 19,394 code across 56 files (flat physical,
+−20 code). The topology-token path is unchanged and the in-place gates are
+green. No protocol, fixture or `out_hash` change.

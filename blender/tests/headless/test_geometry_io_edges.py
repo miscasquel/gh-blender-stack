@@ -5,7 +5,7 @@ classified malformed groups, absent-means-clear, counted notes for losses, and
 the per-kind dispatch surface. They deliberately use the public module
 functions; the one private helper named here (``_reject_duplicate_sections``)
 is the only deterministic observer of the aggregate writer's duplicate guard
-and moves with it in T4.
+and lives in the instances module.
 """
 
 import unittest
@@ -14,6 +14,7 @@ import bpy
 import numpy as np
 
 from blender.stageloom.blender import geometry_io  # noqa: E402
+from blender.stageloom.blender.geometry_io import instances as geometry_instances  # noqa: E402
 
 
 def quad_mesh(name="edge-quad"):
@@ -51,13 +52,13 @@ class SectionGroupTests(unittest.TestCase):
         )
 
     def test_duplicate_section_names_are_rejected(self):
-        geometry_io._reject_duplicate_sections(
+        geometry_instances._reject_duplicate_sections(
             [("mesh.verts", "f32", np.zeros(3))]
         )
         with self.assertRaisesRegex(
             geometry_io.GeometryIOError, "duplicate section name"
         ):
-            geometry_io._reject_duplicate_sections(
+            geometry_instances._reject_duplicate_sections(
                 [
                     ("mesh.verts", "f32", np.zeros(3)),
                     ("mesh.verts", "f32", np.zeros(3)),

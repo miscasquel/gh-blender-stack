@@ -51,12 +51,12 @@ class TopologyTokenApplyTests(unittest.TestCase):
         bpy.ops.preferences.addon_enable(module="stageloom")
         cls.enterClassContext(isolate_data_root("stageloom-token-"))
         import stageloom.blender.engine as engine
-        import stageloom.blender.geometry_io as geometry_io_module
+        import stageloom.blender.geometry_io.mesh as geometry_mesh_module
         import stageloom.blender.helpers as helpers
         import stageloom.blender.stack as stack_mod
 
         cls.engine = engine
-        cls.geometry_io = geometry_io_module
+        cls.geometry_mesh = geometry_mesh_module
         cls.helpers = helpers
         cls.stack_mod = stack_mod
 
@@ -135,7 +135,7 @@ class TopologyTokenApplyTests(unittest.TestCase):
 
     def forbid_topology_reads(self):
         return mock.patch.object(
-            self.geometry_io,
+            self.geometry_mesh,
             "_topology_matches",
             side_effect=AssertionError("the token path read polygon/loop arrays"),
         )
@@ -194,18 +194,18 @@ class TopologyTokenApplyTests(unittest.TestCase):
         self.apply("sha256:seven", "sha256:out-7", quad_sections(0.0), TOKEN_A)
 
         with mock.patch.object(
-            self.geometry_io,
+            self.geometry_mesh,
             "_topology_matches",
-            wraps=self.geometry_io._topology_matches,
+            wraps=self.geometry_mesh._topology_matches,
         ) as matches:
             self.apply("sha256:eight", "sha256:out-8", quad_sections(2.0))
         self.assertEqual(matches.call_count, 1, "a missing token skipped verification")
         self.assertEqual(self.stage.applied_topology, "", "a missing token was stored")
 
         with mock.patch.object(
-            self.geometry_io,
+            self.geometry_mesh,
             "_topology_matches",
-            wraps=self.geometry_io._topology_matches,
+            wraps=self.geometry_mesh._topology_matches,
         ) as matches:
             self.apply("sha256:nine", "sha256:out-9", quad_sections(4.0), "not-a-token")
         self.assertEqual(matches.call_count, 1, "a malformed token skipped verification")

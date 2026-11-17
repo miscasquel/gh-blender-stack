@@ -10,6 +10,7 @@ import bpy
 import numpy as np
 
 from blender.stageloom.blender import geometry_io  # noqa: E402
+from blender.stageloom.blender.geometry_io import attributes as geometry_attributes  # noqa: E402
 from blender.stageloom.core import attributes as attr_mod  # noqa: E402
 from harness import free_port, isolate_data_root, pump, start_fake, stop_fake
 
@@ -206,10 +207,10 @@ class AttributeIOTests(unittest.TestCase):
         """The wire vocabulary and the Blender foreach table must not drift.
 
         STRING is the one type with no foreach path: it is read and written
-        element by element in geometry_io, so it is intentionally absent from
-        ``_FOREACH``.
+        element by element in the attributes module, so it is intentionally
+        absent from ``_FOREACH``.
         """
-        self.assertEqual(set(geometry_io._FOREACH) | {"STRING"}, set(attr_mod.WIRE_TYPES))
+        self.assertEqual(set(geometry_attributes._FOREACH) | {"STRING"}, set(attr_mod.WIRE_TYPES))
 
 
 def _buffer_dtype(dtype):

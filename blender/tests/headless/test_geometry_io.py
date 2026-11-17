@@ -16,6 +16,7 @@ import bpy
 import numpy as np
 
 from blender.stageloom.blender import geometry_io  # noqa: E402
+from blender.stageloom.blender.geometry_io import mesh as geometry_mesh  # noqa: E402
 from blender.stageloom.core import codec  # noqa: E402
 
 
@@ -150,12 +151,12 @@ class SectionRoundTripTests(unittest.TestCase):
         by = sections_dict(sections)
         moved = by["mesh.verts"] + np.float32(1.0)
 
-        original_faces_from = geometry_io._faces_from
+        original_faces_from = geometry_mesh._faces_from
 
         def must_not_rebuild(*args):
             raise AssertionError("a true topology match rebuilt the mesh")
 
-        geometry_io._faces_from = must_not_rebuild
+        geometry_mesh._faces_from = must_not_rebuild
         try:
             geometry_io.sections_to_mesh(
                 obj.data,
@@ -163,7 +164,7 @@ class SectionRoundTripTests(unittest.TestCase):
                 + [(n, d, v) for n, d, v in sections if n != "mesh.verts"],
             )
         finally:
-            geometry_io._faces_from = original_faces_from
+            geometry_mesh._faces_from = original_faces_from
 
         co = np.empty(len(obj.data.vertices) * 3, dtype=np.float32)
         obj.data.vertices.foreach_get("co", co)
@@ -193,7 +194,7 @@ class SectionRoundTripTests(unittest.TestCase):
         moved = np.asarray(verts, dtype=np.float32) + np.float32(1.0)
         creases = ("mesh.crease_edges", "u32", np.array([[0, 1]], dtype=np.uint32))
         with mock.patch.object(
-            geometry_io,
+            geometry_mesh,
             "_topology_matches",
             side_effect=AssertionError("the token path read polygon/loop arrays"),
         ):

@@ -1,14 +1,13 @@
 # Performance ledger
 
 **Status: T1 baseline measured and green; T2 subtraction verified; T3
-characterization landed without a production change.** The 2026-11-16 baseline
-was captured
-on a quiet host from three solo runs and is stored as the **median of the three**
-per-run p50/p95 values. The fresh three-run median gate passed all 26 p50/p95
-checks (13 gated metrics). The full `scripts/check-all` gate passed in
-**173.6 s**, with the bench step enforcing the baseline (62.3 s). The idle-pass
-diagnostic was later ungated: at ~3 µs its p95 is below the timer noise floor,
-and the 2 ms hard budget still applies.
+characterization landed; T4 `geometry_io` package split complete.** The
+2026-11-16 baseline was captured on a quiet host from three solo runs and is
+stored as the **median of the three** per-run p50/p95 values. The T4 full
+`scripts/check-all` gate passed in **179.5 s** with the bench step enforcing the
+baseline (63.1 s) and all 26 p50/p95 checks green (13 gated metrics). The
+idle-pass diagnostic was ungated in T2: at ~3 µs its p95 is below the timer
+noise floor, and the 2 ms hard budget still applies.
 
 | Field | Value |
 |---|---|
@@ -74,7 +73,7 @@ noise; its 2 ms hard budget remains in `bench.py`.
 | T1 | `multistage.settle_ms` | 79.7700 / 82.3715 | 79.7043 / 82.0213 | -0.08% / -0.43% | none needed | accepted |
 | T2 | no production hot-path change | — | — | — | production physical LOC 25,096 → 24,946 (−150); tracked tree 112,513 → 82,866 lines (−29,647) incl. the vendored wheel/spikes | accepted |
 | T3 | no production hot-path change | — | — | — | no metric regressed; the worst delta was **-0.79%** (`pipeline.100k.extract_ms` p50, an improvement), baseline gate PASS 26/26 | accepted |
-| T4 | pending | — | — | — | — | pending |
+| T4 | 100k/1M in-place + instance repeat (p50/p95) | 2.2081 / 2.8269; 22.8247 / 23.0365; 2.5087 / 3.1799 | 2.2709 / 2.3472; 23.0166 / 23.7384; 2.5663 / 2.7071 | +2.85% / -16.97%; +0.84% / +3.05%; +2.29% / -14.87% | production 24,946 / 19,394 (flat physical, −20 code), 56 files; package 2,151 / 1,791 vs old 2,151 / 1,811 | accepted |
 | T5 | pending | — | — | — | — | pending |
 | T6 | pending | — | — | — | — | pending |
 | T7 | pending | — | — | — | — | pending |
@@ -138,6 +137,32 @@ other metric improved. The immediate rerun passed 26/26 with that metric at
 p95 **-3.90%**. This is the known tail noise on the extract p95, not a code
 change: T3 changes only tests/docs and no production file. The threshold was
 not widened and no metric was excluded.
+
+### T4 verification
+
+T4 split `geometry_io.py` into `geometry_io/` (common, attributes, mesh,
+curves, points, instances, dispatch, facade), preserved all 43 public names and
+moved the private test hooks to their owners. Production is **24,946 physical /
+19,394 code lines across 56 files**: physical flat, code −20; the new package is
+2,151 / 1,791 versus the old 2,151 / 1,811. The 454 Blender tests and 681 C#
+checks are unchanged.
+
+The full `scripts/check-all` gate passed alone in **179.5 s** with the baseline
+enforced (bench 63.1 s; Blender 88.3 s; extension 2.8 s; C# 23.3 s). All
+**26/26** p50/p95 checks passed. The key in-place numbers are:
+
+| Metric | p50 | p95 |
+|---|---:|---:|
+| `pipeline.100k.apply_inplace_ms` | +2.85% | -16.97% |
+| `pipeline.1m.apply_inplace_ms` | +0.84% | +3.05% |
+| `instances.13x.apply_repeat_ms` | +2.29% | -14.87% |
+
+The largest positive delta was `pipeline.100k.decode_ms` p50 **+4.30%**, on
+codec code untouched by T4; every other metric stayed within ±5% or improved,
+and the topology-token fast path is unchanged. Earlier runs during browser and
+thermal load were discarded (they produced a 1M p95 failure and a decode p50
+fluctuation on unchanged paths); the gate above is the accepted clean
+measurement. No threshold was widened and no metric was excluded.
 
 ## C# parameter/schema baseline (ungated)
 

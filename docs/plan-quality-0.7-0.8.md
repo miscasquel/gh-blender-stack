@@ -35,7 +35,12 @@ and the seam map [`seams-0.8.md`](seams-0.8.md) with **no production change**;
 the full gate passed alone in **174.0 s** with 454 Blender headless tests and
 681 C# checks, and the local harness explicitly skips the native Rhino halves
 under wine. T3 is complete; the measured values are in the T3 section of the ledger and
-code-health.
+code-health. T4 then split `geometry_io.py` into a package with one owner per
+kind behind the same facade: **24,946 physical / 19,394 code lines across 56
+production files** (flat physical, −20 code), with 454 Blender tests and 681 C#
+checks unchanged. The full gate passed alone in **179.5 s** with 26/26 gated
+metrics green (100k in-place +2.85% p50, 1M in-place +0.84%, instance repeat
++2.29%).
 
 **0.7.0 completion record (2026-11-16).** Q1–Q19 are complete; Q5 was merged
 into Q4 (the cache and the `Live` toggle were one removal). The release was
@@ -808,7 +813,7 @@ acceptance criteria, then committed before the next starts.
 | T1 | Baseline, performance gate, code health | three-run median baseline; `--check-baseline` fails a +6% regression; ledger and code-health inventory; no production behavior change | Done 2026-11-16 (`c2ed250`) |
 | T2 | Subtraction before refactor | dead material/aliases/vendored tree removed; shim ADR and wheel ADR; no behavior change; full gate green; production and total tree smaller | Done 2026-11-16 |
 | T3 | Characterization tests for the seams | tests pin `geometry_io`, the engine hub, `GhLink` and `Instances`; no production edits | Done 2026-11-16 |
-| T4 | `geometry_io` package split | one responsibility per module; no production net growth; full gate; in-place benchmarks within 5% | Pending |
+| T4 | `geometry_io` package split | one responsibility per module; no production net growth; full gate; in-place benchmarks within 5% | Done 2026-11-17 |
 | T5 | Blender engine object | explicit `Engine`/runtime records; no package-global hub; lifecycle/playback/bake tests unchanged | Pending |
 | T6 | `GhLink` split | registry/connection/scheduler/protocol/publication/slots split; document isolation and threading preserved | Pending |
 | T7 | `Instances` split and table-driven conversion | single-part/multi-part/nested/attribute round trips unchanged; production LOC down or flat | Pending |
