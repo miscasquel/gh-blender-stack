@@ -3,6 +3,10 @@
 import unittest
 
 import bpy
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import lifecycle as engine_lifecycle
+from stageloom.blender.engine import messages as engine_messages
+from stageloom.blender.engine import triggers as engine_triggers
 
 
 class StageIndexTests(unittest.TestCase):
@@ -29,55 +33,52 @@ class StageIndexTests(unittest.TestCase):
         bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_a_warm_index_is_not_rebuilt_by_messages(self):
-        engine = self.engine
-        engine._rebuild_index()
-        self.assertIn(self.stage.key, engine._stage_index)
-        self.assertIn(self.obj, engine._stack_objects)
-        before = engine.stats["index_rebuilds"]
+        engine_lifecycle._rebuild_index()
+        self.assertIn(self.stage.key, ENGINE.stage_index)
+        self.assertIn(self.obj, ENGINE.stack_objects)
+        before = ENGINE.stats()["index_rebuilds"]
 
-        engine._handle_schema({
+        engine_messages._handle_schema({
             "type": "schema",
             "stage": self.stage.key,
             "params": [],
         })
-        engine._handle_response({
+        engine_messages._handle_response({
             "type": "response",
             "stage": self.stage.key,
             "rid": "sha256:" + "0" * 64,
             "status": "error",
             "error": {"code": "test", "message": "no"},
         }, {})
-        engine._on_client_hello({
+        engine_messages._on_client_hello({
             "type": "hello",
             "doc": "index.gh",
             "stages": [{"key": self.stage.key}],
         })
-        engine._last_stall_check = 0.0
-        engine._nudge_stalled_waits()
+        ENGINE.last_stall_check = 0.0
+        engine_triggers._nudge_stalled_waits()
 
         self.assertEqual(
-            engine.stats["index_rebuilds"], before,
+            ENGINE.stats()["index_rebuilds"], before,
             "a message path rebuilt the whole-scene index",
         )
 
     def test_a_rename_does_not_lose_the_stack(self):
-        engine = self.engine
-        engine._rebuild_index()
+        engine_lifecycle._rebuild_index()
         self.obj.name = "Indexed Renamed"
-        engine._dirty.clear()
-        engine._mark_dirty_all()
-        self.assertIn("Indexed Renamed", engine._dirty)
-        self.assertIn(self.obj, engine._stack_objects)
+        ENGINE.dirty.clear()
+        engine_lifecycle._mark_dirty_all()
+        self.assertIn("Indexed Renamed", ENGINE.dirty)
+        self.assertIn(self.obj, ENGINE.stack_objects)
 
     def test_a_new_object_is_picked_up(self):
-        engine = self.engine
-        engine._rebuild_index()
-        before = engine.stats["index_rebuilds"]
+        engine_lifecycle._rebuild_index()
+        before = ENGINE.stats()["index_rebuilds"]
         extra = bpy.data.objects.new("index-new", bpy.data.meshes.new("index-new"))
         bpy.context.scene.collection.objects.link(extra)
-        engine._ensure_index()
-        self.assertGreater(engine.stats["index_rebuilds"], before)
-        self.assertIn(self.obj, engine._stack_objects)
+        engine_lifecycle._ensure_index()
+        self.assertGreater(ENGINE.stats()["index_rebuilds"], before)
+        self.assertIn(self.obj, ENGINE.stack_objects)
 
 
 if __name__ == "__main__":

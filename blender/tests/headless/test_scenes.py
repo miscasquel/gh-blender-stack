@@ -12,6 +12,11 @@ import bpy
 import numpy as np
 
 from harness import isolate_data_root
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import lifecycle as engine_lifecycle
+from stageloom.blender.engine import playback as engine_playback
+from stageloom.blender.engine import request as engine_request
+from stageloom.blender.engine import triggers as engine_triggers
 
 
 class SceneScopeTests(unittest.TestCase):
@@ -77,117 +82,113 @@ class SceneScopeTests(unittest.TestCase):
         self.window.scene = self.scene_a
         self.scene_a.frame_set(1)
         self.scene_b.frame_set(10)
-        self.engine._pending.clear()
-        self.engine._sent.clear()
-        self.engine._last_frame.clear()
-        self.engine._verify.clear()
-        self.engine._dirty.clear()
-        self.engine._playback_sync = False
-        self.engine._playback_scene = None
-        self.engine._rebuild_index()
+        ENGINE.clear_runtimes()
+        ENGINE.clear_runtimes()
+        ENGINE.clear_runtimes()
+        ENGINE.verify.clear()
+        ENGINE.dirty.clear()
+        ENGINE.playback_sync = False
+        ENGINE.playback_scene = None
+        engine_lifecycle._rebuild_index()
         self.bridge.state.update(connected=True, clients=1, doc="multi-scene.gh")
 
     def tearDown(self):
-        self.engine._pending.clear()
-        self.engine._sent.clear()
-        self.engine._last_frame.clear()
-        self.engine._verify.clear()
-        self.engine._dirty.clear()
-        self.engine._playback_sync = False
-        self.engine._playback_scene = None
+        ENGINE.clear_runtimes()
+        ENGINE.clear_runtimes()
+        ENGINE.clear_runtimes()
+        ENGINE.verify.clear()
+        ENGINE.dirty.clear()
+        ENGINE.playback_sync = False
+        ENGINE.playback_scene = None
         self.server.SERVER.send = self.real_send
         self.bridge.state.clear()
         self.bridge.state.update(self.previous_connected)
         self.window.scene = self.scene_a
 
     def test_01_each_request_uses_its_objects_scene_frame(self):
-        engine = self.engine
         self.server.SERVER.send = lambda frame: True
         try:
             # Process B while the *active* scene is A at frame 1, while B is at
             # frame 10. The old code compared against A and recorded 1.
             self.assertEqual(self.scene_a.frame_float, 1.0)
             self.assertEqual(self.scene_b.frame_float, 10.0)
-            engine._process_object(self.obj_b)
+            engine_lifecycle._process_object(self.obj_b)
             key_b = (self.record_b.stack_id, self.stage_b.key)
             self.assertEqual(
-                engine._last_frame.get(key_b),
+                ENGINE.peek_runtime(*key_b).last_frame,
                 10.0,
                 "the request recorded the active scene's frame, not the object's",
             )
-            self.assertFalse(engine._dirty, "the scene switch queued a synthetic frame pass")
-            self.assertFalse(engine._switching_scene)
+            self.assertFalse(ENGINE.dirty, "the scene switch queued a synthetic frame pass")
+            self.assertFalse(ENGINE.switching_scene)
 
             # B's frame did not move. Moving A must not make B ask again.
-            engine._forget(self.record_b.stack_id, self.stage_b.key)
-            engine._pending.pop(key_b, None)
+            ENGINE.forget(self.record_b.stack_id, self.stage_b.key)
+            ENGINE.runtime(*key_b).pending.clear()
             self.scene_a.frame_set(2)
-            sends = engine.stats["sends"]
-            engine._process_object(self.obj_b)
-            self.assertEqual(engine.stats["sends"], sends, "an unrelated scene's frame woke B")
+            sends = ENGINE.stats()["sends"]
+            engine_lifecycle._process_object(self.obj_b)
+            self.assertEqual(ENGINE.stats()["sends"], sends, "an unrelated scene's frame woke B")
 
             # A's own scene frame moved, so A asks.
-            engine._process_object(self.obj_a)
-            self.assertGreater(engine.stats["sends"], sends, "A's own frame change did not ask")
+            engine_lifecycle._process_object(self.obj_a)
+            self.assertGreater(ENGINE.stats()["sends"], sends, "A's own frame change did not ask")
             record_a = self.obj_a.gh_stack
             self.assertEqual(
-                engine._last_frame.get((record_a.stack_id, self.stage_a.key)),
+                (ENGINE.peek_runtime(*(record_a.stack_id, self.stage_a.key)).last_frame if ENGINE.peek_runtime(*(record_a.stack_id, self.stage_a.key)) else None),
                 2.0,
             )
         finally:
             self.server.SERVER.send = self.real_send
 
     def test_02_the_playback_gate_ignores_another_scenes_frame(self):
-        engine = self.engine
         self.scene_a.sync_mode = "NONE"
         self.scene_b.sync_mode = "NONE"
-        engine._on_playback_pre(self.scene_a)
+        engine_playback._on_playback_pre(self.scene_a)
         try:
-            self.assertTrue(engine._playback_sync)
-            frames = engine.stats["playback_frames"]
-            engine._on_frame_change_sync(self.scene_b)
+            self.assertTrue(ENGINE.playback_sync)
+            frames = ENGINE.stats()["playback_frames"]
+            engine_playback._on_frame_change_sync(self.scene_b)
             self.assertEqual(
-                engine.stats["playback_frames"],
+                ENGINE.stats()["playback_frames"],
                 frames,
                 "a frame event from another scene entered the playback gate",
             )
             # A late post from the other scene must not disarm A's gate.
-            engine._on_playback_post(self.scene_b)
-            self.assertTrue(engine._playback_sync, "another scene disarmed the gate")
+            engine_playback._on_playback_post(self.scene_b)
+            self.assertTrue(ENGINE.playback_sync, "another scene disarmed the gate")
         finally:
-            engine._on_playback_post(self.scene_a)
-        self.assertFalse(engine._playback_sync)
-        self.assertIsNone(engine._playback_scene)
+            engine_playback._on_playback_post(self.scene_a)
+        self.assertFalse(ENGINE.playback_sync)
+        self.assertIsNone(ENGINE.playback_scene)
 
     def test_03_a_depsgraph_event_marks_only_its_scenes_stacks(self):
-        engine = self.engine
-        engine._dirty.clear()
-        engine._on_depsgraph(self.scene_b)
-        self.assertIn(self.obj_b.name, engine._dirty)
-        self.assertNotIn(self.obj_a.name, engine._dirty)
+        ENGINE.dirty.clear()
+        engine_triggers._on_depsgraph(self.scene_b)
+        self.assertIn(self.obj_b.name, ENGINE.dirty)
+        self.assertNotIn(self.obj_a.name, ENGINE.dirty)
 
-        engine._dirty.clear()
-        engine._on_frame_change(self.scene_a)
-        self.assertIn(self.obj_a.name, engine._dirty)
-        self.assertNotIn(self.obj_b.name, engine._dirty)
+        ENGINE.dirty.clear()
+        engine_triggers._on_frame_change(self.scene_a)
+        self.assertIn(self.obj_a.name, ENGINE.dirty)
+        self.assertNotIn(self.obj_b.name, ENGINE.dirty)
 
     def test_04_the_prefix_is_read_at_the_objects_scene_frame(self):
-        engine = self.engine
         # Active scene A is at frame 1; B is at frame 10. The animated deform
         # above B's stage must be evaluated at 10.
         self.assertEqual(self.scene_a.frame_float, 1.0)
         self.assertEqual(self.scene_b.frame_float, 10.0)
-        engine._dirty.clear()
-        sections_10, _hash, _attributes, _definitions = engine._prefix_sections(
+        ENGINE.dirty.clear()
+        sections_10, _hash, _attributes, _definitions = engine_request._prefix_sections(
             self.obj_b, self.record_b, self.stage_b
         )
         self.scene_b.frame_set(2)
-        engine._dirty.clear()
-        sections_2, _hash, _attributes, _definitions = engine._prefix_sections(
+        ENGINE.dirty.clear()
+        sections_2, _hash, _attributes, _definitions = engine_request._prefix_sections(
             self.obj_b, self.record_b, self.stage_b
         )
         self.assertFalse(
-            engine._dirty,
+            ENGINE.dirty,
             "evaluating another scene's prefix queued a synthetic frame pass",
         )
         by_name_10 = {name: values for name, _dtype, values in sections_10}

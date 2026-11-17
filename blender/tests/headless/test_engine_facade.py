@@ -12,6 +12,10 @@ import unittest
 import bpy
 
 from harness import isolate_data_root
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import messages as engine_messages
+from stageloom.blender.engine import triggers as engine_triggers
+from stageloom.blender import bridge
 
 
 class DormantDiagnosticsTests(unittest.TestCase):
@@ -26,33 +30,33 @@ class DormantDiagnosticsTests(unittest.TestCase):
 
         cls.engine = engine
         # Headless has no event loop for the post-register settle.
-        engine._settle()
-        engine._on_load()
+        ENGINE.settle()
+        engine_triggers._on_load()
 
     @classmethod
     def tearDownClass(cls):
         bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_a_dormant_engine_reports_no_timer_and_a_zero_tick_rate(self):
-        report = self.engine.registration_report()
+        report = ENGINE.registration_report()
         self.assertFalse(report["active"])
         self.assertFalse(report["timer_registered"])
         self.assertEqual(report["stack_objects"], 0)
-        self.assertEqual(self.engine.tick_rate(0.1), 0.0)
+        self.assertEqual(ENGINE.tick_rate(0.1), 0.0)
 
     def test_recent_activity_is_a_bounded_copy(self):
         marker = "t3-diagnostics-marker"
-        self.engine._trace.append(marker)
-        activity = self.engine.recent_activity(1)
+        ENGINE.trace_lines.append(marker)
+        activity = ENGINE.recent_activity(1)
         self.assertEqual(activity, [marker])
         activity.append("mutated")
-        self.assertNotIn("mutated", self.engine.recent_activity(10))
+        self.assertNotIn("mutated", ENGINE.recent_activity(10))
         for index in range(5):
-            self.engine._trace.append("%s-%d" % (marker, index))
-        self.assertEqual(len(self.engine.recent_activity(2)), 2)
+            ENGINE.trace_lines.append("%s-%d" % (marker, index))
+        self.assertEqual(len(ENGINE.recent_activity(2)), 2)
 
     def test_trigger_health_is_empty_before_an_event(self):
-        health = self.engine.trigger_health()
+        health = ENGINE.trigger_health()
         self.assertIsNone(health["trigger_age"])
         self.assertEqual(health["trigger_count"], 0)
         self.assertEqual(health["trigger_updates"], 0)
@@ -71,14 +75,14 @@ class EngineFacadeTests(unittest.TestCase):
 
         cls.engine = engine
         cls.stack_mod = stack_mod
-        engine._deactivate()
+        ENGINE.deactivate()
         bpy.ops.mesh.primitive_cube_add(size=2.0)
         cls.obj = bpy.context.object
         cls.obj.name = "Facade"
         bpy.ops.stageloom.add_stage(label="Facade")
         cls.stage = cls.obj.gh_stack.stages[0]
-        engine._deactivate()
-        engine._dirty.clear()
+        ENGINE.deactivate()
+        ENGINE.dirty.clear()
 
     @classmethod
     def tearDownClass(cls):
@@ -122,7 +126,7 @@ class EngineFacadeTests(unittest.TestCase):
         stage.has_stage_out = True
         nonce = stage.nonce
 
-        self.engine._on_client_hello(
+        engine_messages._on_client_hello(
             {
                 "doc": "malformed.gh",
                 "caps": "not-a-list",
@@ -139,22 +143,22 @@ class EngineFacadeTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(self.engine.bridge.state["caps"], [])
+        self.assertEqual(bridge.state["caps"], [])
         self.assertEqual(stage.input_mode, self.stack_mod.INPUT_PREFIX)
         self.assertTrue(stage.has_stage_out)
         self.assertEqual(stage.nonce, nonce, "hello itself sent a request")
         self.assertTrue(
             any(
                 "client hello: malformed.gh" in line
-                for line in self.engine.recent_activity(20)
+                for line in ENGINE.recent_activity(20)
             ),
-            self.engine.recent_activity(20),
+            ENGINE.recent_activity(20),
         )
 
     def test_05_an_active_engine_reports_one_generation(self):
-        self.assertTrue(self.engine._ensure_active())
+        self.assertTrue(ENGINE.ensure_active())
         try:
-            report = self.engine.registration_report()
+            report = ENGINE.registration_report()
             self.assertTrue(report["registered"])
             self.assertTrue(report["active"])
             self.assertTrue(report["timer_registered"])
@@ -175,7 +179,7 @@ class EngineFacadeTests(unittest.TestCase):
                 report["timer_module"], "stageloom.blender.engine.triggers"
             )
         finally:
-            self.engine._deactivate()
+            ENGINE.deactivate()
 
 
 if __name__ == "__main__":

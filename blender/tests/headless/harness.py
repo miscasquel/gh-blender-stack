@@ -45,11 +45,11 @@ def pump(seconds=8.0, until=None, step=0.01):
     ``step`` is explicit because one suite polls at half the usual interval to
     catch a short-lived state; every other caller keeps the 10 ms cadence.
     """
-    import stageloom.blender.engine as engine
+    from stageloom.blender.engine import triggers
 
     deadline = time.time() + seconds
     while time.time() < deadline:
-        engine._timer()
+        triggers._timer()
         if until is not None and until():
             return True
         time.sleep(step)
@@ -60,12 +60,12 @@ def pump_dirty(obj, seconds=8.0, until=None, step=0.01):
     """Like pump, but keeps the object dirty. The request timeout is only
     noticed on a pass, so a test waiting for a retry has to ask for passes (a
     scene change would do the same in a session)."""
-    import stageloom.blender.engine as engine
+    from stageloom.blender.engine import ENGINE, triggers
 
     deadline = time.time() + seconds
     while time.time() < deadline:
-        engine._mark_object_dirty(obj)
-        engine._timer()
+        ENGINE.mark_object_dirty(obj)
+        triggers._timer()
         if until is not None and until():
             return True
         time.sleep(step)

@@ -1,26 +1,49 @@
 """Blender handlers, the timer and the depsgraph/edit-mode triggers."""
 
-import sys
+import time
 
-engine = sys.modules[__package__]
+import bpy
+
+from .. import bridge, helpers, nodes, prefs
+from .. import stack as stack_mod
+from .lifecycle import (
+    _all_stack_objects,
+    _ensure_index,
+    _mark_dirty_all,
+    _mark_dirty_scene,
+    _process_object,
+    _rebuild_index,
+    _repair_plumbing,
+    _stage_key_conflicted,
+)
+from .messages import _handle_incoming
+from .state import _set_state
+from .request import _bump_epochs, _expire_pull, _pull_expired, _set
+from .runtime import (
+    ENGINE,
+    HOT_INTERVAL,
+    IDLE_INTERVAL,
+    SOFT_RETRY_SECONDS,
+    WAIT_INTERVAL,
+)
 
 
-@engine.bpy.app.handlers.persistent
+@bpy.app.handlers.persistent
 def _on_depsgraph(scene, depsgraph=None):
     # By design, every depsgraph update re-reads every stage prefix: Python
     # cannot ask a node tree which datablocks it depends on, and a narrower
     # filter is silent stale geometry when it misses one. The pass is coalesced
     # to one per tick; only the redundant evaluation before it was removed.
-    if engine._evaluating:
-        engine._trace_guard_drop()
+    if ENGINE.evaluating:
+        _trace_guard_drop()
         return
-    engine._heartbeat["trigger_at"] = engine.time.monotonic()
-    engine._heartbeat["trigger_count"] += 1
-    engine._heartbeat["trigger_updates"] = engine._bump_epochs(depsgraph)
+    ENGINE.heartbeat["trigger_at"] = time.monotonic()
+    ENGINE.heartbeat["trigger_count"] += 1
+    ENGINE.heartbeat["trigger_updates"] = _bump_epochs(depsgraph)
     # A depsgraph event belongs to one scene. Marking every stack made an
     # unrelated scene's stage ask again, with the wrong scene's frame.
-    engine._mark_dirty_scene(scene)
-    engine._mark_hot()
+    _mark_dirty_scene(scene)
+    ENGINE.mark_hot()
 
 
 def _trace_guard_drop():
@@ -30,12 +53,12 @@ def _trace_guard_drop():
     pass running means the guard was left up by a pass that died — the mute the
     watchdog exists for — and only that one is named.
     """
-    if engine._ticking:
+    if ENGINE.ticking:
         return
-    where = "%s (stage %s)" % engine._guard_owner if engine._guard_owner else "unknown"
+    where = "%s (stage %s)" % ENGINE.guard_owner if ENGINE.guard_owner else "unknown"
     line = "depsgraph update dropped: guard up by %s" % where
-    if not engine._trace or engine._trace[-1] != line:
-        engine._trace.append(line)
+    if not ENGINE.trace_lines or ENGINE.trace_lines[-1] != line:
+        ENGINE.trace(line)
 
 
 def _drain_depsgraph():
@@ -46,10 +69,10 @@ def _drain_depsgraph():
     — the "random, needs Push" failure. Draining first delivers every pending
     update while the guard is down; it is free when nothing is tagged.
     """
-    if engine._evaluating:
+    if ENGINE.evaluating:
         return
     try:
-        engine.bpy.context.evaluated_depsgraph_get().update()
+        bpy.context.evaluated_depsgraph_get().update()
     except (AttributeError, RuntimeError):
         pass
 
@@ -63,9 +86,9 @@ def _edit_mode_objects():
     sculpt and pose sessions out.
     """
     try:
-        candidates = list(engine.bpy.context.objects_in_mode)
+        candidates = list(bpy.context.objects_in_mode)
     except AttributeError:
-        candidates = list(engine.bpy.data.objects)
+        candidates = list(bpy.data.objects)
     return [obj for obj in candidates if obj.mode == "EDIT"]
 
 
@@ -84,7 +107,7 @@ def _flush_object(obj):
         obj.update_from_editmode()
     except RuntimeError:
         return False
-    engine._trace.append("flushed Edit Mode data for %s" % obj.name)
+    ENGINE.trace("flushed Edit Mode data for %s" % obj.name)
     return True
 
 
@@ -97,28 +120,28 @@ def _flush_edit_mode():
     non-active object — or behind a non-stack active object — reach Grasshopper
     while the mode is open.
     """
-    if not engine._dirty:
+    if not ENGINE.dirty:
         # Nothing is waiting for a flush; skip the mode scan on every idle tick.
         return
-    for obj in engine._edit_mode_objects():
-        if engine.stack_mod.stack_of(obj) is None:
+    for obj in _edit_mode_objects():
+        if stack_mod.stack_of(obj) is None:
             continue
-        if obj.name not in engine._dirty:
+        if obj.name not in ENGINE.dirty:
             continue
-        engine._flush_object(obj)
+        _flush_object(obj)
 
 
-@engine.bpy.app.handlers.persistent
+@bpy.app.handlers.persistent
 def _on_frame_change(scene, depsgraph=None):
     # A frame change tags nothing (the frame is part of the prefix revision).
     # It queues the stacks of *this* scene: a stage on an object in another
     # scene keeps that scene's frame and is not woken by this one.
-    if engine._switching_scene:
+    if ENGINE.switching_scene:
         # Fired by the prefix read temporarily activating the object's scene,
         # not by the user or by playback.
         return
-    engine._mark_dirty_scene(scene)
-    engine._mark_hot()
+    _mark_dirty_scene(scene)
+    ENGINE.mark_hot()
 
 
 def _after_history_step():
@@ -141,41 +164,42 @@ def _after_history_step():
     The step cannot prove which of two claimants was the original: a restored
     shared key is a strict conflict, never a name-based split.
     """
-    engine._stage_owners.clear()
-    engine._rebuild_index()
-    for obj in list(engine._stack_objects):
-        record = engine.stack_mod.stack_of(obj)
+    ENGINE.stage_owners.clear()
+    _rebuild_index()
+    for obj in list(ENGINE.stack_objects):
+        record = stack_mod.stack_of(obj)
         if not record.stack_id:
-            record.stack_id = engine.stack_mod.ensure_stack(obj).stack_id
+            record.stack_id = stack_mod.ensure_stack(obj).stack_id
         for stage in record.stages:
-            sent = engine._sent.get((record.stack_id, stage.key))
-            engine._set(stage, "geom_hash", sent[1] if sent is not None else "")
+            row = ENGINE.peek_runtime(record.stack_id, stage.key)
+            sent = row.sent if row is not None else None
+            _set(stage, "geom_hash", sent[1] if sent is not None else "")
             # A topology token restored by the step describes the helper data
             # saved in that step, not what the session will apply next. Drop it
             # so the next apply rebuilds or verifies instead of trusting it.
-            engine._set(stage, "applied_topology", "")
+            _set(stage, "applied_topology", "")
             # The solver state is not part of Blender's undo history: ask for
             # the current state instead of assuming the restored rid was
             # delivered.
-            engine._verify.add((record.stack_id, stage.key))
-            engine._last_frame.pop((record.stack_id, stage.key), None)
-    engine._prefix_memo.clear()
-    if engine._ensure_active():
-        engine._mark_dirty_all()
-        engine._mark_hot()
+            ENGINE.verify.add((record.stack_id, stage.key))
+            ENGINE.runtime(record.stack_id, stage.key).last_frame = None
+    ENGINE.prefix_memo.clear()
+    if ENGINE.ensure_active():
+        _mark_dirty_all()
+        ENGINE.mark_hot()
 
 
-@engine.bpy.app.handlers.persistent
+@bpy.app.handlers.persistent
 def _on_undo(scene=None):
-    engine._after_history_step()
+    _after_history_step()
 
 
-@engine.bpy.app.handlers.persistent
+@bpy.app.handlers.persistent
 def _on_redo(scene=None):
-    engine._after_history_step()
+    _after_history_step()
 
 
-@engine.bpy.app.handlers.persistent
+@bpy.app.handlers.persistent
 def _on_load(scene=None):
     """A file was opened (or reverted, or Blender started with one).
 
@@ -196,92 +220,85 @@ def _on_load(scene=None):
     # scene: move it now, so the outliner is clean before the first apply.
     # This also renames object-name-based helpers to the stable stack-id
     # identity, so a file saved under the old scheme keeps its geometry.
-    engine.helpers.adopt_existing()
+    helpers.adopt_existing()
     # A decoded frame belongs to the session that just ended. A response or
     # schema queued before the load must not be applied to the new file (the
     # stage keys may even coincide).
-    engine.bridge.clear_incoming()
-    engine._pending.clear()
-    engine._sent.clear()
-    engine._last_frame.clear()
-    engine._pull_permits.clear()
-    engine._pull_deadlines.clear()
-    engine._prefix_memo.clear()
-    engine._prefix_batch.clear()
-    engine._prefix_batch_built = False
-    engine._prefix_batching = False
-    engine._prefix_epoch = 0
-    engine._verify.clear()
-    engine._state_since.clear()
-    engine._last_no_send.clear()
-    engine._timings.clear()
-    engine._last_stall_check = 0.0
-    engine._reset_reports()
-    engine._dirty.clear()
+    bridge.clear_incoming()
+    ENGINE.clear_runtimes()
+    ENGINE.prefix_memo.clear()
+    ENGINE.prefix_batch.clear()
+    ENGINE.prefix_batch_built = False
+    ENGINE.prefix_batching = False
+    ENGINE.prefix_epoch = 0
+    ENGINE.verify.clear()
+    ENGINE.last_stall_check = 0.0
+    ENGINE.reset_playback_reports()
+    ENGINE.dirty.clear()
     # The guard belongs to the session that just ended. A pass can only be
     # running on the main thread, but a load (a new file, a revert) must not
     # inherit the previous file's wedge: with `_evaluating` set the depsgraph
     # handler would drop every edit in the new file until the watchdog fired.
-    engine._evaluating = False
-    engine._guard_owner = None
-    engine._evaluating_since = None
-    engine._ticking = False
-    engine._playback_sync = False
-    engine._bake_sync = False
-    engine._bake_progress = None
-    engine._playback_scene = None
-    engine._bake_scene = None
-    engine._switching_scene = False
+    ENGINE.evaluating = False
+    ENGINE.guard_owner = None
+    ENGINE.evaluating_since = None
+    ENGINE.ticking = False
+    ENGINE.playback_sync = False
+    ENGINE.bake_sync = False
+    ENGINE.bake_progress = None
+    ENGINE.playback_scene = None
+    ENGINE.bake_scene = None
+    ENGINE.switching_scene = False
     # A load cannot prove which of two objects sharing a key was the original.
     # Build the index without trusting the previous session's owners: a shared
     # key becomes a visible conflict rather than a name-based silent split.
-    engine._stage_owners.clear()
-    engine._stage_conflicts.clear()
-    engine._stage_claims.clear()
-    engine._rebuild_index()
-    for obj in list(engine._stack_objects):
-        record = engine.stack_mod.stack_of(obj)
+    ENGINE.stage_owners.clear()
+    ENGINE.stage_conflicts.clear()
+    ENGINE.stage_claims.clear()
+    _rebuild_index()
+    for obj in list(ENGINE.stack_objects):
+        record = stack_mod.stack_of(obj)
         if record is None:
             continue
         for stage in record.stages:
-            if stage.state == engine.stack_mod.STATE_WAITING:
-                engine._set_state(stage, engine.stack_mod.STATE_IDLE)
+            if stage.state == stack_mod.STATE_WAITING:
+                _set_state(stage, stack_mod.STATE_IDLE)
             # A saved request id names a request from the session that just
             # ended. A response queued at load must not apply it before
             # `_verify` has asked Grasshopper again, so clear it on every stage;
             # for a frozen stage it also keeps a late answer from unparking the
             # output. Pull permits belong to that old session too: an armed Pull
             # must not fire into a stage the file saved frozen.
-            engine._set(stage, "rid", "")
+            _set(stage, "rid", "")
             # The token belongs to the helper data this file saved; a new
             # session proves nothing about it (and an old producer may not
             # have sent one), so the next apply verifies or rebuilds.
-            engine._set(stage, "applied_topology", "")
+            _set(stage, "applied_topology", "")
             if stage.geom_hash:
                 # We cannot know that GH kept the geometry: ask again in full.
                 stage.geom_hash = ""
             if not record.stack_id:
-                record.stack_id = engine.stack_mod.ensure_stack(obj).stack_id
-            if engine._stage_key_conflicted(stage.key):
+                record.stack_id = stack_mod.ensure_stack(obj).stack_id
+            if _stage_key_conflicted(stage.key):
                 # The conflict state names the claimants and blocks both the
                 # request and the answer path; do not repair or verify it.
                 continue
             # A saved file may meet a document that changed in between: ask
             # once even if the saved request id and frame still match.
-            engine._verify.add((record.stack_id, stage.key))
+            ENGINE.verify.add((record.stack_id, stage.key))
             # Plumbing lost with the file (helpers or the node group deleted
             # before the save) is rebuilt here and the stage marked unbound
             # until an answer arrives. A missing *modifier* is not
             # repaired: deleting it is how a stage is removed (§9.8).
-            modifier = engine.nodes.modifier_of(obj, stage)
+            modifier = nodes.modifier_of(obj, stage)
             if modifier is not None:
-                engine._repair_plumbing(obj, record, stage, modifier)
-    engine._rebuild_index()
+                _repair_plumbing(obj, record, stage, modifier)
+    _rebuild_index()
     # Activate only when this file has stages. A load into a stage-less file
     # must leave Blender with no Stageloom timer or per-frame handler at all.
-    if engine._ensure_active():
-        engine._mark_dirty_all()
-        engine._mark_hot()
+    if ENGINE.ensure_active():
+        _mark_dirty_all()
+        ENGINE.mark_hot()
 
 
 def _recover_stuck_guard():
@@ -292,34 +309,34 @@ def _recover_stuck_guard():
     stack dirty again, so the tick says who left it, clears it, and marks every
     stack dirty to pick up the edits missed meanwhile.
     """
-    age = engine.time.monotonic() - engine._evaluating_since if engine._evaluating_since is not None else 0.0
-    where = "%s (stage %s)" % engine._guard_owner if engine._guard_owner else "unknown"
-    engine._evaluating = False
+    age = time.monotonic() - ENGINE.evaluating_since if ENGINE.evaluating_since is not None else 0.0
+    where = "%s (stage %s)" % ENGINE.guard_owner if ENGINE.guard_owner else "unknown"
+    ENGINE.evaluating = False
     # Every depsgraph update the guard swallowed was dropped *before* it could
     # move the generation, so a memo written before the leak still looks
     # current even though the scene moved. Clearing them is what makes the
     # "mark dirty" below read the edited scene instead of replaying the stale
     # prefix (and the old rid) one more time.
-    engine._prefix_memo.clear()
-    engine._mark_dirty_all()
+    ENGINE.prefix_memo.clear()
+    _mark_dirty_all()
     line = (
         "guard watchdog: prefix guard left up by %s %.2f s ago; cleared and all stacks marked dirty"
         % (where, age)
     )
-    engine._trace.append(line)
-    engine.prefs.log("[stageloom] " + line, flush=True)
+    ENGINE.trace(line)
+    prefs.log("[stageloom] " + line, flush=True)
 
 
 def _in_background():
     """Whether this Blender has no GUI event loop (tests, headless renders)."""
-    return bool(engine.bpy.app.background)
+    return bool(bpy.app.background)
 
 
 def _all_stacks_dirty():
     """Whether every stack object in this file is already queued for a pass."""
-    engine._ensure_index()
-    names = {obj.name for obj in engine._stack_objects}
-    return bool(names) and names <= engine._dirty
+    _ensure_index()
+    names = {obj.name for obj in ENGINE.stack_objects}
+    return bool(names) and names <= ENGINE.dirty
 
 
 def _needs_drain(dirty_before):
@@ -331,7 +348,7 @@ def _needs_drain(dirty_before):
     pending update may name a stack that is not queued. Background sessions have no
     event loop delivering updates, so they always drain.
     """
-    if engine._in_background():
+    if _in_background():
         return True
     return bool(dirty_before) and not _all_stacks_dirty()
 
@@ -344,89 +361,89 @@ def _timer():
     panel state instead.
     """
     try:
-        if not engine._active:
+        if not ENGINE.active:
             # A stale tick after deactivation (or a direct test call): there is
             # no stage to evaluate, so do not touch the scene.
             return None
-        if engine._playback_sync or engine._bake_sync:
+        if ENGINE.playback_sync or ENGINE.bake_sync:
             # Play Every Frame or a native Bake is driving the stage pass
             # synchronously from frame_change_post; an asynchronous pass for
             # the live playhead must not race it. The playback/bake end hooks
             # clear their flag, so the timer resumes afterwards.
-            return engine.IDLE_INTERVAL
-        engine._ensure_index()
-        if not engine._stack_objects:
-            engine._deactivate()
+            return IDLE_INTERVAL
+        _ensure_index()
+        if not ENGINE.stack_objects:
+            ENGINE.deactivate()
             return None
-        engine.stats["passes"] += 1
-        engine._ticking = True
+        ENGINE.stats()["passes"] += 1
+        ENGINE.ticking = True
         # Before anything else: a guard already up at the start of a tick cannot
         # belong to this pass, so it is the wedge the watchdog exists for.
-        if engine._evaluating:
-            engine._recover_stuck_guard()
+        if ENGINE.evaluating:
+            _recover_stuck_guard()
         # Drain only when the pass is narrower than the queues: an all-dirty
         # pass clones every prefix anyway, and the clone sees the pending edit.
-        dirty_before = bool(engine._dirty)
-        if engine._needs_drain(dirty_before):
-            engine._drain_depsgraph()
+        dirty_before = bool(ENGINE.dirty)
+        if _needs_drain(dirty_before):
+            _drain_depsgraph()
         elif dirty_before:
-            engine._bump_epochs(None)
-        engine._handle_incoming()
-        engine._nudge_stalled_waits()
-        if engine._dirty and not dirty_before:
+            _bump_epochs(None)
+        _handle_incoming()
+        _nudge_stalled_waits()
+        if ENGINE.dirty and not dirty_before:
             # Handling a message or the stall scan can produce work after the
             # gate above. Drain before the clone this pass is now about to run.
-            if engine._needs_drain(True):
-                engine._drain_depsgraph()
+            if _needs_drain(True):
+                _drain_depsgraph()
             else:
-                engine._bump_epochs(None)
-        engine._flush_edit_mode()
+                _bump_epochs(None)
+        _flush_edit_mode()
         busy = False
-        for name in list(engine._dirty):
-            obj = engine.bpy.data.objects.get(name)
+        for name in list(ENGINE.dirty):
+            obj = bpy.data.objects.get(name)
             if obj is None:
-                engine._dirty.discard(name)
+                ENGINE.dirty.discard(name)
                 continue
             try:
-                if engine._process_object(obj):
+                if _process_object(obj):
                     busy = True
             except Exception as exc:
-                engine.bridge.state["error"] = "engine error on %s: %r" % (name, exc)
+                bridge.state["error"] = "engine error on %s: %r" % (name, exc)
                 import traceback
 
-                engine.prefs.log("[stageloom] engine error:\n%s" % traceback.format_exc(), flush=True)
+                prefs.log("[stageloom] engine error:\n%s" % traceback.format_exc(), flush=True)
                 # The pass died before it could decide anything for this
                 # object: say so in the panel, where the silence is what a user
                 # is staring at. One line per consecutive identical failure.
                 line = "engine error on %s: %r" % (name, exc)
-                if not engine._trace or engine._trace[-1] != line:
-                    engine._trace.append(line)
-            engine._dirty.discard(name)
-        if not engine._stack_objects:
+                if not ENGINE.trace_lines or ENGINE.trace_lines[-1] != line:
+                    ENGINE.trace(line)
+            ENGINE.dirty.discard(name)
+        if not ENGINE.stack_objects:
             # The pass removed the last stage: stop the timer and the per-frame
             # handlers until a load/undo/add brings one back.
-            engine._deactivate()
+            ENGINE.deactivate()
             return None
         if busy:
-            return engine.WAIT_INTERVAL
-        if engine.time.monotonic() < engine._hot_until:
-            return engine.HOT_INTERVAL
-        return engine.IDLE_INTERVAL
+            return WAIT_INTERVAL
+        if time.monotonic() < ENGINE.hot_until:
+            return HOT_INTERVAL
+        return IDLE_INTERVAL
     except Exception as exc:
         # The last-resort handler must not raise itself: Blender unregisters a
         # timer whose callback raises, and then the engine is gone for the rest
         # of the session. `prefs.log` is already print-safe; this guard also
         # covers the state write and anything a future edit adds here.
         try:
-            engine.bridge.state["error"] = "engine error: %r" % (exc,)
+            bridge.state["error"] = "engine error: %r" % (exc,)
             import traceback
 
-            engine.prefs.log("[stageloom] engine error:\n%s" % traceback.format_exc(), flush=True)
+            prefs.log("[stageloom] engine error:\n%s" % traceback.format_exc(), flush=True)
         except Exception:
             pass
-        return engine.IDLE_INTERVAL
+        return IDLE_INTERVAL
     finally:
-        engine._ticking = False
+        ENGINE.ticking = False
 
 
 def _nudge_stalled_waits():
@@ -442,22 +459,23 @@ def _nudge_stalled_waits():
     request to supersede it. The nudge expires it instead of poking the object
     forever, and otherwise leaves the object alone until its answer lands.
     """
-    now = engine.time.monotonic()
-    if now - engine._last_stall_check < 1.0:
+    now = time.monotonic()
+    if now - ENGINE.last_stall_check < 1.0:
         return
-    engine._last_stall_check = now
-    for obj in engine._all_stack_objects():
-        record = engine.stack_mod.stack_of(obj)
+    ENGINE.last_stall_check = now
+    for obj in _all_stack_objects():
+        record = stack_mod.stack_of(obj)
         for stage in record.stages:
             key = (record.stack_id, stage.key)
-            if key in engine._pull_permits:
-                if engine._pull_expired(key, now):
-                    engine._expire_pull(record, stage)
+            if ENGINE.runtime(*key).pull_permit:
+                if _pull_expired(key, now):
+                    _expire_pull(record, stage)
                 continue
-            pending = engine._pending.get(key)
+            row = ENGINE.peek_runtime(*key)
+            pending = row.pending if row is not None else {}
             if not pending:
                 continue
-            if now - min(pending.values()) > engine.SOFT_RETRY_SECONDS:
-                engine._dirty.add(obj.name)
-                engine._mark_hot()
+            if now - min(pending.values()) > SOFT_RETRY_SECONDS:
+                ENGINE.dirty.add(obj.name)
+                ENGINE.mark_hot()
 

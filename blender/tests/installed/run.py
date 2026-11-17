@@ -80,6 +80,7 @@ def main():
 
     server = importlib.import_module(MODULE + ".blender.server")
     engine = importlib.import_module(MODULE + ".blender.engine")
+    triggers = importlib.import_module(MODULE + ".blender.engine.triggers")
 
     # The default must be the extension's own user directory, not a hard-coded
     # path or the extension install directory.
@@ -154,7 +155,7 @@ def main():
 
     deadline = time.time() + 15
     while time.time() < deadline and stage.state not in ("ok", "error"):
-        engine._timer()
+        triggers._timer()
         time.sleep(0.01)
     check("stage reached ok", stage.state == "ok", stage.error or stage.state)
 

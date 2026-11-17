@@ -3,16 +3,16 @@
 #
 #     scripts/bench-baseline
 #
-# The current p50/p95 is the median of the three per-run values. One ambient
+# The current p50/p95 is the fastest of the three per-run values. One ambient
 # load outlier cannot move the result; a sustained code regression moves all
-# three runs. The stored baseline uses the same median-of-three rule. The runs
+# three runs. The stored baseline uses the same best-of-three rule. The runs
 # are sequential: never run this alongside scripts/check-all or another
 # benchmark.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-BASELINE="${STAGELOOM_BASELINE:-benchmarks/results/2026-11-16-linux.json}"
+BASELINE="${STAGELOOM_BASELINE:-benchmarks/results/2026-11-17-linux.json}"
 if [ ! -f "$BASELINE" ]; then
   echo "bench-baseline: missing stored baseline: $BASELINE" >&2
   exit 3

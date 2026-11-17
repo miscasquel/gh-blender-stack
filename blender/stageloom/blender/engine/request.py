@@ -2,10 +2,24 @@
 
 import contextlib
 import sys
+import time
+
+import bpy
+import numpy as np
 
 from ...core import CAP_BLOCKS_2
-
-engine = sys.modules[__package__]
+from ...core import attributes as attributes_mod, codec, hashing
+from .. import (
+    bridge,
+    geometry_io,
+    helpers,
+    nodes,
+    prefs,
+    props,
+    server,
+    stack as stack_mod,
+)
+from .runtime import ENGINE, SOFT_RETRY_SECONDS
 
 
 @contextlib.contextmanager
@@ -18,14 +32,14 @@ def _owned_scene(obj):
     restored. A normal single-scene session never pays for the switch (the
     context scene already is the object's scene).
     """
-    scene = engine.helpers.scene_of(obj)
-    window = getattr(engine.bpy.context, "window", None)
+    scene = helpers.scene_of(obj)
+    window = getattr(bpy.context, "window", None)
     current = getattr(window, "scene", None) if window is not None else None
     if scene is None or window is None or current == scene:
         yield scene
         return
     previous_layer = getattr(window, "view_layer", None)
-    engine._switching_scene = True
+    ENGINE.switching_scene = True
     try:
         window.scene = scene
         try:
@@ -38,7 +52,7 @@ def _owned_scene(obj):
                 except (AttributeError, TypeError, ValueError):
                     pass
     finally:
-        engine._switching_scene = False
+        ENGINE.switching_scene = False
 
 
 def _set(stage, field, value):
@@ -58,7 +72,7 @@ def _set_input_warnings(stage, notes):
     tag the UI.
     """
     text = "\n".join(note for note in (notes or []) if note)
-    engine._set(stage, "input_warnings", text)
+    _set(stage, "input_warnings", text)
 
 
 def _peer_blocks_2():
@@ -68,7 +82,7 @@ def _peer_blocks_2():
     definition to a peer that cannot read one: it splits it into single-part
     definitions and leaves a visible note instead.
     """
-    caps = engine.bridge.state.get("caps") or ()
+    caps = bridge.state.get("caps") or ()
     if not isinstance(caps, (list, tuple, set, frozenset)):
         return False
     return CAP_BLOCKS_2 in caps
@@ -89,6 +103,14 @@ def _prefix_result(result):
 
 _EMPTY_GEOMETRY_HASH = None
 
+# The collections an Edit Mode clone's private copy can belong to. Named by the
+# ID type's RNA identifier, which is what the copy reports.
+_OWNED_COLLECTIONS = {
+    "Mesh": "meshes",
+    "Curve": "curves",
+    "PointCloud": "pointclouds",
+}
+
 
 def _empty_geometry_hash():
     """The geometry hash of a generator stage: the hash of no sections.
@@ -99,7 +121,7 @@ def _empty_geometry_hash():
     """
     global _EMPTY_GEOMETRY_HASH
     if _EMPTY_GEOMETRY_HASH is None:
-        _EMPTY_GEOMETRY_HASH = engine.hashing.geometry_hash({})
+        _EMPTY_GEOMETRY_HASH = hashing.geometry_hash({})
     return _EMPTY_GEOMETRY_HASH
 
 
@@ -111,14 +133,12 @@ def _arm_pull(key):
     permit carries the same bound as a request timeout, so the stage settles
     back to frozen and keeps its last output.
     """
-    engine._pull_permits.add(key)
-    engine._pull_deadlines[key] = engine.time.monotonic() + _timeout()
+    ENGINE.arm_pull(key[0], key[1], time.monotonic() + _timeout())
 
 
 def _clear_pull(key):
     """Drop one Pull permit and its deadline together."""
-    engine._pull_permits.discard(key)
-    engine._pull_deadlines.pop(key, None)
+    ENGINE.clear_pull(key[0], key[1])
 
 
 def _pull_expired(key, now=None):
@@ -127,11 +147,12 @@ def _pull_expired(key, now=None):
     A permit planted directly (a test, or state from before deadlines existed)
     gets the same bound from the first pass that sees it.
     """
-    now = engine.time.monotonic() if now is None else now
-    deadline = engine._pull_deadlines.get(key)
+    now = time.monotonic() if now is None else now
+    record = ENGINE.runtime(key[0], key[1])
+    deadline = record.pull_deadline
     if deadline is None:
         deadline = now + _timeout()
-        engine._pull_deadlines[key] = deadline
+        record.pull_deadline = deadline
     return now >= deadline
 
 
@@ -139,19 +160,19 @@ def _expire_pull(record, stage):
     """Settle a Pull whose answer never came: frozen, with a visible error."""
     key = (record.stack_id, stage.key)
     timeout = _timeout()
-    engine._clear_pull(key)
-    engine._forget(record.stack_id, stage.key)
-    engine._set(stage, "rid", "")
+    ENGINE.clear_pull(key[0], key[1])
+    ENGINE.forget(record.stack_id, stage.key)
+    _set(stage, "rid", "")
     message = "Pull timed out after %.0f s; keeping the last output" % timeout
     # A frozen stage stays frozen and keeps the reason; the guard also clamps a
     # disabled stage to disabled and a conflicted key to conflict.
-    engine._set_state(stage, engine.stack_mod.STATE_ERROR, error=message)
+    ENGINE.set_state(stage, stack_mod.STATE_ERROR, error=message)
     line = "%s: Pull timed out after %.0f s; keeping the last output" % (
         stage.key,
         timeout,
     )
-    engine._trace.append(line)
-    engine.prefs.log("[stageloom] " + line, flush=True)
+    ENGINE.trace(line)
+    prefs.log("[stageloom] " + line, flush=True)
 
 
 def _no_send(record, stage, reason, rid=None):
@@ -165,10 +186,11 @@ def _no_send(record, stage, reason, rid=None):
         return
     key = (record.stack_id, stage.key)
     token = (reason, rid)
-    if engine._last_no_send.get(key) == token:
+    record = ENGINE.runtime(*key)
+    if record.last_no_send == token:
         return
-    engine._last_no_send[key] = token
-    engine._trace.append("%s: no send (%s)" % (stage.key, reason))
+    record.last_no_send = token
+    ENGINE.trace("%s: no send (%s)" % (stage.key, reason))
 
 
 def _process_stage(obj, record, stage):
@@ -180,101 +202,101 @@ def _process_stage(obj, record, stage):
     timeout armed a new ask. Another stage merely dirtying the shared object is
     not one of those: it must not advance this stage.
     """
-    if engine._stage_key_conflicted(stage.key):
+    if ENGINE.stage_key_conflicted(stage.key):
         # A shared key has no proven owner: sending would make one claimant
         # speak for both. The pass leaves it visibly errored until resolved.
-        engine._no_send(record, stage, "duplicate stage key")
+        _no_send(record, stage, "duplicate stage key")
         return "idle"
-    owner = engine._stage_owners.get(stage.key)
+    owner = ENGINE.stage_owners.get(stage.key)
     if owner is not None and owner is not obj:
         # A runtime duplicate that has not been split yet must not send under
         # its old key; its own pass splits it first.
-        engine._no_send(record, stage, "stage key owned by %s" % owner.name)
+        _no_send(record, stage, "stage key owned by %s" % owner.name)
         return "idle"
-    modifier = engine.nodes.modifier_of(obj, stage)
+    modifier = nodes.modifier_of(obj, stage)
     if modifier is None and not stage.modifier_uid:
         # A record saved before the uid existed, whose group is gone: the name
         # fallback still finds it, and the repair below re-links it.
-        modifier = engine.nodes.modifier_by_name(obj, stage)
+        modifier = nodes.modifier_by_name(obj, stage)
     if modifier is None:
         # `_drop_removed_stages` runs first; this is a defensive skip only.
-        engine._no_send(record, stage, "no stage")
+        _no_send(record, stage, "no stage")
         return "idle"
-    active = engine.nodes.modifier_active(modifier)
+    active = nodes.modifier_active(modifier)
     # The modifier's own toggles are the control: a stage is active
     # while visible in any context, and the record mirrors that for the state
     # row. Nothing here ever writes a modifier flag back — that was the bug
     # where a toggle in the modifiers panel was undone by the next pass.
-    engine._set(stage, "enabled", active)
+    _set(stage, "enabled", active)
     if not active:
         # A request already in flight is no longer awaited: leaving it pending
         # keeps the stall nudge dirtying the object forever for an answer the
         # disabled stage will ignore. Drop the sent bookkeeping too, so
         # re-enabling starts from the scene rather than assuming the client
         # still holds geometry for a request the stage never saw answered.
-        engine._forget(record.stack_id, stage.key)
-        engine._sent.pop((record.stack_id, stage.key), None)
-        engine._last_frame.pop((record.stack_id, stage.key), None)
-        engine._set(stage, "rid", "")
-        engine._set_state(stage, engine.stack_mod.STATE_DISABLED)
-        engine._no_send(record, stage, "disabled")
+        ENGINE.forget(record.stack_id, stage.key)
+        ENGINE.runtime(record.stack_id, stage.key).sent = None
+        ENGINE.runtime(record.stack_id, stage.key).last_frame = None
+        _set(stage, "rid", "")
+        ENGINE.set_state(stage, stack_mod.STATE_DISABLED)
+        _no_send(record, stage, "disabled")
         return "idle"
-    engine._repair_plumbing(obj, record, stage, modifier)
+    ENGINE.repair_plumbing(obj, record, stage, modifier)
     key = (record.stack_id, stage.key)
     if stage.frozen:
-        if key in engine._pull_permits and engine._pull_expired(key):
-            engine._expire_pull(record, stage)
-            engine._no_send(record, stage, "Pull timed out")
+        if ENGINE.runtime(*key).pull_permit and _pull_expired(key):
+            _expire_pull(record, stage)
+            _no_send(record, stage, "Pull timed out")
             return "idle"
-        if key not in engine._pull_permits:
+        if not ENGINE.runtime(*key).pull_permit:
             # Freeze: no requests; the helpers keep their last output. Pull
             # (engine.request_again) plants a one-shot permit above and works
             # while frozen; it is consumed here, or when its answer lands.
-            if engine._pending.get(key):
+            if ENGINE.is_pending(*key):
                 # A Pull whose permit was cleared (freeze, load, conflict) has
                 # no answer to wait for. Leaving it pending is what made the
                 # stall nudge dirty the object once a second forever.
-                engine._forget(record.stack_id, stage.key)
-                engine._set(stage, "rid", "")
-            engine._set_state(stage, engine.stack_mod.STATE_FROZEN)
-            engine._no_send(record, stage, "frozen")
+                ENGINE.forget(record.stack_id, stage.key)
+                _set(stage, "rid", "")
+            ENGINE.set_state(stage, stack_mod.STATE_FROZEN)
+            _no_send(record, stage, "frozen")
             return "idle"
 
-    connected = bool(engine.bridge.state["connected"])
+    connected = bool(bridge.state["connected"])
     if not connected:
         # No client can answer a new request. Drop any wait: it belonged to a
         # client that is gone, and a reconnect's hello resets the rest. The
         # stage keeps its last output, so there is no prefix read to pay for.
-        engine._forget(record.stack_id, stage.key)
-        engine._set_state(
+        ENGINE.forget(record.stack_id, stage.key)
+        ENGINE.set_state(
             stage,
-            engine.stack_mod.STATE_UNBOUND
+            stack_mod.STATE_UNBOUND
             if not stage.applied_out_hash
-            else engine.stack_mod.STATE_DISCONNECTED,
+            else stack_mod.STATE_DISCONNECTED,
         )
-        engine._no_send(record, stage, "disconnected")
+        _no_send(record, stage, "disconnected")
         return "idle"
 
     # While a request is young, a pass costs nothing: the prefix does not have
     # to be read to know nothing can go out before the soft retry. Without this
     # every edit during a slow solve re-evaluated the whole prefix and threw it
     # away (measured: 62 clones for 13 sends on a 51k-vertex drag).
-    pending = engine._pending_of(record.stack_id, stage.key)
+    pending = ENGINE.pending_of(record.stack_id, stage.key)
     if pending:
         sent_rid = next(iter(pending))
-        if engine.time.monotonic() - pending[sent_rid] < engine.SOFT_RETRY_SECONDS:
-            engine._no_send(record, stage, "waiting on rid %s" % sent_rid[-8:])
+        if time.monotonic() - pending[sent_rid] < SOFT_RETRY_SECONDS:
+            _no_send(record, stage, "waiting on rid %s" % sent_rid[-8:])
             return "waiting"
 
-    started = engine.time.monotonic()
-    sections, geom_hash, attributes, definitions = engine._prefix_sections(obj, record, stage)
-    engine._record_timing(record, stage, "prefix_ms", engine._timed_since(started))
-    params_json = engine.props.canonical_json(obj, stage)
-    rid = engine.hashing.request_id(stage.key, params_json, geom_hash, "m", "stack-local", stage.nonce)
+    started = time.monotonic()
+    sections, geom_hash, attributes, definitions = _prefix_sections(obj, record, stage)
+    ENGINE.record_timing(record, stage, "prefix_ms", ENGINE.timed_since(started))
+    params_json = props.canonical_json(obj, stage)
+    rid = hashing.request_id(stage.key, params_json, geom_hash, "m", "stack-local", stage.nonce)
     # A client may have connected or disconnected while the prefix evaluated.
     # The decision below must use the state at decision time, as before; only
     # the fast path above uses the state at entry.
-    connected = bool(engine.bridge.state["connected"])
+    connected = bool(bridge.state["connected"])
 
     # `stage.rid` is deliberately NOT set here. It names the request the stage is
     # waiting on — the answer it must recognise as its own — so it is written only
@@ -290,22 +312,22 @@ def _process_stage(obj, record, stage):
     if one_way:
         # No Stage Out answers this key. Drop any wait from when it was
         # two-way and deliver the prefix to its Stage In without arming one.
-        engine._forget(record.stack_id, stage.key)
+        ENGINE.forget(record.stack_id, stage.key)
 
     if not connected:
         # With Grasshopper away the stage keeps its last output. A stage no
         # document has ever answered reads unbound instead of disconnected:
         # disconnected means a client was there and left.
-        engine._no_send(record, stage, "disconnected", rid)
-        engine._set_state(
+        _no_send(record, stage, "disconnected", rid)
+        ENGINE.set_state(
             stage,
-            engine.stack_mod.STATE_UNBOUND
+            stack_mod.STATE_UNBOUND
             if not stage.applied_out_hash
-            else engine.stack_mod.STATE_DISCONNECTED,
+            else stack_mod.STATE_DISCONNECTED,
         )
         return "idle"
 
-    pending = engine._pending_of(record.stack_id, stage.key)
+    pending = ENGINE.pending_of(record.stack_id, stage.key)
     retry_note = ""
     if pending:
         # One evaluation at a time. While an answer is outstanding the stage asks
@@ -317,60 +339,61 @@ def _process_stage(obj, record, stage):
         # on is requested on the first pass after this answer lands.
         sent_rid = next(iter(pending))
         sent_at = pending[sent_rid]
-        age = engine.time.monotonic() - sent_at
-        if age <= engine._timeout():
+        age = time.monotonic() - sent_at
+        if age <= _timeout():
             # The state may move on while an answer is in flight. After
             # SOFT_RETRY_SECONDS a newer request supersedes the stale one: GH
             # coalesces solves, so the ask is not a backlog, and the answer is
             # for what the user is looking at. The same state waits: the hard
             # timeout below is its resend.
-            if rid == sent_rid or age < engine.SOFT_RETRY_SECONDS:
-                engine._no_send(record, stage, "waiting on rid %s" % sent_rid[-8:], rid)
+            if rid == sent_rid or age < SOFT_RETRY_SECONDS:
+                _no_send(record, stage, "waiting on rid %s" % sent_rid[-8:], rid)
                 return "waiting"
-            engine._forget(record.stack_id, stage.key)
-            engine._trace.append("%s: superseded %s" % (stage.key, sent_rid[-8:]))
+            ENGINE.forget(record.stack_id, stage.key)
+            ENGINE.trace("%s: superseded %s" % (stage.key, sent_rid[-8:]))
         else:
             # The answer never came. We cannot know whether Grasshopper received
             # the geometry, so the retry goes out in full — the same reasoning as
             # the unknown_ref handler. And the failure stays visible: retrying
             # silently is what made a stage stuck in this loop look healthy.
-            engine._forget(record.stack_id, stage.key)
-            engine._sent.pop(verify_key, None)
-            engine._set(stage, "geom_hash", "")
-            engine.stats["timeouts"] += 1
-            retry_note = "timed out after %.0f s; requesting the geometry again" % engine._timeout()
+            ENGINE.forget(record.stack_id, stage.key)
+            ENGINE.runtime(*verify_key).sent = None
+            _set(stage, "geom_hash", "")
+            ENGINE.stats()["timeouts"] += 1
+            retry_note = "timed out after %.0f s; requesting the geometry again" % _timeout()
 
     # Every delivered request is a solver step. A pass that was only dirtied by
     # another stage's apply sees the same request id and the same frame, and must
     # stay idle: sending there would step the solver twice per frame. A
     # verification (reconnect/load/unknown_ref) and the timeout retry are the
     # explicit permits that bypass this gate.
-    last_frame = engine._last_frame.get(verify_key)
+    last_frame = ENGINE.runtime(*verify_key).last_frame
     if (
         rid == stage.rid
         and last_frame is not None
-        and last_frame == engine.helpers.frame_of(obj)
-        and verify_key not in engine._verify
+        and last_frame == helpers.frame_of(obj)
+        and verify_key not in ENGINE.verify
         and not retry_note
     ):
         # Nothing moved, so the displayed output is still current. Settle any
         # transient state (an unfreeze or a repair leaves `idle`/`unbound`).
-        engine._set_state(stage, engine.stack_mod.STATE_OK)
-        engine._no_send(record, stage, "unchanged")
+        ENGINE.set_state(stage, stack_mod.STATE_OK)
+        _no_send(record, stage, "unchanged")
         return "idle"
 
     # Use the session truth, not the saved stage record: undo/redo restores
     # `stage.geom_hash` from its step, while the client keeps the geometry it
     # was last sent. No session entry means no client has been told anything
     # this session, so the first request must carry the geometry in full (§8.8).
-    held_geom = engine._sent[verify_key][1] if verify_key in engine._sent else ""
+    held_record = ENGINE.peek_runtime(*verify_key)
+    held_geom = held_record.sent[1] if held_record is not None and held_record.sent else ""
     mode = "full" if geom_hash != held_geom else "ref"
     header = {
         "type": "request",
         "stage": stage.key,
         "rid": rid,
         "nonce": stage.nonce,
-        "params": engine.props.cast_values(obj, stage),
+        "params": props.cast_values(obj, stage),
         "geom": {"mode": mode, "hash": geom_hash, "subd": bool(record.subd)},
         "units": "m",
         "space": "stack-local",
@@ -387,58 +410,59 @@ def _process_stage(obj, record, stage):
         header["attributes"] = attributes
     if mode == "full" and definitions:
         header["definitions"] = definitions
-    started = engine.time.monotonic()
-    frame = engine.codec.encode_frame(header, sections if mode == "full" else [])
-    engine._record_timing(record, stage, "encode_ms", engine._timed_since(started))
-    if not engine.server.SERVER.send(frame):
+    started = time.monotonic()
+    frame = codec.encode_frame(header, sections if mode == "full" else [])
+    ENGINE.record_timing(record, stage, "encode_ms", ENGINE.timed_since(started))
+    if not server.SERVER.send(frame):
         # No client socket to carry it. Recording a pending request here would
         # make the stage wait out a whole timeout for an answer nobody was asked
         # for — and the retry would be gated on that same pending entry.
-        engine.stats["undelivered"] += 1
-        engine._set_state(stage, engine.stack_mod.STATE_DISCONNECTED)
-        engine._no_send(record, stage, "undelivered", rid)
+        ENGINE.stats()["undelivered"] += 1
+        ENGINE.set_state(stage, stack_mod.STATE_DISCONNECTED)
+        _no_send(record, stage, "undelivered", rid)
         return "idle"
-    engine._verify.discard(verify_key)
+    ENGINE.verify.discard(verify_key)
     # The client has now been told this request; `_sent` is the session truth for
     # the next full/ref decision (until undo or a reconnect says otherwise).
-    engine._sent[verify_key] = (rid, geom_hash)
-    engine._last_frame[verify_key] = engine.helpers.frame_of(obj)
+    sent_record = ENGINE.runtime(*verify_key)
+    sent_record.sent = (rid, geom_hash)
+    sent_record.last_frame = helpers.frame_of(obj)
     # A Pull permit is held until the request it caused settles: a send that
     # never left (disconnected, undelivered) leaves the Pull armed for the next
     # pass, and an answer or the permit deadline releases it. A one-way stage
     # never answers, so its delivery is the end of the Pull.
     if one_way or not stage.frozen:
-        engine._clear_pull((record.stack_id, stage.key))
-    engine._trace.append(
+        ENGINE.clear_pull(record.stack_id, stage.key)
+    ENGINE.trace(
         "%s: sent %s %s" % (stage.key, mode, rid[-8:] if rid else "")
     )
     if retry_note:
-        engine.prefs.log("[stageloom] %s: %s" % (stage.key, retry_note), flush=True)
-    engine.stats["sends"] += 1
+        prefs.log("[stageloom] %s: %s" % (stage.key, retry_note), flush=True)
+    ENGINE.stats()["sends"] += 1
     # A send re-arms the "why no send" reason: the next silence is a new
     # decision, not a repeat of the pass before this one.
-    engine._last_no_send.pop((record.stack_id, stage.key), None)
+    ENGINE.runtime(record.stack_id, stage.key).last_no_send = None
 
-    now = engine.time.monotonic()
-    engine._heartbeat["sent_at"] = now
+    now = time.monotonic()
+    ENGINE.heartbeat["sent_at"] = now
     if one_way:
         # The request delivered the prefix to the stage's Stage In. Nothing will
         # answer it, so do not arm a pending wait: the stack continues to later
         # stages and the playback gate never blocks on this one.
-        engine._set(stage, "rid", rid)
-        engine._set(stage, "geom_hash", geom_hash)
-        engine._set_state(stage, engine.stack_mod.STATE_OK)
-        engine._set(stage, "error", retry_note)
+        _set(stage, "rid", rid)
+        _set(stage, "geom_hash", geom_hash)
+        ENGINE.set_state(stage, stack_mod.STATE_OK)
+        _set(stage, "error", retry_note)
         return "idle"
-    engine._pending_of(record.stack_id, stage.key)[rid] = now
-    engine._state_since[(record.stack_id, stage.key)] = now
-    engine._set(stage, "rid", rid)
-    engine._set(stage, "geom_hash", geom_hash)
+    ENGINE.pending_of(record.stack_id, stage.key)[rid] = now
+    ENGINE.runtime(record.stack_id, stage.key).state_since = now
+    _set(stage, "rid", rid)
+    _set(stage, "geom_hash", geom_hash)
     # A delivered request is the solver step: the same state and frame do not ask
     # again until the playhead or the stage's own inputs move on. An undelivered
     # send returns above and leaves the frame for the retry.
-    engine._set_state(stage, engine.stack_mod.STATE_WAITING)
-    engine._set(stage, "error", retry_note)
+    ENGINE.set_state(stage, stack_mod.STATE_WAITING)
+    _set(stage, "error", retry_note)
     return "waiting"
 
 
@@ -455,52 +479,52 @@ def _prefix_sections(obj, record, stage):
     skipped entirely and the request names the empty geometry hash. Base
     geometry edits therefore cannot move its request id.
     """
-    if engine.stack_mod.is_generator(stage):
+    if stack_mod.is_generator(stage):
         _set_input_warnings(stage, [])
         return [], _empty_geometry_hash(), [], []
 
     if obj.type == "SURFACE":
         subd = bool(record.subd)
         notes = []
-        sections, attributes = engine.geometry_io.object_to_sections(
+        sections, attributes = geometry_io.object_to_sections(
             obj, as_subd=subd, notes=notes
         )
         _set_input_warnings(stage, notes)
-        return sections, engine._sections_hash(sections, attributes), attributes, []
+        return sections, _sections_hash(sections, attributes), attributes, []
 
-    modifier = engine.nodes.modifier_of(obj, stage)
-    index = engine._modifier_index(obj, modifier)
-    revision = engine._prefix_revision(obj, record)
+    modifier = nodes.modifier_of(obj, stage)
+    index = _modifier_index(obj, modifier)
+    revision = _prefix_revision(obj, record)
     # Keyed by identity, not by name: as_pointer() is stable for the session and
     # keeps no reference, so a deleted object does not live on through this dict.
     memo_key = (obj.as_pointer(), stage.key)
     blocks_2 = _peer_blocks_2()
-    memo = engine._prefix_memo.get(memo_key)
+    memo = ENGINE.prefix_memo.get(memo_key)
     if memo is not None and memo.get("blocks_2") != blocks_2:
         # A different peer capability changes the definition namespaces this
         # read must produce; the memoized frame belongs to the other peer.
         memo = None
     if memo is not None and memo["revision"] == revision:
-        engine.stats["prefix_memo_hits"] += 1
+        ENGINE.stats()["prefix_memo_hits"] += 1
         _set_input_warnings(stage, memo.get("notes"))
         return memo["sections"], memo["geom_hash"], memo["attributes"], memo["definitions"]
 
     subd = bool(record.subd)
     batched = None
-    if engine._prefix_batching:
+    if ENGINE.prefix_batching:
         pointer = obj.as_pointer()
-        batched = engine._prefix_batch.get((pointer, stage.key))
+        batched = ENGINE.prefix_batch.get((pointer, stage.key))
         if batched is None:
-            engine._build_prefix_batch(obj, record, stage)
-            batched = engine._prefix_batch.get((pointer, stage.key))
+            _build_prefix_batch(obj, record, stage)
+            batched = ENGINE.prefix_batch.get((pointer, stage.key))
     if batched is not None:
         sections, attributes, definitions, notes = _prefix_result(batched)
     else:
         notes = []
-        sections, attributes, definitions = engine._clone_prefix(
+        sections, attributes, definitions = _clone_prefix(
             obj, index, subd, stage.key, notes=notes
         )
-        engine.stats["prefix_clones"] += 1
+        ENGINE.stats()["prefix_clones"] += 1
 
     # Blender evaluates modifier-generated attribute data (a Bevel's UVs, for
     # example) with last-bit float variation between evaluations. Hashing that
@@ -511,12 +535,12 @@ def _prefix_sections(obj, record, stage):
     # above the tolerance and takes the normal path.
     if (
         memo is not None
-        and engine._same_prefix(
+        and _same_prefix(
             memo["sections"], memo["attributes"], memo["definitions"],
             sections, attributes, definitions,
         )
     ):
-        engine.stats["prefix_memo_hits"] += 1
+        ENGINE.stats()["prefix_memo_hits"] += 1
         sections = memo["sections"]
         attributes = memo["attributes"]
         definitions = memo["definitions"]
@@ -526,8 +550,8 @@ def _prefix_sections(obj, record, stage):
         _set_input_warnings(stage, notes)
         return sections, geom_hash, attributes, definitions
 
-    geom_hash = engine._sections_hash(sections, attributes, definitions)
-    engine._prefix_memo[memo_key] = {
+    geom_hash = _sections_hash(sections, attributes, definitions)
+    ENGINE.prefix_memo[memo_key] = {
         "revision": revision,
         "blocks_2": blocks_2,
         "sections": sections,
@@ -559,27 +583,27 @@ def _same_prefix(old_sections, old_attributes, old_definitions,
     floating = {
         descriptor["section"]
         for descriptor in new_attributes
-        if engine.attributes_mod.wire_dtype(descriptor.get("type") or "FLOAT") == "f32"
+        if attributes_mod.wire_dtype(descriptor.get("type") or "FLOAT") == "f32"
     }
     for name, (dtype, values) in new_by.items():
         old_dtype, old_values = old_by[name]
         if dtype != old_dtype:
             return False
         if name in floating:
-            if not engine._close_enough(old_values, values):
+            if not _close_enough(old_values, values):
                 return False
-        elif engine.codec.section_bytes(name, dtype, values) != engine.codec.section_bytes(name, dtype, old_values):
+        elif codec.section_bytes(name, dtype, values) != codec.section_bytes(name, dtype, old_values):
             return False
     return True
 
 
 def _close_enough(old_values, new_values):
     """Element-wise float comparison with the tolerance attribute noise needs."""
-    old = engine.np.asarray(old_values, dtype=engine.np.float32).reshape(-1)
-    new = engine.np.asarray(new_values, dtype=engine.np.float32).reshape(-1)
+    old = np.asarray(old_values, dtype=np.float32).reshape(-1)
+    new = np.asarray(new_values, dtype=np.float32).reshape(-1)
     if old.shape != new.shape:
         return False
-    return bool(engine.np.allclose(old, new, rtol=1e-5, atol=1e-9, equal_nan=True))
+    return bool(np.allclose(old, new, rtol=1e-5, atol=1e-9, equal_nan=True))
 
 
 def _build_prefix_batch(obj, record, stage=None):
@@ -599,33 +623,33 @@ def _build_prefix_batch(obj, record, stage=None):
     rebuilds evaluate one prefix instead of the whole stack.
     """
     if obj.type == "SURFACE" or len(record.stages) < 2:
-        engine._prefix_batch_built = True
+        ENGINE.prefix_batch_built = True
         return
-    rebuild_one = stage is not None and engine._prefix_batch_built
+    rebuild_one = stage is not None and ENGINE.prefix_batch_built
     stages = []
     for candidate in record.stages:
         # A generator has no Stage In: there is no prefix to evaluate, and its
         # request never reads one. Cloning it would only cost a depsgraph update.
-        if engine.stack_mod.is_generator(candidate):
+        if stack_mod.is_generator(candidate):
             continue
         if rebuild_one and candidate.key != stage.key:
             continue
-        modifier = engine.nodes.modifier_of(obj, candidate)
+        modifier = nodes.modifier_of(obj, candidate)
         if modifier is None and not candidate.modifier_uid:
-            modifier = engine.nodes.modifier_by_name(obj, candidate)
-        stages.append((candidate, engine._modifier_index(obj, modifier)))
+            modifier = nodes.modifier_by_name(obj, candidate)
+        stages.append((candidate, _modifier_index(obj, modifier)))
     if not stages:
         # Every stage in this rebuild is a generator: the pass has nothing to
         # evaluate, and the empty batch stays empty.
-        engine._prefix_batch_built = True
+        ENGINE.prefix_batch_built = True
         return
-    results = engine._clone_prefixes(obj, stages, bool(record.subd))
+    results = _clone_prefixes(obj, stages, bool(record.subd))
     pointer = obj.as_pointer()
-    engine._prefix_batch.update(
+    ENGINE.prefix_batch.update(
         {(pointer, key): value for key, value in results.items()}
     )
-    engine._prefix_batch_built = True
-    engine.stats["prefix_clones"] += len(results)
+    ENGINE.prefix_batch_built = True
+    ENGINE.stats()["prefix_clones"] += len(results)
 
 
 def _clone_prefixes(obj, stages, subd):
@@ -640,15 +664,15 @@ def _clone_prefixes(obj, stages, subd):
     results = {}
     cleanup_failure = None
     primary_failed = False
-    engine._guard_owner = (obj.name, "prefix batch")
-    engine._evaluating_since = engine.time.monotonic()
-    engine._evaluating = True
+    ENGINE.guard_owner = (obj.name, "prefix batch")
+    ENGINE.evaluating_since = time.monotonic()
+    ENGINE.evaluating = True
     try:
         # The clones live in, and are evaluated by, the object's own scene.
         # Evaluating them in the active scene read its frame for a stage that
         # belongs to another one.
         with _owned_scene(obj) as scene:
-            target = scene.collection if scene is not None else engine.bpy.context.scene.collection
+            target = scene.collection if scene is not None else bpy.context.scene.collection
             try:
                 for stage, index in stages:
                     clone = obj.copy()
@@ -661,22 +685,22 @@ def _clone_prefixes(obj, stages, subd):
                     target.objects.link(clone)
                     for later in list(clone.modifiers)[index:]:
                         clone.modifiers.remove(later)
-                depsgraph = engine.bpy.context.evaluated_depsgraph_get()
+                depsgraph = bpy.context.evaluated_depsgraph_get()
                 for stage, clone, _owned_data in clones:
                     geometry = clone.evaluated_get(depsgraph).evaluated_geometry()
                     notes = []
                     sections, attributes, definitions = (
-                        engine.geometry_io.geometry_set_to_sections(
+                        geometry_io.geometry_set_to_sections(
                             geometry, as_subd=subd, notes=notes,
                             blocks_2=_peer_blocks_2(),
                         )
                     )
                     results[stage.key] = (sections, attributes, definitions, notes)
             finally:
-                primary_failed = engine.sys.exc_info()[0] is not None
+                primary_failed = sys.exc_info()[0] is not None
                 try:
                     for stage, clone, owned_data in clones:
-                        failure = engine._cleanup_prefix_clone(
+                        failure = _cleanup_prefix_clone(
                             clone, owned_data, stage.key, update_view_layer=False
                         )
                         if cleanup_failure is None:
@@ -686,24 +710,24 @@ def _clone_prefixes(obj, stages, subd):
                         # the depsgraph delivers the clone link/remove tags after the
                         # guard drops, marks every stack dirty, and the next pass builds
                         # another batch: a live-session feedback loop.
-                        engine.bpy.context.view_layer.update()
+                        bpy.context.view_layer.update()
                     except Exception as exc:
                         if cleanup_failure is None:
                             cleanup_failure = exc
                         message = "prefix cleanup failed (update view layer): %r" % (exc,)
-                        engine.bridge.state["error"] = message
-                        if not engine._trace or engine._trace[-1] != message:
-                            engine._trace.append(message)
+                        bridge.state["error"] = message
+                        if not ENGINE.trace_lines or ENGINE.trace_lines[-1] != message:
+                            ENGINE.trace(message)
                         import traceback
 
-                        engine.prefs.log(
+                        prefs.log(
                             "[stageloom] %s\n%s" % (message, traceback.format_exc()),
                             flush=True,
                         )
                 finally:
-                    engine._evaluating = False
+                    ENGINE.evaluating = False
     finally:
-        engine._evaluating = False
+        ENGINE.evaluating = False
     if cleanup_failure is not None and not primary_failed:
         raise cleanup_failure
     return results
@@ -731,23 +755,23 @@ def _clone_prefix(obj, index, subd, stage_key=None, notes=None):
     if obj.mode == "EDIT":
         owned_data = obj.data.copy()
         clone.data = owned_data
-    engine._guard_owner = (obj.name, stage_key)
-    engine._evaluating_since = engine.time.monotonic()
-    engine._evaluating = True
+    ENGINE.guard_owner = (obj.name, stage_key)
+    ENGINE.evaluating_since = time.monotonic()
+    ENGINE.evaluating = True
     sections = attributes = definitions = None
     try:
         # Link and evaluate in the object's own scene, not whichever scene is
         # active. The latter is the multi-scene frame bug: the clone was read
         # with another scene's playhead.
         with _owned_scene(obj) as scene:
-            target = scene.collection if scene is not None else engine.bpy.context.scene.collection
+            target = scene.collection if scene is not None else bpy.context.scene.collection
             try:
                 target.objects.link(clone)
                 for later in list(clone.modifiers)[index:]:
                     clone.modifiers.remove(later)
-                depsgraph = engine.bpy.context.evaluated_depsgraph_get()
+                depsgraph = bpy.context.evaluated_depsgraph_get()
                 geometry = clone.evaluated_get(depsgraph).evaluated_geometry()
-                sections, attributes, definitions = engine.geometry_io.geometry_set_to_sections(
+                sections, attributes, definitions = geometry_io.geometry_set_to_sections(
                     geometry, as_subd=subd, notes=notes, blocks_2=_peer_blocks_2()
                 )
             finally:
@@ -755,15 +779,15 @@ def _clone_prefix(obj, index, subd, stage_key=None, notes=None):
                 # cleanup failure must not mask it, and the guard reset must happen
                 # either way. The reset is the inner `finally` of the two, so it runs
                 # even if `_cleanup_prefix_clone` itself surprises us.
-                primary_failed = engine.sys.exc_info()[0] is not None
+                primary_failed = sys.exc_info()[0] is not None
                 try:
-                    cleanup_failure = engine._cleanup_prefix_clone(clone, owned_data, stage_key)
+                    cleanup_failure = _cleanup_prefix_clone(clone, owned_data, stage_key)
                 finally:
-                    engine._evaluating = False
+                    ENGINE.evaluating = False
                 if cleanup_failure is not None and not primary_failed:
                     raise cleanup_failure
     finally:
-        engine._evaluating = False
+        ENGINE.evaluating = False
     return sections, attributes, definitions
 
 
@@ -778,14 +802,14 @@ def _cleanup_prefix_clone(clone, owned_data, stage_key, update_view_layer=True):
     batch and removes every clone in the same guarded region.
     """
     steps = (
-        ("remove clone", lambda: engine.bpy.data.objects.remove(clone, do_unlink=True)),
+        ("remove clone", lambda: bpy.data.objects.remove(clone, do_unlink=True)),
         (
             "drop private data",
-            (lambda: engine._drop_owned_data(owned_data)) if owned_data is not None else None,
+            (lambda: _drop_owned_data(owned_data)) if owned_data is not None else None,
         ),
         (
             "update view layer",
-            (lambda: engine.bpy.context.view_layer.update())
+            (lambda: bpy.context.view_layer.update())
             if update_view_layer
             else None,
         ),
@@ -800,12 +824,12 @@ def _cleanup_prefix_clone(clone, owned_data, stage_key, update_view_layer=True):
             if failure is None:
                 failure = exc
             message = "prefix cleanup failed (%s): %r" % (name, exc)
-            engine.bridge.state["error"] = message
-            if not engine._trace or engine._trace[-1] != message:
-                engine._trace.append(message)
+            bridge.state["error"] = message
+            if not ENGINE.trace_lines or ENGINE.trace_lines[-1] != message:
+                ENGINE.trace(message)
             import traceback
 
-            engine.prefs.log("[stageloom] %s\n%s" % (message, traceback.format_exc()), flush=True)
+            prefs.log("[stageloom] %s\n%s" % (message, traceback.format_exc()), flush=True)
     return failure
 
 
@@ -819,7 +843,7 @@ def _drop_owned_data(id_block):
     """
     try:
         collection = getattr(
-            engine.bpy.data, engine._OWNED_COLLECTIONS.get(id_block.bl_rna.identifier, ""), None
+            bpy.data, _OWNED_COLLECTIONS.get(id_block.bl_rna.identifier, ""), None
         )
         if collection is not None:
             collection.remove(id_block)
@@ -833,12 +857,12 @@ def _sections_hash(sections, attributes=None, definitions=None):
     names are index-based, so without them a renamed attribute or definition
     would produce the same hash and the same request id, and the stage would
     silently keep the old name."""
-    raw = {name: engine.codec.section_bytes(name, dtype, values) for name, dtype, values in sections}
+    raw = {name: codec.section_bytes(name, dtype, values) for name, dtype, values in sections}
     if attributes:
-        raw["attr.descriptors"] = engine.codec.canonical_json(attributes).encode("utf-8")
+        raw["attr.descriptors"] = codec.canonical_json(attributes).encode("utf-8")
     if definitions:
-        raw["definitions"] = engine.codec.canonical_json(definitions).encode("utf-8")
-    return engine.hashing.geometry_hash(raw)
+        raw["definitions"] = codec.canonical_json(definitions).encode("utf-8")
+    return hashing.geometry_hash(raw)
 
 
 def _prefix_revision(obj, record):
@@ -852,7 +876,7 @@ def _prefix_revision(obj, record):
     list of references is silent stale geometry when it misses one. The frame
     (a frame change tags nothing) and the SubD cage flag are read directly.
     """
-    return (engine._prefix_epoch, bool(record.subd), engine.helpers.frame_of(obj))
+    return (ENGINE.prefix_epoch, bool(record.subd), helpers.frame_of(obj))
 
 
 def _bump_epochs(depsgraph=None):
@@ -865,7 +889,7 @@ def _bump_epochs(depsgraph=None):
     moved. The engine's own clone events are excluded by the guard alone.
     Returns the update count for the heartbeat.
     """
-    engine._prefix_epoch += 1
+    ENGINE.prefix_epoch += 1
     if depsgraph is None:
         return 0
     try:
@@ -881,10 +905,10 @@ def _bump_epochs(depsgraph=None):
     line = "depsgraph %d update(s): %s" % (len(updates), ", ".join(names))
     # One rolling line, not one per event: a drag would flush everything else
     # out of the ring.
-    if engine._trace and engine._trace[-1].startswith("depsgraph"):
-        engine._trace[-1] = line
+    if ENGINE.trace_lines and ENGINE.trace_lines[-1].startswith("depsgraph"):
+        ENGINE.trace_lines[-1] = line
     else:
-        engine._trace.append(line)
+        ENGINE.trace(line)
     return len(updates)
 
 
@@ -896,7 +920,7 @@ def _bump_id(id_block):
     than waited for. The generation is global, so one bump covers every stage
     downstream of the written datablock.
     """
-    engine._bump_epochs(None)
+    _bump_epochs(None)
 
 
 def _modifier_index(obj, modifier):
@@ -909,5 +933,5 @@ def _modifier_index(obj, modifier):
 
 
 def _timeout():
-    return float(engine.prefs._pref("timeout", 30.0))
+    return float(prefs._pref("timeout", 30.0))
 

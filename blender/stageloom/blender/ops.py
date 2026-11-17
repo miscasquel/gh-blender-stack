@@ -10,7 +10,8 @@ import secrets
 import bpy
 from bpy.props import IntProperty, StringProperty
 
-from . import bridge, engine, helpers, nodes, props, stack as stack_mod
+from . import bridge, helpers, nodes, props, stack as stack_mod
+from .engine import ENGINE
 from .engine import bake as bake_mod
 from .engine.dependencies import stage_dependencies, stage_dependents
 from .registration import register_classes, unregister_classes
@@ -100,7 +101,7 @@ def _stage(context, index):
     """
     obj = context.object
     record = stack_mod.stack_of(obj) if obj is not None else None
-    stages = engine._ordered_stages(obj, record) if record is not None else []
+    stages = ENGINE.ordered_stages(obj, record) if record is not None else []
     if not (0 <= index < len(stages)):
         return None, None, None
     return obj, record, stages[index]
@@ -155,7 +156,7 @@ class STAGELOOM_OT_add_stage(bpy.types.Operator):
         helpers.ensure_helpers(obj, stage.key)
         nodes.ensure_modifier(obj, stage)
         obj.update_tag()
-        engine.request_again(obj, stage)
+        ENGINE.request_again(obj, stage)
         self.report({"INFO"}, "Added stage %s" % stage.key)
         return {"FINISHED"}
 
@@ -169,7 +170,7 @@ class STAGELOOM_OT_push(EditableStageOperatorMixin, bpy.types.Operator):
     bl_options = {"REGISTER"}
 
     def execute(self, context):
-        engine.push(context.object)
+        ENGINE.push(context.object)
         return {"FINISHED"}
 
 
@@ -188,7 +189,7 @@ class STAGELOOM_OT_pull(EditableStageOperatorMixin, bpy.types.Operator):
             return {"CANCELLED"}
         # A fresh request: this is also how a frozen stage is refreshed once,
         # on demand.
-        engine.request_again(obj, stage)
+        ENGINE.request_again(obj, stage)
         self.report({"INFO"}, "Pulling %s" % stage.key)
         return {"FINISHED"}
 
@@ -211,7 +212,7 @@ class STAGELOOM_OT_resolve_duplicate_key(
         if stage is None:
             return {"CANCELLED"}
         old_key = stage.key
-        new_key = engine.resolve_duplicate_key(obj, record, stage)
+        new_key = ENGINE.resolve_duplicate_key(obj, record, stage)
         if new_key is None:
             self.report({"WARNING"}, "this stage key is not in conflict")
             return {"CANCELLED"}
@@ -234,11 +235,11 @@ class STAGELOOM_OT_freeze(EditableStageOperatorMixin, bpy.types.Operator):
             return {"CANCELLED"}
         if stage.frozen:
             stage.frozen = False
-            engine.unfreeze(obj, stage)
+            ENGINE.unfreeze(obj, stage)
             self.report({"INFO"}, "Unfroze %s" % stage.key)
         else:
             stage.frozen = True
-            engine.freeze(obj, stage)
+            ENGINE.freeze(obj, stage)
             self.report({"INFO"}, "Froze %s" % stage.key)
         return {"FINISHED"}
 
@@ -288,7 +289,7 @@ def _stage_pending(obj, stage):
     record = stack_mod.stack_of(obj)
     if record is None:
         return False
-    return bool(engine._pending.get((record.stack_id, stage.key)))
+    return bool(ENGINE.is_pending(record.stack_id, stage.key))
 
 
 def _bake_blocker(obj, stage):
@@ -376,8 +377,8 @@ def _trigger_dependents(pairs, token, frame):
                 dep_stage.key,
                 reason,
             )
-            if not engine._trace or engine._trace[-1] != line:
-                engine._trace.append(line)
+            if not ENGINE.trace_lines or ENGINE.trace_lines[-1] != line:
+                ENGINE.trace_lines.append(line)
             continue
         user_frozen = bool(dep_stage.frozen)
         ok, why = bake_mod.trigger_once(dep_obj, dep_stage)
@@ -385,14 +386,14 @@ def _trigger_dependents(pairs, token, frame):
             reason_text = why or "no answer"
             record = stack_mod.stack_of(dep_obj)
             if record is not None:
-                engine._forget(record.stack_id, dep_stage.key)
-                engine._clear_pull((record.stack_id, dep_stage.key))
+                ENGINE.forget(record.stack_id, dep_stage.key)
+                ENGINE.clear_pull(record.stack_id, dep_stage.key)
             # A user-frozen stage stays frozen with the failure visible; any
             # other dependent lands in error. Rollback below unfreezes the
             # stages this bake froze, so no dependent is left half-asked.
-            engine._set_state(
+            ENGINE.set_state(
                 dep_stage,
-                engine.stack_mod.STATE_ERROR,
+                stack_mod.STATE_ERROR,
                 error=reason_text,
             )
             line = "bake: dependent %s/%s failed at frame %s: %s" % (
@@ -401,7 +402,7 @@ def _trigger_dependents(pairs, token, frame):
                 frame,
                 reason_text,
             )
-            engine._trace.append(line)
+            ENGINE.trace_lines.append(line)
             return triggered, newly_frozen, skipped, (
                 dep_obj,
                 dep_stage,
@@ -412,7 +413,7 @@ def _trigger_dependents(pairs, token, frame):
         if not user_frozen:
             newly_frozen += 1
         triggered += 1
-        engine._trace.append(
+        ENGINE.trace_lines.append(
             "bake: triggered dependent %s/%s at frame %s%s"
             % (
                 dep_obj.name,
@@ -523,7 +524,7 @@ class STAGELOOM_OT_bake(EditableStageOperatorMixin, bpy.types.Operator):
         # it for the duration and freeze it again on success.
         if was_frozen:
             stage.frozen = False
-            engine.unfreeze(obj, stage)
+            ENGINE.unfreeze(obj, stage)
 
         # The native bake steps frames and fires frame_change_post. Arm the same
         # synchronous stage pass Play Every Frame uses; the Bake node then
@@ -531,10 +532,7 @@ class STAGELOOM_OT_bake(EditableStageOperatorMixin, bpy.types.Operator):
         # graph, do not build or inspect node groups from the per-frame apply:
         # nested Instance-on-Points chains crash Blender 5.3 if we do.
         nodes.hold_group_updates(True)
-        engine._bake_sync = True
-        engine._bake_scene = scene.as_pointer()
-        for counter in ("playback_frames", "playback_synced", "playback_failures"):
-            engine.stats[counter] = 0
+        ENGINE.begin_bake(scene)
         original = scene.frame_current
         context.view_layer.objects.active = obj
         obj.select_set(True)
@@ -546,7 +544,7 @@ class STAGELOOM_OT_bake(EditableStageOperatorMixin, bpy.types.Operator):
                 # Blender's cursor progress number updates even while the
                 # synchronous bake blocks the event loop.
                 wm.progress_begin(0, total)
-                engine._bake_progress = (wm, int(scene.frame_start), total)
+                ENGINE.set_bake_progress(wm, scene.frame_start, total)
             result = bpy.ops.object.geometry_node_bake_single(
                 session_uid=getattr(obj, "session_uid", 0),
                 modifier_name=modifier.name,
@@ -556,17 +554,15 @@ class STAGELOOM_OT_bake(EditableStageOperatorMixin, bpy.types.Operator):
             result = {"CANCELLED"}
             failure = repr(exc)
         finally:
-            engine._bake_progress = None
+            ENGINE.end_bake()
             if wm is not None:
                 wm.progress_end()
-            engine._bake_sync = False
-            engine._bake_scene = None
             nodes.hold_group_updates(False)
             try:
                 scene.frame_set(original)
             except Exception:
                 pass
-        stats = engine.stats
+        stats = ENGINE.stats()
         if failure is None and "FINISHED" not in result:
             failure = "Blender did not finish the native bake"
         if failure is None and stats["playback_failures"]:
@@ -582,7 +578,7 @@ class STAGELOOM_OT_bake(EditableStageOperatorMixin, bpy.types.Operator):
             stage.frozen = False
             if was_frozen:
                 stage.frozen = True
-                engine.freeze(obj, stage)
+                ENGINE.freeze(obj, stage)
             deleted = _delete_native_bake(context, obj, modifier, entry)
             if deleted is not None:
                 self.report(
@@ -607,7 +603,7 @@ class STAGELOOM_OT_bake(EditableStageOperatorMixin, bpy.types.Operator):
         stage.frozen = True
         stage.bake_token = token
         stage.frozen_by_bake = ""
-        engine.freeze(obj, stage)
+        ENGINE.freeze(obj, stage)
         frozen_upstream = 0
         for upstream_obj, upstream_stage in upstream:
             if upstream_stage.frozen:
@@ -631,7 +627,7 @@ class STAGELOOM_OT_bake(EditableStageOperatorMixin, bpy.types.Operator):
             if was_frozen:
                 stage.frozen = True
                 stage.frozen_by_bake = prior_marker
-                engine.freeze(obj, stage)
+                ENGINE.freeze(obj, stage)
             deleted = _delete_native_bake(context, obj, modifier, entry)
             tail = (
                 "; the partial native bake could not be deleted: %s" % deleted
@@ -803,7 +799,7 @@ class STAGELOOM_OT_clear_bake(EditableStageOperatorMixin, bpy.types.Operator):
         # only this action's own freeze markers are released below.
         if had_bake:
             stage.frozen = False
-            engine.unfreeze(obj, stage)
+            ENGINE.unfreeze(obj, stage)
         unfrozen = _unfreeze_bake_token(token)
         self.report(
             {"INFO"},
@@ -836,7 +832,7 @@ class STAGELOOM_OT_start_server(bpy.types.Operator):
     bl_description = "Start (or restart) the WebSocket server"
 
     def execute(self, context):
-        ok = engine.start_server()
+        ok = ENGINE.start_server()
         if ok:
             self.report({"INFO"}, "Stageloom server started")
             return {"FINISHED"}

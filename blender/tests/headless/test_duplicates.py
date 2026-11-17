@@ -8,6 +8,14 @@ import unittest
 import bpy
 
 from harness import isolate_data_root
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import apply as engine_apply
+from stageloom.blender.engine import lifecycle as engine_lifecycle
+from stageloom.blender.engine import messages as engine_messages
+from stageloom.blender.engine import request as engine_request
+from stageloom.blender.engine import triggers as engine_triggers
+from stageloom.blender import helpers
+from stageloom.blender import nodes
 
 PARAMS = [
     {
@@ -35,7 +43,7 @@ def enable(case):
     """A clean scene with the add-on enabled and no socket connection."""
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.preferences.addon_enable(module="stageloom")
-    from stageloom.blender import bridge, engine, helpers, nodes, props
+    from stageloom.blender import bridge, engine, props
     from stageloom.blender import stack as stack_mod
 
     # A class owns one root for all its tests; a per-test setUp returns to the
@@ -47,7 +55,7 @@ def enable(case):
         case.enterContext(root)
     # Direct passes only; no socket, no timer.
     bridge.state.update(connected=False, clients=0, listening=False)
-    engine._dirty.clear()
+    ENGINE.dirty.clear()
     return engine, helpers, nodes, props, stack_mod, bridge
 
 
@@ -114,7 +122,7 @@ class DuplicateStageTests(unittest.TestCase):
         cls.dup.name = "Original.001"
         # Simulate the copy having been the last to rebuild the shared group.
         cls.nodes.ensure_group(cls.dup, cls.stage.key)
-        cls.engine._process_object(cls.dup)
+        engine_lifecycle._process_object(cls.dup)
 
     @classmethod
     def tearDownClass(cls):
@@ -197,8 +205,8 @@ class DuplicateStageTests(unittest.TestCase):
 
     def test_03_one_object_cannot_take_the_other_group_back(self):
         dup_stage = self.dup.gh_stack.stages[0]
-        self.engine._process_object(self.obj)
-        self.engine._process_object(self.dup)
+        engine_lifecycle._process_object(self.obj)
+        engine_lifecycle._process_object(self.dup)
 
         self.assertEqual(self.stage.key, self.original_key, "the original was renamed")
         orig_group = self.nodes.modifier_of(self.obj, self.stage).node_group
@@ -219,7 +227,7 @@ class DuplicateStageTests(unittest.TestCase):
         copy = self.obj.copy()
         bpy.context.scene.collection.objects.link(copy)
         copy.name = "Original.002"
-        self.engine._on_load()
+        engine_triggers._on_load()
 
         copy_stage = copy.gh_stack.stages[0]
         self.assertEqual(copy_stage.key, self.original_key, "the load split by name")
@@ -229,16 +237,16 @@ class DuplicateStageTests(unittest.TestCase):
             self.assertIn(self.original_key, stage.error)
             self.assertIn("Original", stage.error)
             self.assertIn("Original.002", stage.error)
-        self.assertIn(self.original_key, self.engine._stage_conflicts)
-        self.assertNotIn(self.original_key, self.engine._stage_owners)
-        self.assertEqual(list(self.engine._stage_views(self.original_key)), [])
+        self.assertIn(self.original_key, ENGINE.stage_conflicts)
+        self.assertNotIn(self.original_key, ENGINE.stage_owners)
+        self.assertEqual(list(engine_lifecycle._stage_views(self.original_key)), [])
 
-        sends = self.engine.stats["sends"]
-        applies = self.engine.stats["applies"]
-        self.engine._dirty.clear()
-        self.engine._process_object(self.obj)
-        self.engine._process_object(copy)
-        self.engine._handle_response(
+        sends = ENGINE.stats()["sends"]
+        applies = ENGINE.stats()["applies"]
+        ENGINE.dirty.clear()
+        engine_lifecycle._process_object(self.obj)
+        engine_lifecycle._process_object(copy)
+        engine_messages._handle_response(
             {
                 "type": "response",
                 "stage": self.original_key,
@@ -248,14 +256,14 @@ class DuplicateStageTests(unittest.TestCase):
             },
             {},
         )
-        self.assertEqual(self.engine.stats["sends"], sends)
-        self.assertEqual(self.engine.stats["applies"], applies)
+        self.assertEqual(ENGINE.stats()["sends"], sends)
+        self.assertEqual(ENGINE.stats()["applies"], applies)
 
         bpy.data.objects.remove(copy, do_unlink=True)
-        self.engine._rebuild_index()
+        engine_lifecycle._rebuild_index()
         self.assertEqual(self.stage.state, "idle", "the survivor did not leave the conflict")
-        self.assertNotIn(self.original_key, self.engine._stage_conflicts)
-        self.assertIs(self.engine._stage_owners[self.original_key], self.obj)
+        self.assertNotIn(self.original_key, ENGINE.stage_conflicts)
+        self.assertIs(ENGINE.stage_owners[self.original_key], self.obj)
 
 
 class RuntimeDuplicateIdentityTests(unittest.TestCase):
@@ -273,7 +281,7 @@ class RuntimeDuplicateIdentityTests(unittest.TestCase):
         copy = duplicate_object(original, "AChair")
         # Both names now sort on the wrong side for the old name rule.
         original.name = "ZOriginal"
-        self.engine._process_object(copy)
+        engine_lifecycle._process_object(copy)
 
         copy_stage = copy.gh_stack.stages[0]
         self.assertEqual(stage.key, key, "the original lost its key to the rename")
@@ -283,9 +291,9 @@ class RuntimeDuplicateIdentityTests(unittest.TestCase):
             self.stack_mod.duplicate_stage_key(key, copy.name),
         )
         self.assertNotEqual(copy.gh_stack.stack_id, original.gh_stack.stack_id)
-        self.assertIs(self.engine._stage_owners[key], original)
-        self.assertIs(self.engine._stage_owners[copy_stage.key], copy)
-        self.assertNotIn(key, self.engine._stage_conflicts)
+        self.assertIs(ENGINE.stage_owners[key], original)
+        self.assertIs(ENGINE.stage_owners[copy_stage.key], copy)
+        self.assertNotIn(key, ENGINE.stage_conflicts)
 
         group = self.nodes.modifier_of(original, stage).node_group
         self.assertEqual(
@@ -303,15 +311,15 @@ class RuntimeDuplicateIdentityTests(unittest.TestCase):
         copy = duplicate_object(original, "SoloCopy")
         bpy.data.objects.remove(original, do_unlink=True)
 
-        self.engine._process_object(copy)
+        engine_lifecycle._process_object(copy)
         copy_stage = copy.gh_stack.stages[0]
         self.assertEqual(copy_stage.key, key, "the only claimant was split")
         self.assertNotIn(
             copy_stage.state,
             (self.stack_mod.STATE_ERROR, self.stack_mod.STATE_CONFLICT),
         )
-        self.assertIs(self.engine._stage_owners[key], copy)
-        self.assertNotIn(key, self.engine._stage_conflicts)
+        self.assertIs(ENGINE.stage_owners[key], copy)
+        self.assertNotIn(key, ENGINE.stage_conflicts)
 
     def test_03_a_script_copy_is_a_new_claimant(self):
         original, stage = make_stack("Scripted", "Scripted")
@@ -320,31 +328,31 @@ class RuntimeDuplicateIdentityTests(unittest.TestCase):
         bpy.context.scene.collection.objects.link(copy)
         copy.name = "Scripted Copy"
 
-        self.engine._process_object(copy)
+        engine_lifecycle._process_object(copy)
         self.assertEqual(stage.key, key)
         self.assertNotEqual(copy.gh_stack.stages[0].key, key)
-        self.assertNotIn(key, self.engine._stage_conflicts)
+        self.assertNotIn(key, ENGINE.stage_conflicts)
 
     def test_04_undo_restoring_a_shared_key_is_a_conflict(self):
         original, stage = make_stack("Undone", "Undone")
         key = stage.key
         copy = duplicate_object(original, "UndoneCopy")
-        self.engine._process_object(copy)
+        engine_lifecycle._process_object(copy)
         copy_stage = copy.gh_stack.stages[0]
         self.assertNotEqual(copy_stage.key, key)
 
         # Undo restores the pre-split record: the shared key is ambiguous, so
         # the history hook must conflict instead of splitting by name again.
         copy_stage.key = key
-        self.engine._after_history_step()
+        engine_triggers._after_history_step()
 
         self.assertEqual(stage.key, key)
         self.assertEqual(copy_stage.key, key, "undo silently split the key")
         for item in (stage, copy_stage):
             self.assertEqual(item.state, self.stack_mod.STATE_CONFLICT)
             self.assertIn(key, item.error)
-        self.assertIn(key, self.engine._stage_conflicts)
-        self.assertNotIn(key, self.engine._stage_owners)
+        self.assertIn(key, ENGINE.stage_conflicts)
+        self.assertNotIn(key, ENGINE.stage_owners)
 
 
 class StrictConflictTests(unittest.TestCase):
@@ -358,7 +366,7 @@ class StrictConflictTests(unittest.TestCase):
         )
         self.chair[self.scale] = 2.5
         self.copy = duplicate_object(self.chair, "AChair")
-        self.engine._on_load()
+        engine_triggers._on_load()
         self.copy_stage = self.copy.gh_stack.stages[0]
         self.key = self.chair_stage.key
 
@@ -374,18 +382,18 @@ class StrictConflictTests(unittest.TestCase):
             self.assertIn(self.key, stage.error)
             self.assertIn("Chair", stage.error)
             self.assertIn("AChair", stage.error)
-        self.assertEqual(self.engine._stage_claims[self.key], 2)
-        self.assertIn(self.key, self.engine._stage_conflicts)
-        self.assertNotIn(self.key, self.engine._stage_owners)
-        self.assertEqual(list(self.engine._stage_views(self.key)), [])
+        self.assertEqual(ENGINE.stage_claims[self.key], 2)
+        self.assertIn(self.key, ENGINE.stage_conflicts)
+        self.assertNotIn(self.key, ENGINE.stage_owners)
+        self.assertEqual(list(engine_lifecycle._stage_views(self.key)), [])
 
-        sends = self.engine.stats["sends"]
-        applies = self.engine.stats["applies"]
+        sends = ENGINE.stats()["sends"]
+        applies = ENGINE.stats()["applies"]
         before = (self.chair_stage.applied_out_hash, self.copy_stage.applied_out_hash)
-        self.engine._dirty.clear()
-        self.engine._process_object(self.chair)
-        self.engine._process_object(self.copy)
-        self.engine._handle_response(
+        ENGINE.dirty.clear()
+        engine_lifecycle._process_object(self.chair)
+        engine_lifecycle._process_object(self.copy)
+        engine_messages._handle_response(
             {
                 "type": "response",
                 "stage": self.key,
@@ -395,43 +403,47 @@ class StrictConflictTests(unittest.TestCase):
             },
             {},
         )
-        self.assertEqual(self.engine.stats["sends"], sends)
-        self.assertEqual(self.engine.stats["applies"], applies)
+        self.assertEqual(ENGINE.stats()["sends"], sends)
+        self.assertEqual(ENGINE.stats()["applies"], applies)
         self.assertEqual(
             (self.chair_stage.applied_out_hash, self.copy_stage.applied_out_hash),
             before,
         )
-        self.assertFalse(any(key == self.key for _stack, key in self.engine._pending))
-        self.assertFalse(any(key == self.key for _stack, key in self.engine._sent))
+        for obj in (self.chair, self.copy):
+            stack_id = obj.gh_stack.stack_id
+            self.assertFalse(ENGINE.is_pending(stack_id, self.key))
+            self.assertIsNone(
+                getattr(ENGINE.peek_runtime(stack_id, self.key), "sent", None)
+            )
 
     def test_02_a_saved_conflict_error_clears_when_the_key_becomes_unique(self):
         # A file saved while conflicted can carry the derived error after the
         # duplicate was deleted. Loading it again must not leave a unique stage
         # looking broken.
         bpy.data.objects.remove(self.copy, do_unlink=True)
-        self.engine._on_load()
+        engine_triggers._on_load()
         self.assertEqual(self.chair_stage.key, self.key)
         self.assertEqual(self.chair_stage.error, "")
         self.assertNotIn(
             self.chair_stage.state,
             (self.stack_mod.STATE_ERROR, self.stack_mod.STATE_CONFLICT),
         )
-        self.assertNotIn(self.key, self.engine._stage_conflicts)
+        self.assertNotIn(self.key, ENGINE.stage_conflicts)
 
     def test_03_conflicted_keys_never_reach_process_or_response(self):
         def unexpected(*args, **kwargs):
             raise AssertionError("a conflicted key reached the send/apply path")
 
-        real_process = self.engine._process_stage
-        real_views = self.engine._stage_views
-        real_apply = self.engine._apply
-        self.engine._process_stage = unexpected
-        self.engine._stage_views = unexpected
-        self.engine._apply = unexpected
+        real_process = engine_request._process_stage
+        real_views = engine_lifecycle._stage_views
+        real_apply = engine_apply._apply
+        engine_request._process_stage = unexpected
+        engine_lifecycle._stage_views = unexpected
+        engine_apply._apply = unexpected
         try:
-            self.engine._process_object(self.chair)
-            self.engine._process_object(self.copy)
-            self.engine._handle_response(
+            engine_lifecycle._process_object(self.chair)
+            engine_lifecycle._process_object(self.copy)
+            engine_messages._handle_response(
                 {
                     "type": "response",
                     "stage": self.key,
@@ -442,9 +454,9 @@ class StrictConflictTests(unittest.TestCase):
                 {},
             )
         finally:
-            self.engine._process_stage = real_process
-            self.engine._stage_views = real_views
-            self.engine._apply = real_apply
+            engine_request._process_stage = real_process
+            engine_lifecycle._stage_views = real_views
+            engine_apply._apply = real_apply
 
     def test_04_the_panel_operator_resolves_one_stage_per_key(self):
         old_key = self.key
@@ -465,13 +477,13 @@ class StrictConflictTests(unittest.TestCase):
             "the resolution reused the name-based split key",
         )
         self.assertEqual(self.chair_stage.key, old_key)
-        self.assertIs(self.engine._stage_owners[old_key], self.chair)
-        self.assertIs(self.engine._stage_owners[new_key], self.copy)
-        self.assertNotIn(old_key, self.engine._stage_conflicts)
-        self.assertNotIn(new_key, self.engine._stage_conflicts)
+        self.assertIs(ENGINE.stage_owners[old_key], self.chair)
+        self.assertIs(ENGINE.stage_owners[new_key], self.copy)
+        self.assertNotIn(old_key, ENGINE.stage_conflicts)
+        self.assertNotIn(new_key, ENGINE.stage_conflicts)
         self.assertEqual(self.chair_stage.error, "")
         self.assertEqual(self.copy_stage.error, "")
-        self.assertEqual(self.engine._stage_claims[old_key], 1)
+        self.assertEqual(ENGINE.stage_claims[old_key], 1)
 
         new_scale = self.stack_mod.param_prop_name(new_key, PARAMS[0]["id"])
         self.assertNotIn(self.scale, self.copy)
@@ -485,8 +497,8 @@ class StrictConflictTests(unittest.TestCase):
             self.assertEqual(self.helpers.definition_collections(self.copy, key), {})
 
         # The next pass repairs the group under the new key.
-        self.engine._dirty.clear()
-        self.engine._process_object(self.copy)
+        ENGINE.dirty.clear()
+        engine_lifecycle._process_object(self.copy)
         modifier = self.nodes.modifier_of(self.copy, self.copy_stage)
         self.assertIsNotNone(modifier.node_group)
         self.assertEqual(modifier.node_group.name, self.nodes.group_name(new_key))
@@ -508,25 +520,25 @@ class SameObjectConflictTests(unittest.TestCase):
         self.stage_b = self.obj.gh_stack.stages[-1]
         self.key = self.stage_a.key
         self.stage_b.key = self.key
-        self.engine._reindex_object(self.obj)
+        engine_lifecycle._reindex_object(self.obj)
 
     def tearDown(self):
         bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_01_same_object_claims_are_a_conflict(self):
-        self.assertEqual(self.engine._stage_claims[self.key], 2)
-        self.assertIn(self.key, self.engine._stage_conflicts)
-        self.assertNotIn(self.key, self.engine._stage_owners)
+        self.assertEqual(ENGINE.stage_claims[self.key], 2)
+        self.assertIn(self.key, ENGINE.stage_conflicts)
+        self.assertNotIn(self.key, ENGINE.stage_owners)
         for stage in (self.stage_a, self.stage_b):
             self.assertEqual(stage.state, self.stack_mod.STATE_CONFLICT)
             self.assertIn(self.key, stage.error)
             self.assertIn("2 stages", stage.error)
-        self.assertEqual(list(self.engine._stage_views(self.key)), [])
+        self.assertEqual(list(engine_lifecycle._stage_views(self.key)), [])
 
-        sends = self.engine.stats["sends"]
-        self.engine._dirty.clear()
-        self.engine._process_object(self.obj)
-        self.assertEqual(self.engine.stats["sends"], sends)
+        sends = ENGINE.stats()["sends"]
+        ENGINE.dirty.clear()
+        engine_lifecycle._process_object(self.obj)
+        self.assertEqual(ENGINE.stats()["sends"], sends)
 
     def test_02_resolving_one_stage_leaves_the_other_on_the_old_key(self):
         bpy.context.view_layer.objects.active = self.obj
@@ -537,12 +549,12 @@ class SameObjectConflictTests(unittest.TestCase):
         new_key = self.stage_a.key
         self.assertNotEqual(new_key, self.key)
         self.assertEqual(self.stage_b.key, self.key)
-        self.assertIs(self.engine._stage_owners[self.key], self.obj)
-        self.assertIs(self.engine._stage_owners[new_key], self.obj)
-        self.assertNotIn(self.key, self.engine._stage_conflicts)
-        self.assertNotIn(new_key, self.engine._stage_conflicts)
-        self.assertEqual(self.engine._stage_claims[self.key], 1)
-        self.assertEqual(self.engine._stage_claims[new_key], 1)
+        self.assertIs(ENGINE.stage_owners[self.key], self.obj)
+        self.assertIs(ENGINE.stage_owners[new_key], self.obj)
+        self.assertNotIn(self.key, ENGINE.stage_conflicts)
+        self.assertNotIn(new_key, ENGINE.stage_conflicts)
+        self.assertEqual(ENGINE.stage_claims[self.key], 1)
+        self.assertEqual(ENGINE.stage_claims[new_key], 1)
         self.assertEqual(self.stage_a.error, "")
         self.assertEqual(self.stage_b.error, "")
 
@@ -578,8 +590,8 @@ class NormalReloadTests(unittest.TestCase):
                 stage.state,
                 (self.stack_mod.STATE_ERROR, self.stack_mod.STATE_CONFLICT),
             )
-            self.assertNotIn(stage.key, self.engine._stage_conflicts)
-            self.assertIs(self.engine._stage_owners[stage.key], obj)
+            self.assertNotIn(stage.key, ENGINE.stage_conflicts)
+            self.assertIs(ENGINE.stage_owners[stage.key], obj)
 
 
 class DuplicateLifecycleTests(unittest.TestCase):
@@ -591,12 +603,12 @@ class DuplicateLifecycleTests(unittest.TestCase):
         cls.engine, cls.helpers, cls.nodes, cls.props, cls.stack_mod, cls.bridge = enable(cls)
         cls.obj, cls.stage = make_stack("DupLifeRoot", "DupLifeRoot", params=None)
         cls.dup = duplicate_object(cls.obj, "DupLifeCopy")
-        cls.engine._process_object(cls.dup)
+        engine_lifecycle._process_object(cls.dup)
         while cls.dup.gh_stack.stages[0].key == cls.stage.key:
             # The split is deterministic for a given name; a rerun of the same
             # name can collide with a previous class state. Nudge the name.
             cls.dup.name += "x"
-            cls.engine._process_object(cls.dup)
+            engine_lifecycle._process_object(cls.dup)
         cls.dup_stage = cls.dup.gh_stack.stages[0]
         # A definition and a row cloud on each side: delete/rename must address
         # every namespace, not only the three base helpers.
@@ -627,7 +639,7 @@ class DuplicateLifecycleTests(unittest.TestCase):
         dup_blocks = self._datablocks(dup_prefix)
 
         self.obj.name = "DupLifeRoot Renamed"
-        self.engine._process_object(self.obj)
+        engine_lifecycle._process_object(self.obj)
 
         self.assertIs(self.helpers.helper_for(self.obj, self.stage.key, "mesh"), helper)
         self.assertIs(self.helpers.helper_for(self.dup, self.dup_stage.key, "mesh"), dup_helper)
@@ -644,7 +656,7 @@ class DuplicateLifecycleTests(unittest.TestCase):
         original_prefix = self._prefix(self.obj, self.stage)
         group_name = self.nodes.group_name(self.dup_stage.key)
         bpy.data.objects.remove(self.dup, do_unlink=True)
-        self.engine._rebuild_index()
+        engine_lifecycle._rebuild_index()
 
         self.assertEqual(self._datablocks(prefix), set(), "the duplicate's plumbing was orphaned")
         self.assertIsNone(bpy.data.node_groups.get(group_name))

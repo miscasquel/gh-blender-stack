@@ -63,11 +63,18 @@ import baseline  # noqa: E402
 import stageloom  # noqa: E402
 from stageloom.blender import (  # noqa: E402
     bridge,
-    engine,
     geometry_io,
     nodes,
     prefs,
+    server,
     stack as stack_mod,
+)
+from stageloom.blender.engine import ENGINE  # noqa: E402
+from stageloom.blender.engine import (  # noqa: E402
+    apply as apply_mod,
+    lifecycle,
+    request as request_mod,
+    triggers,
 )
 from stageloom.core import codec, hashing  # noqa: E402
 
@@ -138,7 +145,7 @@ def stop_addon():
         stop_fake(fake)
     _FAKES.clear()
     try:
-        engine.server.SERVER.stop()
+        server.SERVER.stop()
     except Exception:
         pass
     try:
@@ -149,12 +156,9 @@ def stop_addon():
 
 def reset_scene():
     """A clean file between scenarios, with the engine's transient state gone."""
-    engine._dirty.clear()
-    engine._pending.clear()
-    engine._sent.clear()
-    engine._verify.clear()
-    engine._pull_permits.clear()
-    engine._timings.clear()
+    ENGINE.dirty.clear()
+    ENGINE.clear_runtimes()
+    ENGINE.verify.clear()
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
 
@@ -366,7 +370,7 @@ def pump(seconds, until):
     """Drive the engine timer until ``until()`` or the deadline."""
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        engine._timer()
+        triggers._timer()
         if until():
             return True
         time.sleep(0.002)
@@ -374,7 +378,7 @@ def pump(seconds, until):
 
 
 def pending_of(record, stage):
-    return engine._pending.get((record.stack_id, stage.key)) or {}
+    return ENGINE.pending_of(record.stack_id, stage.key)
 
 
 def settled(record):
@@ -397,8 +401,9 @@ def wait_for_clients(count, seconds=15.0):
 
 def request_full(obj, stage):
     """Ask for a fresh full request: a new nonce and no remembered client geometry."""
-    engine._sent.pop((stack_mod.stack_of(obj).stack_id, stage.key), None)
-    engine.request_again(obj, stage)
+    record = stack_mod.stack_of(obj)
+    ENGINE.runtime(record.stack_id, stage.key).sent = None
+    ENGINE.request_again(obj, stage)
 
 
 # ------------------------------------------------------------------ scenarios
@@ -551,11 +556,11 @@ def scenario_instances(args, report):
     record = stack_mod.stack_of(holder)
 
     def cold_prefix():
-        engine._forget_prefix(holder, stage.key)
-        engine._prefix_memo.pop((holder.as_pointer(), stage.key), None)
+        lifecycle._forget_prefix(holder, stage.key)
+        ENGINE.prefix_memo.pop((holder.as_pointer(), stage.key), None)
         modifier = nodes.modifier_of(holder, stage)
-        index = engine._modifier_index(holder, modifier)
-        return engine._clone_prefix(holder, index, bool(record.subd), stage.key)
+        index = request_mod._modifier_index(holder, modifier)
+        return request_mod._clone_prefix(holder, index, bool(record.subd), stage.key)
 
     # The prefix and repeated apply are gated; 25 samples keep one scheduler
     # outlier out of the p95 tail (the top 5% of 25 is the 24th value).
@@ -588,7 +593,7 @@ def scenario_instances(args, report):
                 payload[name] = matrices.reshape(-1)
             else:
                 payload[name] = values
-        return engine._apply(holder, stage, payload, attributes, topology=token)
+        return apply_mod._apply(holder, stage, payload, attributes, topology=token)
 
     # The first apply stores the token exactly as the message path does; the
     # repeated applies then take the same-topology path for the definition.
@@ -633,7 +638,7 @@ def scenario_roundtrip(args, report):
     record = stack_mod.stack_of(obj)
     port = free_port()
     report_path = os.path.join(DATA_ROOT, "roundtrip-report.json")
-    if not engine.start_server(port):
+    if not ENGINE.start_server(port):
         raise RuntimeError("server did not start: %s" % bridge.state.get("notice", ""))
     start_fake(stage.key, port, report_path)
     if not wait_for_clients(1, 15.0):
@@ -656,7 +661,7 @@ def scenario_roundtrip(args, report):
         if not wait_for_stages(record, 30.0):
             raise RuntimeError("round trip did not settle: %s" % stage.state)
         elapsed = (time.monotonic() - started) * 1000.0
-        timings = engine.stage_timings(record.stack_id, stage.key)
+        timings = ENGINE.stage_timings(record.stack_id, stage.key)
         full_samples.append(
             {
                 "settle_ms": elapsed,
@@ -671,12 +676,12 @@ def scenario_roundtrip(args, report):
         entry = stage.params[0]
         prop = stack_mod.param_prop_name(stage.key, entry.param_id)
         obj[prop] = float(obj.get(prop, 1.0)) + 0.1
-        engine.request_again(obj, stage)
+        ENGINE.request_again(obj, stage)
         started = time.monotonic()
         if not wait_for_stages(record, 30.0):
             raise RuntimeError("ref round trip did not settle: %s" % stage.state)
         elapsed = (time.monotonic() - started) * 1000.0
-        timings = engine.stage_timings(record.stack_id, stage.key)
+        timings = ENGINE.stage_timings(record.stack_id, stage.key)
         ref_samples.append(
             {
                 "settle_ms": elapsed,
@@ -752,7 +757,7 @@ def scenario_multistage(args, report):
     stages = [add_stage(obj, "Chain %d" % (index + 1)) for index in range(3)]
     record = stack_mod.stack_of(obj)
     port = free_port()
-    if not engine.start_server(port):
+    if not ENGINE.start_server(port):
         raise RuntimeError("server did not start: %s" % bridge.state.get("notice", ""))
     for index, stage in enumerate(stages):
         path = os.path.join(DATA_ROOT, "multistage-%d.json" % index)
@@ -772,9 +777,9 @@ def scenario_multistage(args, report):
         obj.data.vertices.foreach_set("co", arr)
         obj.update_tag()
         bpy.context.view_layer.update()
-        engine._mark_dirty_all()
+        ENGINE.mark_dirty_all()
         started = time.monotonic()
-        engine._timer()
+        triggers._timer()
         dirty_samples.append((time.monotonic() - started) * 1000.0)
         started = time.monotonic()
         if not wait_for_stages(record, 30.0):
@@ -784,12 +789,12 @@ def scenario_multistage(args, report):
     # The idle pass: nothing dirty, no request in flight, the timer still ticks.
     # It is only a few microseconds, so time a batch of 1000 ticks and divide:
     # the amortized value resolves a 5% change that a single tick cannot.
-    engine._dirty.clear()
+    ENGINE.dirty.clear()
     idle_samples = []
     for _ in range(200):
         started = time.monotonic()
         for _ in range(1000):
-            engine._timer()
+            triggers._timer()
         idle_samples.append((time.monotonic() - started) * 1000.0 / 1000.0)
 
     dirty_stats = sample_stats(dirty_samples)
@@ -801,7 +806,7 @@ def scenario_multistage(args, report):
         "settle_ms": sample_stats(settle_samples),
         "idle_pass_ms": idle_stats,
         "stage_timings": {
-            stage.key: engine.stage_timings(record.stack_id, stage.key)
+            stage.key: ENGINE.stage_timings(record.stack_id, stage.key)
             for stage in stages
         },
     }
@@ -827,7 +832,7 @@ def scenario_playback(args, report):
     record = stack_mod.stack_of(obj)
     port = free_port()
     report_path = os.path.join(DATA_ROOT, "playback-report.json")
-    if not engine.start_server(port):
+    if not ENGINE.start_server(port):
         raise RuntimeError("server did not start: %s" % bridge.state.get("notice", ""))
     # A stateful solver: each answer is a different output for the same inputs.
     start_fake(stage.key, port, report_path, "--stateful")
@@ -837,18 +842,18 @@ def scenario_playback(args, report):
     # Park the playhead before frame 1 and let the setup request settle there:
     # the connect-time answer is setup, and frame 1 must be a real step.
     bpy.context.scene.frame_set(bpy.context.scene.frame_start - 1)
-    engine._mark_dirty_all()
+    ENGINE.mark_dirty_all()
     if not wait_for_stages(record, 30.0):
         raise RuntimeError("playback setup did not settle: %s" % stage.state)
     time.sleep(0.05)
     responses_before = read_report(report_path).get("responses") or 0
-    applies_before = engine.stats["applies"]
+    applies_before = ENGINE.stats()["applies"]
 
     frames = 30
     per_frame = []
     for frame in range(1, frames + 1):
         bpy.context.scene.frame_set(frame)
-        engine._mark_dirty_all()
+        ENGINE.mark_dirty_all()
         started = time.monotonic()
         if not wait_for_stages(record, 30.0):
             raise RuntimeError("playback frame did not settle: %s" % stage.state)
@@ -857,7 +862,7 @@ def scenario_playback(args, report):
     time.sleep(0.05)
     fake_report = read_report(report_path)
     responses = (fake_report.get("responses") or 0) - responses_before
-    applies = engine.stats["applies"] - applies_before
+    applies = ENGINE.stats()["applies"] - applies_before
     row = {
         "triangles": actual,
         "frames": frames,
@@ -865,7 +870,7 @@ def scenario_playback(args, report):
         "responses": responses,
         "echoes": fake_report.get("echoes"),
         "applies": applies,
-        "stage_timings": engine.stage_timings(record.stack_id, stage.key),
+        "stage_timings": ENGINE.stage_timings(record.stack_id, stage.key),
     }
     report["playback"] = row
     print(

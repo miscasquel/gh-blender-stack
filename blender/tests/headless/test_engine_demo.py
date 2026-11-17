@@ -9,6 +9,8 @@ import unittest
 import bpy
 
 from harness import free_port, isolate_data_root, pump, start_fake, stop_fake
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import triggers as engine_triggers
 
 
 class EngineDemoTests(unittest.TestCase):
@@ -93,10 +95,10 @@ class EngineDemoTests(unittest.TestCase):
         self.assertEqual(entry.values, "Ribbon\nPanel\nGrid")
         self.assertEqual(entry.group, "Shape")
 
-        self.engine._dirty.discard(self.obj.name)
+        ENGINE.dirty.discard(self.obj.name)
         entry.value_index = "2"
         self.assertEqual(self.obj[choice_name], 2)
-        self.assertIn(self.obj.name, self.engine._dirty, "dropdown pick did not mark the object dirty")
+        self.assertIn(self.obj.name, ENGINE.dirty, "dropdown pick did not mark the object dirty")
 
     def test_02_first_response_applied(self):
         self.assertEqual(self.stage.state, "ok", self.stage.error)
@@ -162,16 +164,16 @@ class EngineDemoTests(unittest.TestCase):
         self.assertIsNotNone(modifier)
         # Muting one context keeps the stage active: render is still on.
         modifier.show_viewport = False
-        self.engine._mark_object_dirty(self.obj)
-        self.engine._timer()
+        ENGINE.mark_object_dirty(self.obj)
+        engine_triggers._timer()
         self.assertEqual(self.stage.state, "ok", self.stage.error)
         self.assertTrue(self.stage.enabled, "one muted context disabled the stage")
         self.assertFalse(modifier.show_viewport, "the engine re-enabled the toggle")
         # All three off: disabled, and the toggles stay where they were put.
         modifier.show_render = False
         modifier.show_in_editmode = False
-        self.engine._mark_object_dirty(self.obj)
-        self.engine._timer()
+        ENGINE.mark_object_dirty(self.obj)
+        engine_triggers._timer()
         self.assertEqual(self.stage.state, "disabled")
         self.assertFalse(self.stage.enabled)
         self.assertFalse(modifier.show_render)
@@ -180,7 +182,7 @@ class EngineDemoTests(unittest.TestCase):
         modifier.show_viewport = True
         modifier.show_render = True
         modifier.show_in_editmode = True
-        self.engine._mark_object_dirty(self.obj)
+        ENGINE.mark_object_dirty(self.obj)
         self.assertTrue(pump(until=lambda: self.stage.state == "ok"))
 
 

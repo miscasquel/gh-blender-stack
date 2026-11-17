@@ -4,7 +4,7 @@ import unittest
 
 import bpy
 
-from blender.stageloom.blender import helpers
+from stageloom.blender import helpers
 
 
 class RebrandMigrationTests(unittest.TestCase):

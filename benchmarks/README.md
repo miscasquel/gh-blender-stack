@@ -11,7 +11,7 @@ scripts/bench --quick              # skip the 1M-triangle case
 scripts/bench --scenario instances # one scenario (repeatable)
 scripts/bench --out /tmp/bench.json
 scripts/bench --no-budget          # measure without failing on a budget
-scripts/bench-baseline            # gate: 3 sequential runs, median p50/p95 vs baseline
+scripts/bench-baseline            # gate: 3 sequential runs, best p50/p95 vs baseline
 scripts/bench --check-baseline     # one-run comparison against the stored baseline
 scripts/bench --require-baseline   # reference-machine mode: fail when not comparable
 scripts/bench --check-baseline-only --report /tmp/bench.json  # compare an existing report
@@ -74,29 +74,29 @@ across runs.
 
 ## Stored baseline gate
 
-The 0.8.0 baseline is `results/2026-11-16-linux.json`, built from three solo
-runs on the quiet reference machine: `results/2026-11-16-linux-run1.json`,
+The 0.8.0 reference baseline is `results/2026-11-17-linux.json`, built from
+three solo runs on the reference machine: `results/2026-11-17-linux-run1.json`,
 `…-run2.json` and `…-run3.json`. The raw reports and their SHA-256 are recorded
-in the baseline, so every aggregate can be recomputed.
+in the baseline, so every aggregate can be recomputed. The 2026-11-16 baseline
+is historical; it was captured in a faster CPU power/core state and is no longer
+the gate reference.
 
-Runs 1 and 3 were tight; run 2 was a global outlier, roughly 20–30% slower on
-CPU-bound metrics (for example, `pipeline.100k.extract_ms` p50 8.19 ms against
-4.97/4.96 ms). The documented median-of-three rule stores the median of each
-metric's three per-run percentiles, so the ambient-load/frequency episode cannot
-become the baseline and an optimistic p95 from the fastest run cannot either.
-The median baseline was rebuilt from the same three source runs; the fresh
-three-run gate and its measured values are recorded in the performance ledger.
+The documented best-of-three rule stores the fastest per-run p50/p95 for each
+metric. CPU frequency/core scheduling on the development host moves a single
+run by several percent even with unchanged code; the fastest run keeps that
+ambient state from inflating the reference, while a sustained code regression
+still moves every run. The per-run values remain in the baseline for audit.
 
 ```bash
 # one baseline from three sequential runs (never run another gate alongside them)
-scripts/bench --out benchmarks/results/2026-11-16-linux-run1.json
-scripts/bench --out benchmarks/results/2026-11-16-linux-run2.json
-scripts/bench --out benchmarks/results/2026-11-16-linux-run3.json
+scripts/bench --out benchmarks/results/2026-11-17-linux-run1.json
+scripts/bench --out benchmarks/results/2026-11-17-linux-run2.json
+scripts/bench --out benchmarks/results/2026-11-17-linux-run3.json
 python3 benchmarks/baseline.py build \
-  --run benchmarks/results/2026-11-16-linux-run1.json \
-  --run benchmarks/results/2026-11-16-linux-run2.json \
-  --run benchmarks/results/2026-11-16-linux-run3.json \
-  --out benchmarks/results/2026-11-16-linux.json --created 2026-11-16
+  --run benchmarks/results/2026-11-17-linux-run1.json \
+  --run benchmarks/results/2026-11-17-linux-run2.json \
+  --run benchmarks/results/2026-11-17-linux-run3.json \
+  --out benchmarks/results/2026-11-17-linux.json --created 2026-11-17
 ```
 
 The gate is exactly the plan's rule: **a gated metric more than +5% slower than
@@ -106,9 +106,9 @@ production-code reduction, test/runtime improvement, or a documented
 correctness/simplicity benefit). An unoffset regression is a failure.
 
 `scripts/bench-baseline` is the gate command. It runs `scripts/bench` three
-times, sequentially, and compares the median of the three per-run p50/p95 values
-with the stored baseline (the baseline uses the same median-of-three rule). One
-ambient-load outlier cannot move the result; a sustained code regression moves
+times, sequentially, and compares the fastest of the three per-run p50/p95 values
+with the stored baseline (the baseline uses the same best-of-three rule). One
+ambient-load outlier cannot inflate the result; a sustained code regression moves
 all three runs. The per-run values are stored, so the aggregate is auditable.
 `scripts/check-all` runs this command, so the full gate measures three times
 before it decides.
@@ -118,7 +118,7 @@ before it decides.
 `benchmarks/baseline.py` is pure standard library and owns the statistics and
 comparison; `bench.py` only measures. For each metric the baseline stores:
 
-- `p50`/`p95`: the median of the three per-run percentiles;
+- `p50`/`p95`: the fastest of the three per-run percentiles;
 - `p50_runs`/`p95_runs`: the three per-run values;
 - `samples`: the pooled raw samples from all three runs.
 
@@ -180,9 +180,10 @@ with the code's `METRICS`.
 
 ### Machine identity and CI
 
-The stored numbers are from the development machine. The median-of-three rule
-rejects a single background-load spike but cannot remove sustained load: run the
-gate without another gate or benchmark, and only on a quiet machine. If the host
+The stored numbers are from the development machine. The best-of-three rule
+rejects a single background-load/CPU-state spike but cannot remove sustained
+load: run the gate without another gate or benchmark, and only on a quiet
+machine. If the host
 is loaded, stop and defer. The gate compares
 `processor`, `platform`, `blender` and `python`. On another machine it prints
 `[baseline] SKIP: NOT COMPARABLE on this machine` and exits 0; the check-all

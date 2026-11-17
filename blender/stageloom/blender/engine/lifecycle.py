@@ -1,8 +1,15 @@
 """Stage/stack lookup, lifecycle entry points and register hooks."""
 
-import sys
+import time
 
-engine = sys.modules[__package__]
+import bpy
+
+from .. import helpers, nodes, prefs, props, server
+from .. import stack as stack_mod
+from . import request as request_mod
+from .request import _no_send, _set, _timeout
+from .runtime import ENGINE
+from .state import _set_state
 
 
 CONFLICT_PREFIX = "duplicate stage key"
@@ -14,11 +21,11 @@ def _claims_for_key(key):
     The index names an object once per key, so iterating the record's stages is
     what turns a shared object entry into a real claim count.
     """
-    for obj in list(engine._stage_index.get(key, ())):
+    for obj in list(ENGINE.stage_index.get(key, ())):
         try:
-            record = engine.stack_mod.stack_of(obj)
+            record = stack_mod.stack_of(obj)
         except ReferenceError:
-            engine._index_dirty = True
+            ENGINE.index_dirty = True
             continue
         if record is None:
             continue
@@ -62,9 +69,9 @@ def _owner_claims_key(owner, key):
     surviving claimant keeps the key without a split.
     """
     try:
-        record = engine.stack_mod.stack_of(owner)
+        record = stack_mod.stack_of(owner)
     except ReferenceError:
-        engine._index_dirty = True
+        ENGINE.index_dirty = True
         return False
     return record is not None and any(stage.key == key for stage in record.stages)
 
@@ -105,29 +112,23 @@ def _mark_key_conflict(key):
     message = _conflict_message(key, claims)
     for obj, record, stage in claims:
         stack_id = record.stack_id
-        engine._forget(stack_id, key)
-        engine._sent.pop((stack_id, key), None)
-        engine._verify.discard((stack_id, key))
-        engine._clear_pull((stack_id, key))
-        engine._last_frame.pop((stack_id, key), None)
-        engine._last_no_send.pop((stack_id, key), None)
-        engine._state_since.pop((stack_id, key), None)
-        engine._timings.pop((stack_id, key), None)
-        engine._forget_prefix(obj, key)
-        engine._set(stage, "rid", "")
-        engine._set_state(stage, engine.stack_mod.STATE_CONFLICT, error=message)
+        ENGINE.discard_runtime(stack_id, key)
+        ENGINE.verify.discard((stack_id, key))
+        _forget_prefix(obj, key)
+        _set(stage, "rid", "")
+        _set_state(stage, stack_mod.STATE_CONFLICT, error=message)
 
 
 def _clear_conflict_error(stage):
     """Clear the derived error/state left by a conflict, if present."""
-    if stage.state != engine.stack_mod.STATE_CONFLICT and not stage.error.startswith(
+    if stage.state != stack_mod.STATE_CONFLICT and not stage.error.startswith(
         CONFLICT_PREFIX
     ):
         return False
-    engine._set(stage, "error", "")
+    _set(stage, "error", "")
     # The key is no longer conflicted when this runs; the flags decide whether
     # the stage returns to idle, frozen or disabled.
-    engine._set_state(stage, engine.stack_mod.rest_state(stage))
+    _set_state(stage, stack_mod.rest_state(stage))
     return True
 
 
@@ -137,11 +138,11 @@ def _clear_key_conflict(key):
         if not _clear_conflict_error(stage):
             continue
         if not record.stack_id:
-            record.stack_id = engine.stack_mod.ensure_stack(obj).stack_id
+            record.stack_id = stack_mod.ensure_stack(obj).stack_id
         # The stage was silent while ambiguous, and a load/undo may have changed
         # the session: ask once instead of trusting a frame or geometry hash.
-        engine._verify.add((record.stack_id, key))
-        engine._dirty.add(obj.name)
+        ENGINE.verify.add((record.stack_id, key))
+        ENGINE.dirty.add(obj.name)
 
 
 def _rebuild_index():
@@ -154,45 +155,45 @@ def _rebuild_index():
     that is a runtime duplication and the new one is split on its next pass.
     Any other shared key is a strict conflict.
     """
-    engine._stage_index.clear()
-    del engine._stack_objects[:]
-    engine._index_object_count = len(engine.bpy.data.objects)
+    ENGINE.stage_index.clear()
+    del ENGINE.stack_objects[:]
+    ENGINE.index_object_count = len(bpy.data.objects)
     claims = {}
     all_claims = []
-    for obj in engine.bpy.data.objects:
-        record = engine.stack_mod.stack_of(obj)
+    for obj in bpy.data.objects:
+        record = stack_mod.stack_of(obj)
         if record is None or not len(record.stages):
             continue
-        engine._stack_objects.append(obj)
+        ENGINE.stack_objects.append(obj)
         for stage in record.stages:
             if not stage.key:
                 continue
-            objects = engine._stage_index.setdefault(stage.key, [])
+            objects = ENGINE.stage_index.setdefault(stage.key, [])
             if not any(other is obj for other in objects):
                 objects.append(obj)
             claims[stage.key] = claims.get(stage.key, 0) + 1
             all_claims.append((obj, record, stage))
-    previous_owners = dict(engine._stage_owners)
-    old_conflicts = set(engine._stage_conflicts)
-    engine._stage_claims.clear()
-    engine._stage_claims.update(claims)
+    previous_owners = dict(ENGINE.stage_owners)
+    old_conflicts = set(ENGINE.stage_conflicts)
+    ENGINE.stage_claims.clear()
+    ENGINE.stage_claims.update(claims)
     owners = {}
     conflicts = set()
     for key, count in claims.items():
         if count == 1:
-            owners[key] = engine._stage_index[key][0]
+            owners[key] = ENGINE.stage_index[key][0]
             continue
         owner = _runtime_split_owner(key, previous_owners)
         if owner is not None:
             owners[key] = owner
         else:
             conflicts.add(key)
-    engine._stage_owners.clear()
-    engine._stage_owners.update(owners)
-    engine._stage_conflicts.clear()
-    engine._stage_conflicts.update(conflicts)
-    engine._index_dirty = False
-    engine.stats["index_rebuilds"] += 1
+    ENGINE.stage_owners.clear()
+    ENGINE.stage_owners.update(owners)
+    ENGINE.stage_conflicts.clear()
+    ENGINE.stage_conflicts.update(conflicts)
+    ENGINE.index_dirty = False
+    ENGINE.stats()["index_rebuilds"] += 1
     for key in old_conflicts - conflicts:
         _clear_key_conflict(key)
     for key in conflicts:
@@ -208,7 +209,7 @@ def _rebuild_index():
     # A deleted stack object cannot run its own cleanup: its helpers,
     # definitions and clouds outlive the record until this sweep names the
     # stack ids that still exist. Only owned plumbing is removed.
-    engine.helpers.sweep_orphans()
+    helpers.sweep_orphans()
 
 
 def _index_has_stale_object():
@@ -218,7 +219,7 @@ def _index_has_stale_object():
     (remove one stack object, add another) can leave the count unchanged while
     every entry still names a dead pointer. Reading the name is what notices it.
     """
-    for obj in engine._stack_objects:
+    for obj in ENGINE.stack_objects:
         try:
             obj.name
         except ReferenceError:
@@ -228,44 +229,44 @@ def _index_has_stale_object():
 
 def _ensure_index():
     if (
-        engine._index_dirty
-        or len(engine.bpy.data.objects) != engine._index_object_count
+        ENGINE.index_dirty
+        or len(bpy.data.objects) != ENGINE.index_object_count
         or _index_has_stale_object()
     ):
-        engine._rebuild_index()
+        _rebuild_index()
 
 
 def _refresh_key(key):
     """Recompute one key's claims, owner and conflict after an object change."""
     try:
-        engine._ensure_index()
+        _ensure_index()
     except ReferenceError:
-        engine._index_dirty = True
+        ENGINE.index_dirty = True
         return
     claims = list(_claims_for_key(key))
-    was_conflict = key in engine._stage_conflicts
+    was_conflict = key in ENGINE.stage_conflicts
     if not claims:
-        engine._stage_claims.pop(key, None)
-        engine._stage_owners.pop(key, None)
-        engine._stage_conflicts.discard(key)
-        engine._stage_index.pop(key, None)
+        ENGINE.stage_claims.pop(key, None)
+        ENGINE.stage_owners.pop(key, None)
+        ENGINE.stage_conflicts.discard(key)
+        ENGINE.stage_index.pop(key, None)
         return
-    engine._stage_claims[key] = len(claims)
+    ENGINE.stage_claims[key] = len(claims)
     if len(claims) == 1:
-        engine._stage_owners[key] = claims[0][0]
-        engine._stage_conflicts.discard(key)
+        ENGINE.stage_owners[key] = claims[0][0]
+        ENGINE.stage_conflicts.discard(key)
         if was_conflict:
             _clear_key_conflict(key)
         return
-    owner = _runtime_split_owner(key, engine._stage_owners)
+    owner = _runtime_split_owner(key, ENGINE.stage_owners)
     if owner is not None:
-        engine._stage_owners[key] = owner
-        engine._stage_conflicts.discard(key)
+        ENGINE.stage_owners[key] = owner
+        ENGINE.stage_conflicts.discard(key)
         if was_conflict:
             _clear_key_conflict(key)
         return
-    engine._stage_owners.pop(key, None)
-    engine._stage_conflicts.add(key)
+    ENGINE.stage_owners.pop(key, None)
+    ENGINE.stage_conflicts.add(key)
     _mark_key_conflict(key)
 
 
@@ -277,24 +278,24 @@ def _reindex_object(obj):
     stages on this object that a per-object index entry cannot show.
     """
     try:
-        record = engine.stack_mod.stack_of(obj)
+        record = stack_mod.stack_of(obj)
     except ReferenceError:
-        engine._index_dirty = True
+        ENGINE.index_dirty = True
         return
-    engine._ensure_index()
+    _ensure_index()
     touched = set()
-    if obj in engine._stack_objects:
-        del engine._stack_objects[engine._stack_objects.index(obj)]
-    for key in list(engine._stage_index):
-        objects = engine._stage_index[key]
+    if obj in ENGINE.stack_objects:
+        del ENGINE.stack_objects[ENGINE.stack_objects.index(obj)]
+    for key in list(ENGINE.stage_index):
+        objects = ENGINE.stage_index[key]
         if not any(other is obj for other in objects):
             continue
         touched.add(key)
         objects[:] = [other for other in objects if other is not obj]
         if not objects:
-            del engine._stage_index[key]
+            del ENGINE.stage_index[key]
     if record is not None and len(record.stages):
-        engine._stack_objects.append(obj)
+        ENGINE.stack_objects.append(obj)
         seen = set()
         for stage in record.stages:
             if not stage.key:
@@ -303,15 +304,15 @@ def _reindex_object(obj):
             if stage.key in seen:
                 continue
             seen.add(stage.key)
-            engine._stage_index.setdefault(stage.key, []).append(obj)
+            ENGINE.stage_index.setdefault(stage.key, []).append(obj)
     for key in touched:
         _refresh_key(key)
 
 
 def _stage_key_conflicted(key):
     """Whether no stage may send or apply for this key until the user resolves it."""
-    engine._ensure_index()
-    return bool(key) and key in engine._stage_conflicts
+    _ensure_index()
+    return bool(key) and key in ENGINE.stage_conflicts
 
 
 def _stage_views(key):
@@ -321,10 +322,10 @@ def _stage_views(key):
     that object's stages, so a runtime duplicate cannot receive a message before
     its next pass splits it.
     """
-    engine._ensure_index()
-    if not key or key in engine._stage_conflicts:
+    _ensure_index()
+    if not key or key in ENGINE.stage_conflicts:
         return
-    owner = engine._stage_owners.get(key)
+    owner = ENGINE.stage_owners.get(key)
     if owner is None:
         return
     for obj, record, stage in _claims_for_key(key):
@@ -334,12 +335,12 @@ def _stage_views(key):
 
 def _all_stack_objects():
     """Every object with a stage, refreshing the index if a datablock vanished."""
-    engine._ensure_index()
-    for obj in list(engine._stack_objects):
+    _ensure_index()
+    for obj in list(ENGINE.stack_objects):
         try:
-            record = engine.stack_mod.stack_of(obj)
+            record = stack_mod.stack_of(obj)
         except ReferenceError:
-            engine._index_dirty = True
+            ENGINE.index_dirty = True
             continue
         if record is not None and len(record.stages):
             yield obj
@@ -347,13 +348,13 @@ def _all_stack_objects():
 
 def _mark_dirty_all():
     """Queue every stack object for a pass."""
-    for obj in engine._all_stack_objects():
-        engine._dirty.add(obj.name)
+    for obj in _all_stack_objects():
+        ENGINE.dirty.add(obj.name)
 
 
 def _scene_stack_objects(scene):
     """Every stack object linked into one scene, for a scene-scoped trigger."""
-    for obj in engine._all_stack_objects():
+    for obj in _all_stack_objects():
         if scene is None or obj.name in scene.objects:
             yield obj
 
@@ -367,7 +368,7 @@ def _mark_dirty_scene(scene):
     for callers that have no scene (tests, a load-driven full pass).
     """
     for obj in _scene_stack_objects(scene):
-        engine._dirty.add(obj.name)
+        ENGINE.dirty.add(obj.name)
 
 
 def _forget_prefix(obj, stage_key):
@@ -379,7 +380,7 @@ def _forget_prefix(obj, stage_key):
     scene is showing.
     """
     if obj is not None:
-        engine._prefix_memo.pop((obj.as_pointer(), stage_key), None)
+        ENGINE.prefix_memo.pop((obj.as_pointer(), stage_key), None)
 
 
 def _split_stage(obj, stage, new_key=None):
@@ -396,40 +397,40 @@ def _split_stage(obj, stage, new_key=None):
     """
     old_key = stage.key
     if not new_key:
-        new_key = engine.stack_mod.duplicate_stage_key(old_key, obj.name)
-        if new_key == old_key or engine._stage_claims.get(new_key, 0):
+        new_key = stack_mod.duplicate_stage_key(old_key, obj.name)
+        if new_key == old_key or ENGINE.stage_claims.get(new_key, 0):
             new_key = None
-    while not new_key or new_key == old_key or engine._stage_claims.get(new_key, 0):
-        new_key = engine.stack_mod.new_stage_key(stage.label or old_key)
-    engine._forget_prefix(obj, old_key)
-    engine._forget_prefix(obj, new_key)
-    engine.props.move_stage_params(obj, old_key, new_key)
+    while not new_key or new_key == old_key or ENGINE.stage_claims.get(new_key, 0):
+        new_key = stack_mod.new_stage_key(stage.label or old_key)
+    _forget_prefix(obj, old_key)
+    _forget_prefix(obj, new_key)
+    props.move_stage_params(obj, old_key, new_key)
     stage.key = new_key
     for entry in stage.params:
         entry.stage_key = new_key
     # A new key has no document that has answered it yet.
-    engine._set_state(stage, engine.stack_mod.STATE_UNBOUND)
-    engine._set(stage, "rid", "")
-    engine._set(stage, "geom_hash", "")
-    engine._set(stage, "applied_out_hash", "")
-    engine._set(stage, "applied_topology", "")
-    engine._set(stage, "error", "")
-    engine._set(stage, "warnings", "")
-    engine._set(stage, "input_warnings", "")
-    engine._set(stage, "nonce", 0)
+    _set_state(stage, stack_mod.STATE_UNBOUND)
+    _set(stage, "rid", "")
+    _set(stage, "geom_hash", "")
+    _set(stage, "applied_out_hash", "")
+    _set(stage, "applied_topology", "")
+    _set(stage, "error", "")
+    _set(stage, "warnings", "")
+    _set(stage, "input_warnings", "")
+    _set(stage, "nonce", 0)
     # The duplicate is a new claimant: the original's Clear Bake must not
     # unfreeze it, and its own stale token owns no upstream stages.
-    engine._set(stage, "bake_token", "")
-    engine._set(stage, "frozen_by_bake", "")
+    _set(stage, "bake_token", "")
+    _set(stage, "frozen_by_bake", "")
     return new_key
 
 
 def _remove_stage_plumbing(obj, keys):
     """Remove this object's helpers and block definitions under ``keys``."""
     for key in keys:
-        engine.helpers.remove_helper(obj, key)
-        for index in list(engine.helpers.definition_collections(obj, key)):
-            engine.helpers.remove_definition(obj, key, index)
+        helpers.remove_helper(obj, key)
+        for index in list(helpers.definition_collections(obj, key)):
+            helpers.remove_definition(obj, key, index)
 
 
 def _split_duplicate_stages(obj, record):
@@ -443,49 +444,49 @@ def _split_duplicate_stages(obj, record):
     the last pass may have pointed it at this object's helpers.
     Returns True when something split.
     """
-    engine._ensure_index()
+    _ensure_index()
     keys = [stage.key for stage in record.stages if stage.key]
     if len(keys) != len(set(keys)):
         # Two stages on this object claim one key. `_stage_index` names the
         # object once, so refresh from the records: this is a real conflict,
         # not something to split by position.
-        engine._reindex_object(obj)
+        _reindex_object(obj)
         return False
     splits = []
     for stage in record.stages:
-        if not stage.key or not engine._stage_has_modifier(obj, stage):
+        if not stage.key or not _stage_has_modifier(obj, stage):
             continue
-        if stage.key in engine._stage_conflicts:
+        if stage.key in ENGINE.stage_conflicts:
             continue
-        owner = engine._stage_owners.get(stage.key)
+        owner = ENGINE.stage_owners.get(stage.key)
         if owner is None or owner is obj:
             continue
         if not _owner_claims_key(owner, stage.key):
             # The snapshot outlived its claimant and the object count hid the
             # change. Rebuild from the scene; the survivor owns the key now.
-            engine._reindex_object(obj)
+            _reindex_object(obj)
             return False
         splits.append((stage, owner))
     if not splits:
         return False
-    record.stack_id = engine.stack_mod.new_stack_id()
+    record.stack_id = stack_mod.new_stack_id()
     if any(
-        name.startswith(engine.stack_mod.stage_prefix(stage.key))
+        name.startswith(stack_mod.stage_prefix(stage.key))
         for stage, _owner in splits
         for name in obj.keys()
     ):
         # Only pay for (and decouple) the action when parameter paths move.
-        engine.props.detach_animation(obj)
+        props.detach_animation(obj)
     for stage, owner in splits:
         old_key = stage.key
-        engine._split_stage(obj, stage)
-        engine.nodes.ensure_group(owner, old_key)
+        _split_stage(obj, stage)
+        nodes.ensure_group(owner, old_key)
         # A reused object name can find helpers left behind by an earlier
         # incarnation of the copy; an unbound stage must start empty, not show
         # that output until Grasshopper answers.
         _remove_stage_plumbing(obj, (old_key, stage.key))
-        engine._trace.append("%s: split stage %s -> %s" % (obj.name, old_key, stage.key))
-    engine._reindex_object(obj)
+        ENGINE.trace("%s: split stage %s -> %s" % (obj.name, old_key, stage.key))
+    _reindex_object(obj)
     obj.update_tag()
     return True
 
@@ -499,9 +500,9 @@ def resolve_duplicate_key(obj, record, stage):
     group and asks as usual. Returns the new key, or None when ``stage`` is not
     part of a conflict.
     """
-    engine._ensure_index()
+    _ensure_index()
     old_key = stage.key
-    if not old_key or old_key not in engine._stage_conflicts:
+    if not old_key or old_key not in ENGINE.stage_conflicts:
         return None
     others = []
     for other, _other_record, _other_stage in _claims_for_key(old_key):
@@ -511,24 +512,24 @@ def resolve_duplicate_key(obj, record, stage):
     # The old key stays with its other claimant(s); rebuild their group before
     # this object's old helpers go away, exactly like a runtime split.
     for other in others:
-        engine.nodes.ensure_group(other, old_key)
+        nodes.ensure_group(other, old_key)
     if any(
-        name.startswith(engine.stack_mod.stage_prefix(old_key)) for name in obj.keys()
+        name.startswith(stack_mod.stage_prefix(old_key)) for name in obj.keys()
     ):
-        engine.props.detach_animation(obj)
-    new_key = engine.stack_mod.new_stage_key(stage.label or old_key)
-    while new_key == old_key or engine._stage_claims.get(new_key, 0):
-        new_key = engine.stack_mod.new_stage_key(stage.label or old_key)
-    engine._split_stage(obj, stage, new_key)
+        props.detach_animation(obj)
+    new_key = stack_mod.new_stage_key(stage.label or old_key)
+    while new_key == old_key or ENGINE.stage_claims.get(new_key, 0):
+        new_key = stack_mod.new_stage_key(stage.label or old_key)
+    _split_stage(obj, stage, new_key)
     # A reused object name can find helpers left behind by an earlier
     # incarnation; the resolved stage must start empty, not show that output.
     _remove_stage_plumbing(obj, (old_key, new_key))
-    engine._reindex_object(obj)
-    engine._trace.append(
+    _reindex_object(obj)
+    ENGINE.trace(
         "%s: resolved duplicate stage key %s -> %s" % (obj.name, old_key, new_key)
     )
     obj.update_tag()
-    engine.request_again(obj, stage)
+    request_again(obj, stage)
     return new_key
 
 
@@ -544,9 +545,9 @@ def _ordered_stages(obj, record):
     """
     positioned = []
     for record_index, stage in enumerate(record.stages):
-        modifier = engine.nodes.modifier_of(obj, stage)
+        modifier = nodes.modifier_of(obj, stage)
         if modifier is None and not stage.modifier_uid:
-            modifier = engine.nodes.modifier_by_name(obj, stage)
+            modifier = nodes.modifier_by_name(obj, stage)
         index = len(obj.modifiers)
         if modifier is not None:
             for i, candidate in enumerate(obj.modifiers):
@@ -559,24 +560,24 @@ def _ordered_stages(obj, record):
 
 
 def _process_object(obj):
-    record = engine.stack_mod.stack_of(obj)
+    record = stack_mod.stack_of(obj)
     if record is None or not record.stages:
         return False
     if not record.stack_id:
-        record.stack_id = engine.stack_mod.ensure_stack(obj).stack_id
-    busy = engine._drop_removed_stages(obj, record)
-    if engine._split_duplicate_stages(obj, record):
+        record.stack_id = stack_mod.ensure_stack(obj).stack_id
+    busy = _drop_removed_stages(obj, record)
+    if _split_duplicate_stages(obj, record):
         busy = True
-    engine._prefix_batch.clear()
-    engine._prefix_batch_built = False
-    engine._prefix_batching = True
+    ENGINE.prefix_batch.clear()
+    ENGINE.prefix_batch_built = False
+    ENGINE.prefix_batching = True
     try:
         for stage in _ordered_stages(obj, record):
-            if stage.key in engine._stage_conflicts:
+            if stage.key in ENGINE.stage_conflicts:
                 # The panel already shows the conflict; nothing may ask or
                 # apply for this key until the user resolves one claimant.
                 continue
-            outcome = engine._process_stage(obj, record, stage)
+            outcome = request_mod._process_stage(obj, record, stage)
             if outcome == "waiting":
                 # Later stages would run on a prefix that is not final yet (§9.1.5).
                 busy = True
@@ -584,10 +585,17 @@ def _process_object(obj):
             if outcome == "busy":
                 busy = True
     finally:
-        engine._prefix_batching = False
-        engine._prefix_batch.clear()
-        engine._prefix_batch_built = False
+        ENGINE.prefix_batching = False
+        ENGINE.prefix_batch.clear()
+        ENGINE.prefix_batch_built = False
     return busy
+
+
+def _stage_has_modifier(obj, stage):
+    """Whether a stage record still has its modifier (the stage is live)."""
+    return nodes.modifier_of(obj, stage) is not None or (
+        not stage.modifier_uid and nodes.modifier_by_name(obj, stage) is not None
+    )
 
 
 def _drop_removed_stages(obj, record):
@@ -601,19 +609,19 @@ def _drop_removed_stages(obj, record):
     removed = False
     for index in range(len(record.stages) - 1, -1, -1):
         stage = record.stages[index]
-        if engine.nodes.modifier_of(obj, stage) is not None:
+        if nodes.modifier_of(obj, stage) is not None:
             continue
         if (
             stage.modifier_uid
-            and engine.nodes.modifier_uid_count(obj, stage.modifier_uid) > 1
+            and nodes.modifier_uid_count(obj, stage.modifier_uid) > 1
         ):
             # The uid is shared by more than one modifier, so modifier_of()
             # refuses to guess. Keep the stage: deleting it would turn an
             # ambiguity into data loss.
-            engine._no_send(record, stage, "ambiguous modifier uid")
+            _no_send(record, stage, "ambiguous modifier uid")
             continue
         if not stage.modifier_uid:
-            candidates = engine.nodes.modifier_name_candidates(obj, stage)
+            candidates = nodes.modifier_name_candidates(obj, stage)
             if candidates:
                 # A record from before the uid existed, whose node group is
                 # gone too: the modifier is there but has nothing to match on.
@@ -621,33 +629,27 @@ def _drop_removed_stages(obj, record):
                 # it. With more than one same-name candidate there is no safe
                 # binding, so report the ambiguity instead of guessing.
                 if len(candidates) > 1:
-                    engine._set_state(
+                    _set_state(
                         stage,
-                        engine.stack_mod.STATE_ERROR,
+                        stack_mod.STATE_ERROR,
                         error="ambiguous modifier name: %d unattached modifiers match %r"
                         % (len(candidates), stage.label or stage.key),
                     )
-                    engine._no_send(record, stage, "ambiguous modifier name")
+                    _no_send(record, stage, "ambiguous modifier name")
                 continue
         key = (record.stack_id, stage.key)
-        engine._forget(record.stack_id, stage.key)
-        engine._sent.pop(key, None)
-        engine._last_frame.pop(key, None)
-        engine._state_since.pop(key, None)
-        engine._timings.pop(key, None)
-        engine._last_no_send.pop(key, None)
-        engine._clear_pull(key)
-        engine._verify.discard(key)
-        engine._forget_prefix(obj, stage.key)
-        engine.helpers.remove_helper(obj, stage.key)
-        for definition in list(engine.helpers.definition_collections(obj, stage.key)):
-            engine.helpers.remove_definition(obj, stage.key, definition)
-        engine.stack_mod.clear_stage_params(obj, stage.key)
-        engine.nodes.remove_orphan_group(stage.key)
+        ENGINE.discard_runtime(*key)
+        ENGINE.verify.discard(key)
+        _forget_prefix(obj, stage.key)
+        helpers.remove_helper(obj, stage.key)
+        for definition in list(helpers.definition_collections(obj, stage.key)):
+            helpers.remove_definition(obj, stage.key, definition)
+        stack_mod.clear_stage_params(obj, stage.key)
+        nodes.remove_orphan_group(stage.key)
         record.stages.remove(index)
         removed = True
     if removed:
-        engine._reindex_object(obj)
+        _reindex_object(obj)
         obj.update_tag()
     return removed
 
@@ -659,11 +661,11 @@ def _repair_plumbing(obj, record, stage, modifier):
     is re-applied instead of skipped over empty helpers.
     Returns True when something was rebuilt."""
     rebuilt = False
-    if engine.helpers.missing_kinds(obj, stage.key):
-        engine.helpers.ensure_helpers(obj, stage.key)
-        modifier.node_group = engine.nodes.ensure_group(obj, stage.key)
+    if helpers.missing_kinds(obj, stage.key):
+        helpers.ensure_helpers(obj, stage.key)
+        modifier.node_group = nodes.ensure_group(obj, stage.key)
         rebuilt = True
-    elif engine.nodes.bind_modifier(obj, stage, modifier):
+    elif nodes.bind_modifier(obj, stage, modifier):
         rebuilt = True
     if stage.modifier_uid != modifier.persistent_uid:
         # Adopt the uid of the modifier actually found: an old record has none,
@@ -671,24 +673,24 @@ def _repair_plumbing(obj, record, stage, modifier):
         # follows the modifier that is really there.
         stage.modifier_uid = modifier.persistent_uid
     if rebuilt:
-        engine._forget(record.stack_id, stage.key)
-        engine._set(stage, "applied_out_hash", "")
-        engine._set(stage, "applied_topology", "")
+        ENGINE.forget(record.stack_id, stage.key)
+        _set(stage, "applied_out_hash", "")
+        _set(stage, "applied_topology", "")
         # The helpers are empty again: ask for the answer even if the request
         # id and frame have not moved, or the same-frame gate treats the empty
         # display as current.
-        engine._verify.add((record.stack_id, stage.key))
-        engine._last_frame.pop((record.stack_id, stage.key), None)
-        if stage.state != engine.stack_mod.STATE_UNBOUND:
-            engine._set_state(stage, engine.stack_mod.STATE_UNBOUND)
-        engine.prefs.log("[stageloom] %s: plumbing rebuilt, marked unbound" % stage.key, flush=True)
+        ENGINE.verify.add((record.stack_id, stage.key))
+        ENGINE.runtime(record.stack_id, stage.key).last_frame = None
+        if stage.state != stack_mod.STATE_UNBOUND:
+            _set_state(stage, stack_mod.STATE_UNBOUND)
+        prefs.log("[stageloom] %s: plumbing rebuilt, marked unbound" % stage.key, flush=True)
     return rebuilt
 
 
 def start_server(port=None):
     if port is None:
-        port = int(engine.prefs._pref("port", engine.prefs.DEFAULT_PORT))
-    return engine.server.SERVER.start(port)
+        port = int(prefs._pref("port", prefs.DEFAULT_PORT))
+    return server.SERVER.start(port)
 
 
 def request_again(obj, stage=None, skip_frozen=False):
@@ -701,46 +703,50 @@ def request_again(obj, stage=None, skip_frozen=False):
     the stale datablock is a `ref` claiming Grasshopper's copy is current, which
     is how Push after a stroke on a non-active edit object recovered nothing.
     """
-    record = engine.stack_mod.stack_of(obj)
+    record = stack_mod.stack_of(obj)
     if record is None:
         return
-    engine._flush_object(obj)
+    from .triggers import _flush_object
+
+    _flush_object(obj)
     if not record.stack_id:
-        record.stack_id = engine.stack_mod.ensure_stack(obj).stack_id
+        record.stack_id = stack_mod.ensure_stack(obj).stack_id
     stages = [stage] if stage is not None else list(record.stages)
     for item in stages:
         if skip_frozen and item.frozen:
             continue
         item.nonce += 1
-        engine._forget(record.stack_id, item.key)
-        engine._forget_prefix(obj, item.key)
+        ENGINE.forget(record.stack_id, item.key)
+        _forget_prefix(obj, item.key)
         if item.frozen:
             # Pull on a frozen stage: one request, then parked again.
-            engine._arm_pull((record.stack_id, item.key))
-            engine._set_state(item, engine.stack_mod.STATE_FROZEN)
+            ENGINE.arm_pull(
+                record.stack_id, item.key, time.monotonic() + _timeout()
+            )
+            _set_state(item, stack_mod.STATE_FROZEN)
         else:
             # A disabled stage never leaves disabled; unfreeze/Pull cannot make
             # it idle behind the flag.
-            engine._set_state(item, engine.stack_mod.STATE_IDLE)
-    engine._reindex_object(obj)
+            _set_state(item, stack_mod.STATE_IDLE)
+    _reindex_object(obj)
     # A new stage (or a Pull) brings the engine back from dormancy.
-    engine._ensure_active()
-    engine._dirty.add(obj.name)
-    engine._mark_hot()
+    ENGINE.ensure_active()
+    ENGINE.dirty.add(obj.name)
+    ENGINE.mark_hot()
 
 
 def freeze(obj, stage):
     """Freeze a stage: stop requests; the helpers keep their last output. An
     answer already in flight is forgotten; Pull refreshes on demand while
     frozen."""
-    record = engine.stack_mod.stack_of(obj)
+    record = stack_mod.stack_of(obj)
     if record is None:
         return
-    engine._clear_pull((record.stack_id, stage.key))
-    engine._forget(record.stack_id, stage.key)
-    engine._set(stage, "rid", "")
-    engine._set(stage, "error", "")
-    engine._set_state(stage, engine.stack_mod.STATE_FROZEN)
+    ENGINE.clear_pull(record.stack_id, stage.key)
+    ENGINE.forget(record.stack_id, stage.key)
+    _set(stage, "rid", "")
+    _set(stage, "error", "")
+    _set_state(stage, stack_mod.STATE_FROZEN)
 
 
 def unfreeze(obj, stage):
@@ -749,29 +755,29 @@ def unfreeze(obj, stage):
     Only the frozen flag changed; a disabled or conflicted stage settles back
     to its own state instead of pretending to be idle.
     """
-    record = engine.stack_mod.stack_of(obj)
+    record = stack_mod.stack_of(obj)
     if record is not None:
-        engine._clear_pull((record.stack_id, stage.key))
-    engine._set_state(stage, engine.stack_mod.STATE_IDLE)
-    engine._ensure_active()
-    engine._dirty.add(obj.name)
-    engine._mark_hot()
+        ENGINE.clear_pull(record.stack_id, stage.key)
+    _set_state(stage, stack_mod.STATE_IDLE)
+    ENGINE.ensure_active()
+    ENGINE.dirty.add(obj.name)
+    ENGINE.mark_hot()
 
 
 def push(obj=None):
     """Force a fresh request for every live stage of a stack (increments the
     nonce). Frozen stages are parked and skipped entirely."""
-    obj = obj or engine.bpy.context.object
+    obj = obj or bpy.context.object
     if obj is None:
         return
-    record = engine.stack_mod.stack_of(obj)
+    record = stack_mod.stack_of(obj)
     if record is None:
         return
-    engine.request_again(obj, skip_frozen=True)
+    request_again(obj, skip_frozen=True)
 
 
 def _mark_object_dirty(obj):
-    engine._ensure_active()
-    engine._dirty.add(obj.name)
-    engine._mark_hot()
+    ENGINE.ensure_active()
+    ENGINE.dirty.add(obj.name)
+    ENGINE.mark_hot()
 

@@ -5,7 +5,7 @@ Run with:
     scripts/test-blender
 
 The memo is only allowed to answer while *nothing* has been tagged since its
-sections were read (`engine._prefix_revision` holds the depsgraph generation).
+sections were read (`engine_request._prefix_revision` holds the depsgraph generation).
 This file pins the inputs that are easiest to believe "Blender wouldn't tag
 that", because each one cost a release:
 
@@ -37,6 +37,9 @@ from harness import (
     start_fake,
     stop_fake,
 )
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import apply as engine_apply
+from stageloom.blender.engine import request as engine_request
 
 
 def gn_shift_group(name="MemoShift", shift=0.0, min_value=-20.0, max_value=20.0):
@@ -183,12 +186,11 @@ class ModifierInputMemoTests(unittest.TestCase):
         self.assertAlmostEqual(report.get("received_first", [None])[0], 9.0, places=2)
 
     def test_03_the_revision_sees_the_input(self):
-        import stageloom.blender.engine as engine
 
         record = bpy.context.object.gh_stack
-        first = engine._prefix_revision(self.obj, record)
+        first = engine_request._prefix_revision(self.obj, record)
         set_gn_input(self.gn, -10.0, self.obj)
-        second = engine._prefix_revision(self.obj, record)
+        second = engine_request._prefix_revision(self.obj, record)
         self.assertIsNotNone(first)
         self.assertNotEqual(
             first,
@@ -197,7 +199,7 @@ class ModifierInputMemoTests(unittest.TestCase):
         )
         set_gn_input(self.gn, 10.0, self.obj)
         self.assertNotEqual(
-            engine._prefix_revision(self.obj, record),
+            engine_request._prefix_revision(self.obj, record),
             second,
             "moving the input again did not move the revision: a generation only grows",
         )
@@ -349,9 +351,8 @@ class ReferencedObjectTests(unittest.TestCase):
         finally:
             bpy.app.handlers.depsgraph_update_post.remove(capture)
         if seen:
-            import stageloom.blender.engine as engine
 
-            engine._bump_epochs(seen[-1])
+            engine_request._bump_epochs(seen[-1])
 
     def test_01_a_referenced_object_move_reaches_grasshopper(self):
         self.assertEqual(self.stage.state, "ok", self.stage.error)
@@ -382,16 +383,15 @@ class ReferencedObjectTests(unittest.TestCase):
         self.assertGreaterEqual(report_of(self.report).get("full", 0), 2)
 
     def test_02_the_generation_is_consulted(self):
-        import stageloom.blender.engine as engine
 
         record = self.obj.gh_stack
-        before = engine._prefix_revision(self.obj, record)
+        before = engine_request._prefix_revision(self.obj, record)
         # Any depsgraph update retires every memo: the generation moves and the
         # revision with it, with no list of "what this prefix reads" to keep
         # correct. Blender tags the object that moved; the engine bumps once for
         # the whole graph.
-        engine._bump_epochs(None)
-        self.assertNotEqual(before, engine._prefix_revision(self.obj, record))
+        engine_request._bump_epochs(None)
+        self.assertNotEqual(before, engine_request._prefix_revision(self.obj, record))
 
 
 class UpstreamOutputTests(unittest.TestCase):
@@ -430,10 +430,9 @@ class UpstreamOutputTests(unittest.TestCase):
 
     def test_an_instance_only_apply_moves_the_downstream_prefix(self):
         import numpy as np
-        import stageloom.blender.engine as engine
 
         record = self.obj.gh_stack
-        before, before_hash, _attributes, _definitions = engine._prefix_sections(
+        before, before_hash, _attributes, _definitions = engine_request._prefix_sections(
             self.obj, record, self.stage_b
         )
 
@@ -441,7 +440,7 @@ class UpstreamOutputTests(unittest.TestCase):
         matrix[0, 3] = 10.0
         # An instance-only frame: no idef geometry, so only the row cloud (and
         # the definition wiring) changes.
-        engine._apply(
+        engine_apply._apply(
             self.obj,
             self.stage_a,
             {
@@ -450,7 +449,7 @@ class UpstreamOutputTests(unittest.TestCase):
             },
         )
 
-        after, after_hash, _attributes, _definitions = engine._prefix_sections(
+        after, after_hash, _attributes, _definitions = engine_request._prefix_sections(
             self.obj, record, self.stage_b
         )
 
@@ -479,13 +478,12 @@ class UpstreamOutputTests(unittest.TestCase):
         )
 
     def test_the_engine_write_moves_the_downstream_revision(self):
-        import stageloom.blender.engine as engine
 
         record = self.obj.gh_stack
-        before = engine._prefix_revision(self.obj, record)
+        before = engine_request._prefix_revision(self.obj, record)
         # What _apply does to a helper: the write, and the stamp that stands in
         # for the tag the depsgraph has not produced yet.
-        engine._apply(
+        engine_apply._apply(
             self.obj,
             self.stage_a,
             {
@@ -496,7 +494,7 @@ class UpstreamOutputTests(unittest.TestCase):
         )
         self.assertNotEqual(
             before,
-            engine._prefix_revision(self.obj, record),
+            engine_request._prefix_revision(self.obj, record),
             "the downstream stage did not see the upstream write",
         )
 
@@ -517,21 +515,19 @@ class WaitingAgeTests(unittest.TestCase):
         bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_idle_stages_report_no_wait(self):
-        import stageloom.blender.engine as engine
 
         bpy.ops.mesh.primitive_cube_add(size=2.0)
         bpy.ops.stageloom.add_stage(label="Age")
         stage = bpy.context.object.gh_stack.stages[0]
         record = bpy.context.object.gh_stack
-        self.assertEqual(engine.waiting_seconds(record.stack_id, stage.key), 0.0)
+        self.assertEqual(ENGINE.waiting_seconds(record.stack_id, stage.key), 0.0)
         self.assertEqual(
-            engine.waiting_seconds("no-such-stack", "no-such-stage"),
+            ENGINE.waiting_seconds("no-such-stack", "no-such-stage"),
             0.0,
             "an unknown stage must not look like a wait",
         )
 
     def test_a_stamp_ages(self):
-        import stageloom.blender.engine as engine
 
         bpy.ops.mesh.primitive_cube_add(size=2.0)
         bpy.ops.stageloom.add_stage(label="AgeB")
@@ -539,16 +535,16 @@ class WaitingAgeTests(unittest.TestCase):
         record = bpy.context.object.gh_stack
         key = (record.stack_id, stage.key)
         # A wait is an in-flight request; only then does the stamp mean age.
-        engine._pending[key] = {"rid": "aging"}
-        engine._state_since[key] = time.monotonic() - 4.0
-        self.assertGreaterEqual(engine.waiting_seconds(*key), 3.9)
+        ENGINE.runtime(*key).pending = {"rid": "aging"}
+        ENGINE.runtime(*key).state_since = time.monotonic() - 4.0
+        self.assertGreaterEqual(ENGINE.waiting_seconds(*key), 3.9)
         # A stamp with no request behind it must not age a settled stage.
-        engine._pending.pop(key, None)
-        self.assertEqual(engine.waiting_seconds(*key), 0.0)
+        ENGINE.runtime(*key).pending.clear()
+        self.assertEqual(ENGINE.waiting_seconds(*key), 0.0)
         # A new registration throws the stamps away: a stamp from a previous
         # session would age a stage that is not waiting at all.
-        engine._state_since.clear()
-        self.assertEqual(engine.waiting_seconds(*key), 0.0)
+        ENGINE.clear_runtimes()
+        self.assertEqual(ENGINE.waiting_seconds(*key), 0.0)
 
 
 if __name__ == "__main__":

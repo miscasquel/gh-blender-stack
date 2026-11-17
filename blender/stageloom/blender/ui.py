@@ -9,7 +9,8 @@ themselves, and the standard property decorators.
 
 import bpy
 
-from . import bridge, engine, ops, prefs, props, server as server_mod, stack as stack_mod
+from . import bridge, ops, prefs, props, server as server_mod, stack as stack_mod
+from .engine import ENGINE
 from .registration import safe_unregister
 
 # IMPORT_EXPORT (the two-way glyph) landed after Blender 5.2. Keep the N-panel
@@ -117,7 +118,7 @@ class STAGELOOM_PT_panel(bpy.types.Panel):
             row.use_property_split = True
             row.prop(record, "subd", text="Base is a SubD cage")
 
-        for index, stage in enumerate(engine._ordered_stages(obj, record)):
+        for index, stage in enumerate(ENGINE.ordered_stages(obj, record)):
             try:
                 self.draw_stage(layout, obj, record, stage, index)
             except Exception as exc:
@@ -173,7 +174,7 @@ class STAGELOOM_PT_panel(bpy.types.Panel):
         row = box.row()
         row.label(text="Key")
         row.label(text=stage.key)
-        if engine._stage_key_conflicted(stage.key):
+        if ENGINE.stage_key_conflicted(stage.key):
             row = box.row()
             row.operator(
                 "stageloom.resolve_duplicate_key",
@@ -256,7 +257,7 @@ class STAGELOOM_PT_diagnostics(bpy.types.Panel):
         # Trigger, send and apply ages: the difference between "the engine never
         # heard Blender" and "the engine heard it and stayed quiet". A frozen
         # trigger age with the scene being edited is the tell for a mute.
-        health = engine.trigger_health()
+        health = ENGINE.trigger_health()
         layout.label(
             text="trigger %s · sent %s · applied %s"
             % (
@@ -270,9 +271,9 @@ class STAGELOOM_PT_diagnostics(bpy.types.Panel):
         layout.label(
             text="clones %d · applies %d · sends %d"
             % (
-                engine.stats["prefix_clones"],
-                engine.stats["applies"],
-                engine.stats["sends"],
+                ENGINE.stats()["prefix_clones"],
+                ENGINE.stats()["applies"],
+                ENGINE.stats()["sends"],
             )
         )
         if state.get("error"):
@@ -283,18 +284,18 @@ class STAGELOOM_PT_diagnostics(bpy.types.Panel):
         if record is None or not record.stages:
             layout.label(text="no stage on this object")
             return
-        for stage in engine._ordered_stages(obj, record):
+        for stage in ENGINE.ordered_stages(obj, record):
             box = layout.box()
             box.label(text="%s (%s)" % (stage.key, stage.state))
             box.label(text="rid: %s" % (stage.rid[-16:] or "-"))
             # The last pass's latencies, so a slow round trip names its slowest
             # part instead of being a black box.
-            timing_text = _timing_text(engine.stage_timings(record.stack_id, stage.key))
+            timing_text = _timing_text(ENGINE.stage_timings(record.stack_id, stage.key))
             if timing_text:
                 box.label(text=timing_text, icon="TIME")
             # Only while something is actually slow: an answer outstanding for a
             # second is where a sync fault looks like nothing at all.
-            age = engine.waiting_seconds(record.stack_id, stage.key)
+            age = ENGINE.waiting_seconds(record.stack_id, stage.key)
             if stage.state == stack_mod.STATE_WAITING and age >= 1.0:
                 box.label(text="waiting %.1f s" % age, icon="TIME")
             if stage.error:
@@ -314,7 +315,7 @@ class STAGELOOM_PT_diagnostics(bpy.types.Panel):
                     box.label(text=name.rsplit("/", 1)[-1])
                 box.operator("stageloom.purge_orphans", icon="TRASH")
 
-        activity = engine.recent_activity(8)
+        activity = ENGINE.recent_activity(8)
         if activity:
             box = layout.box()
             box.label(text="Recent activity", icon="INFO")

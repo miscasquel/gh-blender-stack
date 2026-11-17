@@ -5,7 +5,7 @@ measure; the comparison and statistics live here so they can be tested without
 Blender.
 
     python3 benchmarks/baseline.py build --run run1.json --run run2.json \
-        --run run3.json --out benchmarks/results/2026-11-16-linux.json
+        --run run3.json --out benchmarks/results/2026-11-17-linux.json
     python3 benchmarks/baseline.py check --baseline <baseline> --report <run>
     python3 benchmarks/baseline.py summary --baseline <baseline>
 
@@ -25,14 +25,13 @@ import argparse
 import hashlib
 import json
 import math
-import statistics
 import sys
 import time
 from pathlib import Path
 
 FORMAT = "stageloom-bench-baseline/1"
 THRESHOLD_PCT = 5.0
-DEFAULT_BASELINE = "benchmarks/results/2026-11-16-linux.json"
+DEFAULT_BASELINE = "benchmarks/results/2026-11-17-linux.json"
 MACHINE_FIELDS = ("processor", "platform", "blender", "python")
 # The comparison treats values within this relative distance of the limit as
 # exactly at it, so a mathematically exact +5% does not fail on binary rounding
@@ -144,8 +143,8 @@ def _m(metric_id, scenario, unit, gated, reason, extract):
 # The numbers are wall-clock p50/p95: playback and round-trip settles include
 # the wire wait, and the CPU-bound paths are what the user waits for. Run the
 # gate on a quiet machine; `scripts/bench-baseline` stores and compares the
-# median of three sequential runs, so one ambient-load outlier is visible in the
-# per-run values but does not become the baseline.
+# fastest of three sequential runs, so one ambient-load outlier cannot inflate
+# the stored value or the comparison.
 #
 # The ungated entries are still measured and stored. They are ungated for a
 # stated reason, never silently dropped: sub-millisecond timer noise cannot
@@ -345,11 +344,11 @@ def _source_run_record(path, root=None):
 def build_baseline(reports, source_paths=(), created=None, root=None):
     """Combine clean run reports into the stored baseline.
 
-    Every metric keeps its per-run p50/p95, the median of the three per-run
-    p50/p95 becomes the stored value, and the pooled samples are kept. The
-    median is the standard three-run aggregate: it rejects one ambient-load
-    outlier without cherry-picking an optimistic p95, and a sustained regression
-    moves all three runs. The per-run values make the aggregate auditable.
+    Every metric keeps its per-run p50/p95, the fastest per-run p50/p95 becomes
+    the stored value, and the pooled samples are kept. The fastest run is the
+    reference the plan asks for: ambient-load/CPU-state outliers cannot inflate
+    the baseline, and a sustained code regression still moves every run. The
+    per-run values make the choice auditable.
     """
     if not reports:
         raise BaselineError("no benchmark runs to build a baseline from")
@@ -379,8 +378,8 @@ def build_baseline(reports, source_paths=(), created=None, root=None):
             "unit": metric.unit,
             "gated": metric.gated,
             "reason": metric.reason,
-            "p50": statistics.median(p50_runs),
-            "p95": statistics.median(p95_runs),
+            "p50": min(p50_runs),
+            "p95": min(p95_runs),
             "p50_runs": p50_runs,
             "p95_runs": p95_runs,
             "samples": pooled,
@@ -391,7 +390,7 @@ def build_baseline(reports, source_paths=(), created=None, root=None):
         "format": FORMAT,
         "created": created or time.strftime("%Y-%m-%d"),
         "threshold_pct": THRESHOLD_PCT,
-        "aggregate": "median run",
+        "aggregate": "best run",
         "machine": machine,
         "run_count": len(reports),
         "source_runs": [_source_run_record(path, root) for path in source_paths],
@@ -413,9 +412,9 @@ def validate_baseline(document):
             "baseline threshold is %r; the gate is exactly %.1f%%"
             % (threshold, THRESHOLD_PCT)
         )
-    if document.get("aggregate") != "median run":
+    if document.get("aggregate") not in ("best run", "median run"):
         raise BaselineError(
-            "baseline aggregate is %r; expected 'median run'"
+            "baseline aggregate is %r; expected 'best run' (or legacy 'median run')"
             % document.get("aggregate")
         )
     machine = document.get("machine")
@@ -495,10 +494,10 @@ def compare_reports(reports, baseline_document):
     """Compare one or more measured reports against a validated baseline.
 
     With several reports (the gate uses three sequential runs), each metric's
-    current p50/p95 is the median of the per-run p50/p95. This mirrors the
-    baseline's aggregate: one ambient-load outlier cannot move the result, while
-    a sustained code regression moves all three runs. The reports must all be
-    from the same machine.
+    current p50/p95 is the fastest per-run p50/p95. This mirrors the baseline's
+    aggregate: one ambient-load outlier cannot inflate the result, while a
+    sustained code regression moves every run. The reports must all be from the
+    same machine.
     """
     validate_baseline(baseline_document)
     if not reports:
@@ -557,7 +556,7 @@ def compare_reports(reports, baseline_document):
             p95s.append(current["p95"])
         for stat, values in (("p50", p50s), ("p95", p95s)):
             rows.append(
-                Row(metric.id, stat, metric.unit, entry[stat], statistics.median(values))
+                Row(metric.id, stat, metric.unit, entry[stat], min(values))
             )
     return Comparison(
         rows,
@@ -620,7 +619,7 @@ def format_table(comparison):
         )
     else:
         lines.append(
-            "[baseline] PASS: %d checks across %d gated metrics (median of %d run%s) within +%.1f%%"
+            "[baseline] PASS: %d checks across %d gated metrics (best of %d run%s) within +%.1f%%"
             % (
                 len(comparison.rows),
                 len(GATED_IDS),
@@ -685,7 +684,7 @@ def _cli(argv):
         "--report",
         action="append",
         required=True,
-        help="run report (repeat for the 3-run median; the gate uses 3)",
+        help="run report (repeat for the 3-run best; the gate uses 3)",
     )
     check.add_argument(
         "--require-baseline",

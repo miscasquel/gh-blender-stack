@@ -15,9 +15,9 @@ from unittest import mock
 import bpy
 import numpy as np
 
-from blender.stageloom.blender import geometry_io  # noqa: E402
-from blender.stageloom.blender.geometry_io import mesh as geometry_mesh  # noqa: E402
-from blender.stageloom.core import codec  # noqa: E402
+from stageloom.blender import geometry_io  # noqa: E402
+from stageloom.blender.geometry_io import mesh as geometry_mesh  # noqa: E402
+from stageloom.core import codec  # noqa: E402
 
 
 def new_mesh_object(name, verts, faces):

@@ -7,15 +7,24 @@ suppressed while the gate owns the frame.
 """
 
 import queue
-import sys
 import time
 
-engine = sys.modules[__package__]
+import bpy
 
-# Last failure reported per stage, so a disconnected client does not print a
-# line for every frame of a playback. Cleared when the stage succeeds and at
-# the start/end of a synced playback.
-_reported = {}
+from .. import bridge, prefs
+from .. import stack as stack_mod
+from .lifecycle import (
+    _all_stack_objects,
+    _drop_removed_stages,
+    _ordered_stages,
+    _split_duplicate_stages,
+)
+from .messages import _handle_incoming, _handle_message, _report_message_failure
+from . import request as request_mod
+from .request import _clear_pull
+from .runtime import ENGINE
+from .state import _set_state
+from .triggers import _edit_mode_objects, _flush_object
 
 # A finite backstop for the default "no timeout" preference. Ten minutes is
 # far longer than any interactive solve, and short enough that a wedged client
@@ -26,34 +35,34 @@ PLAYBACK_HARD_CAP_SECONDS = 600.0
 
 def _report(stage, text, error=False):
     """Record one playback failure once per stage, not once per frame."""
-    engine.stats["playback_failures"] += 1
+    ENGINE.stats()["playback_failures"] += 1
     if error:
         # A frozen or disabled stage keeps its flag state; the failure stays
         # visible in the error detail and the playback report.
-        engine._set_state(stage, engine.stack_mod.STATE_ERROR, error=text)
-    if _reported.get(stage.key) == text:
+        _set_state(stage, stack_mod.STATE_ERROR, error=text)
+    if ENGINE.playback_reports.get(stage.key) == text:
         return
-    _reported[stage.key] = text
-    mode = "bake" if engine._bake_sync else "playback"
+    ENGINE.playback_reports[stage.key] = text
+    mode = "bake" if ENGINE.bake_sync else "playback"
     line = "%s: %s: %s" % (mode, stage.key, text)
-    if not engine._trace or engine._trace[-1] != line:
-        engine._trace.append(line)
-    engine.prefs.log("[stageloom] " + line, flush=True)
+    if not ENGINE.trace_lines or ENGINE.trace_lines[-1] != line:
+        ENGINE.trace(line)
+    prefs.log("[stageloom] " + line, flush=True)
 
 
 def _clear_report(stage):
-    _reported.pop(stage.key, None)
+    ENGINE.playback_reports.pop(stage.key, None)
 
 
 def _reset_reports():
     """Forget the per-stage dedup lines of a session that just ended."""
-    _reported.clear()
+    ENGINE.playback_reports.clear()
 
 
 def _playback_hard_cap():
     """The finite cap that applies even when the preference says "no timeout"."""
     try:
-        cap = float(engine.prefs._pref("playback_hard_cap", PLAYBACK_HARD_CAP_SECONDS))
+        cap = float(prefs._pref("playback_hard_cap", PLAYBACK_HARD_CAP_SECONDS))
     except (TypeError, ValueError):
         cap = PLAYBACK_HARD_CAP_SECONDS
     return cap if cap > 0.0 else PLAYBACK_HARD_CAP_SECONDS
@@ -70,7 +79,7 @@ def _playback_deadline():
     answers both end in a reported timeout rather than a pinned main thread.
     """
     try:
-        timeout = float(engine.prefs._pref("playback_timeout", 0.0))
+        timeout = float(prefs._pref("playback_timeout", 0.0))
     except (TypeError, ValueError):
         timeout = 0.0
     cap = _playback_hard_cap()
@@ -81,7 +90,7 @@ def _playback_deadline():
 
 def _client_token():
     """What identifies the client session a wait belongs to."""
-    state = engine.bridge.state
+    state = bridge.state
     return (state.get("connected_at"), state.get("doc"), state.get("clients"))
 
 
@@ -93,24 +102,25 @@ def _superseded(record, stage, rid, token):
     session and clears the wait; the playhead must move on with the last output
     instead of reading an answer the new client was never asked for.
     """
-    state = engine.bridge.state
+    state = bridge.state
     if not state["clients"]:
         return "Grasshopper disconnected; keeping the last output"
     if _client_token() != token:
         return "the Grasshopper session changed; keeping the last output"
-    pending = engine._pending.get((record.stack_id, stage.key)) or {}
+    row = ENGINE.peek_runtime(record.stack_id, stage.key)
+    pending = row.pending if row is not None else {}
     if not rid or stage.rid != rid:
         return "the request was superseded; keeping the last output"
     if rid not in pending:
         return "the request is no longer pending; keeping the last output"
-    if stage.state != engine.stack_mod.STATE_WAITING:
+    if stage.state != stack_mod.STATE_WAITING:
         return "the stage left waiting; keeping the last output"
     return None
 
 
 def _scene_stacks(scene):
     """The stack objects the playback gate is responsible for in this scene."""
-    return [obj for obj in engine._all_stack_objects() if obj.name in scene.objects]
+    return [obj for obj in _all_stack_objects() if obj.name in scene.objects]
 
 
 def _dispatch(item):
@@ -120,12 +130,12 @@ def _dispatch(item):
     its own answer instead of trying the same broken answer again.
     """
     try:
-        engine._handle_message(*item)
+        _handle_message(*item)
     except Exception as exc:
         try:
-            engine._report_message_failure(item[0], exc)
+            _report_message_failure(item[0], exc)
         except Exception:
-            engine._trace.append("incoming message failed and could not be reported")
+            ENGINE.trace("incoming message failed and could not be reported")
         return exc
     return None
 
@@ -167,7 +177,7 @@ def _pump_until_settled(record, stage, rid, deadline):
         else:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                engine._forget(record.stack_id, stage.key)
+                ENGINE.forget(record.stack_id, stage.key)
                 _report(
                     stage,
                     "no answer within %.1f s; keeping the last output"
@@ -177,7 +187,7 @@ def _pump_until_settled(record, stage, rid, deadline):
                 return False
             wait = min(0.05, remaining)
         try:
-            item = engine.bridge.INCOMING.get(timeout=wait)
+            item = bridge.INCOMING.get(timeout=wait)
         except queue.Empty:
             continue
         answered = _is_answer(item, stage, rid)
@@ -197,19 +207,19 @@ def _sync_stage(obj, record, stage, deadline):
     """Make one stage ready for the current playback frame."""
     # A request left in flight before playback began belongs to the session
     # before this frame. Its answer is dropped if it supersedes.
-    engine._forget(record.stack_id, stage.key)
+    ENGINE.forget(record.stack_id, stage.key)
     while True:
-        outcome = engine._process_stage(obj, record, stage)
+        outcome = request_mod._process_stage(obj, record, stage)
         if outcome == "idle":
             if not stage.has_stage_out:
                 # One-way stage: the pass delivered its prefix to Stage In and
                 # there is nothing to wait for. Never let it block playback.
                 _clear_report(stage)
                 return True
-            if stage.state == engine.stack_mod.STATE_DISCONNECTED:
+            if stage.state == stack_mod.STATE_DISCONNECTED:
                 _report(stage, "Grasshopper disconnected; keeping the last output")
                 return False
-            if stage.state == engine.stack_mod.STATE_UNBOUND:
+            if stage.state == stack_mod.STATE_UNBOUND:
                 _report(stage, "no Grasshopper document answered this stage")
                 return False
             # Disabled, frozen or already on screen: nothing to wait for.
@@ -228,13 +238,13 @@ def _sync_stage(obj, record, stage, deadline):
             # The wait can end because the stage left `waiting` with a visible
             # error (a protocol error for this request); report that too, so a
             # failed frame is not only a silent counter.
-            if stage.state == engine.stack_mod.STATE_ERROR and stage.error:
+            if stage.state == stack_mod.STATE_ERROR and stage.error:
                 _report(stage, stage.error)
             return False
-        if stage.state == engine.stack_mod.STATE_ERROR:
+        if stage.state == stack_mod.STATE_ERROR:
             _report(stage, stage.error or "Grasshopper error")
             return False
-        if stage.state in (engine.stack_mod.STATE_WAITING, engine.stack_mod.STATE_IDLE):
+        if stage.state in (stack_mod.STATE_WAITING, stack_mod.STATE_IDLE):
             # A stale answer won the pending race (waiting), or Grasshopper
             # asked for the geometry again (unknown_ref): ask for this frame
             # once more, still inside the same deadline.
@@ -250,27 +260,27 @@ def _flush_playback_edits(scene):
     pass through that path, and the prefix clone would otherwise read the
     pre-edit cage. Only objects actually in Edit Mode pay for this.
     """
-    for obj in engine._edit_mode_objects():
+    for obj in _edit_mode_objects():
         if obj.name not in scene.objects:
             continue
-        if engine.stack_mod.stack_of(obj) is None:
+        if stack_mod.stack_of(obj) is None:
             continue
-        engine._flush_object(obj)
+        _flush_object(obj)
 
 
 def _report_stage_failure(stage, exc):
     """Turn one stage's exception into its error row, never the frame's death."""
     message = "stage pass failed: %r" % (exc,)
     try:
-        engine.bridge.state["error"] = message
+        bridge.state["error"] = message
         import traceback
 
-        engine.prefs.log("[stageloom] " + message + "\n" + traceback.format_exc(), flush=True)
+        prefs.log("[stageloom] " + message + "\n" + traceback.format_exc(), flush=True)
         _report(stage, message, error=True)
     except Exception:
         # Reporting is the last line of defence: a stage whose record cannot be
         # written must not cost the next stage its pass.
-        engine._trace.append(message)
+        ENGINE.trace(message)
 
 
 def _sync_playback_frame(scene):
@@ -278,25 +288,25 @@ def _sync_playback_frame(scene):
     stacks = _scene_stacks(scene)
     if not stacks:
         return True
-    engine._handle_incoming()
-    engine._flush_playback_edits(scene)
-    engine.stats["playback_frames"] += 1
+    _handle_incoming()
+    _flush_playback_edits(scene)
+    ENGINE.stats()["playback_frames"] += 1
     ready = True
     for obj in stacks:
-        record = engine.stack_mod.stack_of(obj)
+        record = stack_mod.stack_of(obj)
         if record is None or not record.stages:
             continue
         if not record.stack_id:
-            record.stack_id = engine.stack_mod.ensure_stack(obj).stack_id
-        engine._drop_removed_stages(obj, record)
-        engine._split_duplicate_stages(obj, record)
+            record.stack_id = stack_mod.ensure_stack(obj).stack_id
+        _drop_removed_stages(obj, record)
+        _split_duplicate_stages(obj, record)
         # One depsgraph evaluation serves every stage prefix on this object,
         # the same batching the timer pass uses.
-        engine._prefix_batch.clear()
-        engine._prefix_batch_built = False
-        engine._prefix_batching = True
+        ENGINE.prefix_batch.clear()
+        ENGINE.prefix_batch_built = False
+        ENGINE.prefix_batching = True
         try:
-            for stage in engine._ordered_stages(obj, record):
+            for stage in _ordered_stages(obj, record):
                 try:
                     stage_ready = _sync_stage(obj, record, stage, _playback_deadline())
                 except Exception as exc:
@@ -304,62 +314,62 @@ def _sync_playback_frame(scene):
                     # not escape a frame handler while `_playback_sync` is armed
                     # and leave the rest of the chain unprocessed. The failed
                     # pass will not wait for anything it asked for.
-                    engine._forget(record.stack_id, stage.key)
-                    engine._clear_pull((record.stack_id, stage.key))
+                    ENGINE.forget(record.stack_id, stage.key)
+                    _clear_pull((record.stack_id, stage.key))
                     _report_stage_failure(stage, exc)
                     stage_ready = False
                 if not stage_ready:
                     ready = False
         finally:
-            engine._prefix_batching = False
-            engine._prefix_batch.clear()
-            engine._prefix_batch_built = False
+            ENGINE.prefix_batching = False
+            ENGINE.prefix_batch.clear()
+            ENGINE.prefix_batch_built = False
     if ready:
-        engine.stats["playback_synced"] += 1
+        ENGINE.stats()["playback_synced"] += 1
     return ready
 
 
-@engine.bpy.app.handlers.persistent
+@bpy.app.handlers.persistent
 def _on_playback_pre(scene, depsgraph=None):
     """Arm the gate when Blender starts playback in Play Every Frame."""
-    _reported.clear()
+    ENGINE.playback_reports.clear()
     for counter in ("playback_frames", "playback_synced", "playback_failures"):
-        engine.stats[counter] = 0
-    engine._playback_sync = bool(_scene_stacks(scene)) and scene.sync_mode == "NONE"
-    engine._playback_scene = scene.as_pointer() if engine._playback_sync else None
-    if engine._playback_sync:
-        engine._trace.append("playback sync: Play Every Frame waits for Grasshopper")
-        engine.prefs.log(
+        ENGINE.stats()[counter] = 0
+    ENGINE.playback_sync = bool(_scene_stacks(scene)) and scene.sync_mode == "NONE"
+    ENGINE.playback_scene = scene.as_pointer() if ENGINE.playback_sync else None
+    if ENGINE.playback_sync:
+        ENGINE.trace("playback sync: Play Every Frame waits for Grasshopper")
+        prefs.log(
             "[stageloom] playback sync: Play Every Frame waits for Grasshopper",
             flush=True,
         )
 
 
-@engine.bpy.app.handlers.persistent
+@bpy.app.handlers.persistent
 def _on_playback_post(scene, depsgraph=None):
     """Disarm the gate when playback stops."""
-    if engine._playback_scene is not None and scene is not None:
-        if scene.as_pointer() != engine._playback_scene:
+    if ENGINE.playback_scene is not None and scene is not None:
+        if scene.as_pointer() != ENGINE.playback_scene:
             # A post event from another scene must not disarm this one's gate.
             return
-    was_synced = engine._playback_sync
-    engine._playback_sync = False
-    engine._playback_scene = None
-    _reported.clear()
+    was_synced = ENGINE.playback_sync
+    ENGINE.playback_sync = False
+    ENGINE.playback_scene = None
+    ENGINE.playback_reports.clear()
     if was_synced:
-        stats = engine.stats
+        stats = ENGINE.stats()
         line = "playback sync: %d frame(s), %d ready, %d failure(s)" % (
             stats["playback_frames"],
             stats["playback_synced"],
             stats["playback_failures"],
         )
-        engine._trace.append(line)
-        engine.prefs.log("[stageloom] " + line, flush=True)
+        ENGINE.trace(line)
+        prefs.log("[stageloom] " + line, flush=True)
 
 
 def _update_bake_progress(scene):
     """Move Blender's cursor progress number with the baked frame."""
-    progress = engine._bake_progress
+    progress = ENGINE.bake_progress
     if progress is None:
         return
     wm, start, total = progress
@@ -373,40 +383,40 @@ def _run_gate(scene):
     except Exception as exc:
         try:
             message = "playback gate failed: %r" % (exc,)
-            engine.bridge.state["error"] = message
+            bridge.state["error"] = message
             import traceback
 
-            engine.prefs.log("[stageloom] " + message + "\n" + traceback.format_exc(), flush=True)
-            if not engine._trace or engine._trace[-1] != message:
-                engine._trace.append(message)
+            prefs.log("[stageloom] " + message + "\n" + traceback.format_exc(), flush=True)
+            if not ENGINE.trace_lines or ENGINE.trace_lines[-1] != message:
+                ENGINE.trace(message)
         except Exception:
             pass
 
 
-@engine.bpy.app.handlers.persistent
+@bpy.app.handlers.persistent
 def _on_frame_change_sync(scene, depsgraph=None):
     """One gated frame: block until the current frame's stages are ready."""
-    if engine._switching_scene:
+    if ENGINE.switching_scene:
         # The prefix read activated another scene for its depsgraph; this is
         # not a playback or bake frame.
         return
     pointer = scene.as_pointer() if scene is not None else None
-    if engine._bake_sync:
+    if ENGINE.bake_sync:
         # A native Bake job steps frames and fires this handler. The stage
         # outputs it stores must be the ones for *this* frame. A bake belongs
         # to one scene; a frame event from another must not enter it.
-        if pointer is not None and engine._bake_scene is not None and pointer != engine._bake_scene:
+        if pointer is not None and ENGINE.bake_scene is not None and pointer != ENGINE.bake_scene:
             return
         _update_bake_progress(scene)
         _run_gate(scene)
         return
-    if not engine._playback_sync:
+    if not ENGINE.playback_sync:
         return
-    if pointer is not None and engine._playback_scene is not None and pointer != engine._playback_scene:
+    if pointer is not None and ENGINE.playback_scene is not None and pointer != ENGINE.playback_scene:
         return
     if scene.sync_mode != "NONE":
         # The mode changed while playing; hand the frame back to the timer.
-        engine._playback_sync = False
-        engine._playback_scene = None
+        ENGINE.playback_sync = False
+        ENGINE.playback_scene = None
         return
     _run_gate(scene)

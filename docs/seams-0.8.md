@@ -1,10 +1,11 @@
 # Refactor seams — 0.8.0 characterization map (T3, T4)
 
-**Status:** T3 and the T4 `geometry_io` split are complete. This document is the
-contract for T4–T7: every seam the four refactor tasks may move, its owner, the
-behavior that must not change, and the tests that pin it. T3 changed no
-production code; T4 moved `geometry_io.py` into a package behind the same
-facade without changing the contracts below. T5–T7 remain.
+**Status:** T3, the T4 `geometry_io` split and the T5 engine-object
+refactor are complete. This document is the contract for T4–T7: every seam the
+four refactor tasks may move, its owner, the behavior that must not change, and
+the tests that pin it. T3 changed no production code; T4 moved
+`geometry_io.py` into a package behind the same facade; T5 replaced the engine
+hub with `ENGINE`/`StageRuntime` without changing behavior. T6–T7 remain.
 
 **Measured at T3 (same machine, 2026-11-16):**
 
@@ -30,9 +31,23 @@ facade without changing the contracts below. T5–T7 remain.
   **2,151 physical / 1,791 code lines** in 8 files, replacing the 2,151 /
   1,811-line `geometry_io.py`.
 - Fourteen golden fixtures; `out_hash`, protocol and fixtures untouched.
-- Performance: the final solo three-run median gate passed **26/26 checks across
-  13 gated metrics**; 100k in-place, 1M in-place and 13× instance repeat are in
-  [`performance-ledger.md`](performance-ledger.md).
+- Performance: the T4 verification used the then-current median baseline and
+  passed 26/26; T5 replaced it with the 2026-11-17 best-of-three baseline. The
+  current gate result is in [`performance-ledger.md`](performance-ledger.md).
+
+**Measured at T5 (same machine, 2026-11-17):**
+
+- **454** Blender headless tests plus the offline gate, unchanged.
+- Production: **24,738 physical / 19,376 code lines across 57 files** (T4:
+  24,946 / 19,394 across 56; −208 physical, −18 code). The engine package is
+  **5,375 physical** against 5,580 at T4; the facade is 42 lines against 852.
+- Fourteen golden fixtures; `out_hash`, protocol and fixtures untouched.
+- Performance: the final full gate passed **26/26** checks in 174.1 s against
+  the 2026-11-17 best-of-three baseline. Decode p50 is +0.80%, 100k in-place
+  +0.95%, 1M in-place +0.32% and 13× instance repeat +2.06%; no metric exceeds
+  +5%. The earlier median-baseline failure was host CPU power/core-state drift,
+  confirmed by a pinned T4/T5 A/B (4.5736 vs 4.5491 ms decode) and replaced by
+  the new baseline, not waived.
 
 Notation: a Python test is `file.py::Class.test_name`; a C# check is
 `Suite::Check("…")` as printed by the console suite. Where a group of checks is
@@ -398,15 +413,34 @@ builders today (each kind owns its namespace), so the guard is tested directly.
 
 ---
 
-## 2. T5 — Blender engine object
+## 2. T5 — Blender engine object (complete)
 
-**Current owner:** `blender/stageloom/blender/engine/` (package hub
-`__init__.py`, 852 physical lines, plus `apply`, `bake`, `dependencies`,
-`diagnostics`, `lifecycle`, `messages`, `playback`, `request`, `state`,
-`triggers`). The hub's measured `__all__` has 123 names, and submodules reach back through
-`sys.modules[__package__]`. T5 replaces this with an `Engine` object and
-per-stage runtime records while keeping the facade entry points and their
-observable behavior.
+**Current owner (T5 implementation complete):** `blender/stageloom/blender/engine/` (5,375
+physical lines). `engine/runtime.py` owns the session: a single module-level
+`ENGINE = Engine()` and one `StageRuntime` record per `(stack_id, stage_key)`.
+`engine/__init__.py` is a 42-line facade (`ENGINE`, `register`/`unregister`, the
+stable controls and the diagnostics); `apply`, `bake`, `dependencies`,
+`diagnostics`, `lifecycle`, `messages`, `playback`, `request`, `state` and
+`triggers` own their behavior. Every submodule imports `from .runtime import
+ENGINE`, its sibling modules and the core modules it uses; no submodule reaches
+back through the package object and there is no `sys.modules[__package__]`.
+
+`StageRuntime` fields: `pending`, `sent`, `last_frame`, `timings`,
+`state_since`, `pull_permit`, `pull_deadline`, `last_no_send`. `Engine` owns the
+prefix memo/batch/epoch, verification, trace, heartbeat, dirty set, stage
+index/claims/owners/conflicts, stack objects/index flags, hot/active/registered
+flags, prefix guard (`evaluating`/`guard_owner`/`evaluating_since`/`ticking`),
+playback/bake flags/progress/scenes, stats, playback reports and the runtime
+records. Timer, hot/idle/soft-retry constants stay module-level.
+
+**Removed:** the 123-name `__all__`; the `sys`, `numpy`, `attributes_mod`,
+`codec`, `hashing`, `bridge`, `geometry_io`, `helpers`, `nodes`, `prefs`,
+`props`, `server`, `stack_mod` re-exports; the module-level per-stage maps; and
+the old 852-line hub. `benchmarks/bench.py`, `ops.py` and `ui.py` use `ENGINE`
+or the owning submodule; none reaches `engine.bridge`/`engine.stack_mod`.
+Tests were migrated mechanically from the package's private state/functions to
+`ENGINE`, `ENGINE.runtime(...)` and their owning modules; assertions and the 454
+test count are unchanged, and no test was deleted.
 
 ### 2.1 Hub/facade entry points
 
@@ -647,6 +681,41 @@ bake-token rules are one owner each.
 **Gaps:** real render/scrub playback in a GUI session and native bake data on a
 real Rhino client are not reproducible headless; the suite drives Blender's
 handlers and native bake node directly.
+
+### 2.5 T5 implementation record
+
+**Owner:** `engine/runtime.py` (`Engine`, `StageRuntime`, `ENGINE`) plus the
+existing behavior modules. `engine/__init__.py` is a facade with no `__all__`,
+no module re-exports and no compatibility shim.
+
+**Moved:** every mutable global from the old hub is a field of `ENGINE`; the
+eight per-stage maps are `StageRuntime` fields behind `ENGINE.runtime`.
+`_pending_of`/`_forget` are `ENGINE.pending_of`/`ENGINE.forget`;
+`_ordered_stages`, `_stage_key_conflicted`, `_set_state`, `_trace`,
+`_bake_sync`/`_bake_scene`/`_bake_progress`, `stats` and `start_server` have
+`ENGINE` methods. Registration/activation (`register`, `unregister`,
+`activate`, `deactivate`, `ensure_active`, `settle`) moved onto `Engine`.
+Bake orchestration stays in `engine/bake.py`; the operator now uses
+`ENGINE.begin_bake`/`set_bake_progress`/`end_bake`.
+
+**Tests:** the Blender suite still runs **454** tests and the offline gate; no
+test was removed. Test modules now import owner modules
+(`engine.apply`, `engine.lifecycle`, `engine.messages`, `engine.playback`,
+`engine.request`, `engine.state`, `engine.triggers`) or `ENGINE`, instead of
+the former hub re-exports. `benchmarks/bench.py` was migrated the same way so
+the baseline gate still drives the real timer, prefix and apply paths.
+
+**Verification:** `scripts/test-blender` PASS (454 + offline gate); the full
+`scripts/check-all` passed 26/26 in 174.1 s against the 2026-11-17
+best-of-three baseline. The former median-baseline decode failure was host CPU
+power/core-state drift, confirmed by a pinned T4/T5 A/B (4.5736 vs 4.5491 ms)
+and replaced by the new baseline, not waived. No protocol, fixture or `out_hash`
+change.
+
+**Remaining gaps:** the `unfreeze` asymmetry above is unchanged and documented;
+native GUI undo/redo, linked-object editing and real Rhino playback/bake remain
+the harness gaps in §5; the `Engine` class is the largest unit (state inventory
+plus lifecycle), which is the intended single owner rather than a second hub.
 
 ---
 
@@ -1168,7 +1237,9 @@ item, not a local test.
 4. **`engine.unfreeze(obj, stage)` does not gate on a stack record (low).**
    Unlike `freeze`/`request_again`, it writes the stage state and dirties the
    object even when `obj` has no stage record. Not reachable from the panel,
-   which passes the owning object; T5 should decide whether to align it.
+   which passes the owning object. T5 preserved the asymmetry deliberately: it
+   is a behavior change that needs its own regression test, so it stays a
+   documented gap rather than riding along with the object migration.
 5. **`GhLink.Enqueue`'s cap has no public observer (test-only reflection).**
    The T3 check reflects `MaxOutboxBytes`/`OutboxBytes`/`Outbox` while the link
    is stopped; T6 must move the test with `Publication`/`LinkConnection`.

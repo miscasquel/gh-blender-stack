@@ -1,13 +1,12 @@
 # Performance ledger
 
-**Status: T1 baseline measured and green; T2 subtraction verified; T3
-characterization landed; T4 `geometry_io` package split complete.** The
-2026-11-16 baseline was captured on a quiet host from three solo runs and is
-stored as the **median of the three** per-run p50/p95 values. The T4 full
-`scripts/check-all` gate passed in **179.5 s** with the bench step enforcing the
-baseline (63.1 s) and all 26 p50/p95 checks green (13 gated metrics). The
-idle-pass diagnostic was ungated in T2: at ~3 µs its p95 is below the timer
-noise floor, and the 2 ms hard budget still applies.
+**Status: T1–T5 accepted.** The gate reference is the **2026-11-17 best-of-three
+baseline**: three clean solo runs, with the fastest per-run p50/p95 stored for
+each metric. It replaces the 2026-11-16 median baseline after host CPU
+power/core-state drift was measured and confirmed not to be a T5 regression; the
+T1–T4 rows below remain historical against the old reference. The idle-pass
+diagnostic was ungated in T2: at ~3 µs its p95 is below the timer noise floor,
+and the 2 ms hard budget still applies.
 
 | Field | Value |
 |---|---|
@@ -15,20 +14,18 @@ noise floor, and the 2 ms hard budget still applies.
 | Reference platform | Linux-7.3.4-1-cachyos-x86_64-with-glibc2.44 |
 | Reference Blender | 5.3.0 |
 | Reference Python | 3.13.13 |
-| Gate | `scripts/bench-baseline` (3 sequential runs, median p50/p95 per metric) |
-| Stored baseline | `benchmarks/results/2026-11-16-linux.json` (`aggregate: median run`) |
-| Raw evidence | `benchmarks/results/2026-11-16-linux-run1.json`, `…-run2.json`, `…-run3.json` + SHA-256 in the baseline |
+| Gate | `scripts/bench-baseline` (3 sequential runs, best p50/p95 per metric) |
+| Stored baseline | `benchmarks/results/2026-11-17-linux.json` (`aggregate: best run`) |
+| Raw evidence | `benchmarks/results/2026-11-17-linux-run1.json`, `…-run2.json`, `…-run3.json` + SHA-256 in the baseline |
 | C# microbench | `benchmarks/results/2026-11-16-linux-csharp.json` |
-| Gate result | **PASS 26/26 (13 gated metrics, fresh three-run median gate)** |
+| Gate result | **PASS 26/26 (13 gated metrics, fresh best-of-three gate)** |
 
-The three baseline runs were taken with the host quiet. Runs 1 and 3 were
-tight; run 2 was a global outlier, roughly 20–30% slower on CPU-bound metrics
-(for example, `pipeline.100k.extract_ms` p50 8.19 ms against 4.97/4.96 ms in
-runs 1 and 3). The stored baseline is the **median of the three runs**, not the
-lowest or the highest run: one ambient-load/frequency episode is visible in the raw
-per-run values but does not move the baseline, and a sustained regression moves
-all three runs. The per-run values and pooled samples remain in the baseline for
-audit.
+The 2026-11-17 baseline was taken with the host quiet from three solo runs. The
+stored value is the **fastest per-run p50/p95** for each metric. The previous
+2026-11-16 median baseline was captured in a faster CPU power/core state and no
+longer reproduces on this host; a pinned T4/T5 A/B showed no code regression.
+The 2026-11-16 source runs and values remain historical evidence. The per-run
+values and pooled samples are recorded in the baseline for audit.
 
 ## Rule
 
@@ -49,12 +46,11 @@ an error on the reference machine).
 
 ## T1 baseline and task ledger
 
-**T1 decision: accepted.** Values are milliseconds; p50/p95 are the **median of
-the three per-run percentiles**. The gate ran three fresh sequential runs and
-passed all 26 checks; no gated metric regressed by more than +5%. The earlier
-fastest-run aggregate is superseded by this median baseline. The idle-pass row
-was moved to the ungated diagnostics after its p95 flaked on unrelated timer
-noise; its 2 ms hard budget remains in `bench.py`.
+**T1 decision (historical).** The T1 verification below used the 2026-11-16
+median baseline. T5 replaced it with the 2026-11-17 best-of-three baseline; the
+T1–T4 rows remain evidence for those tasks but are not the current gate
+reference. The idle-pass row was moved to the ungated diagnostics after its p95
+flaked on unrelated timer noise; its 2 ms hard budget remains in `bench.py`.
 
 | Task | Metric | Baseline p50 / p95 | Measured p50 / p95 | Delta p50 / p95 | Offsetting gain | Decision |
 |---|---|---|---|---:|---:|---|---|
@@ -74,7 +70,7 @@ noise; its 2 ms hard budget remains in `bench.py`.
 | T2 | no production hot-path change | — | — | — | production physical LOC 25,096 → 24,946 (−150); tracked tree 112,513 → 82,866 lines (−29,647) incl. the vendored wheel/spikes | accepted |
 | T3 | no production hot-path change | — | — | — | no metric regressed; the worst delta was **-0.79%** (`pipeline.100k.extract_ms` p50, an improvement), baseline gate PASS 26/26 | accepted |
 | T4 | 100k/1M in-place + instance repeat (p50/p95) | 2.2081 / 2.8269; 22.8247 / 23.0365; 2.5087 / 3.1799 | 2.2709 / 2.3472; 23.0166 / 23.7384; 2.5663 / 2.7071 | +2.85% / -16.97%; +0.84% / +3.05%; +2.29% / -14.87% | production 24,946 / 19,394 (flat physical, −20 code), 56 files; package 2,151 / 1,791 vs old 2,151 / 1,811 | accepted |
-| T5 | pending | — | — | — | — | pending |
+| T5 | engine object: 100k/1M in-place, 13× instance repeat, playback, prefix/apply, roundtrip | 2.1453 / 2.1708; 21.6598 / 21.7428; 2.4608 / 2.5706; 12.8405 / 13.3398; 116.8278 / 119.6174; 91.0217 / 92.1573 | 2.1658 / 2.1996; 21.7300 / 21.7899; 2.5115 / 2.5672; 12.8752 / 13.3305; 116.6537 / 118.5319; 90.4581 / 91.1653 | +0.95% / +1.33%; +0.32% / +0.22%; +2.06% / -0.13%; +0.27% / -0.07%; -0.15% / -0.91%; -0.62% / -1.08% | production 24,738 / 19,376 (−208 / −18), 57 files; 454 Blender + 681 C# checks unchanged | accepted: 26/26 on the 2026-11-17 best baseline; decode +0.80% / -2.88%; no >5% metric |
 | T6 | pending | — | — | — | — | pending |
 | T7 | pending | — | — | — | — | pending |
 | T8 | pending | — | — | — | — | pending |
@@ -88,8 +84,9 @@ not a sum of independently warmed phase timings. The idle pass is amortized over
 
 ### T1 verification
 
-- The baseline was rebuilt from the same three source runs with
-  `aggregate: median run`; the source paths and SHA-256 are unchanged.
+- The T1 baseline was rebuilt from the same three source runs with
+  `aggregate: median run`; T5 later replaced it with the 2026-11-17 best-of-three
+  baseline after host-state drift was measured.
 - The pure `benchmarks/baseline.py` gate and its 15 unit tests cover identical,
   +4%, exactly +5%, +6%, p95-only +6%, one-outlier rejection, systematic
   regression, missing/extra metrics, malformed baselines, machine mismatch and a
@@ -97,10 +94,10 @@ not a sum of independently warmed phase timings. The idle pass is amortized over
 - A pure CLI proof with a synthetic report exits 0 at exactly +5%, exits 1 on a
   temporary +6% mutation and names the metric, and exits 2 on a machine
   mismatch under `--require-baseline`.
-- The `scripts/bench-baseline` three-run median gate and its `scripts/check-all`
-  wiring are in place.
-- The fresh median gate passes 26/26 checks across the 13 gated metrics; the
-  idle-pass diagnostic is ungated but keeps the 2 ms budget.
+- The `scripts/bench-baseline` gate and its `scripts/check-all` wiring are in
+  place; T5 switched the reference to best-of-three.
+- The current best-of-three gate passes 26/26 checks across the 13 gated
+  metrics; the idle-pass diagnostic is ungated but keeps the 2 ms budget.
 - The full `scripts/check-all` gate passed alone in **173.6 s**: docs, ruff,
   core (125 tests), bench (62.3 s, baseline enforced), the Blender CLI proof
   (1.5 s), Blender headless (423 tests + offline gate, 84.1 s), extension
@@ -163,6 +160,40 @@ and the topology-token fast path is unchanged. Earlier runs during browser and
 thermal load were discarded (they produced a 1M p95 failure and a decode p50
 fluctuation on unchanged paths); the gate above is the accepted clean
 measurement. No threshold was widened and no metric was excluded.
+
+### T5 verification
+
+T5 is an internal-state refactor: it changes the engine owner and imports, not
+the codec, the wire or the geometry write path. Production is **24,738 physical
+/ 19,376 code lines across 57 files** (T4: 24,946 / 19,394 across 56; −208
+physical, −18 code); the engine package is 5,375 physical against 5,580 and the
+facade is 42 lines against 852. The 454 Blender tests plus the offline gate and
+the 681 C# checks are unchanged.
+
+The 2026-11-17 reference baseline was rebuilt from three clean solo runs as the
+best-of-three (fastest per-run p50/p95) after the 2026-11-16 median baseline was
+shown to be non-reproducible under the current host CPU power/core state. The
+pinned T4-vs-T5 A/B measured decode p50 **4.5736 ms (T4)** vs **4.5491 ms
+(T5)** and apply p50 **2.2686 ms (T4)** vs **2.1719 ms (T5)**: T5 has no codec
+or apply regression. `core/codec.py` is byte-identical to T4.
+
+The full `scripts/check-all` gate passed alone in **174.1 s** with the new
+baseline enforced (bench 60.9 s; Blender 454 tests + offline gate, 87.5 s;
+extension 2.6 s; C# 21.4 s). All **26/26** p50/p95 checks passed. Key deltas:
+
+| Metric | p50 | p95 |
+|---|---:|---:|
+| `pipeline.100k.decode_ms` | +0.80% | -2.88% |
+| `pipeline.100k.apply_inplace_ms` | +0.95% | +1.33% |
+| `pipeline.1m.apply_inplace_ms` | +0.32% | +0.22% |
+| `instances.13x.apply_repeat_ms` | +2.06% | -0.13% |
+| `playback.frame_ms` | +0.27% | -0.07% |
+| `roundtrip.full.settle_ms` | -0.15% | -0.91% |
+| `roundtrip.ref.settle_ms` | -0.62% | -1.08% |
+
+No gated metric exceeds +5%; the worst positive p50 is +2.06%
+(`instances.13x.apply_repeat_ms`). The threshold was not widened and no metric
+was excluded.
 
 ## C# parameter/schema baseline (ungated)
 

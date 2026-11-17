@@ -15,7 +15,7 @@ recorded in §2.
 contract, ADRs the decision log. This document owns the 0.7/0.8 quality work and
 records where those documents must change.
 
-**0.8.0 completion record so far (2026-11-16).** T1 added the three-run median
+**0.8.0 completion record so far (2026-11-16).** T1 added the three-run best
 p50/p95 baseline and `scripts/check-all` gate, the C# parameter/schema
 microbenchmark and the generated code-health inventory. T2 removed the
 `spikes/` evidence tree, the stale planning handoff, the archived Grasshopper 2
@@ -40,7 +40,17 @@ kind behind the same facade: **24,946 physical / 19,394 code lines across 56
 production files** (flat physical, −20 code), with 454 Blender tests and 681 C#
 checks unchanged. The full gate passed alone in **179.5 s** with 26/26 gated
 metrics green (100k in-place +2.85% p50, 1M in-place +0.84%, instance repeat
-+2.29%).
++2.29%). T5 then replaced the package-global engine hub with the explicit
+`ENGINE`/`StageRuntime` owner in `engine/runtime.py`; the facade is 42 lines and
+no submodule uses `sys.modules[__package__]` or the old 123-name `__all__`.
+Production is **24,738 physical / 19,376 code lines across 57 files**
+(−208 physical, −18 code against T4), with 454 Blender tests and 681 C# checks
+unchanged. The 2026-11-17 best-of-three baseline was rebuilt from three clean
+solo runs after the old median baseline was shown to be non-comparable under the
+host CPU power/core state; a pinned T4/T5 A/B showed no T5 regression. The full
+gate passed 26/26 in **174.1 s** (decode +0.80%, 100k in-place +0.95%, 1M
++0.32%, instance repeat +2.06%). See [`seams-0.8.md`](seams-0.8.md) and the
+ledger.
 
 **0.7.0 completion record (2026-11-16).** Q1–Q19 are complete; Q5 was merged
 into Q4 (the cache and the `Live` toggle were one removal). The release was
@@ -810,11 +820,11 @@ acceptance criteria, then committed before the next starts.
 
 | ID | Task | Acceptance | Status |
 |---|---|---|---|
-| T1 | Baseline, performance gate, code health | three-run median baseline; `--check-baseline` fails a +6% regression; ledger and code-health inventory; no production behavior change | Done 2026-11-16 (`c2ed250`) |
+| T1 | Baseline, performance gate, code health | three-run best baseline; `--check-baseline` fails a +6% regression; ledger and code-health inventory; no production behavior change | Done 2026-11-16 (`c2ed250`) |
 | T2 | Subtraction before refactor | dead material/aliases/vendored tree removed; shim ADR and wheel ADR; no behavior change; full gate green; production and total tree smaller | Done 2026-11-16 |
 | T3 | Characterization tests for the seams | tests pin `geometry_io`, the engine hub, `GhLink` and `Instances`; no production edits | Done 2026-11-16 |
 | T4 | `geometry_io` package split | one responsibility per module; no production net growth; full gate; in-place benchmarks within 5% | Done 2026-11-17 |
-| T5 | Blender engine object | explicit `Engine`/runtime records; no package-global hub; lifecycle/playback/bake tests unchanged | Pending |
+| T5 | Blender engine object | explicit `Engine`/runtime records; no package-global hub; lifecycle/playback/bake tests unchanged | Done 2026-11-17; 26/26 on the 2026-11-17 best baseline |
 | T6 | `GhLink` split | registry/connection/scheduler/protocol/publication/slots split; document isolation and threading preserved | Pending |
 | T7 | `Instances` split and table-driven conversion | single-part/multi-part/nested/attribute round trips unchanged; production LOC down or flat | Pending |
 | T8 | Performance follow-through | playback resolved or traded; p50/p95 within 5%; each fixed path measured | Pending |

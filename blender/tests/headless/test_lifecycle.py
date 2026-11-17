@@ -15,6 +15,9 @@ import unittest
 import bpy
 
 from harness import isolate_data_root
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import lifecycle as engine_lifecycle
+from stageloom.blender.engine import triggers as engine_triggers
 
 
 def _stage_prefix(obj, key):
@@ -58,8 +61,8 @@ class LifecycleTests(unittest.TestCase):
         bpy.ops.preferences.addon_disable(module="stageloom")
 
     def setUp(self):
-        self.engine._dirty.clear()
-        self.engine._rebuild_index()
+        ENGINE.dirty.clear()
+        engine_lifecycle._rebuild_index()
 
     def _make_stack(self, name):
         bpy.ops.mesh.primitive_cube_add(size=2.0)
@@ -75,7 +78,7 @@ class LifecycleTests(unittest.TestCase):
             bpy.data.objects.remove(obj, do_unlink=True)
         except ReferenceError:
             pass
-        self.engine._rebuild_index()
+        engine_lifecycle._rebuild_index()
 
     def _add_definition_and_clouds(self, obj, key):
         """One two-part definition and both row-cloud families, populated."""
@@ -100,7 +103,7 @@ class LifecycleTests(unittest.TestCase):
         before = _stage_datablocks(_stage_prefix(obj, stage.key))
 
         obj.name = "Rename Root Renamed"
-        self.engine._process_object(obj)
+        engine_lifecycle._process_object(obj)
 
         self.assertIs(
             helpers.helper_for(obj, stage.key, "mesh"),
@@ -137,7 +140,7 @@ class LifecycleTests(unittest.TestCase):
         self.assertIsNotNone(bpy.data.node_groups.get(group_name))
 
         bpy.data.objects.remove(obj, do_unlink=True)
-        self.engine._rebuild_index()
+        engine_lifecycle._rebuild_index()
 
         self.assertEqual(
             _stage_datablocks(prefix),
@@ -203,8 +206,8 @@ class LifecycleTests(unittest.TestCase):
         before = _stage_datablocks(_stage_prefix(obj, stage.key))
 
         obj.name = "Undo Root Renamed"
-        self.engine._on_undo()
-        self.engine._on_redo()
+        engine_triggers._on_undo()
+        engine_triggers._on_redo()
 
         self.assertIs(self.helpers.helper_for(obj, stage.key, "mesh"), helper)
         self.assertEqual(_stage_datablocks(_stage_prefix(obj, stage.key)), before)
@@ -222,7 +225,7 @@ class LifecycleTests(unittest.TestCase):
         # What an undo step or a split between records can look like: the stack
         # still owns the identity, but the stage record is momentarily gone.
         record.stages.remove(0)
-        self.engine._rebuild_index()
+        engine_lifecycle._rebuild_index()
 
         self.assertIsNotNone(bpy.data.objects.get(helper.name), "a live stack's helper was swept")
         self.assertEqual(_stage_datablocks(prefix), before)

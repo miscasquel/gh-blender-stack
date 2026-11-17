@@ -7,8 +7,14 @@ import unittest
 import bpy
 import numpy as np
 
-from blender.stageloom.blender import geometry_io  # noqa: E402
-from blender.stageloom.core import codec  # noqa: E402
+from stageloom.blender import geometry_io  # noqa: E402
+from stageloom.core import codec  # noqa: E402
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import apply as engine_apply
+from stageloom.blender.engine import request as engine_request
+from stageloom.blender.engine import triggers as engine_triggers
+from stageloom.blender import bridge, nodes
+from stageloom.blender import server
 
 
 def _quad(name):
@@ -681,7 +687,6 @@ class InstanceReadTests(unittest.TestCase):
         self.assertEqual([cube_row[0][3], cube_row[1][3], cube_row[2][3]], [0.0, 0.0, 0.0])
 
     def test_definition_names_take_part_in_the_request_hash(self):
-        from blender.stageloom.blender import engine
 
         quad = _quad("hash-quad")
         coll = _collection("HashColl", quad)
@@ -689,10 +694,10 @@ class InstanceReadTests(unittest.TestCase):
         holder = _instance_holder("HashHolder", points, coll, "collection")
 
         sections, attributes, definitions = _serialize(holder)
-        first = engine._sections_hash(sections, attributes, definitions)
+        first = engine_request._sections_hash(sections, attributes, definitions)
         renamed = [dict(entry, name="Other") for entry in definitions]
         self.assertNotEqual(
-            first, engine._sections_hash(sections, attributes, renamed)
+            first, engine_request._sections_hash(sections, attributes, renamed)
         )
 
     def test_frames_encode_and_decode_with_instances(self):
@@ -779,7 +784,6 @@ class InstanceApplyTests(unittest.TestCase):
         return evaluated, evaluated.to_mesh()
 
     def test_apply_realizes_block_instances(self):
-        from blender.stageloom.blender import engine
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -789,7 +793,7 @@ class InstanceApplyTests(unittest.TestCase):
             self._wire_transform((5, 0, 0)),
         ])
 
-        engine._apply(obj, stage, sections, None)
+        engine_apply._apply(obj, stage, sections, None)
 
         evaluated, mesh = self._realized_mesh(obj)
         try:
@@ -818,7 +822,7 @@ class InstanceApplyTests(unittest.TestCase):
             bpy.data.collections.remove(coll)
 
     def test_apply_builds_one_helper_per_part(self):
-        from stageloom.blender import engine, helpers
+        from stageloom.blender import helpers
 
         obj, stage = self._stage()
         sections = {}
@@ -845,7 +849,7 @@ class InstanceApplyTests(unittest.TestCase):
         }]
         definitions = [{"name": "Parts", "parts": 2}]
 
-        engine._apply(obj, stage, sections, attributes, definitions)
+        engine_apply._apply(obj, stage, sections, attributes, definitions)
 
         part_zero = bpy.data.objects[
             helpers.definition_name(obj, stage.key, 0, "mesh", part=0)
@@ -875,7 +879,7 @@ class InstanceApplyTests(unittest.TestCase):
             evaluated.to_mesh_clear()
 
     def test_apply_draws_a_multi_part_definition_with_nested_rows(self):
-        from stageloom.blender import engine, helpers
+        from stageloom.blender import helpers
 
         obj, stage = self._stage()
         sections = {}
@@ -893,7 +897,7 @@ class InstanceApplyTests(unittest.TestCase):
         sections["inst.transforms"] = self._wire_transform((0, 0, 0))
         definitions = [{"name": "Block", "parts": 2}, {"name": "Child"}]
 
-        engine._apply(obj, stage, sections, None, definitions)
+        engine_apply._apply(obj, stage, sections, None, definitions)
 
         nested = helpers.nested_clouds(obj, stage.key)
         self.assertEqual(sorted(nested), [0])
@@ -914,14 +918,14 @@ class InstanceApplyTests(unittest.TestCase):
             evaluated.to_mesh_clear()
 
     def test_apply_reads_a_single_part_definitions_table(self):
-        from stageloom.blender import engine, helpers
+        from stageloom.blender import helpers
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
         sections["inst.ref_def"] = np.array([0], dtype=np.uint32)
         sections["inst.transforms"] = self._wire_transform((0, 0, 0))
 
-        engine._apply(obj, stage, sections, None, [{"name": "Single"}])
+        engine_apply._apply(obj, stage, sections, None, [{"name": "Single"}])
 
         helper = bpy.data.objects[
             helpers.definition_name(obj, stage.key, 0, "mesh")
@@ -934,7 +938,7 @@ class InstanceApplyTests(unittest.TestCase):
         )
 
     def test_apply_rejects_a_multipart_frame_that_does_not_resolve(self):
-        from stageloom.blender import engine, helpers
+        from stageloom.blender import helpers
 
         obj, stage = self._stage()
         quad = self._quad_sections("idef.0.0.")
@@ -968,15 +972,14 @@ class InstanceApplyTests(unittest.TestCase):
         }
         for label, (definitions, sections) in cases.items():
             with self.subTest(label):
-                with self.assertRaises(engine.geometry_io.GeometryIOError):
-                    engine._apply(obj, stage, sections, None, definitions)
+                with self.assertRaises(geometry_io.GeometryIOError):
+                    engine_apply._apply(obj, stage, sections, None, definitions)
                 self.assertEqual(
                     helpers.definition_collections(obj, stage.key), {},
                     "a rejected frame created helpers",
                 )
 
     def test_apply_rejects_a_descriptor_from_another_part(self):
-        from stageloom.blender import engine
 
         obj, stage = self._stage()
         sections = {}
@@ -999,13 +1002,13 @@ class InstanceApplyTests(unittest.TestCase):
             "part": 1,
         }]
 
-        with self.assertRaises(engine.geometry_io.GeometryIOError):
-            engine._apply(
+        with self.assertRaises(geometry_io.GeometryIOError):
+            engine_apply._apply(
                 obj, stage, sections, attributes, [{"name": "Parts", "parts": 2}]
             )
 
     def test_a_multipart_frame_round_trips_through_the_codec_into_helpers(self):
-        from stageloom.blender import engine, helpers
+        from stageloom.blender import helpers
 
         obj, stage = self._stage()
         sections = {}
@@ -1052,7 +1055,7 @@ class InstanceApplyTests(unittest.TestCase):
         )
         header, decoded = codec.decode_frame(frame)
 
-        engine._apply(
+        engine_apply._apply(
             obj, stage, decoded, header.get("attributes"),
             header.get("definitions"),
         )
@@ -1074,7 +1077,7 @@ class InstanceApplyTests(unittest.TestCase):
     def test_the_multipart_fixture_applies_to_its_helpers(self):
         # The Q10a golden response is the contract's own two-part frame: part 0
         # with a face attribute, part 1, and a definition-level nested row.
-        from stageloom.blender import engine, helpers
+        from stageloom.blender import helpers
 
         path = os.path.join(
             os.path.dirname(__file__), "..", "..", "..",
@@ -1084,7 +1087,7 @@ class InstanceApplyTests(unittest.TestCase):
             header, sections = codec.decode_frame(stream.read())
         obj, stage = self._stage()
 
-        engine._apply(
+        engine_apply._apply(
             obj, stage, sections, header.get("attributes"),
             header.get("definitions"),
         )
@@ -1113,7 +1116,6 @@ class InstanceApplyTests(unittest.TestCase):
             evaluated.to_mesh_clear()
 
     def test_apply_rotates_and_scales_rows(self):
-        from blender.stageloom.blender import engine
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -1126,7 +1128,7 @@ class InstanceApplyTests(unittest.TestCase):
         m[3, 3] = 1.0
         sections["inst.transforms"] = m.reshape(-1)
 
-        engine._apply(obj, stage, sections, None)
+        engine_apply._apply(obj, stage, sections, None)
 
         evaluated, mesh = self._realized_mesh(obj)
         try:
@@ -1141,7 +1143,7 @@ class InstanceApplyTests(unittest.TestCase):
         # A nested placement is an instance of the child's prototype chain at
         # the parent's placement points — never a baked transformed copy — so
         # the parent's rows draw the nested content with it.
-        from blender.stageloom.blender import engine, helpers, nodes
+        from stageloom.blender import helpers
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -1150,7 +1152,7 @@ class InstanceApplyTests(unittest.TestCase):
         sections["inst.ref_def"] = np.array([1], dtype=np.uint32)
         sections["inst.transforms"] = self._wire_transform((0, 0, 0))
 
-        engine._apply(obj, stage, sections, None)
+        engine_apply._apply(obj, stage, sections, None)
 
         collections = helpers.definition_collections(obj, stage.key)
         self.assertIn(0, collections)
@@ -1186,7 +1188,6 @@ class InstanceApplyTests(unittest.TestCase):
     def test_apply_draws_two_levels_of_nesting(self):
         # def0: a quad; def1 nests it 3 up; def2 nests def1 1 up; one top row
         # of def2 — the quad lands at z = 4. Each level stays its own instance.
-        from blender.stageloom.blender import engine
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -1197,7 +1198,7 @@ class InstanceApplyTests(unittest.TestCase):
         sections["inst.ref_def"] = np.array([2], dtype=np.uint32)
         sections["inst.transforms"] = self._wire_transform((0, 0, 0))
 
-        engine._apply(obj, stage, sections, None)
+        engine_apply._apply(obj, stage, sections, None)
 
         bpy.context.view_layer.update()
         geometry = obj.evaluated_get(bpy.context.evaluated_depsgraph_get()).evaluated_geometry()
@@ -1226,7 +1227,6 @@ class InstanceApplyTests(unittest.TestCase):
         # One placement cloud, two children: each Instance-on-Points selects
         # only the points whose ``child`` names it, so both children land where
         # they belong inside a single cloud (rows interleaved on purpose).
-        from blender.stageloom.blender import engine, nodes
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -1244,7 +1244,7 @@ class InstanceApplyTests(unittest.TestCase):
         sections["inst.ref_def"] = np.array([2], dtype=np.uint32)
         sections["inst.transforms"] = self._wire_transform((0, 0, 0))
 
-        engine._apply(obj, stage, sections, None)
+        engine_apply._apply(obj, stage, sections, None)
 
         group = bpy.data.node_groups[nodes.group_name(stage.key)]
         ionos = [n for n in group.nodes if n.bl_idname == "GeometryNodeInstanceOnPoints"]
@@ -1269,7 +1269,6 @@ class InstanceApplyTests(unittest.TestCase):
         # A definition placed inside itself is a wire error: the placement is
         # skipped (with a note), the rest of the chain still wires, and the
         # group stays a real graph.
-        from blender.stageloom.blender import engine
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -1281,7 +1280,7 @@ class InstanceApplyTests(unittest.TestCase):
         sections["inst.ref_def"] = np.array([1], dtype=np.uint32)
         sections["inst.transforms"] = self._wire_transform((0, 0, 0))
 
-        engine._apply(obj, stage, sections, None)
+        engine_apply._apply(obj, stage, sections, None)
 
         evaluated, mesh = self._realized_mesh(obj)
         try:
@@ -1297,7 +1296,7 @@ class InstanceApplyTests(unittest.TestCase):
         # like the top-level rows, so moving a nested placement updates the
         # drawing without churning the node group. The old chain baked each
         # matrix into a Transform node, so every move rebuilt the chain.
-        from blender.stageloom.blender import engine, helpers, nodes
+        from stageloom.blender import helpers
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -1305,11 +1304,11 @@ class InstanceApplyTests(unittest.TestCase):
         sections["idef.1.inst.transforms"] = self._wire_transform((0, 0, 3))
         sections["inst.ref_def"] = np.array([1], dtype=np.uint32)
         sections["inst.transforms"] = self._wire_transform((0, 0, 0))
-        engine._apply(obj, stage, sections, None)
+        engine_apply._apply(obj, stage, sections, None)
 
         group = bpy.data.node_groups[nodes.group_name(stage.key)]
         helpers_map = helpers.ensure_helpers(obj, stage.key)
-        nested = engine._nested_rows_of(sections)
+        nested = engine_apply._nested_rows_of(sections)
         definitions = nodes._definitions(obj, stage.key, nested)
         signature = group["gh_stack_nested"]
         self.assertEqual(signature, "1>0")
@@ -1317,7 +1316,7 @@ class InstanceApplyTests(unittest.TestCase):
         self.assertFalse(nodes._group_matches(group, helpers_map, definitions, "changed", nested))
 
         sections["idef.1.inst.transforms"] = self._wire_transform((0, 0, 5))
-        engine._apply(obj, stage, sections, None)
+        engine_apply._apply(obj, stage, sections, None)
         self.assertIs(bpy.data.node_groups[nodes.group_name(stage.key)], group)
         self.assertEqual(group["gh_stack_nested"], signature)
         self.assertTrue(nodes._group_matches(group, helpers_map, definitions, signature, nested))
@@ -1330,7 +1329,7 @@ class InstanceApplyTests(unittest.TestCase):
             evaluated.to_mesh_clear()
 
     def test_the_group_rebuilds_when_the_nested_structure_changes(self):
-        from blender.stageloom.blender import engine, helpers, nodes
+        from stageloom.blender import helpers
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -1338,7 +1337,7 @@ class InstanceApplyTests(unittest.TestCase):
         sections["idef.1.inst.transforms"] = self._wire_transform((0, 0, 3))
         sections["inst.ref_def"] = np.array([1], dtype=np.uint32)
         sections["inst.transforms"] = self._wire_transform((0, 0, 0))
-        engine._apply(obj, stage, sections, None)
+        engine_apply._apply(obj, stage, sections, None)
 
         group = bpy.data.node_groups[nodes.group_name(stage.key)]
         self.assertEqual(group["gh_stack_nested"], "1>0")
@@ -1351,11 +1350,11 @@ class InstanceApplyTests(unittest.TestCase):
         sections["idef.1.inst.transforms"] = self._wire_transform((0, 0, 3))
         sections["inst.ref_def"] = np.array([1], dtype=np.uint32)
         sections["inst.transforms"] = self._wire_transform((0, 0, 0))
-        engine._apply(obj, stage, sections, None)
+        engine_apply._apply(obj, stage, sections, None)
         self.assertEqual(group["gh_stack_nested"], "1>2")
 
         helpers_map = helpers.ensure_helpers(obj, stage.key)
-        nested = engine._nested_rows_of(sections)
+        nested = engine_apply._nested_rows_of(sections)
         definitions = nodes._definitions(obj, stage.key, nested)
         self.assertTrue(nodes._group_matches(group, helpers_map, definitions, "1>2", nested))
         self.assertFalse(any(n.bl_idname == "GeometryNodeTransform" for n in group.nodes))
@@ -1373,7 +1372,6 @@ class InstanceApplyTests(unittest.TestCase):
         # per row — so a child placed at many nested rows scaled with copies.
         # The output must hold one instance per placement instead, reachable
         # through the instance references, with no baked mesh at the top.
-        from blender.stageloom.blender import engine, nodes
 
         obj, stage = self._stage()
         placements = 1000
@@ -1387,7 +1385,7 @@ class InstanceApplyTests(unittest.TestCase):
         sections["inst.transforms"] = np.tile(self._wire_transform((0, 0, 0)), (rows, 1))
 
         started = time.monotonic()
-        engine._apply(obj, stage, sections, None)
+        engine_apply._apply(obj, stage, sections, None)
         bpy.context.view_layer.update()
         geometry = obj.evaluated_get(bpy.context.evaluated_depsgraph_get()).evaluated_geometry()
         elapsed = time.monotonic() - started
@@ -1412,7 +1410,6 @@ class InstanceApplyTests(unittest.TestCase):
         # counted is what proves the renderer sees the nested instances (the
         # method that showed geometry copies drawing where references did not,
         # 2026-10-17).
-        from blender.stageloom.blender import engine
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -1420,7 +1417,7 @@ class InstanceApplyTests(unittest.TestCase):
         sections["idef.1.inst.transforms"] = self._wire_transform((0, 0, 3))
         sections["inst.ref_def"] = np.array([1], dtype=np.uint32)
         sections["inst.transforms"] = self._wire_transform((0, 0, 0))
-        engine._apply(obj, stage, sections, None)
+        engine_apply._apply(obj, stage, sections, None)
 
         scene = bpy.context.scene
         scene.render.engine = "CYCLES"
@@ -1463,7 +1460,7 @@ class InstanceApplyTests(unittest.TestCase):
         # A group written by an older build has no format stamp (and no nested
         # chain): a same-hash frame must still be able to repair it, so the
         # stamp is part of the match.
-        from blender.stageloom.blender import engine, helpers, nodes
+        from stageloom.blender import helpers
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -1471,11 +1468,11 @@ class InstanceApplyTests(unittest.TestCase):
         sections["idef.1.inst.transforms"] = self._wire_transform((0, 0, 3))
         sections["inst.ref_def"] = np.array([1], dtype=np.uint32)
         sections["inst.transforms"] = self._wire_transform((0, 0, 0))
-        engine._apply(obj, stage, sections, None)
+        engine_apply._apply(obj, stage, sections, None)
 
         group = bpy.data.node_groups[nodes.group_name(stage.key)]
         helpers_map = helpers.ensure_helpers(obj, stage.key)
-        nested = engine._nested_rows_of(sections)
+        nested = engine_apply._nested_rows_of(sections)
         definitions = nodes._definitions(obj, stage.key, nested)
 
         group["gh_stack_format"] = 1  # what an older build left behind
@@ -1489,13 +1486,13 @@ class InstanceApplyTests(unittest.TestCase):
     def test_an_orphan_definition_is_not_expected_in_the_group(self):
         # A definition no row reaches gets no chain; expecting its objects would
         # make every apply see a mismatch and rebuild forever.
-        from blender.stageloom.blender import engine, helpers, nodes
+        from stageloom.blender import helpers
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
         sections["inst.ref_def"] = np.array([0], dtype=np.uint32)
         sections["inst.transforms"] = self._wire_transform((0, 0, 0))
-        engine._apply(obj, stage, sections, None)
+        engine_apply._apply(obj, stage, sections, None)
 
         group = bpy.data.node_groups[nodes.group_name(stage.key)]
         helpers_map = helpers.ensure_helpers(obj, stage.key)
@@ -1509,7 +1506,6 @@ class InstanceApplyTests(unittest.TestCase):
         # attribute + four rows, all in one response. The base mesh draws as
         # real geometry, the four quads as instances, and each attribute lands
         # on its own helper.
-        from blender.stageloom.blender import engine
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections())
@@ -1535,7 +1531,7 @@ class InstanceApplyTests(unittest.TestCase):
         sections["attr.0.values"] = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
         sections["idef.0.attr.1.values"] = np.array([5.0, 6.0, 7.0, 8.0], dtype=np.float32)
 
-        engine._apply(obj, stage, sections, attributes)
+        engine_apply._apply(obj, stage, sections, attributes)
 
         evaluated, mesh = self._realized_mesh(obj)
         try:
@@ -1545,7 +1541,7 @@ class InstanceApplyTests(unittest.TestCase):
         finally:
             evaluated.to_mesh_clear()
 
-        from blender.stageloom.blender import helpers
+        from stageloom.blender import helpers
 
         base = helpers.helper_for(obj, stage.key, "mesh")
         definition = helpers.definition_name(obj, stage.key, 0)
@@ -1559,13 +1555,13 @@ class InstanceApplyTests(unittest.TestCase):
         # The rebuild check must agree with the wiring it just produced (it
         # must not count the base points helper as a row cloud and rebuild on
         # every apply.
-        from blender.stageloom.blender import engine, helpers, nodes
+        from stageloom.blender import helpers
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
         sections["inst.ref_def"] = np.array([0], dtype=np.uint32)
         sections["inst.transforms"] = self._wire_transform((0, 0, 0))
-        engine._apply(obj, stage, sections, None)
+        engine_apply._apply(obj, stage, sections, None)
 
         group = bpy.data.node_groups[nodes.group_name(stage.key)]
         helpers_map = helpers.ensure_helpers(obj, stage.key)
@@ -1578,7 +1574,7 @@ class InstanceApplyTests(unittest.TestCase):
         self.assertFalse(nodes._group_matches(group, helpers_map, {}))
 
         # And a response without blocks must actually remove it.
-        engine._apply(obj, stage, {}, None)
+        engine_apply._apply(obj, stage, {}, None)
         self.assertEqual(helpers.definition_collections(obj, stage.key), {})
         self.assertEqual(helpers.instance_clouds(obj, stage.key), {})
 
@@ -1587,51 +1583,50 @@ class InstanceApplyTests(unittest.TestCase):
         # definitions + rows has empty top-level helpers. The old emptiness
         # check looked only there, so every pass looked "missing" and applied
         # the same frame again. Check the helper each section actually writes.
-        from blender.stageloom.blender import engine, helpers
+        from stageloom.blender import helpers
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
         sections["inst.ref_def"] = np.array([0], dtype=np.uint32)
         sections["inst.transforms"] = self._wire_transform((0, 0, 0))
-        engine._apply(obj, stage, sections, None)
+        engine_apply._apply(obj, stage, sections, None)
 
-        self.assertFalse(engine._payload_missing(obj, stage, sections))
+        self.assertFalse(engine_apply._payload_missing(obj, stage, sections))
 
         # Clear only the definition prototype: the frame still names geometry
         # the helper no longer holds, so a replay must repair it.
         definition = bpy.data.objects[helpers.definition_name(obj, stage.key, 0)]
         definition.data.clear_geometry()
-        self.assertTrue(engine._payload_missing(obj, stage, sections))
+        self.assertTrue(engine_apply._payload_missing(obj, stage, sections))
 
     def test_a_mixed_frame_still_reapplies_a_cleared_base_helper(self):
         # Definition helpers must not mask a missing base helper: both are
         # checked against the sections that name them.
-        from blender.stageloom.blender import engine, helpers
+        from stageloom.blender import helpers
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections())
         sections.update(self._quad_sections("idef.0."))
         sections["inst.ref_def"] = np.array([0], dtype=np.uint32)
         sections["inst.transforms"] = self._wire_transform((0, 0, 0))
-        engine._apply(obj, stage, sections, None)
-        self.assertFalse(engine._payload_missing(obj, stage, sections))
+        engine_apply._apply(obj, stage, sections, None)
+        self.assertFalse(engine_apply._payload_missing(obj, stage, sections))
 
         helpers.helper_for(obj, stage.key, "mesh").data.clear_geometry()
-        self.assertTrue(engine._payload_missing(obj, stage, sections))
+        self.assertTrue(engine_apply._payload_missing(obj, stage, sections))
 
     def test_apply_clears_definitions_that_go_away(self):
-        from blender.stageloom.blender import engine
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
         sections["inst.ref_def"] = np.array([0], dtype=np.uint32)
         sections["inst.transforms"] = self._wire_transform((0, 0, 0))
-        engine._apply(obj, stage, sections, None)
+        engine_apply._apply(obj, stage, sections, None)
 
         # A later response without blocks removes the prototype and its cloud.
-        from blender.stageloom.blender import helpers
+        from stageloom.blender import helpers
 
-        engine._apply(obj, stage, {}, None)
+        engine_apply._apply(obj, stage, {}, None)
         self.assertEqual(helpers.definition_collections(obj, stage.key), {})
         self.assertEqual(helpers.instance_clouds(obj, stage.key), {})
 
@@ -1646,7 +1641,7 @@ class InstanceApplyTests(unittest.TestCase):
         # Helpers, definitions and row clouds are owned by the dedicated
         # "Stageloom Stage" scene, so the user's outliner holds only their own
         # collections; the node graph still resolves them across scenes.
-        from blender.stageloom.blender import engine, helpers
+        from stageloom.blender import helpers
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
@@ -1654,7 +1649,7 @@ class InstanceApplyTests(unittest.TestCase):
         sections["idef.1.inst.transforms"] = self._wire_transform((0, 0, 3))
         sections["inst.ref_def"] = np.array([1], dtype=np.uint32)
         sections["inst.transforms"] = self._wire_transform((0, 0, 0))
-        engine._apply(obj, stage, sections, None)
+        engine_apply._apply(obj, stage, sections, None)
 
         stage_scene = helpers.stage_scene()
         user_scene = bpy.context.scene
@@ -1680,13 +1675,13 @@ class InstanceApplyTests(unittest.TestCase):
         # Sessions from before the stage scene have their plumbing linked into
         # the user's scene; the next use moves it, so no manual cleanup is
         # needed. A deleted stage scene is recreated the same way.
-        from blender.stageloom.blender import engine, helpers
+        from stageloom.blender import helpers
 
         obj, stage = self._stage()
         sections = dict(self._quad_sections("idef.0."))
         sections["inst.ref_def"] = np.array([0], dtype=np.uint32)
         sections["inst.transforms"] = self._wire_transform((0, 0, 0))
-        engine._apply(obj, stage, sections, None)
+        engine_apply._apply(obj, stage, sections, None)
 
         user_scene = bpy.context.scene
         stage_scene = helpers.stage_scene()
@@ -1797,9 +1792,8 @@ class EnginePrefixTests(unittest.TestCase):
         # The add-on's module copy, not `blender.stageloom`: the registered
         # depsgraph handler and the engine state (`_prefix_epoch`, `_dirty`,
         # the memos) live in the module Blender enabled.
-        from stageloom.blender import engine
 
-        return engine._prefix_sections(holder, stack_mod.stack_of(holder), stage)
+        return engine_request._prefix_sections(holder, stack_mod.stack_of(holder), stage)
 
     def test_stage_after_the_instance_modifier_ships_definitions(self):
         holder, stage, _group, _modifier, stack_mod = self._scene()
@@ -1814,13 +1808,11 @@ class EnginePrefixTests(unittest.TestCase):
         # §8: the capability is retained from the peer's `hello`; without it a
         # multi-part definition is shipped as one single-part definition per
         # part with a visible note, never as a frame an old peer would collapse.
-        from stageloom.blender import engine
-
         holder, stage, stack_mod = self._multipart_scene()
-        engine.bridge.state["caps"] = []
-        engine._prefix_memo.clear()
-        engine._prefix_batch.clear()
-        engine._prefix_batch_built = False
+        bridge.state["caps"] = []
+        ENGINE.prefix_memo.clear()
+        ENGINE.prefix_batch.clear()
+        ENGINE.prefix_batch_built = False
         try:
             sections, _hash, _attributes, definitions = self._prefix(
                 holder, stage, stack_mod
@@ -1838,10 +1830,10 @@ class EnginePrefixTests(unittest.TestCase):
 
             # A peer that does advertise it gets the native two-part frame and
             # the warning goes away.
-            engine.bridge.state["caps"] = ["blocks/2"]
-            engine._prefix_memo.clear()
-            engine._prefix_batch.clear()
-            engine._prefix_batch_built = False
+            bridge.state["caps"] = ["blocks/2"]
+            ENGINE.prefix_memo.clear()
+            ENGINE.prefix_batch.clear()
+            ENGINE.prefix_batch_built = False
             sections, _hash, _attributes, definitions = self._prefix(
                 holder, stage, stack_mod
             )
@@ -1851,7 +1843,7 @@ class EnginePrefixTests(unittest.TestCase):
             self.assertIn("idef.0.1.mesh.verts", names)
             self.assertEqual(stage.input_warnings, "")
         finally:
-            engine.bridge.state["caps"] = []
+            bridge.state["caps"] = []
 
     def test_stage_before_the_instance_modifier_ships_none(self):
         holder, stage, _group, _modifier, stack_mod = self._scene()
@@ -1898,7 +1890,7 @@ class EngineUpdateTests(unittest.TestCase):
     def setUp(self):
         bpy.ops.wm.read_factory_settings(use_empty=True)
         bpy.ops.preferences.addon_enable(module="stageloom")
-        from blender.stageloom.blender import bridge, server
+        from stageloom.blender import bridge
 
         self.server = server
         self.bridge = bridge
@@ -1913,26 +1905,24 @@ class EngineUpdateTests(unittest.TestCase):
         self.bridge.state["connected"] = self._original_connected
 
     def _capture(self, obj, record, stage):
-        from blender.stageloom.blender import engine
-        from blender.stageloom.core import codec
+        from stageloom.core import codec
 
-        engine._process_stage(obj, record, stage)
+        engine_request._process_stage(obj, record, stage)
         header, sections = codec.decode_frame(self.frames[-1])
         return header, sections
 
     @staticmethod
     def _edit(owner, object_name):
-        from blender.stageloom.blender import engine
 
         owner.data.vertices[0].co.x += 0.5
         owner.data.update()
         # The engine's own writing of UI edits stands in for the tag Blender
         # gives a real edit: one global depsgraph generation, no per-datablock
         # counters (the live path is depsgraph-authoritative now).
-        engine._bump_epochs(None)
+        engine_request._bump_epochs(None)
 
     def _collection_scene(self):
-        from blender.stageloom.blender import stack as stack_mod
+        from stageloom.blender import stack as stack_mod
 
         member = _quad("update-member")
         collection = bpy.data.collections.new("update-coll")
@@ -1965,7 +1955,6 @@ class EngineUpdateTests(unittest.TestCase):
         return holder, member, stage, stack_mod.stack_of(holder)
 
     def test_a_collection_members_edit_ships_a_new_definition(self):
-        from blender.stageloom.blender import engine
 
         holder, member, stage, record = self._collection_scene()
         header, sections = self._capture(holder, record, stage)
@@ -1977,7 +1966,7 @@ class EngineUpdateTests(unittest.TestCase):
         before = np.asarray(sections["idef.1.mesh.verts"], dtype=np.float32)
 
         self._edit(member, "update-member")
-        engine._pending_of(record.stack_id, stage.key).clear()
+        ENGINE.pending_of(record.stack_id, stage.key).clear()
         header, sections = self._capture(holder, record, stage)
 
         self.assertEqual((header.get("geom") or {}).get("mode"), "full")
@@ -1990,27 +1979,25 @@ class EngineUpdateTests(unittest.TestCase):
         # nudges a stage that has waited past the timeout.
         import time
 
-        from blender.stageloom.blender import engine
 
         holder, member, stage, record = self._collection_scene()
         self._capture(holder, record, stage)
         self.assertGreater(
-            engine.waiting_seconds(record.stack_id, stage.key),
+            ENGINE.waiting_seconds(record.stack_id, stage.key),
             0.0,
             "the captured request is not reported as in flight",
         )
 
-        pending = engine._pending_of(record.stack_id, stage.key)
+        pending = ENGINE.pending_of(record.stack_id, stage.key)
         self.assertTrue(pending)
         for rid in list(pending):
             pending[rid] = time.monotonic() - 1000.0
-        engine._dirty.clear()
-        engine._last_stall_check = 0.0
-        engine._nudge_stalled_waits()
-        self.assertIn(holder.name, engine._dirty)
+        ENGINE.dirty.clear()
+        ENGINE.last_stall_check = 0.0
+        engine_triggers._nudge_stalled_waits()
+        self.assertIn(holder.name, ENGINE.dirty)
 
     def test_an_object_sources_edit_ships_a_new_definition(self):
-        from blender.stageloom.blender import engine
 
         source = _quad("update-source")
         points = _points("update-opoints", [(0, 0, 0), (1, 0, 0)])
@@ -2034,7 +2021,7 @@ class EngineUpdateTests(unittest.TestCase):
         holder.modifiers.active = modifier
         bpy.ops.stageloom.add_stage(label="UpdateO")
         stage = holder.gh_stack.stages[-1]
-        from blender.stageloom.blender import stack as stack_mod
+        from stageloom.blender import stack as stack_mod
 
         record = stack_mod.stack_of(holder)
 
@@ -2043,7 +2030,7 @@ class EngineUpdateTests(unittest.TestCase):
         before = np.asarray(sections["idef.0.mesh.verts"], dtype=np.float32)
 
         self._edit(source, "update-source")
-        engine._pending_of(record.stack_id, stage.key).clear()
+        ENGINE.pending_of(record.stack_id, stage.key).clear()
         header, sections = self._capture(holder, record, stage)
 
         self.assertEqual((header.get("geom") or {}).get("mode"), "full")

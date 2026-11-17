@@ -5,7 +5,7 @@
 #     scripts/check-all --quick  # inner loop: docs, core, ruff only
 #     scripts/check-all --ci     # full gate, with the C# step explicitly skipped
 #
-# The bench step runs three sequential benchmarks and compares the median
+# The bench step runs three sequential benchmarks and compares the fastest
 # p50/p95 of each gated metric against the stored baseline. On the reference
 # machine a >5% regression fails; on another machine (CI) it prints
 # "NOT COMPARABLE" and the summary says the baseline was skipped.

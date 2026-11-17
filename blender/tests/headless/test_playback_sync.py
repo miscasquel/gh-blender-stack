@@ -39,6 +39,13 @@ from harness import (
     start_fake,
     stop_fake,
 )
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import apply as engine_apply
+from stageloom.blender.engine import messages as engine_messages
+from stageloom.blender.engine import playback as engine_playback
+from stageloom.blender.engine import triggers as engine_triggers
+from stageloom.blender import stack as stack_mod
+from stageloom.blender import server
 
 
 class PlaybackSyncTests(unittest.TestCase):
@@ -84,7 +91,7 @@ class PlaybackSyncTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         stop_fake(getattr(cls, "fake", None))
-        cls.engine._playback_sync = False
+        ENGINE.playback_sync = False
         bpy.ops.preferences.addon_disable(module="stageloom")
 
     @classmethod
@@ -99,86 +106,85 @@ class PlaybackSyncTests(unittest.TestCase):
         raise AssertionError("the fake never connected to the engine")
 
     def setUp(self):
-        engine = self.engine
-        engine._pending.clear()
-        engine._sent.clear()
-        engine._verify.clear()
-        engine._last_frame.clear()
-        engine._dirty.clear()
-        engine._playback_sync = False
-        self.playback._reported.clear()
+        ENGINE.clear_runtimes()
+        ENGINE.clear_runtimes()
+        ENGINE.verify.clear()
+        ENGINE.clear_runtimes()
+        ENGINE.dirty.clear()
+        ENGINE.playback_sync = False
+        ENGINE.playback_reports.clear()
         bpy.context.scene.sync_mode = "NONE"
         bpy.context.scene.frame_set(1)
-        self.sends = engine.stats["sends"]
+        self.sends = ENGINE.stats()["sends"]
 
     def tearDown(self):
-        self.engine._playback_sync = False
-        self.playback._reported.clear()
+        ENGINE.playback_sync = False
+        ENGINE.playback_reports.clear()
 
     def _play(self, frames):
         """Drive the gate the way Play Every Frame does: frame_set, then sync."""
         scene = bpy.context.scene
-        self.engine._on_playback_pre(scene)
+        engine_playback._on_playback_pre(scene)
         try:
             for frame in frames:
                 scene.frame_set(frame)
                 # frame_change_post is not guaranteed to fire under -b; call
                 # the same gate the handler calls. A duplicate call is a
                 # cache hit and sends nothing.
-                self.engine._sync_playback_frame(scene)
+                engine_playback._sync_playback_frame(scene)
         finally:
-            self.engine._on_playback_post(scene)
+            engine_playback._on_playback_post(scene)
 
     def test_00_pre_and_post_handlers_choose_the_mode(self):
         scene = bpy.context.scene
-        self.assertIn(self.engine._on_frame_change_sync, bpy.app.handlers.frame_change_post)
-        self.assertIn(self.engine._on_playback_pre, bpy.app.handlers.animation_playback_pre)
-        self.assertIn(self.engine._on_playback_post, bpy.app.handlers.animation_playback_post)
+        self.assertIn(engine_playback._on_frame_change_sync, bpy.app.handlers.frame_change_post)
+        self.assertIn(engine_playback._on_playback_pre, bpy.app.handlers.animation_playback_pre)
+        self.assertIn(engine_playback._on_playback_post, bpy.app.handlers.animation_playback_post)
 
         scene.sync_mode = "NONE"
-        self.engine._on_playback_pre(scene)
-        self.assertTrue(self.engine._playback_sync, "Play Every Frame did not arm the gate")
-        self.engine._on_playback_post(scene)
-        self.assertFalse(self.engine._playback_sync)
+        engine_playback._on_playback_pre(scene)
+        self.assertTrue(ENGINE.playback_sync, "Play Every Frame did not arm the gate")
+        engine_playback._on_playback_post(scene)
+        self.assertFalse(ENGINE.playback_sync)
 
         scene.sync_mode = "FRAME_DROP"
-        self.engine._on_playback_pre(scene)
-        self.assertFalse(self.engine._playback_sync, "Frame Drop armed the gate")
-        self.engine._on_playback_post(scene)
+        engine_playback._on_playback_pre(scene)
+        self.assertFalse(ENGINE.playback_sync, "Frame Drop armed the gate")
+        engine_playback._on_playback_post(scene)
         scene.sync_mode = "NONE"
 
     def test_01_play_every_frame_asks_once_per_frame_and_waits(self):
         self._play((1, 2, 3))
         self.assertAlmostEqual(helper_max(self.obj, self.stage.key), 3.0, places=2)
         self.assertEqual(
-            self.engine.stats["sends"] - self.sends,
+            ENGINE.stats()["sends"] - self.sends,
             3,
             "the playback gate did not ask for each frame exactly once (report=%s)"
             % report_of(self.report),
         )
         self.assertGreaterEqual(requests_of(self.report), 3)
-        self.assertGreaterEqual(self.engine.stats["playback_frames"], 3)
-        self.assertGreaterEqual(self.engine.stats["playback_synced"], 3)
-        self.assertEqual(self.engine.stats["playback_failures"], 0)
+        self.assertGreaterEqual(ENGINE.stats()["playback_frames"], 3)
+        self.assertGreaterEqual(ENGINE.stats()["playback_synced"], 3)
+        self.assertEqual(ENGINE.stats()["playback_failures"], 0)
 
     def test_02_a_repeated_frame_is_not_asked_twice(self):
         self._play((1,))
-        sends = self.engine.stats["sends"]
+        sends = ENGINE.stats()["sends"]
         self._play((1,))
         self.assertEqual(
-            self.engine.stats["sends"],
+            ENGINE.stats()["sends"],
             sends,
             "the gate asked again for a frame already delivered",
         )
 
     def test_03_timer_is_suppressed_while_the_gate_owns_the_frame(self):
-        passes = self.engine.stats["passes"]
-        self.engine._playback_sync = True
+        passes = ENGINE.stats()["passes"]
+        ENGINE.playback_sync = True
         try:
-            interval = self.engine._timer()
+            interval = engine_triggers._timer()
         finally:
-            self.engine._playback_sync = False
-        self.assertEqual(self.engine.stats["passes"], passes, "the timer ran during a synced playback")
+            ENGINE.playback_sync = False
+        self.assertEqual(ENGINE.stats()["passes"], passes, "the timer ran during a synced playback")
         self.assertEqual(interval, self.engine.IDLE_INTERVAL)
 
     def test_04_disconnect_keeps_the_last_output_and_continues(self):
@@ -190,23 +196,23 @@ class PlaybackSyncTests(unittest.TestCase):
             pump(seconds=5.0, until=lambda: not bridge.state["connected"]),
             "the fake never disconnected",
         )
-        self.engine._playback_sync = True
+        ENGINE.playback_sync = True
         scene = bpy.context.scene
         scene.frame_set(2)
-        ready = self.engine._sync_playback_frame(scene)
+        ready = engine_playback._sync_playback_frame(scene)
         self.assertFalse(ready, "a disconnected stage reported the frame ready")
-        self.assertGreaterEqual(self.engine.stats["playback_failures"], 1)
+        self.assertGreaterEqual(ENGINE.stats()["playback_failures"], 1)
         self.assertIn(
             self.stage.state,
             (
-                self.engine.stack_mod.STATE_DISCONNECTED,
-                self.engine.stack_mod.STATE_UNBOUND,
+                stack_mod.STATE_DISCONNECTED,
+                stack_mod.STATE_UNBOUND,
             ),
         )
 
         # This test owns the only fake; the later wait tests need a connected
         # client again, so restore one before leaving.
-        self.engine._playback_sync = False
+        ENGINE.playback_sync = False
         type(self).fake = start_fake(
             self.stage.key, self.report, "--delay-ms", "120", port=self.port
         )
@@ -219,8 +225,8 @@ class PlaybackSyncTests(unittest.TestCase):
             % (
                 self.stage.state,
                 dict(bridge.state),
-                self.engine.server.SERVER.running,
-                self.engine.server.SERVER._clients,
+                server.SERVER.running,
+                server.SERVER._clients,
                 type(self).fake.process.poll() if type(self).fake else None,
             ),
         )
@@ -314,7 +320,6 @@ class PlaybackSyncTests(unittest.TestCase):
         )
 
     def test_09_bake_progress_follows_the_baked_frames(self):
-        import stageloom.blender.engine as engine
         from stageloom.blender.engine import playback
 
         class Cursor:
@@ -325,22 +330,22 @@ class PlaybackSyncTests(unittest.TestCase):
                 self.values.append(value)
 
         cursor = Cursor()
-        engine._bake_progress = (cursor, 10, 5)
+        ENGINE.bake_progress = (cursor, 10, 5)
         try:
             for frame in (9, 10, 12, 14, 20):
                 playback._update_bake_progress(
                     type("Scene", (), {"frame_current": frame})()
                 )
         finally:
-            engine._bake_progress = None
+            ENGINE.bake_progress = None
         self.assertEqual(cursor.values, [0, 1, 3, 5, 5])
 
     def _waiting(self, rid):
         key = (self.record.stack_id, self.stage.key)
-        self.engine._pending.clear()
-        self.engine._pending[key] = {rid: time.monotonic()}
+        ENGINE.clear_runtimes()
+        ENGINE.runtime(*key).pending = {rid: time.monotonic()}
         self.stage.rid = rid
-        self.stage.state = self.engine.stack_mod.STATE_WAITING
+        self.stage.state = stack_mod.STATE_WAITING
         return key
 
     def _response(self, rid):
@@ -389,14 +394,14 @@ class PlaybackSyncTests(unittest.TestCase):
             2.0,
             "the hello during playback did not release the main thread",
         )
-        self.assertNotIn(key, self.engine._pending, "the hello left the old wait pending")
+        self.assertFalse(ENGINE.is_pending(*key), "the hello left the old wait pending")
         self.assertEqual(self.stage.rid, "", "the hello kept the old session's request id")
-        self.assertEqual(self.stage.state, self.engine.stack_mod.STATE_IDLE)
+        self.assertEqual(self.stage.state, stack_mod.STATE_IDLE)
 
         # The old client's answer must not apply to the new session.
         header, sections = self._response(rid)
         bridge.post_incoming(header, sections)
-        self.engine._handle_incoming()
+        engine_messages._handle_incoming()
         self.assertEqual(
             self.stage.applied_out_hash,
             "sha256:before-hello",
@@ -427,9 +432,9 @@ class PlaybackSyncTests(unittest.TestCase):
             timer.cancel()
             bridge.state["doc"] = previous_doc
             bridge.state["connected_at"] = previous_at
-            self.engine._forget(self.record.stack_id, self.stage.key)
+            ENGINE.forget(self.record.stack_id, self.stage.key)
             self.stage.rid = ""
-            self.stage.state = self.engine.stack_mod.STATE_IDLE
+            self.stage.state = stack_mod.STATE_IDLE
         self.assertFalse(ready)
         self.assertLess(elapsed, 1.0, "a changed document blocked the playback wait")
 
@@ -448,44 +453,43 @@ class PlaybackSyncTests(unittest.TestCase):
             self.playback.PLAYBACK_HARD_CAP_SECONDS = previous_cap
         self.assertFalse(ready)
         self.assertLess(elapsed, 3.0, "the hard cap did not end the wait")
-        self.assertNotIn(key, self.engine._pending, "the timeout left the request pending")
-        self.assertEqual(self.stage.state, self.engine.stack_mod.STATE_ERROR)
+        self.assertFalse(ENGINE.is_pending(*key), "the timeout left the request pending")
+        self.assertEqual(self.stage.state, stack_mod.STATE_ERROR)
         self.assertIn("no answer within", self.stage.error)
-        self.stage.state = self.engine.stack_mod.STATE_IDLE
+        self.stage.state = stack_mod.STATE_IDLE
         self.stage.error = ""
 
     def test_13_a_stage_exception_stays_in_that_stage(self):
-        import stageloom.blender.engine as engine
 
         self.stage.applied_out_hash = ""
         self.stage.error = ""
-        real_apply = engine._apply
+        real_apply = engine_apply._apply
 
         def failing_apply(
             obj, stage, payload, attributes=None, definitions=None, topology=None
         ):
             raise RuntimeError("playback apply fault")
 
-        engine._apply = failing_apply
+        engine_apply._apply = failing_apply
         scene = bpy.context.scene
         try:
             scene.frame_set(3)
-            engine._playback_sync = True
+            ENGINE.playback_sync = True
             try:
-                ready = engine._sync_playback_frame(scene)
+                ready = engine_playback._sync_playback_frame(scene)
             finally:
-                engine._playback_sync = False
+                ENGINE.playback_sync = False
         finally:
-            engine._apply = real_apply
+            engine_apply._apply = real_apply
         self.assertFalse(ready, "a stage whose answer failed reported the frame ready")
-        self.assertEqual(self.stage.state, engine.stack_mod.STATE_ERROR)
+        self.assertEqual(self.stage.state, stack_mod.STATE_ERROR)
         self.assertIn("playback apply fault", self.stage.error)
         self.assertEqual(
-            engine._pending.get((self.record.stack_id, self.stage.key), {}),
+            ENGINE.pending_of(self.record.stack_id, self.stage.key),
             {},
             "the failed answer left the request pending",
         )
-        self.stage.state = engine.stack_mod.STATE_OK
+        self.stage.state = stack_mod.STATE_OK
         self.stage.error = ""
 
     def test_15_the_gate_ignores_another_scenes_frame_event(self):
@@ -495,27 +499,26 @@ class PlaybackSyncTests(unittest.TestCase):
         other = bpy.data.scenes.new("Playback Other Scene")
         other.sync_mode = "NONE"
         try:
-            self.engine._on_playback_pre(scene)
-            self.assertTrue(self.engine._playback_sync)
-            frames = self.engine.stats["playback_frames"]
-            self.engine._on_frame_change_sync(other)
+            engine_playback._on_playback_pre(scene)
+            self.assertTrue(ENGINE.playback_sync)
+            frames = ENGINE.stats()["playback_frames"]
+            engine_playback._on_frame_change_sync(other)
             self.assertEqual(
-                self.engine.stats["playback_frames"],
+                ENGINE.stats()["playback_frames"],
                 frames,
                 "another scene's frame entered the playback gate",
             )
-            self.engine._on_playback_post(other)
-            self.assertTrue(self.engine._playback_sync, "another scene disarmed the gate")
+            engine_playback._on_playback_post(other)
+            self.assertTrue(ENGINE.playback_sync, "another scene disarmed the gate")
         finally:
-            self.engine._on_playback_post(scene)
+            engine_playback._on_playback_post(scene)
             bpy.data.scenes.remove(other)
-        self.assertFalse(self.engine._playback_sync)
+        self.assertFalse(ENGINE.playback_sync)
 
     def test_14_playback_flushes_edit_mode_before_reading_the_prefix(self):
-        engine = self.engine
         self.stage.applied_out_hash = ""
         self.stage.error = ""
-        engine._prefix_memo.clear()
+        ENGINE.prefix_memo.clear()
         scene = bpy.context.scene
         scene.sync_mode = "NONE"
         scene.frame_set(1)
@@ -528,11 +531,11 @@ class PlaybackSyncTests(unittest.TestCase):
             moved = float(bm.verts[0].co.x) + 5.0
             bm.verts[0].co.x = moved
             bmesh.update_edit_mesh(self.obj.data)
-            engine._playback_sync = True
+            ENGINE.playback_sync = True
             try:
-                ready = engine._sync_playback_frame(scene)
+                ready = engine_playback._sync_playback_frame(scene)
             finally:
-                engine._playback_sync = False
+                ENGINE.playback_sync = False
             self.assertTrue(ready, "the playback gate failed in Edit Mode")
             report = {}
             deadline = time.time() + 3.0

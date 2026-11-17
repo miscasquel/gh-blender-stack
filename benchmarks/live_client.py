@@ -45,6 +45,9 @@ def addon_modules():
     return (
         package,
         importlib.import_module(package + ".blender.engine"),
+        importlib.import_module(package + ".blender.engine.runtime").ENGINE,
+        importlib.import_module(package + ".blender.engine.triggers"),
+        importlib.import_module(package + ".blender.server"),
         importlib.import_module(package + ".blender.stack"),
         importlib.import_module(package + ".blender.bridge"),
     )
@@ -61,42 +64,42 @@ def locate_stage(stack_mod):
     raise RuntimeError("the reference scene has no Stageloom stage")
 
 
-def pump(engine, seconds, until):
+def pump(triggers, seconds, until):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-        engine._timer()
+        triggers._timer()
         if until():
             return True
         time.sleep(0.002)
     return bool(until())
 
 
-def pending(engine, record, stage):
-    return engine._pending.get((record.stack_id, stage.key)) or {}
+def pending(ENGINE, record, stage):
+    return ENGINE.pending_of(record.stack_id, stage.key)
 
 
-def wait_settled(engine, record, stage, timeout):
+def wait_settled(ENGINE, triggers, record, stage, timeout):
     return pump(
-        engine,
+        triggers,
         timeout,
-        lambda: stage.state == "ok" and not pending(engine, record, stage),
+        lambda: stage.state == "ok" and not pending(ENGINE, record, stage),
     )
 
 
 def main():
     args = parse_args()
-    package, engine, stack_mod, bridge = addon_modules()
+    package, engine, ENGINE, triggers, server, stack_mod, bridge = addon_modules()
     obj, record, stage = locate_stage(stack_mod)
 
-    if not engine.server.SERVER.running:
+    if not server.SERVER.running:
         engine.start_server(args.port)
-    if not engine.server.SERVER.running:
+    if not server.SERVER.running:
         raise RuntimeError("the Stageloom server did not start on %d" % args.port)
 
-    connected = pump(engine, args.timeout, lambda: bridge.state["clients"] >= 1)
+    connected = pump(triggers, args.timeout, lambda: bridge.state["clients"] >= 1)
     if not connected:
         raise RuntimeError("no Grasshopper client connected")
-    if not wait_settled(engine, record, stage, args.timeout):
+    if not wait_settled(ENGINE, triggers, record, stage, args.timeout):
         raise RuntimeError(
             "the first stage solve did not settle: %s / %s"
             % (stage.state, stage.error)
@@ -104,16 +107,16 @@ def main():
 
     samples = []
     for index in range(args.samples):
-        key = (record.stack_id, stage.key)
-        engine._timings.pop(key, None)
-        engine._sent.pop(key, None)
-        engine._prefix_memo.pop((obj.as_pointer(), stage.key), None)
-        engine._prefix_batch.clear()
-        engine._prefix_batch_built = False
-        stats_before = dict(engine.stats)
+        row = ENGINE.runtime(record.stack_id, stage.key)
+        row.timings.clear()
+        row.sent = None
+        ENGINE.prefix_memo.pop((obj.as_pointer(), stage.key), None)
+        ENGINE.prefix_batch.clear()
+        ENGINE.prefix_batch_built = False
+        stats_before = dict(ENGINE.stats())
         started = time.monotonic()
         engine.request_again(obj, stage)
-        if not wait_settled(engine, record, stage, args.timeout):
+        if not wait_settled(ENGINE, triggers, record, stage, args.timeout):
             samples.append(
                 {
                     "sample": index + 1,
@@ -121,9 +124,9 @@ def main():
                     "state": stage.state,
                     "error": stage.error,
                     "total_ms": (time.monotonic() - started) * 1000.0,
-                    "timings": engine.stage_timings(record.stack_id, stage.key),
+                    "timings": ENGINE.stage_timings(record.stack_id, stage.key),
                     "stats": {
-                        name: engine.stats[name] - stats_before[name]
+                        name: ENGINE.stats()[name] - stats_before[name]
                         for name in stats_before
                     },
                 }
@@ -136,10 +139,10 @@ def main():
                 "state": stage.state,
                 "error": stage.error,
                 "total_ms": (time.monotonic() - started) * 1000.0,
-                "timings": engine.stage_timings(record.stack_id, stage.key),
-                "passes": engine.stats["passes"],
+                "timings": ENGINE.stage_timings(record.stack_id, stage.key),
+                "passes": ENGINE.stats()["passes"],
                 "stats": {
-                    name: engine.stats[name] - stats_before[name]
+                    name: ENGINE.stats()[name] - stats_before[name]
                     for name in stats_before
                 },
             }
@@ -151,7 +154,7 @@ def main():
         "addon": package,
         "stage_key": stage.key,
         "object": obj.name,
-        "port": engine.server.SERVER.port,
+        "port": server.SERVER.port,
         "clients": bridge.state["clients"],
         "samples": samples,
         "meta": {

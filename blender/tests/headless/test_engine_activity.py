@@ -14,6 +14,10 @@ import unittest
 import bpy
 
 from harness import isolate_data_root
+from stageloom.blender import stack as stack_mod
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import lifecycle as engine_lifecycle
+from stageloom.blender.engine import triggers as engine_triggers
 
 
 class DisconnectedFastPathTests(unittest.TestCase):
@@ -28,13 +32,13 @@ class DisconnectedFastPathTests(unittest.TestCase):
 
         cls.engine = engine
         # Headless has no event loop, so call the post-register settle directly.
-        engine._settle()
+        ENGINE.settle()
         bpy.ops.mesh.primitive_cube_add(size=2.0)
         cls.obj = bpy.context.object
         bpy.ops.stageloom.add_stage(label="NoClient")
         cls.stage = cls.obj.gh_stack.stages[0]
-        engine._timer()
-        if engine._dirty:
+        engine_triggers._timer()
+        if ENGINE.dirty:
             raise AssertionError("the disconnected stage never settled")
 
     @classmethod
@@ -47,48 +51,45 @@ class DisconnectedFastPathTests(unittest.TestCase):
         bpy.context.view_layer.update()
 
     def test_01_an_edit_with_no_client_skips_the_read(self):
-        engine = self.engine
-        clones = engine.stats["prefix_clones"]
+        clones = ENGINE.stats()["prefix_clones"]
         self._edit()
-        engine._timer()
-        self.assertEqual(engine.stats["prefix_clones"], clones, "an edit with no client cloned")
+        engine_triggers._timer()
+        self.assertEqual(ENGINE.stats()["prefix_clones"], clones, "an edit with no client cloned")
         self.assertIn(
             self.stage.state,
-            (engine.stack_mod.STATE_DISCONNECTED, engine.stack_mod.STATE_UNBOUND),
+            (stack_mod.STATE_DISCONNECTED, stack_mod.STATE_UNBOUND),
         )
 
     def test_02_the_drain_policy(self):
-        engine = self.engine
-        real_background = engine._in_background
-        engine._in_background = lambda: False
+        real_background = engine_triggers._in_background
+        engine_triggers._in_background = lambda: False
         try:
-            engine._mark_dirty_all()
+            engine_lifecycle._mark_dirty_all()
             self.assertFalse(
-                engine._needs_drain(True),
+                engine_triggers._needs_drain(True),
                 "an all-dirty pass would force a redundant depsgraph evaluation",
             )
-            engine._dirty.clear()
-            self.assertTrue(engine._needs_drain(True), "a narrower pass did not drain")
+            ENGINE.dirty.clear()
+            self.assertTrue(engine_triggers._needs_drain(True), "a narrower pass did not drain")
         finally:
-            engine._in_background = real_background
-            engine._dirty.clear()
+            engine_triggers._in_background = real_background
+            ENGINE.dirty.clear()
 
     def test_03_an_unrelated_scene_does_not_wake_the_stage(self):
-        engine = self.engine
         other = bpy.data.scenes.new("Activity Other Scene")
         try:
-            engine._dirty.clear()
-            engine._on_depsgraph(other)
-            self.assertNotIn(self.obj.name, engine._dirty, "an unrelated depsgraph woke the stage")
-            engine._dirty.clear()
-            engine._on_frame_change(other)
-            self.assertNotIn(self.obj.name, engine._dirty, "an unrelated frame woke the stage")
+            ENGINE.dirty.clear()
+            engine_triggers._on_depsgraph(other)
+            self.assertNotIn(self.obj.name, ENGINE.dirty, "an unrelated depsgraph woke the stage")
+            ENGINE.dirty.clear()
+            engine_triggers._on_frame_change(other)
+            self.assertNotIn(self.obj.name, ENGINE.dirty, "an unrelated frame woke the stage")
 
-            engine._dirty.clear()
-            engine._on_frame_change(bpy.context.scene)
-            self.assertIn(self.obj.name, engine._dirty, "the stage's own frame did not wake it")
+            ENGINE.dirty.clear()
+            engine_triggers._on_frame_change(bpy.context.scene)
+            self.assertIn(self.obj.name, ENGINE.dirty, "the stage's own frame did not wake it")
         finally:
-            engine._dirty.clear()
+            ENGINE.dirty.clear()
             bpy.data.scenes.remove(other)
 
 

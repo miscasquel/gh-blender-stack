@@ -13,8 +13,8 @@ import unittest
 import bpy
 import numpy as np
 
-from blender.stageloom.blender import geometry_io  # noqa: E402
-from blender.stageloom.blender.geometry_io import instances as geometry_instances  # noqa: E402
+from stageloom.blender import geometry_io  # noqa: E402
+from stageloom.blender.geometry_io import instances as geometry_instances  # noqa: E402
 
 
 def quad_mesh(name="edge-quad"):

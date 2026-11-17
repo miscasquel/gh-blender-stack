@@ -25,6 +25,12 @@ from harness import (
     start_fake,
     stop_fake,
 )
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import messages as engine_messages
+from stageloom.blender.engine import playback as engine_playback
+from stageloom.blender.engine import request as engine_request
+from stageloom.blender.engine import triggers as engine_triggers
+from stageloom.core import hashing
 
 
 class LiveTestCase(unittest.TestCase):
@@ -97,11 +103,10 @@ class GeneratorStageTests(LiveTestCase):
         )
 
     def test_01_a_generator_skips_the_prefix_and_sends_empty_geometry(self):
-        engine = self.engine
         record = self.stack_mod.stack_of(self.obj)
-        clones = engine.stats["prefix_clones"]
+        clones = ENGINE.stats()["prefix_clones"]
 
-        sections, geom_hash, attributes, definitions = engine._prefix_sections(
+        sections, geom_hash, attributes, definitions = engine_request._prefix_sections(
             self.obj, record, self.stage
         )
 
@@ -110,11 +115,11 @@ class GeneratorStageTests(LiveTestCase):
         self.assertEqual(definitions, [])
         self.assertEqual(
             geom_hash,
-            engine.hashing.geometry_hash({}),
+            hashing.geometry_hash({}),
             "a generator named a geometry hash for a prefix it does not read",
         )
         self.assertEqual(
-            engine.stats["prefix_clones"], clones, "a generator cloned the object"
+            ENGINE.stats()["prefix_clones"], clones, "a generator cloned the object"
         )
         report = report_of(self.report)
         self.assertEqual(report.get("received_verts"), 0, report)
@@ -123,36 +128,34 @@ class GeneratorStageTests(LiveTestCase):
         self.assertEqual(self.stage.state, "ok", self.stage.error)
 
     def test_02_a_base_geometry_edit_does_not_move_the_request(self):
-        engine = self.engine
         rid = self.stage.rid
-        sends = engine.stats["sends"]
+        sends = ENGINE.stats()["sends"]
         requests = requests_of(self.report)
-        clones = engine.stats["prefix_clones"]
+        clones = ENGINE.stats()["prefix_clones"]
 
         self.obj.data.vertices[0].co.x += 3.0
         self.obj.data.update()
         bpy.context.view_layer.update()
-        engine._mark_object_dirty(self.obj)
+        ENGINE.mark_object_dirty(self.obj)
         self.assertTrue(
-            pump(seconds=5.0, until=lambda: not engine._dirty and self.stage.state == "ok"),
+            pump(seconds=5.0, until=lambda: not ENGINE.dirty and self.stage.state == "ok"),
             "the pass after a base edit never settled",
         )
 
         self.assertEqual(self.stage.rid, rid, "a base edit moved a generator's request id")
-        self.assertEqual(engine.stats["sends"], sends, "a base edit sent a generator request")
+        self.assertEqual(ENGINE.stats()["sends"], sends, "a base edit sent a generator request")
         self.assertEqual(
             requests_of(self.report), requests, "a base edit reached the generator's client"
         )
         self.assertEqual(
-            engine.stats["prefix_clones"], clones, "the base edit cloned a generator prefix"
+            ENGINE.stats()["prefix_clones"], clones, "the base edit cloned a generator prefix"
         )
 
     def test_03_hello_presence_controls_the_mode_and_absence_keeps_it(self):
-        engine = self.engine
         self.assertEqual(self.stage.input_mode, "generator")
 
         # An older client does not publish the field: the saved mode stays.
-        engine._on_client_hello(
+        engine_messages._on_client_hello(
             {"doc": "fake.gh", "stages": [{"key": self.stage.key}]}
         )
         self.assertEqual(
@@ -161,7 +164,7 @@ class GeneratorStageTests(LiveTestCase):
             "a hello without has_stage_in overwrote the saved mode",
         )
 
-        engine._on_client_hello(
+        engine_messages._on_client_hello(
             {
                 "doc": "fake.gh",
                 "stages": [{"key": self.stage.key, "has_stage_in": True}],
@@ -172,7 +175,7 @@ class GeneratorStageTests(LiveTestCase):
             self.stage.geom_hash, "", "a mode change kept the old geometry claim"
         )
 
-        engine._on_client_hello(
+        engine_messages._on_client_hello(
             {
                 "doc": "fake.gh",
                 "stages": [{"key": self.stage.key, "has_stage_in": False}],
@@ -219,20 +222,19 @@ class LiveStageTests(LiveTestCase):
             "the changed same-rid answer did not apply (helper max %r)"
             % helper_max(self.obj, self.stage.key),
         )
-        pump(seconds=1.0, until=lambda: not self.engine._dirty)
+        pump(seconds=1.0, until=lambda: not ENGINE.dirty)
         self.assertEqual(self.stage.state, "ok", self.stage.error)
 
     def test_02_a_frame_change_sends_once_and_the_same_frame_is_quiet(self):
-        engine = self.engine
-        sends = engine.stats["sends"]
+        sends = ENGINE.stats()["sends"]
         responses = report_of(self.report).get("responses", 0)
         rid = self.stage.rid
 
         bpy.context.scene.frame_set(2)
-        engine._on_frame_change(bpy.context.scene)
+        engine_triggers._on_frame_change(bpy.context.scene)
 
         self.assertTrue(
-            pump(seconds=5.0, until=lambda: engine.stats["sends"] == sends + 1),
+            pump(seconds=5.0, until=lambda: ENGINE.stats()["sends"] == sends + 1),
             "a stage did not send once on a frame change",
         )
         self.assertEqual(
@@ -243,17 +245,17 @@ class LiveStageTests(LiveTestCase):
                 seconds=10.0,
                 until=lambda: self.stage.state == "ok"
                 and report_of(self.report).get("responses", 0) > responses
-                and not engine._dirty,
+                and not ENGINE.dirty,
             ),
             "the frame-change answer never settled (state=%s, error=%s)"
             % (self.stage.state, self.stage.error),
         )
         # No frame change, no input change: the stage must stay idle.
-        sends = engine.stats["sends"]
+        sends = ENGINE.stats()["sends"]
         responses = report_of(self.report).get("responses", 0)
         pump(seconds=0.5)
         self.assertEqual(
-            engine.stats["sends"], sends, "a stage sent without a frame change"
+            ENGINE.stats()["sends"], sends, "a stage sent without a frame change"
         )
         self.assertEqual(
             report_of(self.report).get("responses", 0),
@@ -299,11 +301,10 @@ class SharedObjectIsolationTests(LiveTestCase):
         )
 
     def test_01_another_stages_parameter_does_not_advance_the_live_stage(self):
-        engine = self.engine
         self.assertTrue(
             pump(
                 seconds=10.0,
-                until=lambda: not engine._dirty
+                until=lambda: not ENGINE.dirty
                 and self.stage_a.state == "ok"
                 and self.stage_b.state == "ok",
             ),
@@ -316,7 +317,7 @@ class SharedObjectIsolationTests(LiveTestCase):
         b_requests = requests_of(self.report_b)
 
         self.obj[self.param_name(self.stage_b, SCALE)] = 2.0
-        engine._mark_object_dirty(self.obj)
+        ENGINE.mark_object_dirty(self.obj)
 
         self.assertTrue(
             pump(
@@ -328,7 +329,7 @@ class SharedObjectIsolationTests(LiveTestCase):
             "stage B's parameter change never reached its client",
         )
         self.assertTrue(
-            pump(seconds=2.0, until=lambda: not engine._dirty),
+            pump(seconds=2.0, until=lambda: not ENGINE.dirty),
             "the shared stack did not settle after B's change",
         )
 
@@ -376,11 +377,11 @@ class OneWayStageTests(LiveTestCase):
         )
         self.assertTrue(self.stage.rid, "the delivered request was not recorded")
         self.assertFalse(
-            self.engine._pending.get((self.obj.gh_stack.stack_id, self.stage.key)),
+            ENGINE.pending_of(*(self.obj.gh_stack.stack_id, self.stage.key)),
             "a one-way stage armed a response wait",
         )
         self.assertEqual(
-            self.engine.waiting_seconds(self.obj.gh_stack.stack_id, self.stage.key),
+            ENGINE.waiting_seconds(self.obj.gh_stack.stack_id, self.stage.key),
             0.0,
             "a one-way stage reported a wait it cannot have",
         )
@@ -388,7 +389,7 @@ class OneWayStageTests(LiveTestCase):
     def test_02_a_frame_change_delivers_again_without_waiting(self):
         before = requests_of(self.report)
         bpy.context.scene.frame_set(2)
-        self.engine._on_frame_change(bpy.context.scene)
+        engine_triggers._on_frame_change(bpy.context.scene)
         self.assertTrue(
             pump(seconds=5.0, until=lambda: requests_of(self.report) > before),
             "a one-way stage did not deliver the next frame",
@@ -398,7 +399,7 @@ class OneWayStageTests(LiveTestCase):
             "the one-way stage did not settle after delivering",
         )
         self.assertFalse(
-            self.engine._pending.get((self.obj.gh_stack.stack_id, self.stage.key)),
+            ENGINE.pending_of(*(self.obj.gh_stack.stack_id, self.stage.key)),
             "the frame delivery armed a response wait",
         )
 
@@ -409,7 +410,7 @@ class OneWayStageTests(LiveTestCase):
         try:
             prefs.playback_timeout = 0.5
             started = time.monotonic()
-            ready = self.engine._sync_playback_frame(bpy.context.scene)
+            ready = engine_playback._sync_playback_frame(bpy.context.scene)
             elapsed = time.monotonic() - started
         finally:
             prefs.playback_timeout = original
@@ -421,9 +422,8 @@ class OneWayStageTests(LiveTestCase):
         )
 
     def test_04_hello_claims_update_the_mode_and_absence_keeps_it(self):
-        engine = self.engine
         record = self.obj.gh_stack
-        engine._on_client_hello(
+        engine_messages._on_client_hello(
             {"stages": [{"key": self.stage.key, "has_stage_in": True}]}
         )
         self.assertFalse(
@@ -431,7 +431,7 @@ class OneWayStageTests(LiveTestCase):
             "an old hello without has_stage_out overwrote the saved mode",
         )
         try:
-            engine._on_client_hello(
+            engine_messages._on_client_hello(
                 {
                     "stages": [
                         {
@@ -446,15 +446,15 @@ class OneWayStageTests(LiveTestCase):
                 self.stage.has_stage_out,
                 "hello did not restore the two-way path",
             )
-            outcome = engine._process_stage(self.obj, record, self.stage)
+            outcome = engine_request._process_stage(self.obj, record, self.stage)
             self.assertEqual(
                 outcome,
                 "waiting",
                 "a two-way stage did not wait again for its Stage Out",
             )
         finally:
-            engine._forget(record.stack_id, self.stage.key)
-            engine._set(self.stage, "state", "idle")
+            ENGINE.forget(record.stack_id, self.stage.key)
+            engine_request._set(self.stage, "state", "idle")
 
 
 if __name__ == "__main__":

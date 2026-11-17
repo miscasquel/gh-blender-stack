@@ -9,10 +9,12 @@ import unittest
 import bpy
 import numpy as np
 
-from blender.stageloom.blender import geometry_io  # noqa: E402
-from blender.stageloom.blender.geometry_io import attributes as geometry_attributes  # noqa: E402
-from blender.stageloom.core import attributes as attr_mod  # noqa: E402
+from stageloom.blender import geometry_io  # noqa: E402
+from stageloom.blender.geometry_io import attributes as geometry_attributes  # noqa: E402
+from stageloom.core import attributes as attr_mod  # noqa: E402
 from harness import free_port, isolate_data_root, pump, start_fake, stop_fake
+from stageloom.blender.engine import apply as engine_apply
+from stageloom.blender.engine import request as engine_request
 
 
 def quad_mesh(name="attr-quad"):
@@ -314,7 +316,7 @@ class AttributeEngineTests(unittest.TestCase):
     def test_02b_a_response_without_attributes_clears_them(self):
         # Absent means none: the helper must not keep the previous response's
         # generic attributes or native colour channel.
-        from blender.stageloom.blender import engine, helpers
+        from stageloom.blender import helpers
 
         helper = helpers.helper_for(self.obj, self.stage.key, "mesh")
         mesh = helper.data
@@ -325,36 +327,34 @@ class AttributeEngineTests(unittest.TestCase):
             name: values
             for name, _dtype, values in geometry_io.mesh_to_sections(self.obj.data)
         }
-        engine._apply(self.obj, self.stage, sections, None)
+        engine_apply._apply(self.obj, self.stage, sections, None)
 
         self.assertIsNone(mesh.attributes.get("panel_id"))
         self.assertIsNone(mesh.attributes.get("part"))
         self.assertIsNone(mesh.color_attributes.get("Col"))
 
         # A second identical response must not resurrect them.
-        engine._apply(self.obj, self.stage, sections, None)
+        engine_apply._apply(self.obj, self.stage, sections, None)
         self.assertIsNone(mesh.attributes.get("panel_id"))
         self.assertIsNone(mesh.color_attributes.get("Col"))
 
     def test_03_an_attribute_value_change_is_new_geometry(self):
         """Attribute values are part of the geometry hash: editing one makes the
         stage request again instead of reusing the old request id."""
-        import stageloom.blender.engine as engine
 
         mesh = quad_mesh("hash-quad")
         attr = mesh.attributes.new("v", "FLOAT", "POINT")
         sections, _descriptors = geometry_io.mesh_attributes(mesh)
-        before = engine._sections_hash(sections)
+        before = engine_request._sections_hash(sections)
         attr.data[0].value = 1.0
         sections, _descriptors = geometry_io.mesh_attributes(mesh)
-        self.assertNotEqual(before, engine._sections_hash(sections))
+        self.assertNotEqual(before, engine_request._sections_hash(sections))
 
     def test_04_float_noise_is_not_a_prefix_change(self):
         """Blender evaluates modifier-generated attribute data with last-bit
         float variation. Two reads that differ only that much are the same
         prefix; anything more is a real edit."""
-        import stageloom.blender.engine as engine
-        from blender.stageloom.core import attributes as attr_mod
+        from stageloom.core import attributes as attr_mod
 
         vertices = np.array((0.0, 0.0, 0.0), dtype=np.float32).reshape(-1, 3)
         descriptors = [attr_mod.descriptor("mesh", "load", "POINT", "FLOAT", 2, 0)]
@@ -365,18 +365,18 @@ class AttributeEngineTests(unittest.TestCase):
             ("mesh.verts", "f32", vertices),
             ("attr.0.values", "f32", np.array((0.25, 0.50000006), dtype=np.float32)),
         ]
-        self.assertTrue(engine._same_prefix(a, descriptors, [], noisy, descriptors, []))
+        self.assertTrue(engine_request._same_prefix(a, descriptors, [], noisy, descriptors, []))
 
         # A user-sized edit: a real change.
         edited = [
             ("mesh.verts", "f32", vertices),
             ("attr.0.values", "f32", np.array((0.25, 0.5001), dtype=np.float32)),
         ]
-        self.assertFalse(engine._same_prefix(a, descriptors, [], edited, descriptors, []))
+        self.assertFalse(engine_request._same_prefix(a, descriptors, [], edited, descriptors, []))
 
         # Positions are never toleranced.
         moved = [
             ("mesh.verts", "f32", np.array((0.0, 0.0, 1e-6), dtype=np.float32).reshape(-1, 3)),
             ("attr.0.values", "f32", np.array((0.25, 0.5), dtype=np.float32)),
         ]
-        self.assertFalse(engine._same_prefix(a, descriptors, [], moved, descriptors, []))
+        self.assertFalse(engine_request._same_prefix(a, descriptors, [], moved, descriptors, []))

@@ -27,15 +27,17 @@ from harness import (
     start_fake,
     stop_fake,
 )
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import triggers as engine_triggers
+from stageloom.blender.engine import messages as engine_messages
 
 
 def scrub(obj, frame):
     """Move the timeline and make sure the engine sees it (frame_change_post is
     not guaranteed to run under -b)."""
-    import stageloom.blender.engine as engine
 
     bpy.context.scene.frame_set(frame)
-    engine._mark_object_dirty(obj)
+    ENGINE.mark_object_dirty(obj)
 
 
 def helper_bounds(obj, stage_key):
@@ -161,11 +163,11 @@ class OneEvaluationAtATimeTests(RequestLifecycleTestCase):
         super().tearDownClass()
 
     def test_01_a_frame_while_one_is_outstanding_is_not_queued(self):
-        sends = self.engine.stats["sends"]
+        sends = ENGINE.stats()["sends"]
         type(self).sends_with_one_in_flight = sends + 1
         scrub(self.obj, 2)
         self.assertTrue(
-            pump(seconds=5.0, until=lambda: self.engine.stats["sends"] == sends + 1),
+            pump(seconds=5.0, until=lambda: ENGINE.stats()["sends"] == sends + 1),
             "the next frame was never requested",
         )
         self.assertEqual(self.stage.state, "waiting")
@@ -173,7 +175,7 @@ class OneEvaluationAtATimeTests(RequestLifecycleTestCase):
         scrub(self.obj, 3)  # the playhead moves on while the answer is in flight
         pump(seconds=0.4)
         self.assertEqual(
-            self.engine.stats["sends"],
+            ENGINE.stats()["sends"],
             sends + 1,
             "a second request went out while the first was still outstanding",
         )
@@ -184,7 +186,7 @@ class OneEvaluationAtATimeTests(RequestLifecycleTestCase):
     def test_02_the_answer_lands_and_the_current_frame_is_asked_for_next(self):
         sends = type(self).sends_with_one_in_flight
         self.assertTrue(
-            pump(seconds=10.0, until=lambda: self.engine.stats["sends"] > sends),
+            pump(seconds=10.0, until=lambda: ENGINE.stats()["sends"] > sends),
             "the frame the playhead moved to was never requested after the answer",
         )
         self.assertTrue(
@@ -223,13 +225,13 @@ class PlaybackScrubTests(RequestLifecycleTestCase):
             scrub(cls.obj, frame)
             until = time.time() + hold
             while time.time() < until:
-                cls.engine._timer()
+                engine_triggers._timer()
                 time.sleep(0.005)
 
     def test_01_a_scrub_does_not_queue_every_frame_it_passes(self):
-        before = self.engine.stats["sends"]
+        before = ENGINE.stats()["sends"]
         type(self).play(range(1, 9))
-        requested = self.engine.stats["sends"] - before
+        requested = ENGINE.stats()["sends"] - before
         self.assertLess(
             requested,
             8,
@@ -247,10 +249,10 @@ class PlaybackScrubTests(RequestLifecycleTestCase):
         )
         self.assertEqual(self.stage.state, "ok")
 
-        sends = self.engine.stats["sends"]
+        sends = ENGINE.stats()["sends"]
         cls.play([8], hold=0.3)
         self.assertEqual(
-            self.engine.stats["sends"],
+            ENGINE.stats()["sends"],
             sends,
             "the same frame and inputs were asked for again",
         )
@@ -283,10 +285,9 @@ class OneRequestOutstandingTests(RequestLifecycleTestCase):
     def test_01_only_one_request_is_ever_outstanding(self):
         import stageloom.blender.server as server
 
-        engine = self.engine
         seen = {"outstanding": 0, "peak": 0}
         real_send = server.SERVER.send
-        real_response = engine._handle_response
+        real_response = engine_messages._handle_response
 
         def counting_send(frame):
             sent = real_send(frame)
@@ -300,18 +301,18 @@ class OneRequestOutstandingTests(RequestLifecycleTestCase):
             return real_response(header, sections)
 
         server.SERVER.send = counting_send
-        engine._handle_response = counting_response
+        engine_messages._handle_response = counting_response
         try:
             for frame in list(range(1, 21)) + list(range(20, 0, -1)):
                 scrub(self.obj, frame)
                 until = time.time() + 0.04
                 while time.time() < until:
-                    engine._timer()
+                    engine_triggers._timer()
                     time.sleep(0.004)
             pump(seconds=2.0)
         finally:
             server.SERVER.send = real_send
-            engine._handle_response = real_response
+            engine_messages._handle_response = real_response
 
         self.assertGreater(seen["peak"], 0, "no request was ever sent")
         self.assertEqual(
@@ -367,7 +368,7 @@ class UnknownRefTests(RequestLifecycleTestCase):
         self.assertEqual(self.stage.state, "ok")
         self.assertEqual(self.stage.error, "")
         self.assertEqual(
-            self.engine.stats["timeouts"], 0, "the recovery went through a timeout instead"
+            ENGINE.stats()["timeouts"], 0, "the recovery went through a timeout instead"
         )
 
 
@@ -424,7 +425,7 @@ class SolveFailureTests(RequestLifecycleTestCase):
 
     def test_01_error_arrives_without_the_timeout(self):
         self.assertEqual(self.stage.state, "ok", self.stage.error)
-        timeouts_before = self.engine.stats["timeouts"]
+        timeouts_before = ENGINE.stats()["timeouts"]
         started = time.time()
         scrub(self.obj, 2)
         self.assertTrue(
@@ -438,7 +439,7 @@ class SolveFailureTests(RequestLifecycleTestCase):
             "the error took %.1f s: it arrived through the timeout, not as an answer" % elapsed,
         )
         self.assertEqual(
-            self.engine.stats["timeouts"], timeouts_before, "the error went through a timeout"
+            ENGINE.stats()["timeouts"], timeouts_before, "the error went through a timeout"
         )
         self.assertIn("fake solve failure", self.stage.error)
 
@@ -497,8 +498,8 @@ class CoalescedAnswerTests(RequestLifecycleTestCase):
         super().tearDownClass()
 
     def test_01_a_dropped_request_is_recovered_by_the_retry(self):
-        timeouts_before = self.engine.stats["timeouts"]
-        self.engine._mark_object_dirty(self.obj)
+        timeouts_before = ENGINE.stats()["timeouts"]
+        ENGINE.mark_object_dirty(self.obj)
         self.assertTrue(
             pump(seconds=5.0, until=lambda: requests_of(self.report) >= 1),
             "the first request never reached the client",
@@ -525,7 +526,7 @@ class CoalescedAnswerTests(RequestLifecycleTestCase):
             1,
             "no request was coalesced, so the test proved nothing (report=%s)" % report,
         )
-        self.assertGreaterEqual(self.engine.stats["timeouts"], timeouts_before + 1)
+        self.assertGreaterEqual(ENGINE.stats()["timeouts"], timeouts_before + 1)
 
 
 class TimeDrivenPrefixTests(RequestLifecycleTestCase):
@@ -584,7 +585,7 @@ class TimeDrivenPrefixTests(RequestLifecycleTestCase):
 
     def test_01_each_frame_is_its_own_request(self):
         # Two frames, two request IDs: the frame is part of what a request means.
-        before = self.engine.stats["sends"]
+        before = ENGINE.stats()["sends"]
         first = self.at_frame(1)
         rid_one = self.stage.rid
         second = self.at_frame(24)
@@ -596,7 +597,7 @@ class TimeDrivenPrefixTests(RequestLifecycleTestCase):
             requests_of(self.report), 2,
             "the second frame was never requested (report=%s)" % report_of(self.report),
         )
-        self.assertGreaterEqual(self.engine.stats["sends"] - before, 2)
+        self.assertGreaterEqual(ENGINE.stats()["sends"] - before, 2)
 
     def test_02_the_frame_moves_the_geometry_both_ways(self):
         first = self.at_frame(1)
@@ -614,30 +615,30 @@ class TimeDrivenPrefixTests(RequestLifecycleTestCase):
             pump(
                 seconds=10.0,
                 until=lambda: self.stage.state == "ok"
-                and not self.engine._dirty
-                and not self.engine._pending.get((record.stack_id, self.stage.key)),
+                and not ENGINE.dirty
+                and not ENGINE.pending_of(*(record.stack_id, self.stage.key)),
             ),
             "the frame's request never settled",
         )
 
         def idle_passes(count):
             for _ in range(count):
-                self.engine._mark_object_dirty(self.obj)
-                self.engine._timer()
+                ENGINE.mark_object_dirty(self.obj)
+                engine_triggers._timer()
 
         idle_passes(3)
-        hits = self.engine.stats["prefix_memo_hits"]
-        clones = self.engine.stats["prefix_clones"]
-        sends = self.engine.stats["sends"]
+        hits = ENGINE.stats()["prefix_memo_hits"]
+        clones = ENGINE.stats()["prefix_clones"]
+        sends = ENGINE.stats()["sends"]
         idle_passes(5)
         self.assertGreater(
-            self.engine.stats["prefix_memo_hits"], hits, "an idle pass re-evaluated the prefix"
+            ENGINE.stats()["prefix_memo_hits"], hits, "an idle pass re-evaluated the prefix"
         )
         self.assertEqual(
-            self.engine.stats["prefix_clones"], clones, "an idle pass cloned the object"
+            ENGINE.stats()["prefix_clones"], clones, "an idle pass cloned the object"
         )
         self.assertEqual(
-            self.engine.stats["sends"], sends, "an idle pass asked for an unchanged frame"
+            ENGINE.stats()["sends"], sends, "an idle pass asked for an unchanged frame"
         )
 
 
@@ -666,13 +667,13 @@ class QuietAnswerTests(RequestLifecycleTestCase):
         super().tearDownClass()
 
     def test_01_repeated_identical_response_is_quiet(self):
-        stats = dict(self.engine.stats)
-        dirty = set(self.engine._dirty)
+        stats = dict(ENGINE.stats())
+        dirty = set(ENGINE.dirty)
         pump(seconds=0.5)
-        self.assertEqual(self.engine.stats["applies"], stats["applies"], "a no-op response applied geometry")
-        self.assertEqual(self.engine.stats["tags"], stats["tags"], "a no-op response tagged the depsgraph")
-        self.assertEqual(self.engine.stats["sends"], stats["sends"], "a no-op response sent a request")
-        self.assertFalse(self.engine._dirty, "a no-op response left the engine dirty")
+        self.assertEqual(ENGINE.stats()["applies"], stats["applies"], "a no-op response applied geometry")
+        self.assertEqual(ENGINE.stats()["tags"], stats["tags"], "a no-op response tagged the depsgraph")
+        self.assertEqual(ENGINE.stats()["sends"], stats["sends"], "a no-op response sent a request")
+        self.assertFalse(ENGINE.dirty, "a no-op response left the engine dirty")
         self.assertEqual(self.stage.state, "ok")
         self.assertEqual(dirty, set())
 
@@ -682,22 +683,22 @@ class QuietAnswerTests(RequestLifecycleTestCase):
         # visibility write) queued for the next evaluation. Draining them is what
         # "idle" means; the loop below is the part that must not clone.
         bpy.context.view_layer.update()
-        self.engine._timer()
-        stats = dict(self.engine.stats)
+        engine_triggers._timer()
+        stats = dict(ENGINE.stats())
         for _ in range(5):
             bpy.context.view_layer.update()
-            self.engine._timer()
-        self.assertEqual(self.engine.stats["prefix_clones"], stats["prefix_clones"], "idle passes cloned the prefix")
-        self.assertEqual(self.engine.stats["applies"], stats["applies"], "idle passes applied geometry")
-        self.assertEqual(self.engine.stats["tags"], stats["tags"], "idle passes tagged the depsgraph")
-        self.assertEqual(self.engine.stats["sends"], stats["sends"], "idle passes sent a request")
-        self.assertFalse(self.engine._dirty, "the engine never settled")
+            engine_triggers._timer()
+        self.assertEqual(ENGINE.stats()["prefix_clones"], stats["prefix_clones"], "idle passes cloned the prefix")
+        self.assertEqual(ENGINE.stats()["applies"], stats["applies"], "idle passes applied geometry")
+        self.assertEqual(ENGINE.stats()["tags"], stats["tags"], "idle passes tagged the depsgraph")
+        self.assertEqual(ENGINE.stats()["sends"], stats["sends"], "idle passes sent a request")
+        self.assertFalse(ENGINE.dirty, "the engine never settled")
         self.assertEqual(self.stage.state, "ok")
 
     def test_03_modifier_edits_reach_grasshopper(self):
         # A native prefix modifier edit must invalidate the memo even though the
         # base mesh did not change.
-        sends = self.engine.stats["sends"]
+        sends = ENGINE.stats()["sends"]
         pre = self.obj.modifiers.get("PreBevel")
         self.assertIsNotNone(pre)
         pre.segments = 2
@@ -705,9 +706,9 @@ class QuietAnswerTests(RequestLifecycleTestCase):
         # carries the change to the engine now (the depsgraph is the oracle for
         # what moved); `-b` has no loop to do it, so it is asked for.
         bpy.context.view_layer.update()
-        self.engine._mark_object_dirty(self.obj)
+        ENGINE.mark_object_dirty(self.obj)
         self.assertTrue(
-            pump(seconds=8.0, until=lambda: self.engine.stats["sends"] > sends),
+            pump(seconds=8.0, until=lambda: ENGINE.stats()["sends"] > sends),
             "a prefix modifier edit did not invalidate the memo",
         )
         self.assertTrue(
@@ -741,10 +742,10 @@ class RemovedModeFieldsTests(RequestLifecycleTestCase):
         obj["live"] = True
         obj["live_frame"] = 12.0
         obj["generation"] = 3
-        self.engine._on_load()
-        self.engine._mark_object_dirty(obj)
+        engine_triggers._on_load()
+        ENGINE.mark_object_dirty(obj)
         self.assertTrue(
-            pump(until=lambda: not self.engine._dirty),
+            pump(until=lambda: not ENGINE.dirty),
             "a stage with legacy custom properties never settled",
         )
         self.assertIn(
@@ -775,21 +776,20 @@ class AnswerRoutingTests(RequestLifecycleTestCase):
         super().tearDownClass()
 
     def setUp(self):
-        engine = self.engine
-        engine._pending.clear()
-        engine._dirty.clear()
+        ENGINE.clear_runtimes()
+        ENGINE.dirty.clear()
         self.stage.frozen = False
         self.stage.enabled = True
         self.stage.state = self.stack_mod.STATE_WAITING
         self.stage.rid = "sha256:current"
         self.stage.applied_out_hash = "sha256:applied-before"
         self.stage.error = ""
-        engine._pending[(self.record.stack_id, self.stage.key)] = {
+        ENGINE.runtime(*(self.record.stack_id, self.stage.key)).pending = {
             "sha256:current": time.monotonic()
         }
 
     def _answer(self, rid, out_hash):
-        self.engine._handle_response(
+        engine_messages._handle_response(
             {
                 "type": "response",
                 "stage": self.stage.key,
@@ -802,40 +802,40 @@ class AnswerRoutingTests(RequestLifecycleTestCase):
         )
 
     def test_01_a_changed_answer_for_the_current_request_applies(self):
-        applies = self.engine.stats["applies"]
+        applies = ENGINE.stats()["applies"]
         self._answer("sha256:current", "sha256:after")
 
         self.assertEqual(self.stage.applied_out_hash, "sha256:after")
-        self.assertEqual(self.engine.stats["applies"], applies + 1)
+        self.assertEqual(ENGINE.stats()["applies"], applies + 1)
         self.assertEqual(self.stage.state, self.stack_mod.STATE_OK)
         self.assertFalse(
-            self.engine._pending.get((self.record.stack_id, self.stage.key)),
+            ENGINE.pending_of(*(self.record.stack_id, self.stage.key)),
             "the current answer left its request pending",
         )
 
     def test_02_an_answer_for_a_superseded_request_is_dropped(self):
-        applies = self.engine.stats["applies"]
+        applies = ENGINE.stats()["applies"]
         key = (self.record.stack_id, self.stage.key)
         self._answer("sha256:older", "sha256:older-output")
 
         self.assertEqual(self.stage.applied_out_hash, "sha256:applied-before")
-        self.assertEqual(self.engine.stats["applies"], applies, "a stale answer applied")
-        self.assertIn("sha256:current", self.engine._pending.get(key, {}))
+        self.assertEqual(ENGINE.stats()["applies"], applies, "a stale answer applied")
+        self.assertIn("sha256:current", ENGINE.pending_of(*key))
         self.assertEqual(self.stage.rid, "sha256:current")
         self.assertTrue(
-            any("dropped stale answer" in line for line in self.engine.recent_activity(50)),
-            "the dropped answer left no trace: %s" % self.engine.recent_activity(50),
+            any("dropped stale answer" in line for line in ENGINE.recent_activity(50)),
+            "the dropped answer left no trace: %s" % ENGINE.recent_activity(50),
         )
 
     def test_03_an_unchanged_answer_is_a_no_op(self):
         self.stage.applied_out_hash = "sha256:same"
         self.stage.state = self.stack_mod.STATE_OK
-        applies = self.engine.stats["applies"]
-        tags = self.engine.stats["tags"]
+        applies = ENGINE.stats()["applies"]
+        tags = ENGINE.stats()["tags"]
         self._answer("sha256:current", "sha256:same")
 
-        self.assertEqual(self.engine.stats["applies"], applies, "an unchanged answer applied")
-        self.assertEqual(self.engine.stats["tags"], tags, "an unchanged answer tagged the graph")
+        self.assertEqual(ENGINE.stats()["applies"], applies, "an unchanged answer applied")
+        self.assertEqual(ENGINE.stats()["tags"], tags, "an unchanged answer tagged the graph")
         self.assertEqual(self.stage.state, self.stack_mod.STATE_OK)
 
 

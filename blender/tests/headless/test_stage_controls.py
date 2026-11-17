@@ -9,6 +9,8 @@ import unittest
 import bpy
 
 from harness import free_port, isolate_data_root, pump, start_fake, stop_fake
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import triggers as engine_triggers
 
 
 class StageControlTests(unittest.TestCase):
@@ -70,7 +72,7 @@ class StageControlTests(unittest.TestCase):
         return co.reshape(-1, 3)
 
     def mark(self):
-        self.engine._mark_object_dirty(self.obj)
+        ENGINE.mark_object_dirty(self.obj)
 
     def test_01_freeze_stops_updates(self):
         before = self.helper_coords().copy()
@@ -189,8 +191,8 @@ class StageControlTests(unittest.TestCase):
         key = (record.stack_id, self.stage.key)
         # Seed the session maps a stage can own; removal must clear them rather
         # than leave stale bookkeeping behind.
-        self.engine._state_since[key] = 0.0
-        self.engine._timings[key] = {"prefix_ms": 1.0}
+        ENGINE.runtime(*key).state_since = 0.0
+        ENGINE.runtime(*key).timings = {"prefix_ms": 1.0}
         modifier = self.nodes.modifier_of(self.obj, self.stage)
         helper_name = helpers.helper_name(self.obj, self.stage.key)
         self.obj.modifiers.remove(modifier)
@@ -205,11 +207,11 @@ class StageControlTests(unittest.TestCase):
             bpy.data.node_groups.get(self.nodes.group_name(self.stage.key)),
             "the node group survived removal",
         )
-        self.assertNotIn(key, self.engine._state_since, "the wait stamp survived removal")
-        self.assertNotIn(key, self.engine._timings, "the timings survived removal")
-        self.assertFalse(self.engine._active, "the last stage left the engine active")
+        self.assertFalse(ENGINE.runtime(*key).state_since is not None, "the wait stamp survived removal")
+        self.assertFalse(bool(ENGINE.runtime(*key).timings), "the timings survived removal")
+        self.assertFalse(ENGINE.active, "the last stage left the engine active")
         self.assertFalse(
-            bpy.app.timers.is_registered(self.engine._timer),
+            bpy.app.timers.is_registered(engine_triggers._timer),
             "the last stage left the engine timer registered",
         )
 

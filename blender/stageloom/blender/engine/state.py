@@ -2,7 +2,7 @@
 
 ``stage.state`` is a projection of these facts, in this order:
 
-* the stage key has no proven owner (``_stage_conflicts``): ``conflict``;
+* the stage key has no proven owner (``ENGINE.stage_conflicts``): ``conflict``;
 * the stage's modifier is inactive: ``disabled``;
 * the stage is frozen: ``frozen`` (a Pull may still be ``waiting``);
 * otherwise the last activity: ``idle``/``waiting``/``ok``/``error``/
@@ -18,7 +18,7 @@ are refused so a stale caller cannot move a healthy stage.
 ``waiting`` is special: it is legal only while a request is actually pending
 (or a frozen Pull is in flight). Without one it is refused, or settled back to
 ``rest_state`` if the stage was already stuck there. This is also what keeps
-``waiting_seconds`` honest: the helper owns ``_state_since``, clearing it on
+``waiting_seconds`` honest: the runtime record owns ``state_since``, cleared on
 every transition out of ``waiting``.
 
 The target guards are the documented transition matrix. Every state may follow
@@ -26,16 +26,18 @@ any other state that its flags permit; the illegal edges are exactly the flag
 contradictions above and ``waiting`` without an in-flight request.
 """
 
-import sys
+import time
 
-engine = sys.modules[__package__]
+from .. import stack as stack_mod
+from .request import _set
+from .runtime import ENGINE
 
 
 def _wait_key(stage):
     """The ``(stack_id, stage_key)`` pair that owns the wait clock, or None."""
     try:
         obj = stage.id_data
-        record = engine.stack_mod.stack_of(obj)
+        record = stack_mod.stack_of(obj)
     except (AttributeError, ReferenceError):
         return None
     if record is None:
@@ -48,38 +50,38 @@ def _has_pending(stage):
     key = _wait_key(stage)
     if key is None:
         return False
-    return bool(engine._pending.get(key))
+    return ENGINE.is_pending(*key)
 
 
 def _settled_state(stage):
     """``rest_state`` for a stage that is not showing a transient answer."""
-    return engine.stack_mod.rest_state(stage)
+    return stack_mod.rest_state(stage)
 
 
 def _resolve(stage, requested):
     """The state actually written for ``requested`` (the transition matrix)."""
-    if engine._stage_key_conflicted(stage.key):
-        return engine.stack_mod.STATE_CONFLICT
+    if ENGINE.stage_key_conflicted(stage.key):
+        return stack_mod.STATE_CONFLICT
     if not stage.enabled:
         # Disabled outranks frozen; both outrank transient activity.
-        return engine.stack_mod.STATE_DISABLED
+        return stack_mod.STATE_DISABLED
     if stage.frozen:
         # A Pull is the one request a frozen stage may wait for.
-        if requested == engine.stack_mod.STATE_WAITING and _has_pending(stage):
-            return engine.stack_mod.STATE_WAITING
-        return engine.stack_mod.STATE_FROZEN
-    if requested == engine.stack_mod.STATE_WAITING:
+        if requested == stack_mod.STATE_WAITING and _has_pending(stage):
+            return stack_mod.STATE_WAITING
+        return stack_mod.STATE_FROZEN
+    if requested == stack_mod.STATE_WAITING:
         if _has_pending(stage):
-            return engine.stack_mod.STATE_WAITING
-        if stage.state == engine.stack_mod.STATE_WAITING:
+            return stack_mod.STATE_WAITING
+        if stage.state == stack_mod.STATE_WAITING:
             # A wait with nothing behind it is a diagnostic lie and a stall
             # forever. Settle it instead of leaving it.
             return _settled_state(stage)
         return stage.state
-    if requested in engine.stack_mod.FLAG_STATES:
+    if requested in stack_mod.FLAG_STATES:
         # A flag state without its flag. Clear a stale flag projection; for any
         # other current state, refuse the write rather than invent a flag.
-        if stage.state in engine.stack_mod.FLAG_STATES:
+        if stage.state in stack_mod.FLAG_STATES:
             return _settled_state(stage)
         return stage.state
     return requested
@@ -93,18 +95,20 @@ def _set_state(stage, state, error=None):
     and the error text independently. A state that the guard refuses returns the
     unchanged current state.
     """
-    if state not in engine.stack_mod.STATE_VALUES:
+    if state not in stack_mod.STATE_VALUES:
         raise ValueError("unknown stage state %r" % (state,))
     actual = _resolve(stage, state)
-    engine._set(stage, "state", actual)
+    _set(stage, "state", actual)
     if error is not None:
-        engine._set(stage, "error", error)
+        _set(stage, "error", error)
     key = _wait_key(stage)
     if key is not None:
-        if actual == engine.stack_mod.STATE_WAITING:
+        record = ENGINE.runtime(*key)
+        if actual == stack_mod.STATE_WAITING:
             # request.py stamps the exact send time; this covers callers that
             # enter the state without one.
-            engine._state_since.setdefault(key, engine.time.monotonic())
+            if record.state_since is None:
+                record.state_since = time.monotonic()
         else:
-            engine._state_since.pop(key, None)
+            record.state_since = None
     return actual

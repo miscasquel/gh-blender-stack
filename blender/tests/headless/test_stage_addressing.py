@@ -7,6 +7,11 @@ import bpy
 import numpy as np
 
 from harness import isolate_data_root
+from stageloom.blender import nodes
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import apply as engine_apply
+from stageloom.blender.engine import lifecycle as engine_lifecycle
+from stageloom.blender.engine import request as engine_request
 
 
 def enable(case):
@@ -58,24 +63,24 @@ class StageOrderTests(unittest.TestCase):
         try:
             self.obj.modifiers.move(order.index(mod_b), order.index(mod_a))
             calls = []
-            real = self.engine._process_stage
+            real = engine_request._process_stage
 
             def record_stage(obj, record, stage):
                 calls.append(stage.key)
                 return "idle"
 
-            self.engine._process_stage = record_stage
+            engine_request._process_stage = record_stage
             try:
-                self.engine._process_object(self.obj)
+                engine_lifecycle._process_object(self.obj)
             finally:
-                self.engine._process_stage = real
+                engine_request._process_stage = real
             self.assertEqual(
                 calls,
                 [self.stage_b.key, self.stage_a.key],
                 "stages were processed in record order, not modifier order",
             )
 
-            ordered = self.engine._ordered_stages(self.obj, self.record)
+            ordered = ENGINE.ordered_stages(self.obj, self.record)
             self.assertEqual(
                 [stage.key for stage in ordered],
                 [self.stage_b.key, self.stage_a.key],
@@ -124,7 +129,7 @@ class ApplyInvalidationTests(unittest.TestCase):
         bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_01_apply_keeps_entries_outside_its_stack_and_bumps_an_empty_clear(self):
-        self.engine._apply(
+        engine_apply._apply(
             self.obj,
             self.stage,
             {
@@ -140,20 +145,20 @@ class ApplyInvalidationTests(unittest.TestCase):
         pointer = self.obj.as_pointer()
         own = (pointer, self.stage.key)
         unrelated = ("stale", "entry")
-        self.engine._prefix_batch[own] = ({}, [], [])
-        self.engine._prefix_batch[unrelated] = ({}, [], [])
-        self.engine._prefix_batch_built = True
-        before = self.engine._prefix_epoch
+        ENGINE.prefix_batch[own] = ({}, [], [])
+        ENGINE.prefix_batch[unrelated] = ({}, [], [])
+        ENGINE.prefix_batch_built = True
+        before = ENGINE.prefix_epoch
 
-        self.engine._apply(self.obj, self.stage, {})
+        engine_apply._apply(self.obj, self.stage, {})
 
         # The stage's own prefix ends before its modifier, so this write cannot
         # change it; an unrelated object's entry must not be touched either.
         # Only downstream stages (none here) are invalidated.
-        self.assertIn(own, self.engine._prefix_batch, "the applied stage's own entry was dropped")
-        self.assertIn(unrelated, self.engine._prefix_batch, "an unrelated batch entry was dropped")
+        self.assertIn(own, ENGINE.prefix_batch, "the applied stage's own entry was dropped")
+        self.assertIn(unrelated, ENGINE.prefix_batch, "an unrelated batch entry was dropped")
         self.assertGreater(
-            self.engine._prefix_epoch,
+            ENGINE.prefix_epoch,
             before,
             "clearing a non-empty helper did not move the prefix generation",
         )
@@ -189,55 +194,52 @@ class PrefixBatchTests(unittest.TestCase):
         self._clear_session()
 
     def _clear_session(self):
-        engine = self.engine
-        engine._prefix_memo.clear()
-        engine._prefix_batch.clear()
-        engine._prefix_batch_built = False
-        engine._prefix_batching = False
-        engine._pending.clear()
-        engine._sent.clear()
-        engine._verify.clear()
+        ENGINE.prefix_memo.clear()
+        ENGINE.prefix_batch.clear()
+        ENGINE.prefix_batch_built = False
+        ENGINE.prefix_batching = False
+        ENGINE.clear_runtimes()
+        ENGINE.clear_runtimes()
+        ENGINE.verify.clear()
         for stage in self.stages:
             stage.applied_out_hash = ""
             stage.rid = ""
             stage.state = "ok"
 
     def test_01_a_one_stage_rebuild_evaluates_only_that_stage(self):
-        engine = self.engine
         pointer = self.obj.as_pointer()
         stage_b = self.stages[1]
         for stage in self.stages:
-            engine._prefix_batch[(pointer, stage.key)] = ("old", stage.key)
-        engine._prefix_batch_built = True
+            ENGINE.prefix_batch[(pointer, stage.key)] = ("old", stage.key)
+        ENGINE.prefix_batch_built = True
         calls = []
-        real_clone_prefixes = engine._clone_prefixes
+        real_clone_prefixes = engine_request._clone_prefixes
 
         def counting_clone_prefixes(obj, stages, subd):
             calls.append([stage.key for stage, _index in stages])
             return real_clone_prefixes(obj, stages, subd)
 
-        engine._clone_prefixes = counting_clone_prefixes
+        engine_request._clone_prefixes = counting_clone_prefixes
         try:
-            engine._build_prefix_batch(self.obj, self.record, stage_b)
+            engine_request._build_prefix_batch(self.obj, self.record, stage_b)
         finally:
-            engine._clone_prefixes = real_clone_prefixes
+            engine_request._clone_prefixes = real_clone_prefixes
 
         self.assertEqual(calls, [[stage_b.key]], "a one-stage rebuild evaluated the whole stack")
         for stage in self.stages:
             if stage is stage_b:
                 continue
             self.assertEqual(
-                engine._prefix_batch[(pointer, stage.key)],
+                ENGINE.prefix_batch[(pointer, stage.key)],
                 ("old", stage.key),
                 "a one-stage rebuild replaced another stage's prefix",
             )
 
     def test_02_invalidation_follows_the_modifier_stack_not_the_record(self):
-        engine = self.engine
         pointer = self.obj.as_pointer()
         stage_a, stage_b, stage_c = self.stages
-        modifier_a = engine.nodes.modifier_of(self.obj, stage_a)
-        modifier_c = engine.nodes.modifier_of(self.obj, stage_c)
+        modifier_a = nodes.modifier_of(self.obj, stage_a)
+        modifier_c = nodes.modifier_of(self.obj, stage_c)
         original = list(self.obj.modifiers)
         current = list(self.obj.modifiers)
         self._clear_session()
@@ -246,12 +248,12 @@ class PrefixBatchTests(unittest.TestCase):
             # must stale B (below it in the stack), not C (above it).
             self.obj.modifiers.move(current.index(modifier_c), current.index(modifier_a))
             for stage in self.stages:
-                engine._prefix_batch[(pointer, stage.key)] = ({}, [], [])
-            engine._prefix_batch_built = True
+                ENGINE.prefix_batch[(pointer, stage.key)] = ({}, [], [])
+            ENGINE.prefix_batch_built = True
 
-            engine._apply(self.obj, stage_a, {})
+            engine_apply._apply(self.obj, stage_a, {})
 
-            keys = {key for (owner, key) in engine._prefix_batch if owner == pointer}
+            keys = {key for (owner, key) in ENGINE.prefix_batch if owner == pointer}
             self.assertIn(stage_c.key, keys, "an upstream stack entry was invalidated")
             self.assertIn(stage_a.key, keys, "the applied stage's own prefix was invalidated")
             self.assertNotIn(stage_b.key, keys, "a downstream stack entry survived")
@@ -420,7 +422,7 @@ class LegacyNameAmbiguityTests(unittest.TestCase):
             stage.modifier_uid = 0
 
         keys = [stage.key for stage in stages]
-        removed = self.engine._drop_removed_stages(self.obj, self.record)
+        removed = engine_lifecycle._drop_removed_stages(self.obj, self.record)
 
         self.assertFalse(removed, "an ambiguous name deleted the stage records")
         self.assertEqual(

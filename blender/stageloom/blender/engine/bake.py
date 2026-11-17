@@ -10,16 +10,22 @@ definition:
 - a downstream dependent is asked exactly once, at the scene's current frame,
   and is frozen only after its answer lands.
 
-The dependent wait drives ``engine._timer``, the same pass an ordinary scene
+The dependent wait drives ``_timer``, the same pass an ordinary scene
 event uses. It deliberately does not arm the playback gate: a bake is not
 playback, and moving the playhead would make the single retained frame differ
 from the frame the target was baked at.
 """
 
-import sys
 import time
 
-engine = sys.modules[__package__]
+import bpy
+
+from .. import bridge
+from .. import stack as stack_mod
+from .lifecycle import freeze, request_again, unfreeze
+from .messages import _handle_incoming
+from .request import _set, _timeout
+from .triggers import _timer
 
 
 def token_stages(token):
@@ -31,9 +37,9 @@ def token_stages(token):
     """
     if not token:
         return
-    for candidate in engine.bpy.data.objects:
+    for candidate in bpy.data.objects:
         try:
-            record = engine.stack_mod.stack_of(candidate)
+            record = stack_mod.stack_of(candidate)
         except ReferenceError:
             continue
         if record is None or not record.stages:
@@ -59,7 +65,7 @@ def release_token(token, skip_baked=True):
         if not stage.frozen:
             continue
         stage.frozen = False
-        engine.unfreeze(obj, stage)
+        unfreeze(obj, stage)
         count += 1
     return count
 
@@ -69,7 +75,7 @@ def freeze_stage(obj, stage, token=None, mark=True):
     stage.frozen = True
     if mark:
         stage.frozen_by_bake = token or ""
-    engine.freeze(obj, stage)
+    freeze(obj, stage)
 
 
 def trigger_once(obj, stage, timeout=None):
@@ -86,24 +92,24 @@ def trigger_once(obj, stage, timeout=None):
     one-shot Pull permit for the frozen case, so both paths ask exactly once.
     """
     if timeout is None:
-        timeout = engine._timeout()
+        timeout = _timeout()
     started = time.monotonic()
     deadline = started + max(float(timeout), 0.05)
     # A stale error must not be read as this request's failure. The answer
     # path clears the error on success; the frozen error path keeps the state
     # frozen and writes the error here.
-    engine._set(stage, "error", "")
-    engine.request_again(obj, stage)
+    _set(stage, "error", "")
+    request_again(obj, stage)
     seen_waiting = False
 
     def outcome():
         """Where the forced request stands, or None while it is still out."""
-        if not engine.bridge.state["clients"]:
+        if not bridge.state["clients"]:
             return False, "Grasshopper disconnected"
         state = stage.state
-        if state == engine.stack_mod.STATE_ERROR:
+        if state == stack_mod.STATE_ERROR:
             return False, stage.error or "Grasshopper error"
-        if state == engine.stack_mod.STATE_WAITING:
+        if state == stack_mod.STATE_WAITING:
             # A frozen stage's error answer keeps `frozen` (and was left in
             # `waiting` by the message handler), so the error field is the
             # signal there. The request started with a cleared error, which
@@ -112,15 +118,15 @@ def trigger_once(obj, stage, timeout=None):
                 return False, stage.error
             return None
         if seen_waiting and state in (
-            engine.stack_mod.STATE_OK,
-            engine.stack_mod.STATE_FROZEN,
+            stack_mod.STATE_OK,
+            stack_mod.STATE_FROZEN,
         ):
             if stage.error:
                 return False, stage.error
             return True, ""
         if state in (
-            engine.stack_mod.STATE_DISCONNECTED,
-            engine.stack_mod.STATE_UNBOUND,
+            stack_mod.STATE_DISCONNECTED,
+            stack_mod.STATE_UNBOUND,
         ):
             return False, state
         return None
@@ -129,12 +135,12 @@ def trigger_once(obj, stage, timeout=None):
         # Apply any answer first: a settled answer must not let the same timer
         # pass continue into the next live dependent. The timer below is what
         # asks and what notices a superseded or timed-out request.
-        engine._handle_incoming()
+        _handle_incoming()
         settled = outcome()
         if settled is not None:
             return settled
-        engine._timer()
-        if stage.state == engine.stack_mod.STATE_WAITING:
+        _timer()
+        if stage.state == stack_mod.STATE_WAITING:
             seen_waiting = True
         settled = outcome()
         if settled is not None:

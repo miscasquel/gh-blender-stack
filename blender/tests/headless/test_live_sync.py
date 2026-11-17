@@ -20,6 +20,13 @@ from harness import (
     start_fake,
     stop_fake,
 )
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import apply as engine_apply
+from stageloom.blender.engine import messages as engine_messages
+from stageloom.blender.engine import request as engine_request
+from stageloom.blender.engine import triggers as engine_triggers
+from stageloom.blender.engine import lifecycle as engine_lifecycle
+from stageloom.blender import bridge, server
 
 
 def first_x(report):
@@ -128,7 +135,7 @@ class RevertedEditTests(LiveSyncTestCase):
     def settle(self):
         return pump(
             seconds=15.0,
-            until=lambda: not self.engine._dirty and self.stage.state == "ok",
+            until=lambda: not ENGINE.dirty and self.stage.state == "ok",
         )
 
     def set_first_x(self, value):
@@ -158,7 +165,7 @@ class RevertedEditTests(LiveSyncTestCase):
             % report_of(self.report),
         )
         self.assertTrue(self.settle(), "the moved state never settled")
-        sends = self.engine.stats["sends"]
+        sends = ENGINE.stats()["sends"]
 
         # Esc: the operator restores the BMesh to its pre-transform values and
         # tags the mesh; the reverted state must reach Grasshopper again.
@@ -169,13 +176,13 @@ class RevertedEditTests(LiveSyncTestCase):
                 until=lambda: first_x(report_of(self.report)) is not None
                 and abs(first_x(report_of(self.report)) - base) < 0.05
                 and self.stage.state == "ok"
-                and not self.engine._dirty,
+                and not ENGINE.dirty,
             ),
             "a cancelled transform did not reach Grasshopper; it still holds the "
             "moved geometry (report=%s)" % report_of(self.report),
         )
         self.assertGreater(
-            self.engine.stats["sends"],
+            ENGINE.stats()["sends"],
             sends,
             "the revert did not reach Grasshopper",
         )
@@ -185,7 +192,7 @@ class RevertedEditTests(LiveSyncTestCase):
     def test_02_a_reverted_parameter_reaches_grasshopper(self):
         name = self.stack_mod.param_prop_name(self.stage.key, SCALE)
         self.obj[name] = 2.0
-        self.engine._mark_object_dirty(self.obj)
+        ENGINE.mark_object_dirty(self.obj)
         self.assertTrue(
             pump(
                 seconds=15.0,
@@ -198,7 +205,7 @@ class RevertedEditTests(LiveSyncTestCase):
 
         refs = report_of(self.report).get("ref", 0)
         self.obj[name] = 1.0
-        self.engine._mark_object_dirty(self.obj)
+        ENGINE.mark_object_dirty(self.obj)
         self.assertTrue(
             pump(
                 seconds=15.0,
@@ -247,7 +254,7 @@ class RevertedEditTests(LiveSyncTestCase):
         self.set_first_x(original)
         self.stage.geom_hash = before_edit_hash
         self.stage.rid = before_edit_rid
-        self.engine._on_undo()
+        engine_triggers._on_undo()
 
         self.assertTrue(
             pump(
@@ -255,7 +262,7 @@ class RevertedEditTests(LiveSyncTestCase):
                 until=lambda: first_x(report_of(self.report)) is not None
                 and abs(first_x(report_of(self.report)) - base) < 0.05
                 and self.stage.state == "ok"
-                and not self.engine._dirty,
+                and not ENGINE.dirty,
             ),
             "the undo never reached Grasshopper (report=%s)" % report_of(self.report),
         )
@@ -367,7 +374,7 @@ class MultiObjectEditTests(unittest.TestCase):
         stroke it makes: both stages at rest and nothing marked dirty."""
         return pump(
             seconds=15.0,
-            until=lambda: not self.engine._dirty
+            until=lambda: not ENGINE.dirty
             and self.stage_a.state == "ok"
             and self.stage_b.state == "ok",
         )
@@ -386,7 +393,7 @@ class MultiObjectEditTests(unittest.TestCase):
     def flush_lines(self):
         return [
             line
-            for line in self.engine.recent_activity(200)
+            for line in ENGINE.recent_activity(200)
             if line.startswith("flushed Edit Mode data")
         ]
 
@@ -395,7 +402,7 @@ class MultiObjectEditTests(unittest.TestCase):
         self.assertTrue(self.settle(), "entering Edit Mode never settled")
         before = first_x(report_of(self.report_b))
         self.assertIsNotNone(before)
-        sends = self.engine.stats["sends"]
+        sends = ENGINE.stats()["sends"]
 
         self.stroke(self.obj_b, 5.0)
 
@@ -408,7 +415,7 @@ class MultiObjectEditTests(unittest.TestCase):
             "a stroke on the non-active Edit Mode object never reached Grasshopper "
             "(report=%s)" % report_of(self.report_b),
         )
-        self.assertGreater(self.engine.stats["sends"], sends)
+        self.assertGreater(ENGINE.stats()["sends"], sends)
         self.assertTrue(
             any(
                 "flushed Edit Mode data for %s" % self.obj_b.name in line
@@ -479,7 +486,7 @@ class MultiObjectEditTests(unittest.TestCase):
 
         before = len(self.flush_lines())
         for _ in range(10):
-            self.engine._timer()
+            engine_triggers._timer()
             time.sleep(0.01)
 
         self.assertEqual(
@@ -487,7 +494,7 @@ class MultiObjectEditTests(unittest.TestCase):
             before,
             "an idle Edit Mode session kept copying meshes: %s" % self.flush_lines(),
         )
-        self.assertFalse(self.engine._dirty, "an idle pass left objects dirty")
+        self.assertFalse(ENGINE.dirty, "an idle pass left objects dirty")
 
 
 class MultiObjectGhEditTests(unittest.TestCase):
@@ -588,7 +595,7 @@ class MultiObjectGhEditTests(unittest.TestCase):
         # The fixed Stage Out sends the dependent stage's changed answer too.
         self._send_changed_answer(self.obj_a, self.stage_a, 2.0)
         self._send_changed_answer(self.obj_b, self.stage_b, 3.0)
-        self.engine._handle_incoming()
+        engine_messages._handle_incoming()
 
         self.assertAlmostEqual(
             helper_max(self.obj_a, self.stage_a.key), 2.0, places=3,
@@ -606,11 +613,11 @@ class PendingUpdateTests(LiveSyncTestCase):
         # `view_layer.update()` here). One timer pass must deliver it to the
         # handler and send — a clone earlier in the pass would otherwise mute
         # the handler and lose the edit.
-        sends = self.engine.stats["sends"]
+        sends = ENGINE.stats()["sends"]
         self.obj.data.vertices[0].co.x += 1.0
-        self.engine._timer()
+        engine_triggers._timer()
         self.assertGreater(
-            self.engine.stats["sends"],
+            ENGINE.stats()["sends"],
             sends,
             "a pending depsgraph update was swallowed by the pass",
         )
@@ -623,23 +630,22 @@ class PendingUpdateTests(LiveSyncTestCase):
         """The clone's own evaluation sees a pending edit when every stack is
         queued; forcing a second evaluation first is redundant and is the cost
         the viewport feels during a drag."""
-        engine = self.engine
         self.assertTrue(pump(seconds=15.0, until=lambda: self.stage.state == "ok"))
-        engine._dirty.clear()
+        ENGINE.dirty.clear()
         before = first_x(report_of(self.report))
-        sends = engine.stats["sends"]
+        sends = ENGINE.stats()["sends"]
         drains = []
-        real_background = engine._in_background
-        real_drain = engine._drain_depsgraph
-        engine._in_background = lambda: False
-        engine._drain_depsgraph = lambda: drains.append(True)
+        real_background = engine_triggers._in_background
+        real_drain = engine_triggers._drain_depsgraph
+        engine_triggers._in_background = lambda: False
+        engine_triggers._drain_depsgraph = lambda: drains.append(True)
         try:
-            engine._mark_dirty_all()
+            engine_lifecycle._mark_dirty_all()
             self.obj.data.vertices[0].co.x += 1.0
             # Deliberately no `view_layer.update()`: the edit is still pending.
-            engine._timer()
+            engine_triggers._timer()
             self.assertEqual(drains, [], "the all-dirty pass forced a redundant evaluation")
-            self.assertGreater(engine.stats["sends"], sends, "the pending edit was not sent")
+            self.assertGreater(ENGINE.stats()["sends"], sends, "the pending edit was not sent")
             self.assertTrue(
                 pump(
                     seconds=15.0,
@@ -650,8 +656,8 @@ class PendingUpdateTests(LiveSyncTestCase):
                 % report_of(self.report),
             )
         finally:
-            engine._in_background = real_background
-            engine._drain_depsgraph = real_drain
+            engine_triggers._in_background = real_background
+            engine_triggers._drain_depsgraph = real_drain
 
 
 class ReconnectVerifyTests(LiveSyncTestCase):
@@ -659,12 +665,12 @@ class ReconnectVerifyTests(LiveSyncTestCase):
         pump(seconds=10.0, until=lambda: self.stage.state == "ok")
         self.assertTrue(self.stage.rid, "the stage has no delivered request to verify")
 
-        sends = self.engine.stats["sends"]
-        self.engine._on_client_hello(
+        sends = ENGINE.stats()["sends"]
+        engine_messages._on_client_hello(
             {"doc": "verify.gh", "stages": [{"key": self.stage.key}]}
         )
         self.assertTrue(
-            pump(seconds=15.0, until=lambda: self.engine.stats["sends"] > sends),
+            pump(seconds=15.0, until=lambda: ENGINE.stats()["sends"] > sends),
             "a reconnect did not ask Grasshopper again",
         )
         self.assertTrue(
@@ -678,7 +684,6 @@ class EvaluatedHeadTests(LiveSyncTestCase):
     """No fake, no timer: the prefix read itself must be the evaluated object."""
 
     def test_01_shape_keys_are_part_of_a_head_of_stack_prefix(self):
-        import stageloom.blender.engine as engine
 
         key = self.obj.shape_key_add(name="Basis")
         self.assertIsNotNone(key)
@@ -686,10 +691,10 @@ class EvaluatedHeadTests(LiveSyncTestCase):
         moved.data[0].co.x += 5.0
         moved.value = 1.0
         bpy.context.view_layer.update()
-        engine._forget_prefix(self.obj, self.stage.key)
+        engine_lifecycle._forget_prefix(self.obj, self.stage.key)
 
         record = self.stack_mod.stack_of(self.obj)
-        sections, _hash, _attributes, _definitions = engine._prefix_sections(
+        sections, _hash, _attributes, _definitions = engine_request._prefix_sections(
             self.obj, record, self.stage
         )
         verts = dict((name, values) for name, _dtype, values in sections).get("mesh.verts")
@@ -708,36 +713,35 @@ class GuardWatchdogTests(LiveSyncTestCase):
         self.leave_edit_mode()
 
     def test_01_a_stuck_guard_is_cleared_and_the_edit_still_sends(self):
-        engine = self.engine
         self.assertEqual(self.stage.state, "ok", self.stage.error)
-        sends = engine.stats["sends"]
+        sends = ENGINE.stats()["sends"]
 
         # A guard a dead pass left up. No tick is running, so this is the wedge.
-        engine._evaluating = True
-        engine._guard_owner = (self.obj.name, self.stage.key)
-        engine._evaluating_since = time.monotonic()
+        ENGINE.evaluating = True
+        ENGINE.guard_owner = (self.obj.name, self.stage.key)
+        ENGINE.evaluating_since = time.monotonic()
 
         # An edit made while the guard is up: the handler must drop it (that is
         # the mute) and say so in the trace.
-        epoch = engine._prefix_epoch
+        epoch = ENGINE.prefix_epoch
         self.obj.data.vertices[0].co.x += 2.0
         bpy.context.view_layer.update()
-        self.assertEqual(engine._prefix_epoch, epoch, "a dropped update still moved the epoch")
+        self.assertEqual(ENGINE.prefix_epoch, epoch, "a dropped update still moved the epoch")
         self.assertTrue(
-            any("guard up" in line for line in engine.recent_activity(50)),
-            "the skipped update left no trace: %s" % engine.recent_activity(50),
+            any("guard up" in line for line in ENGINE.recent_activity(50)),
+            "the skipped update left no trace: %s" % ENGINE.recent_activity(50),
         )
 
         # One tick must notice the guard, clear it, explain it, and pick up the
         # edit that was dropped.
-        engine._timer()
-        self.assertFalse(engine._evaluating, "the watchdog did not clear the guard")
-        watch = [line for line in engine.recent_activity(50) if "guard watchdog" in line]
-        self.assertEqual(len(watch), 1, "no single watchdog line: %s" % engine.recent_activity(50))
+        engine_triggers._timer()
+        self.assertFalse(ENGINE.evaluating, "the watchdog did not clear the guard")
+        watch = [line for line in ENGINE.recent_activity(50) if "guard watchdog" in line]
+        self.assertEqual(len(watch), 1, "no single watchdog line: %s" % ENGINE.recent_activity(50))
         self.assertIn(self.obj.name, watch[0])
         self.assertIn(self.stage.key, watch[0])
         self.assertGreater(
-            engine.stats["sends"],
+            ENGINE.stats()["sends"],
             sends,
             "the dropped edit was not sent after the watchdog cleared the guard",
         )
@@ -750,19 +754,18 @@ class GuardWatchdogTests(LiveSyncTestCase):
     def test_02_a_cleanup_raise_clears_the_guard_without_the_watchdog(self):
         import stageloom.blender.bridge as bridge
 
-        engine = self.engine
         self.assertEqual(self.stage.state, "ok", self.stage.error)
         self.edit_mode()
         watchdog_lines = sum(
-            "guard watchdog" in line for line in engine.recent_activity(200)
+            "guard watchdog" in line for line in ENGINE.recent_activity(200)
         )
 
-        real_drop = engine._drop_owned_data
+        real_drop = engine_request._drop_owned_data
 
         def failing_drop(id_block):
             raise RuntimeError("test: cleanup fault")
 
-        engine._drop_owned_data = failing_drop
+        engine_request._drop_owned_data = failing_drop
         try:
             bm = bmesh.from_edit_mesh(self.obj.data)
             bm.verts.ensure_lookup_table()
@@ -770,16 +773,16 @@ class GuardWatchdogTests(LiveSyncTestCase):
             bmesh.update_edit_mesh(self.obj.data)
             # One pass, driven directly: the cleanup fault must fail the pass
             # but the guard must already be down when `_timer` returns.
-            engine._mark_object_dirty(self.obj)
-            engine._timer()
+            ENGINE.mark_object_dirty(self.obj)
+            engine_triggers._timer()
         finally:
-            engine._drop_owned_data = real_drop
+            engine_request._drop_owned_data = real_drop
 
         self.assertFalse(
-            engine._evaluating, "a cleanup raise left the prefix guard up"
+            ENGINE.evaluating, "a cleanup raise left the prefix guard up"
         )
         self.assertEqual(
-            sum("guard watchdog" in line for line in engine.recent_activity(200)),
+            sum("guard watchdog" in line for line in ENGINE.recent_activity(200)),
             watchdog_lines,
             "the watchdog, not the nested finally, cleared the guard",
         )
@@ -791,14 +794,14 @@ class GuardWatchdogTests(LiveSyncTestCase):
 
         # The next edit is processed and reaches Grasshopper: the earlier +4
         # stroke was never sent, so the fake must see the whole current mesh.
-        sends = engine.stats["sends"]
+        sends = ENGINE.stats()["sends"]
         bm = bmesh.from_edit_mesh(self.obj.data)
         bm.verts.ensure_lookup_table()
         bm.verts[0].co.x += 1.0
         bmesh.update_edit_mesh(self.obj.data)
         bpy.context.view_layer.update()
         self.assertTrue(
-            pump(seconds=15.0, until=lambda: engine.stats["sends"] > sends),
+            pump(seconds=15.0, until=lambda: ENGINE.stats()["sends"] > sends),
             "the first edit after a cleanup failure was not sent",
         )
         # The pump's pass flushed Edit Mode into the datablock, so the expected
@@ -840,11 +843,11 @@ class BatchIsolationTests(LiveSyncTestCase):
         server.SERVER.send = lambda frame: True
         try:
             engine.request_again(self.obj)
-            engine._timer()
+            engine_triggers._timer()
         finally:
             server.SERVER.send = real_send
         self.assertEqual(self.stage.state, "waiting", self.stage.error)
-        pending = engine._pending_of(record.stack_id, self.stage.key)
+        pending = ENGINE.pending_of(record.stack_id, self.stage.key)
         self.assertTrue(pending, "the swallowed send recorded no pending request")
         rid = next(iter(pending))
 
@@ -865,7 +868,7 @@ class BatchIsolationTests(LiveSyncTestCase):
             "warnings": [],
         }
 
-        real_apply = engine._apply
+        real_apply = engine_apply._apply
         calls = {"n": 0}
 
         def failing_apply(
@@ -878,7 +881,7 @@ class BatchIsolationTests(LiveSyncTestCase):
                 obj, stage, payload, attributes, definitions, topology=topology
             )
 
-        engine._apply = failing_apply
+        engine_apply._apply = failing_apply
         try:
             bridge.post_incoming(response, sections)
             # The second message of the same batch must still be handled.
@@ -886,9 +889,9 @@ class BatchIsolationTests(LiveSyncTestCase):
                 {"type": "hello", "doc": "batch.gh", "stages": [{"key": self.stage.key}]},
                 {},
             )
-            engine._handle_incoming()
+            engine_messages._handle_incoming()
         finally:
-            engine._apply = real_apply
+            engine_apply._apply = real_apply
 
         self.assertEqual(calls["n"], 1, "the poisoned frame was applied twice")
         self.assertIn(
@@ -897,11 +900,11 @@ class BatchIsolationTests(LiveSyncTestCase):
             "the failed message was not recorded: %r" % (bridge.state["error"],),
         )
         self.assertTrue(
-            any("client hello" in line for line in engine.recent_activity(50)),
-            "the message after the failure was dropped: %s" % engine.recent_activity(50),
+            any("client hello" in line for line in ENGINE.recent_activity(50)),
+            "the message after the failure was dropped: %s" % ENGINE.recent_activity(50),
         )
         self.assertFalse(
-            engine._pending_of(record.stack_id, self.stage.key),
+            ENGINE.pending_of(record.stack_id, self.stage.key),
             "the stage was left waiting with an empty pending map",
         )
         self.assertNotEqual(
@@ -909,10 +912,10 @@ class BatchIsolationTests(LiveSyncTestCase):
             self.stack_mod.STATE_WAITING,
             "the failed response left the stage in waiting",
         )
-        self.assertIn(self.obj.name, engine._dirty, "the failed stage was not marked dirty")
+        self.assertIn(self.obj.name, ENGINE.dirty, "the failed stage was not marked dirty")
         self.assertIn(
             (record.stack_id, self.stage.key),
-            engine._verify,
+            ENGINE.verify,
             "the failed answer did not arm a new request",
         )
 
@@ -922,7 +925,7 @@ class BatchIsolationTests(LiveSyncTestCase):
             "the stage never recovered after the apply failure (state=%s, error=%s)"
             % (self.stage.state, self.stage.error),
         )
-        self.assertGreaterEqual(engine.stats["applies"], 1)
+        self.assertGreaterEqual(ENGINE.stats()["applies"], 1)
 
 
 class StallRenameTests(LiveSyncTestCase):
@@ -949,9 +952,9 @@ class StallRenameTests(LiveSyncTestCase):
             # A request whose answer never comes: swallow the socket write.
             server.SERVER.send = lambda frame: True
             engine.request_again(self.obj)
-            engine._timer()
+            engine_triggers._timer()
             self.assertEqual(self.stage.state, "waiting", self.stage.error)
-            pending = engine._pending_of(record.stack_id, self.stage.key)
+            pending = ENGINE.pending_of(record.stack_id, self.stage.key)
             self.assertTrue(pending, "the swallowed send recorded no pending request")
 
             # Rename after the send: a name captured then is now stale.
@@ -961,12 +964,12 @@ class StallRenameTests(LiveSyncTestCase):
             prefs.timeout = 1.0
             for key in list(pending):
                 pending[key] = time.monotonic() - 5.0
-            engine._dirty.discard(self.obj.name)
-            engine._last_stall_check = 0.0
-            engine._nudge_stalled_waits()
+            ENGINE.dirty.discard(self.obj.name)
+            ENGINE.last_stall_check = 0.0
+            engine_triggers._nudge_stalled_waits()
             self.assertIn(
                 self.obj.name,
-                engine._dirty,
+                ENGINE.dirty,
                 "the renamed object missed the stall nudge",
             )
 
@@ -987,21 +990,21 @@ class StallRenameTests(LiveSyncTestCase):
             record = self.stack_mod.stack_of(self.obj)
             server.SERVER.send = lambda frame: True
             engine.request_again(self.obj)
-            engine._timer()
+            engine_triggers._timer()
             self.assertEqual(self.stage.state, "waiting", self.stage.error)
-            pending = engine._pending_of(record.stack_id, self.stage.key)
+            pending = ENGINE.pending_of(record.stack_id, self.stage.key)
             self.assertTrue(pending, "the swallowed send recorded no pending request")
             for key in list(pending):
                 pending[key] = time.monotonic() - 5.0
-            engine._dirty.discard(self.obj.name)
-            engine._last_stall_check = 0.0
-            engine._nudge_stalled_waits()
-            self.assertIn(self.obj.name, engine._dirty)
+            ENGINE.dirty.discard(self.obj.name)
+            ENGINE.last_stall_check = 0.0
+            engine_triggers._nudge_stalled_waits()
+            self.assertIn(self.obj.name, ENGINE.dirty)
 
             server.SERVER.send = real_send
-            sends = engine.stats["sends"]
+            sends = ENGINE.stats()["sends"]
             self.assertTrue(
-                pump(seconds=15.0, until=lambda: engine.stats["sends"] > sends),
+                pump(seconds=15.0, until=lambda: ENGINE.stats()["sends"] > sends),
                 "the timed-out stage did not retry",
             )
             self.assertTrue(
@@ -1040,7 +1043,7 @@ class StallRenameTests(LiveSyncTestCase):
 
         try:
             self.obj.name = renamed
-            self.engine._mark_object_dirty(self.obj)
+            ENGINE.mark_object_dirty(self.obj)
             self.assertTrue(
                 pump(seconds=15.0, until=lambda: self.stage.state == "ok"),
                 "the renamed stage never settled (state=%s, error=%s)"
@@ -1104,7 +1107,7 @@ class WhyNoSendTests(LiveSyncTestCase):
         """This stage's trace lines only: the ring survives across classes."""
         return [
             line
-            for line in self.engine.recent_activity(200)
+            for line in ENGINE.recent_activity(200)
             if needle in line and self.stage.key in line
         ]
 
@@ -1113,38 +1116,38 @@ class WhyNoSendTests(LiveSyncTestCase):
         self.assertEqual(self.stage.state, "ok", self.stage.error)
         self.stage.frozen = True
         try:
-            engine._mark_object_dirty(self.obj)
-            engine._timer()
+            ENGINE.mark_object_dirty(self.obj)
+            engine_triggers._timer()
             self.assertEqual(
                 len(self.lines("no send (frozen)")),
                 1,
-                "no frozen explanation: %s" % engine.recent_activity(50),
+                "no frozen explanation: %s" % ENGINE.recent_activity(50),
             )
-            engine._mark_object_dirty(self.obj)
-            engine._timer()
+            ENGINE.mark_object_dirty(self.obj)
+            engine_triggers._timer()
             self.assertEqual(
                 len(self.lines("no send (frozen)")),
                 1,
-                "the frozen explanation repeated per tick: %s" % engine.recent_activity(50),
+                "the frozen explanation repeated per tick: %s" % ENGINE.recent_activity(50),
             )
         finally:
             self.stage.frozen = False
 
         # A send re-arms the explanation: freezing again is a new decision.
-        sends = engine.stats["sends"]
+        sends = ENGINE.stats()["sends"]
         engine.request_again(self.obj)
         self.assertTrue(
-            pump(seconds=15.0, until=lambda: engine.stats["sends"] > sends),
+            pump(seconds=15.0, until=lambda: ENGINE.stats()["sends"] > sends),
             "an unfrozen stage did not send",
         )
         self.stage.frozen = True
         try:
-            engine._mark_object_dirty(self.obj)
-            engine._timer()
+            ENGINE.mark_object_dirty(self.obj)
+            engine_triggers._timer()
             self.assertEqual(
                 len(self.lines("no send (frozen)")),
                 2,
-                "the second freeze left no explanation: %s" % engine.recent_activity(50),
+                "the second freeze left no explanation: %s" % ENGINE.recent_activity(50),
             )
         finally:
             self.stage.frozen = False
@@ -1163,7 +1166,7 @@ class WhyNoSendTests(LiveSyncTestCase):
         server.SERVER.send = lambda frame: True
         try:
             engine.request_again(self.obj)
-            engine._timer()
+            engine_triggers._timer()
             self.assertEqual(self.stage.state, "waiting", self.stage.error)
             self.assertEqual(
                 self.lines("no send (waiting on rid"),
@@ -1174,17 +1177,17 @@ class WhyNoSendTests(LiveSyncTestCase):
             # Edits inside the soft-retry window are coalesced: the pass
             # returns before it reads the prefix, so no clone is paid and no
             # second request goes out.
-            clones = engine.stats["prefix_clones"]
-            sends = engine.stats["sends"]
+            clones = ENGINE.stats()["prefix_clones"]
+            sends = ENGINE.stats()["sends"]
             for value in (2.0, 3.0, 4.0):
                 self.obj[name] = value
-                engine._mark_object_dirty(self.obj)
-                engine._timer()
+                ENGINE.mark_object_dirty(self.obj)
+                engine_triggers._timer()
             self.assertEqual(
-                engine.stats["prefix_clones"], clones,
+                ENGINE.stats()["prefix_clones"], clones,
                 "a pass while waiting re-evaluated the prefix",
             )
-            self.assertEqual(engine.stats["sends"], sends, "a second request went out while waiting")
+            self.assertEqual(ENGINE.stats()["sends"], sends, "a second request went out while waiting")
             self.assertEqual(self.stage.state, "waiting")
             self.assertEqual(
                 len(self.lines("no send (waiting on rid")),
@@ -1195,16 +1198,16 @@ class WhyNoSendTests(LiveSyncTestCase):
             # After the soft retry the pass supersedes the stale request with
             # the current state, and the trace says so.
             deadline = time.time() + 6.0
-            while time.time() < deadline and engine.stats["sends"] == sends:
-                engine._mark_object_dirty(self.obj)
-                engine._timer()
+            while time.time() < deadline and ENGINE.stats()["sends"] == sends:
+                ENGINE.mark_object_dirty(self.obj)
+                engine_triggers._timer()
                 time.sleep(0.05)
             self.assertGreater(
-                engine.stats["sends"], sends, "the stale request was never superseded"
+                ENGINE.stats()["sends"], sends, "the stale request was never superseded"
             )
             self.assertTrue(
-                any("superseded" in line for line in engine.recent_activity(50)),
-                "the supersede left no trace: %s" % engine.recent_activity(50),
+                any("superseded" in line for line in ENGINE.recent_activity(50)),
+                "the supersede left no trace: %s" % ENGINE.recent_activity(50),
             )
         finally:
             server.SERVER.send = real_send
@@ -1239,15 +1242,15 @@ class SessionResetTests(LiveSyncTestCase):
         engine.unregister()
         engine.start_server = lambda port=None: False
         try:
-            engine._evaluating = True
-            engine._guard_owner = ("Wedged", self.stage.key)
-            engine._evaluating_since = time.monotonic()
-            engine._ticking = True
-            engine._sent[("Wedged", self.stage.key)] = ("rid", "hash")
-            engine._pending[("Wedged", self.stage.key)] = {"rid": time.monotonic()}
-            engine._last_frame[("Wedged", self.stage.key)] = 1.0
-            engine._pull_permits.add(("Wedged", self.stage.key))
-            engine.bridge.post_incoming(
+            ENGINE.evaluating = True
+            ENGINE.guard_owner = ("Wedged", self.stage.key)
+            ENGINE.evaluating_since = time.monotonic()
+            ENGINE.ticking = True
+            ENGINE.runtime(*("Wedged", self.stage.key)).sent = ("rid", "hash")
+            ENGINE.runtime(*("Wedged", self.stage.key)).pending = {"rid": time.monotonic()}
+            ENGINE.runtime(*("Wedged", self.stage.key)).last_frame = 1.0
+            ENGINE.runtime("Wedged", self.stage.key).pull_permit = True
+            bridge.post_incoming(
                 {
                     "type": "response",
                     "stage": self.stage.key,
@@ -1259,16 +1262,30 @@ class SessionResetTests(LiveSyncTestCase):
             )
 
             engine.register()
-            self.assertFalse(engine._evaluating, "register() kept a wedged prefix guard")
-            self.assertIsNone(engine._guard_owner)
-            self.assertIsNone(engine._evaluating_since)
-            self.assertFalse(engine._ticking, "register() kept the previous session's tick flag")
-            self.assertFalse(engine._sent, "register() kept the previous session's client state")
-            self.assertFalse(engine._pending, "register() kept a pending request")
-            self.assertFalse(engine._last_frame, "register() kept a delivered frame")
-            self.assertFalse(engine._pull_permits, "register() kept a Pull permit")
+            self.assertFalse(ENGINE.evaluating, "register() kept a wedged prefix guard")
+            self.assertIsNone(ENGINE.guard_owner)
+            self.assertIsNone(ENGINE.evaluating_since)
+            self.assertFalse(ENGINE.ticking, "register() kept the previous session's tick flag")
+            self.assertIsNone(
+                getattr(ENGINE.peek_runtime("Wedged", self.stage.key), "sent", None),
+                "register() kept the previous session's client state",
+            )
+            self.assertFalse(
+                ENGINE.is_pending("Wedged", self.stage.key),
+                "register() kept a pending request",
+            )
+            self.assertIsNone(
+                ENGINE.peek_runtime("Wedged", self.stage.key),
+                "register() kept a delivered frame",
+            )
+            self.assertFalse(
+                getattr(
+                    ENGINE.peek_runtime("Wedged", self.stage.key), "pull_permit", False
+                ),
+                "register() kept a Pull permit",
+            )
             self.assertEqual(
-                engine.bridge.INCOMING.qsize(),
+                bridge.INCOMING.qsize(),
                 0,
                 "register() kept a frame from the previous session",
             )
@@ -1278,7 +1295,7 @@ class SessionResetTests(LiveSyncTestCase):
             handlers = len(bpy.app.handlers.depsgraph_update_post)
             undos = len(bpy.app.handlers.undo_post)
             redos = len(bpy.app.handlers.redo_post)
-            engine._registered = False
+            ENGINE.registered = False
             engine.register()
             self.assertEqual(
                 len(bpy.app.handlers.depsgraph_update_post),
@@ -1297,32 +1314,33 @@ class SessionResetTests(LiveSyncTestCase):
             )
         finally:
             engine.start_server = real_start
-            if not engine._registered:
+            if not ENGINE.registered:
                 engine.register()
 
     def test_02_a_file_load_clears_a_wedged_guard(self):
-        engine = self.engine
-        engine._evaluating = True
-        engine._guard_owner = ("Wedged", self.stage.key)
-        engine._evaluating_since = time.monotonic()
-        engine._ticking = True
-        engine._sent[("Wedged", self.stage.key)] = ("rid", "hash")
+        ENGINE.evaluating = True
+        ENGINE.guard_owner = ("Wedged", self.stage.key)
+        ENGINE.evaluating_since = time.monotonic()
+        ENGINE.ticking = True
+        ENGINE.runtime(*("Wedged", self.stage.key)).sent = ("rid", "hash")
 
-        engine._on_load()
-        self.assertFalse(engine._evaluating, "_on_load() kept a wedged prefix guard")
-        self.assertIsNone(engine._guard_owner)
-        self.assertIsNone(engine._evaluating_since)
-        self.assertFalse(engine._ticking, "_on_load() kept the previous session's tick flag")
-        self.assertFalse(engine._sent, "_on_load() kept the previous session's client state")
+        engine_triggers._on_load()
+        self.assertFalse(ENGINE.evaluating, "_on_load() kept a wedged prefix guard")
+        self.assertIsNone(ENGINE.guard_owner)
+        self.assertIsNone(ENGINE.evaluating_since)
+        self.assertFalse(ENGINE.ticking, "_on_load() kept the previous session's tick flag")
+        self.assertIsNone(
+            getattr(ENGINE.peek_runtime("Wedged", self.stage.key), "sent", None),
+            "_on_load() kept the previous session's client state",
+        )
 
 
 class DiagnosticsTimingTests(LiveSyncTestCase):
     """Diagnostics: trigger health and stage timings."""
 
     def test_01_a_round_trip_leaves_timings_and_a_heartbeat(self):
-        engine = self.engine
         record = self.stack_mod.stack_of(self.obj)
-        timings = engine.stage_timings(record.stack_id, self.stage.key)
+        timings = ENGINE.stage_timings(record.stack_id, self.stage.key)
         for field in ("prefix_ms", "encode_ms", "rtt_ms", "apply_ms"):
             self.assertIsNotNone(
                 timings.get(field), "%s missing after a round trip: %s" % (field, timings)
@@ -1332,12 +1350,12 @@ class DiagnosticsTimingTests(LiveSyncTestCase):
         # The helper hands out a copy: the panel can never write engine state.
         timings["rtt_ms"] = -1.0
         self.assertNotEqual(
-            engine.stage_timings(record.stack_id, self.stage.key)["rtt_ms"],
+            ENGINE.stage_timings(record.stack_id, self.stage.key)["rtt_ms"],
             -1.0,
             "stage_timings handed out the engine's live dict",
         )
 
-        health = engine.trigger_health()
+        health = ENGINE.trigger_health()
         self.assertIsNotNone(health["trigger_age"], "no depsgraph update was ever heard")
         self.assertIsNotNone(health["send_age"])
         self.assertIsNotNone(health["apply_age"])
@@ -1392,23 +1410,22 @@ class SupersedeTests(unittest.TestCase):
         bpy.ops.preferences.addon_disable(module="stageloom")
 
     def test_01_a_new_value_supersedes_a_slow_request(self):
-        engine = self.engine
         name = self.stack_mod.param_prop_name(self.stage.key, SCALE)
         self.obj[name] = 2.0
-        engine._mark_object_dirty(self.obj)
+        ENGINE.mark_object_dirty(self.obj)
         self.assertTrue(
             pump(seconds=5.0, until=lambda: self.stage.state == "waiting"),
             "the slow fake never left a request outstanding",
         )
-        sends = engine.stats["sends"]
+        sends = ENGINE.stats()["sends"]
         pump(seconds=0.4)
         self.assertEqual(
-            engine.stats["sends"], sends, "a request went out before the soft retry"
+            ENGINE.stats()["sends"], sends, "a request went out before the soft retry"
         )
         self.obj[name] = 5.0
-        engine._mark_object_dirty(self.obj)
+        ENGINE.mark_object_dirty(self.obj)
         self.assertTrue(
-            pump(seconds=6.0, until=lambda: engine.stats["sends"] > sends),
+            pump(seconds=6.0, until=lambda: ENGINE.stats()["sends"] > sends),
             "the newer value never superseded the in-flight request",
         )
         self.assertTrue(
@@ -1426,15 +1443,14 @@ class SelfHealingTests(LiveSyncTestCase):
     """The bookkeeping around a failed or lost request must not gate recovery."""
 
     def test_01_a_standalone_error_releases_the_pending_gate(self):
-        engine = self.engine
         record = self.stack_mod.stack_of(self.obj)
         key = (record.stack_id, self.stage.key)
         rid = "sha256:standalone-error"
-        engine._pending[key] = {rid: time.monotonic()}
+        ENGINE.runtime(*key).pending = {rid: time.monotonic()}
         self.stage.rid = rid
         self.stage.state = "waiting"
 
-        engine._handle_error(
+        engine_messages._handle_error(
             {
                 "type": "error",
                 "code": "unknown_stage",
@@ -1444,19 +1460,18 @@ class SelfHealingTests(LiveSyncTestCase):
             }
         )
 
-        self.assertFalse(engine._pending.get(key), "the error left a pending request behind")
+        self.assertFalse(ENGINE.pending_of(*key), "the error left a pending request behind")
         self.assertEqual(self.stage.state, "error")
         self.assertIn("unknown_stage", self.stage.error)
 
     def test_02_an_unknown_ref_resend_asks_again(self):
-        engine = self.engine
         record = self.stack_mod.stack_of(self.obj)
         key = (record.stack_id, self.stage.key)
-        engine._resend_in_full(self.obj, record, self.stage, "test")
+        engine_messages._resend_in_full(self.obj, record, self.stage, "test")
 
-        self.assertIn(key, engine._verify, "the promised full resend was not armed")
+        self.assertIn(key, ENGINE.verify, "the promised full resend was not armed")
         self.assertEqual(self.stage.geom_hash, "")
-        self.assertIn(self.obj.name, engine._dirty)
+        self.assertIn(self.obj.name, ENGINE.dirty)
 
     def test_03_a_pull_permit_survives_an_undelivered_send(self):
         engine = self.engine
@@ -1466,24 +1481,26 @@ class SelfHealingTests(LiveSyncTestCase):
         self.stage.frozen = True
         engine.freeze(self.obj, self.stage)
         engine.request_again(self.obj, self.stage)
-        self.assertIn(key, engine._pull_permits)
+        self.assertTrue(ENGINE.runtime(*key).pull_permit)
 
-        real_send = engine.server.SERVER.send
-        engine.server.SERVER.send = lambda frame: False
+        real_send = server.SERVER.send
+        server.SERVER.send = lambda frame: False
         try:
-            engine._mark_object_dirty(self.obj)
-            engine._timer()
+            ENGINE.mark_object_dirty(self.obj)
+            engine_triggers._timer()
         finally:
-            engine.server.SERVER.send = real_send
-        self.assertIn(
-            key,
-            engine._pull_permits,
+            server.SERVER.send = real_send
+        self.assertTrue(
+            ENGINE.runtime(*key).pull_permit,
             "the Pull permit was spent by a send that never left",
         )
 
-        engine._mark_object_dirty(self.obj)
+        ENGINE.mark_object_dirty(self.obj)
         self.assertTrue(
-            pump(seconds=10.0, until=lambda: key not in engine._pull_permits),
+            pump(
+                seconds=10.0,
+                until=lambda: not ENGINE.runtime(*key).pull_permit,
+            ),
             "the armed Pull never went out after the socket recovered",
         )
         self.stage.frozen = False
@@ -1501,34 +1518,34 @@ class SelfHealingTests(LiveSyncTestCase):
         server.SERVER.send = lambda frame: True
         try:
             engine.request_again(self.obj, self.stage)
-            engine._mark_object_dirty(self.obj)
-            engine._timer()
+            ENGINE.mark_object_dirty(self.obj)
+            engine_triggers._timer()
         finally:
             server.SERVER.send = real_send
-        self.assertIn(key, engine._pending, "the Pull was not recorded as in flight")
+        self.assertTrue(ENGINE.is_pending(*key), "the Pull was not recorded as in flight")
         self.assertEqual(self.stage.state, self.stack_mod.STATE_WAITING)
-        self.assertIn(key, engine._pull_permits)
+        self.assertTrue(ENGINE.runtime(*key).pull_permit)
 
         # The answer never lands; the permit deadline is what must settle it.
-        engine._pull_deadlines[key] = time.monotonic() - 0.01
-        engine._last_stall_check = 0.0
-        engine._dirty.clear()
+        ENGINE.runtime(*key).pull_deadline = time.monotonic() - 0.01
+        ENGINE.last_stall_check = 0.0
+        ENGINE.dirty.clear()
         try:
-            engine._nudge_stalled_waits()
+            engine_triggers._nudge_stalled_waits()
         finally:
             self.stage.frozen = False
-        self.assertNotIn(key, engine._pending)
-        self.assertNotIn(key, engine._pull_permits)
-        self.assertNotIn(key, engine._pull_deadlines)
+        self.assertFalse(ENGINE.is_pending(*key))
+        self.assertFalse(ENGINE.runtime(*key).pull_permit)
+        self.assertFalse(ENGINE.runtime(*key).pull_deadline is not None)
         self.assertEqual(self.stage.state, self.stack_mod.STATE_FROZEN)
         self.assertIn("Pull timed out", self.stage.error)
-        self.assertNotIn(self.obj.name, engine._dirty)
+        self.assertNotIn(self.obj.name, ENGINE.dirty)
 
-        engine._last_stall_check = 0.0
-        engine._nudge_stalled_waits()
+        ENGINE.last_stall_check = 0.0
+        engine_triggers._nudge_stalled_waits()
         self.assertNotIn(
             self.obj.name,
-            engine._dirty,
+            ENGINE.dirty,
             "a lost Pull dirtied the object once a second after it had settled",
         )
 
@@ -1553,11 +1570,11 @@ class SelfHealingTests(LiveSyncTestCase):
             pump(seconds=5.0, until=lambda: not bridge.state["clients"]),
             "the fake never disconnected",
         )
-        engine._pending.clear()
-        engine._sent.clear()
-        engine._verify.clear()
-        engine._last_frame.clear()
-        engine._dirty.clear()
+        ENGINE.clear_runtimes()
+        ENGINE.clear_runtimes()
+        ENGINE.verify.clear()
+        ENGINE.clear_runtimes()
+        ENGINE.dirty.clear()
         previous = (bridge.state["clients"], bridge.state["connected"])
         # The stale observation the old send() trusted: a client count with no
         # socket behind it, the exact window between its check and its enqueue.
@@ -1568,21 +1585,21 @@ class SelfHealingTests(LiveSyncTestCase):
                 server.SERVER.send(b"a frame with no socket"),
                 "send claimed a frame was carried with no client socket",
             )
-            undelivered = engine.stats["undelivered"]
+            undelivered = ENGINE.stats()["undelivered"]
             engine.request_again(self.obj, self.stage)
-            engine._mark_object_dirty(self.obj)
-            engine._timer()
+            ENGINE.mark_object_dirty(self.obj)
+            engine_triggers._timer()
             self.assertEqual(
-                engine.stats["undelivered"],
+                ENGINE.stats()["undelivered"],
                 undelivered + 1,
                 "the request path counted an undelivered frame as sent",
             )
             self.assertFalse(
-                engine._pending.get(key),
+                ENGINE.pending_of(*key),
                 "an undelivered frame armed a pending answer wait",
             )
-            self.assertNotIn(
-                key, engine._sent, "an undelivered frame recorded a sent request"
+            self.assertFalse(ENGINE.runtime(*
+                key).sent is not None, "an undelivered frame recorded a sent request"
             )
             self.assertEqual(self.stage.state, self.stack_mod.STATE_DISCONNECTED)
         finally:
@@ -1617,12 +1634,12 @@ class HashTrustTests(LiveSyncTestCase):
         helper = helpers.helper_for(self.obj, self.stage.key, "mesh")
         self.assertIsNotNone(helper)
         self.assertGreater(len(helper.data.vertices), 0)
-        applies = engine.stats["applies"]
+        applies = ENGINE.stats()["applies"]
 
         helper.data.clear_geometry()
         engine.request_again(self.obj, self.stage)
         self.assertTrue(
-            pump(seconds=10.0, until=lambda: engine.stats["applies"] > applies),
+            pump(seconds=10.0, until=lambda: ENGINE.stats()["applies"] > applies),
             "the frame was skipped over an emptied helper",
         )
         helper = helpers.helper_for(self.obj, self.stage.key, "mesh")

@@ -12,7 +12,10 @@ import numpy as np
 
 from harness import free_port, isolate_data_root, pump, start_fake, stop_fake
 
-from blender.stageloom.blender import geometry_io  # noqa: E402
+from stageloom.blender import geometry_io  # noqa: E402
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import apply as engine_apply
+from stageloom.blender.engine import request as engine_request
 
 
 def new_curve_object(name="curve"):
@@ -597,12 +600,11 @@ class MixedEngineTests(unittest.TestCase):
 
     def test_03_a_response_without_curves_or_points_clears_them(self):
         import stageloom.blender.helpers as helpers
-        from blender.stageloom.blender import engine as engine_mod
 
         mesh_sections = {"mesh.verts": [(0, 0, 0), (1, 0, 0), (0, 1, 0)],
                          "mesh.face_counts": [3],
                          "mesh.face_indices": [0, 1, 2]}
-        engine_mod._apply(self.obj, self.stage, mesh_sections)
+        engine_apply._apply(self.obj, self.stage, mesh_sections)
         curve_helper = helpers.ensure_helper(self.obj, self.stage.key, "curves")
         point_helper = helpers.ensure_helper(self.obj, self.stage.key, "points")
         self.assertEqual(len(curve_helper.data.splines), 0)
@@ -670,13 +672,13 @@ class InputWarningsEngineTests(unittest.TestCase):
         bpy.ops.preferences.addon_disable(module="stageloom")
 
     def setUp(self):
-        self.engine._prefix_memo.clear()
-        self.engine._prefix_batch.clear()
-        self.engine._prefix_batch_built = False
+        ENGINE.prefix_memo.clear()
+        ENGINE.prefix_batch.clear()
+        ENGINE.prefix_batch_built = False
         self.stage.input_warnings = ""
 
     def _read(self, appended_notes):
-        module = self.engine.geometry_io
+        module = geometry_io
         real = module.geometry_set_to_sections
 
         def with_notes(geometry, as_subd=False, notes=None, **kwargs):
@@ -687,7 +689,7 @@ class InputWarningsEngineTests(unittest.TestCase):
 
         module.geometry_set_to_sections = with_notes
         try:
-            return self.engine._prefix_sections(
+            return engine_request._prefix_sections(
                 self.obj, self.obj.gh_stack, self.stage
             )
         finally:
@@ -700,7 +702,7 @@ class InputWarningsEngineTests(unittest.TestCase):
             "2 Catmull-Rom curve components were skipped",
         )
 
-        self.engine._prefix_memo.clear()
+        ENGINE.prefix_memo.clear()
         self._read([])
         self.assertEqual(self.stage.input_warnings, "")
 
@@ -728,10 +730,10 @@ class InputWarningsEngineTests(unittest.TestCase):
             [entry.name for entry in self.obj.modifiers].index(modifier.name), 0
         )
         try:
-            self.engine._prefix_memo.clear()
-            self.engine._prefix_batch.clear()
-            self.engine._prefix_batch_built = False
-            self.engine._prefix_sections(
+            ENGINE.prefix_memo.clear()
+            ENGINE.prefix_batch.clear()
+            ENGINE.prefix_batch_built = False
+            engine_request._prefix_sections(
                 self.obj, self.obj.gh_stack, self.stage
             )
             self.assertIn("2 Catmull-Rom", self.stage.input_warnings)
@@ -744,18 +746,18 @@ class InputWarningsEngineTests(unittest.TestCase):
     def test_an_unchanged_read_does_not_rewrite_the_channel(self):
         self._read(["1 conversion note"])
         writes = []
-        real_set = self.engine._set
+        real_set = engine_request._set
 
         def counting(stage, field, value):
             if field == "input_warnings" and getattr(stage, field) != value:
                 writes.append(value)
             return real_set(stage, field, value)
 
-        self.engine._set = counting
+        engine_request._set = counting
         try:
             self._read(["1 conversion note"])
         finally:
-            self.engine._set = real_set
+            engine_request._set = real_set
 
         self.assertEqual(writes, [], "an unchanged prefix rewrote input_warnings")
 

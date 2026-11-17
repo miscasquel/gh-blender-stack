@@ -38,6 +38,9 @@ from stageloom.blender.engine.dependencies import (  # noqa: E402
     stage_dependencies,
     stage_dependents,
 )
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import lifecycle as engine_lifecycle
+from stageloom.blender.engine import triggers as engine_triggers
 
 
 def _cube(name, calc_uvs=True):
@@ -476,15 +479,15 @@ class _BakeFixture(unittest.TestCase):
         bpy.ops.preferences.addon_disable(module="stageloom")
 
     def setUp(self):
-        engine = self.engine
         for obj in list(bpy.data.objects):
             bpy.data.objects.remove(obj, do_unlink=True)
-        engine._prefix_memo.clear()
-        for name in ("_pending", "_sent", "_verify", "_last_frame", "_dirty"):
-            getattr(engine, name).clear()
-        engine._playback_sync = False
-        engine._bake_sync = False
-        engine._bake_progress = None
+        ENGINE.prefix_memo.clear()
+        ENGINE.clear_runtimes()
+        ENGINE.verify.clear()
+        ENGINE.dirty.clear()
+        ENGINE.playback_sync = False
+        ENGINE.bake_sync = False
+        ENGINE.bake_progress = None
         self.fakes = []
         self.reports = {}
         scene = bpy.context.scene
@@ -497,9 +500,9 @@ class _BakeFixture(unittest.TestCase):
 
     def tearDown(self):
         self._stop_fakes()
-        self.engine._playback_sync = False
-        self.engine._bake_sync = False
-        self.engine._bake_progress = None
+        ENGINE.playback_sync = False
+        ENGINE.bake_sync = False
+        ENGINE.bake_progress = None
 
     def _stop_fakes(self):
         for fake in self.fakes:
@@ -703,14 +706,14 @@ class BakeFreezeTests(_BakeFixture):
         self.assertFalse(stage_a.frozen, "a failed bake froze an upstream stage")
         self.assertEqual(stage_a.frozen_by_bake, "")
         self.assertGreater(
-            self.engine.stats["playback_failures"], 0, "the failure was not counted"
+            ENGINE.stats()["playback_failures"], 0, "the failure was not counted"
         )
         self.assertTrue(
             any(
                 line.startswith("bake:") and "fake solve failure" in line
-                for line in self.engine._trace
+                for line in ENGINE.trace_lines
             ),
-            "the failed bake left no visible error: %r" % (list(self.engine._trace),),
+            "the failed bake left no visible error: %r" % (list(ENGINE.trace_lines),),
         )
 
     def test_06_a_rebake_replaces_the_old_upstream_token(self):
@@ -764,23 +767,23 @@ class BakeFreezeTests(_BakeFixture):
         stage_b.state = "ok"
 
         pending_key = (obj.gh_stack.stack_id, stage_a.key)
-        self.engine._pending[pending_key] = {"rid": 0.0}
+        ENGINE.runtime(*pending_key).pending = {"rid": 0.0}
         try:
             with self.assertRaises(RuntimeError) as caught:
                 self._bake(obj, 1)
             self.assertIn("request pending", str(caught.exception))
         finally:
-            self.engine._pending.pop(pending_key, None)
+            ENGINE.runtime(*pending_key).pending.clear()
         self.assertFalse(stage_b.baked)
 
         selected_pending = (obj.gh_stack.stack_id, stage_b.key)
-        self.engine._pending[selected_pending] = {"rid": 0.0}
+        ENGINE.runtime(*selected_pending).pending = {"rid": 0.0}
         try:
             with self.assertRaises(RuntimeError) as caught:
                 self._bake(obj, 1)
             self.assertIn("request pending", str(caught.exception))
         finally:
-            self.engine._pending.pop(selected_pending, None)
+            ENGINE.runtime(*selected_pending).pending.clear()
         self.assertFalse(stage_b.baked)
 
     def test_08_a_split_stage_drops_the_old_bake_markers(self):
@@ -789,7 +792,7 @@ class BakeFreezeTests(_BakeFixture):
         stage_a.frozen_by_bake = "upstream-token"
         old_key = stage_a.key
 
-        new_key = self.engine._split_stage(obj, stage_a)
+        new_key = engine_lifecycle._split_stage(obj, stage_a)
 
         self.assertNotEqual(new_key, old_key)
         self.assertEqual(stage_a.key, new_key)
@@ -799,7 +802,7 @@ class BakeFreezeTests(_BakeFixture):
         )
 
     def _trace_count(self, text):
-        return sum(1 for line in self.engine._trace if text in line)
+        return sum(1 for line in ENGINE.trace_lines if text in line)
 
     def test_09_baking_the_middle_triggers_and_freezes_its_dependents(self):
         obj, stage_a, stage_b, stage_c = self._three_stage_chain()
@@ -841,7 +844,7 @@ class BakeFreezeTests(_BakeFixture):
             ),
             1,
             "the dependent was not triggered exactly once: %r"
-            % (list(self.engine._trace),),
+            % (list(ENGINE.trace_lines),),
         )
         # The bake ended at frame 1. C's last live answer during the bake was
         # frame 3 (scale 3); the forced request must carry the baked frame 1
@@ -860,12 +863,12 @@ class BakeFreezeTests(_BakeFixture):
         )
 
         # Frozen stages must not ask again when the playhead moves.
-        sends = self.engine.stats["sends"]
+        sends = ENGINE.stats()["sends"]
         frozen_helper = self._helper_geometry(obj, stage_c)
         for frame in (2, 3, 1):
             bpy.context.scene.frame_set(frame)
-            self.engine._timer()
-            self.assertEqual(sends, self.engine.stats["sends"], "a scrub sent a request")
+            engine_triggers._timer()
+            self.assertEqual(sends, ENGINE.stats()["sends"], "a scrub sent a request")
             self.assertEqual(
                 frozen_helper,
                 self._helper_geometry(obj, stage_c),
@@ -1001,10 +1004,10 @@ class BakeFreezeTests(_BakeFixture):
         self.assertTrue(
             any(
                 line.startswith("bake:") and "fake solve failure" in line
-                for line in self.engine._trace
+                for line in ENGINE.trace_lines
             ),
             "the failed dependent left no visible error: %r"
-            % (list(self.engine._trace),),
+            % (list(ENGINE.trace_lines),),
         )
 
     def test_14_a_one_way_dependent_is_skipped_with_a_warning(self):
@@ -1031,10 +1034,10 @@ class BakeFreezeTests(_BakeFixture):
         self.assertTrue(
             any(
                 "skipped dependent" in line and "one-way" in line
-                for line in self.engine._trace
+                for line in ENGINE.trace_lines
             ),
             "the one-way dependent was skipped silently: %r"
-            % (list(self.engine._trace),),
+            % (list(ENGINE.trace_lines),),
         )
 
     def test_15_save_reload_preserves_the_bake_and_its_markers(self):
@@ -1217,14 +1220,14 @@ class OfflineBakeAcceptanceTests(_BakeFixture):
         self._save()
         self.assertTrue(os.path.exists(blend))
 
-        sends = self.engine.stats["sends"]
+        sends = ENGINE.stats()["sends"]
         self._stop_fakes()
         baked = {}
         for frame in (1, 2, 3):
             baked[frame] = self._frame_geometry(holder, frame)
-            self.engine._timer()  # the offline engine pass must not ask anyone
+            engine_triggers._timer()  # the offline engine pass must not ask anyone
             self.assertEqual(
-                self.engine.stats["sends"], sends, "evaluation sent a request"
+                ENGINE.stats()["sends"], sends, "evaluation sent a request"
             )
         self.assertEqual(
             len({geometry[1] for geometry in baked.values()}),
@@ -1254,7 +1257,7 @@ class OfflineBakeAcceptanceTests(_BakeFixture):
                 upstream_before["C"],
                 "the frozen cross-object upstream changed",
             )
-            self.assertEqual(self.engine.stats["sends"], sends)
+            self.assertEqual(ENGINE.stats()["sends"], sends)
 
         keys = (source_stage.key, holder_stage_a.key, selected.key)
         bpy.ops.wm.open_mainfile(filepath=blend)
@@ -1292,14 +1295,14 @@ class OfflineBakeAcceptanceTests(_BakeFixture):
             "the bake is a disk bake, not the packed bake the test asked for",
         )
 
-        sends = self.engine.stats["sends"]
+        sends = ENGINE.stats()["sends"]
         for frame in (1, 2, 3):
             self.assertEqual(
                 self._frame_geometry(holder, frame),
                 baked[frame],
                 "the packed bake did not survive save/reload at frame %d" % frame,
             )
-            self.engine._timer()
+            engine_triggers._timer()
             self.assertEqual(
                 self._helper_geometry(holder, holder_stage_a),
                 upstream_before["A"],
@@ -1311,7 +1314,7 @@ class OfflineBakeAcceptanceTests(_BakeFixture):
                 "the reloaded cross-object upstream changed",
             )
             self.assertEqual(
-                self.engine.stats["sends"], sends, "a reloaded evaluation sent a request"
+                ENGINE.stats()["sends"], sends, "a reloaded evaluation sent a request"
             )
 
         self.assertEqual(self._clear(holder, 1), {"FINISHED"})
@@ -1328,14 +1331,14 @@ class OfflineBakeAcceptanceTests(_BakeFixture):
         for stage in (holder_stage_a, source_stage):
             self.assertEqual(stage.frozen_by_bake, "", "a freeze marker survived Clear Bake")
 
-        sends = self.engine.stats["sends"]
+        sends = ENGINE.stats()["sends"]
         self._start_fake(source_stage)
         self._start_fake(holder_stage_a)
         self._start_fake(selected)
         self._wait_clients(3)
         self._settle(source_stage, holder_stage_a, selected)
         self.assertGreater(
-            self.engine.stats["sends"],
+            ENGINE.stats()["sends"],
             sends,
             "the live chain did not request again after Clear Bake",
         )

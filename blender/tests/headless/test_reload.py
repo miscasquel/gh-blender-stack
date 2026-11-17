@@ -15,6 +15,8 @@ from harness import (
     start_fake,
     stop_fake,
 )
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import triggers as engine_triggers
 
 
 class ReopenTests(unittest.TestCase):
@@ -104,19 +106,19 @@ class ReopenTests(unittest.TestCase):
 
     def test_01_engine_hooks_survive_the_load(self):
         self.assertTrue(
-            bpy.app.timers.is_registered(self.engine._timer),
+            bpy.app.timers.is_registered(engine_triggers._timer),
             "the engine timer was cleared by the file load",
         )
-        self.assertIn(self.engine._on_depsgraph, bpy.app.handlers.depsgraph_update_post)
-        self.assertIn(self.engine._on_frame_change, bpy.app.handlers.frame_change_post)
-        self.assertIn(self.engine._on_load, bpy.app.handlers.load_post)
+        self.assertIn(engine_triggers._on_depsgraph, bpy.app.handlers.depsgraph_update_post)
+        self.assertIn(engine_triggers._on_frame_change, bpy.app.handlers.frame_change_post)
+        self.assertIn(engine_triggers._on_load, bpy.app.handlers.load_post)
 
     def test_02_load_resets_waiting_and_marks_the_stack_dirty(self):
         obj = bpy.data.objects.get("Reload")
         self.assertIsNotNone(obj, "the saved object did not survive the reload")
         stage = obj.gh_stack.stages[0]
         self.assertNotEqual(stage.state, "waiting", "a mid-request save was not reset on load")
-        self.assertIn("Reload", self.engine._dirty, "the loaded stack was not marked dirty")
+        self.assertIn("Reload", ENGINE.dirty, "the loaded stack was not marked dirty")
 
     def test_03_reopened_stage_talks_to_grasshopper(self):
         self.assertTrue(self.connected, "the fake never connected before the load")

@@ -7,6 +7,10 @@ import bpy
 import numpy as np
 
 from harness import isolate_data_root
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import messages as engine_messages
+from stageloom.blender.engine import request as engine_request
+from stageloom.blender.engine import triggers as engine_triggers
 
 
 class ResponseValidationTests(unittest.TestCase):
@@ -32,11 +36,11 @@ class ResponseValidationTests(unittest.TestCase):
         bpy.ops.preferences.addon_disable(module="stageloom")
 
     def setUp(self):
-        self.engine._pending.clear()
-        self.engine._sent.clear()
-        self.engine._verify.clear()
-        self.engine._pull_permits.clear()
-        self.engine._pull_deadlines.clear()
+        ENGINE.clear_runtimes()
+        ENGINE.clear_runtimes()
+        ENGINE.verify.clear()
+        ENGINE.clear_runtimes()
+        ENGINE.clear_runtimes()
         self.stage.enabled = True
         self.stage.frozen = False
         self.stage.state = self.stack_mod.STATE_OK
@@ -70,7 +74,7 @@ class ResponseValidationTests(unittest.TestCase):
         self.stage.rid = rid
         self.stage.applied_out_hash = "sha256:applied"
         key = (self.record.stack_id, self.stage.key)
-        self.engine._pending[key] = {rid: time.monotonic()}
+        ENGINE.runtime(*key).pending = {rid: time.monotonic()}
 
         header = {
             "type": "response",
@@ -81,11 +85,11 @@ class ResponseValidationTests(unittest.TestCase):
             "warnings": [],
         }
         bridge.post_incoming(header, {})
-        self.engine._handle_incoming()
+        engine_messages._handle_incoming()
 
         self.assertIn(
             rid,
-            self.engine._pending_of(self.record.stack_id, self.stage.key),
+            ENGINE.pending_of(self.record.stack_id, self.stage.key),
             "the empty-rid response cleared the real pending request",
         )
         self.assertEqual(self.stage.applied_out_hash, "sha256:applied")
@@ -104,7 +108,7 @@ class ResponseValidationTests(unittest.TestCase):
             "warnings": [],
         }
         bridge.post_incoming(header, {})
-        self.engine._handle_incoming()
+        engine_messages._handle_incoming()
 
         self.assertEqual(self.stage.applied_out_hash, "")
 
@@ -114,7 +118,7 @@ class ResponseValidationTests(unittest.TestCase):
         rid = "sha256:failing"
         self.stage.rid = rid
         key = (self.record.stack_id, self.stage.key)
-        self.engine._pending[key] = {rid: time.monotonic()}
+        ENGINE.runtime(*key).pending = {rid: time.monotonic()}
 
         error = {
             "type": "response",
@@ -125,9 +129,9 @@ class ResponseValidationTests(unittest.TestCase):
             "warnings": [],
         }
         bridge.post_incoming(error, {})
-        self.engine._handle_incoming()
+        engine_messages._handle_incoming()
 
-        self.assertNotIn(key, self.engine._pending, "the error left the request pending")
+        self.assertFalse(ENGINE.is_pending(*key), "the error left the request pending")
         self.assertEqual(self.stage.state, self.stack_mod.STATE_ERROR)
         self.assertIn("boom", self.stage.error)
 
@@ -142,7 +146,7 @@ class ResponseValidationTests(unittest.TestCase):
         self.stage.applied_out_hash = "sha256:before"
         header, sections = self._frame(rid, "sha256:after")
         bridge.post_incoming(header, sections)
-        self.engine._handle_incoming()
+        engine_messages._handle_incoming()
 
         self.assertEqual(
             self.stage.applied_out_hash,
@@ -160,7 +164,7 @@ class ResponseValidationTests(unittest.TestCase):
         self.stage.applied_out_hash = "sha256:before"
         header, sections = self._frame(rid, "sha256:after")
         bridge.post_incoming(header, sections)
-        self.engine._handle_incoming()
+        engine_messages._handle_incoming()
 
         self.assertEqual(
             self.stage.applied_out_hash,
@@ -176,7 +180,7 @@ class ResponseValidationTests(unittest.TestCase):
         key = (self.record.stack_id, self.stage.key)
         self.stage.rid = new_rid
         self.stage.state = self.stack_mod.STATE_WAITING
-        self.engine._pending[key] = {new_rid: time.monotonic()}
+        ENGINE.runtime(*key).pending = {new_rid: time.monotonic()}
 
         error = {
             "type": "response",
@@ -187,11 +191,11 @@ class ResponseValidationTests(unittest.TestCase):
             "warnings": [],
         }
         bridge.post_incoming(error, {})
-        self.engine._handle_incoming()
+        engine_messages._handle_incoming()
 
         self.assertIn(
             new_rid,
-            self.engine._pending_of(self.record.stack_id, self.stage.key),
+            ENGINE.pending_of(self.record.stack_id, self.stage.key),
             "a stale error cleared the newer pending request",
         )
         self.assertEqual(self.stage.rid, new_rid)
@@ -206,7 +210,7 @@ class ResponseValidationTests(unittest.TestCase):
         self.stage.state = self.stack_mod.STATE_FROZEN
         self.stage.rid = rid
         key = (self.record.stack_id, self.stage.key)
-        self.engine._pending[key] = {rid: time.monotonic()}
+        ENGINE.runtime(*key).pending = {rid: time.monotonic()}
 
         error = {
             "type": "response",
@@ -217,7 +221,7 @@ class ResponseValidationTests(unittest.TestCase):
             "warnings": [],
         }
         bridge.post_incoming(error, {})
-        self.engine._handle_incoming()
+        engine_messages._handle_incoming()
 
         self.assertEqual(
             self.stage.state,
@@ -242,7 +246,7 @@ class ResponseValidationTests(unittest.TestCase):
             "warnings": [],
         }
         bridge.post_incoming(error, {})
-        self.engine._handle_incoming()
+        engine_messages._handle_incoming()
 
         self.assertEqual(self.stage.state, self.stack_mod.STATE_OK)
         self.assertEqual(self.stage.error, "")
@@ -252,8 +256,8 @@ class ResponseValidationTests(unittest.TestCase):
 
         rid = "sha256:disabled-pending"
         key = (self.record.stack_id, self.stage.key)
-        self.engine._pending[key] = {rid: time.monotonic()}
-        self.engine._sent[key] = (rid, "sha256:geom")
+        ENGINE.runtime(*key).pending = {rid: time.monotonic()}
+        ENGINE.runtime(*key).sent = (rid, "sha256:geom")
         self.stage.rid = rid
         self.stage.state = self.stack_mod.STATE_WAITING
 
@@ -268,7 +272,7 @@ class ResponseValidationTests(unittest.TestCase):
         modifier.show_render = False
         modifier.show_in_editmode = False
         try:
-            outcome = self.engine._process_stage(self.obj, self.record, self.stage)
+            outcome = engine_request._process_stage(self.obj, self.record, self.stage)
         finally:
             (
                 modifier.show_viewport,
@@ -278,14 +282,12 @@ class ResponseValidationTests(unittest.TestCase):
 
         self.assertEqual(outcome, "idle")
         self.assertEqual(self.stage.state, self.stack_mod.STATE_DISABLED)
-        self.assertNotIn(
-            key,
-            self.engine._pending,
+        self.assertFalse(
+            ENGINE.is_pending(*key),
             "the disabled stage kept its in-flight request pending",
         )
-        self.assertNotIn(
-            key,
-            self.engine._sent,
+        self.assertIsNone(
+            getattr(ENGINE.peek_runtime(*key), "sent", None),
             "the disabled stage kept its sent request bookkeeping",
         )
         self.assertEqual(
@@ -305,7 +307,7 @@ class ResponseValidationTests(unittest.TestCase):
         self.stage.applied_topology = "sha256:" + "e" * 64
         header, sections = self._frame(rid, "sha256:after-load")
 
-        self.engine._on_load()
+        engine_triggers._on_load()
 
         self.assertEqual(
             self.stage.rid,
@@ -321,7 +323,7 @@ class ResponseValidationTests(unittest.TestCase):
         # request the load no longer waits for, so it must be dropped: the load
         # has to ask Grasshopper again first.
         bridge.post_incoming(header, sections)
-        self.engine._handle_incoming()
+        engine_messages._handle_incoming()
         self.assertEqual(
             self.stage.applied_out_hash,
             "sha256:before-load",
@@ -333,24 +335,22 @@ class ResponseValidationTests(unittest.TestCase):
         self.stage.frozen = True
         self.stage.state = self.stack_mod.STATE_FROZEN
         self.stage.rid = "sha256:saved-frozen-rid"
-        self.engine._pull_permits.add(key)
-        self.engine._pull_deadlines[key] = time.monotonic() + 30.0
+        ENGINE.runtime(*key).pull_permit = True
+        ENGINE.runtime(*key).pull_deadline = time.monotonic() + 30.0
 
-        self.engine._on_load()
+        engine_triggers._on_load()
 
         self.assertEqual(self.stage.rid, "")
-        self.assertNotIn(
-            key,
-            self.engine._pull_permits,
+        self.assertFalse(
+            ENGINE.runtime(*key).pull_permit,
             "a Pull armed before the save survived the load",
         )
-        self.assertNotIn(
-            key,
-            self.engine._pull_deadlines,
+        self.assertFalse(
+            ENGINE.runtime(*key).pull_deadline is not None,
             "a Pull deadline armed before the save survived the load",
         )
         self.assertEqual(
-            self.engine._process_stage(self.obj, self.record, self.stage),
+            engine_request._process_stage(self.obj, self.record, self.stage),
             "idle",
             "the saved frozen stage sent the old Pull after reopening",
         )
@@ -364,7 +364,7 @@ class ResponseValidationTests(unittest.TestCase):
         key = (self.record.stack_id, self.stage.key)
         self.stage.rid = new_rid
         self.stage.state = self.stack_mod.STATE_WAITING
-        self.engine._pending[key] = {new_rid: time.monotonic()}
+        ENGINE.runtime(*key).pending = {new_rid: time.monotonic()}
 
         bridge.post_incoming(
             {
@@ -376,11 +376,11 @@ class ResponseValidationTests(unittest.TestCase):
             },
             {},
         )
-        self.engine._handle_incoming()
+        engine_messages._handle_incoming()
 
         self.assertIn(
             new_rid,
-            self.engine._pending_of(self.record.stack_id, self.stage.key),
+            ENGINE.pending_of(self.record.stack_id, self.stage.key),
             "a stale standalone error cleared the newer pending request",
         )
         self.assertEqual(self.stage.rid, new_rid)
@@ -389,7 +389,7 @@ class ResponseValidationTests(unittest.TestCase):
 
     def test_16_undo_clears_the_applied_topology(self):
         self.stage.applied_topology = "sha256:" + "f" * 64
-        self.engine._on_undo()
+        engine_triggers._on_undo()
         self.assertEqual(
             self.stage.applied_topology,
             "",
@@ -403,7 +403,7 @@ class ResponseValidationTests(unittest.TestCase):
         key = (self.record.stack_id, self.stage.key)
         self.stage.rid = rid
         self.stage.state = self.stack_mod.STATE_WAITING
-        self.engine._pending[key] = {rid: time.monotonic()}
+        ENGINE.runtime(*key).pending = {rid: time.monotonic()}
 
         bridge.post_incoming(
             {
@@ -414,11 +414,11 @@ class ResponseValidationTests(unittest.TestCase):
             },
             {},
         )
-        self.engine._handle_incoming()
+        engine_messages._handle_incoming()
 
         self.assertIn(
             rid,
-            self.engine._pending_of(self.record.stack_id, self.stage.key),
+            ENGINE.pending_of(self.record.stack_id, self.stage.key),
             "an error without a rid cancelled the newer pending request",
         )
         self.assertEqual(self.stage.state, self.stack_mod.STATE_WAITING)
@@ -430,36 +430,36 @@ class ResponseValidationTests(unittest.TestCase):
         key = (self.record.stack_id, self.stage.key)
         self.stage.rid = new_rid
         self.stage.state = self.stack_mod.STATE_WAITING
-        self.engine._pending[key] = {new_rid: time.monotonic()}
+        ENGINE.runtime(*key).pending = {new_rid: time.monotonic()}
 
-        self.engine._report_message_failure(
+        engine_messages._report_message_failure(
             {"type": "response", "stage": self.stage.key, "rid": old_rid},
             RuntimeError("stale frame failure"),
         )
-        self.engine._clear_failed_response(self.stage.key, old_rid)
+        engine_messages._clear_failed_response(self.stage.key, old_rid)
 
         self.assertIn(
             new_rid,
-            self.engine._pending_of(self.record.stack_id, self.stage.key),
+            ENGINE.pending_of(self.record.stack_id, self.stage.key),
             "a stale failed response consumed the newer pending request",
         )
         self.assertEqual(self.stage.rid, new_rid)
         self.assertEqual(self.stage.state, self.stack_mod.STATE_WAITING)
         self.assertNotIn(
             key,
-            self.engine._verify,
+            ENGINE.verify,
             "a stale failed response armed a resend for the newer request",
         )
 
         # The failure for the request actually in flight still recovers it.
-        self.engine._clear_failed_response(self.stage.key, new_rid)
+        engine_messages._clear_failed_response(self.stage.key, new_rid)
         self.assertFalse(
-            self.engine._pending_of(self.record.stack_id, self.stage.key),
+            ENGINE.pending_of(self.record.stack_id, self.stage.key),
             "the current failed response was not consumed",
         )
         self.assertEqual(self.stage.state, self.stack_mod.STATE_IDLE)
-        self.assertIn(key, self.engine._verify)
-        self.assertIn(self.obj.name, self.engine._dirty)
+        self.assertIn(key, ENGINE.verify)
+        self.assertIn(self.obj.name, ENGINE.dirty)
 
     def test_15_a_frozen_pull_with_no_answer_settles(self):
         rid = "sha256:lost-pull"
@@ -467,40 +467,40 @@ class ResponseValidationTests(unittest.TestCase):
         self.stage.frozen = True
         self.stage.state = self.stack_mod.STATE_WAITING
         self.stage.rid = rid
-        self.engine._pending[key] = {rid: time.monotonic() - 100.0}
-        self.engine._arm_pull(key)
-        self.engine._pull_deadlines[key] = time.monotonic() - 0.01
-        self.engine._dirty.clear()
-        self.engine._last_stall_check = 0.0
+        ENGINE.runtime(*key).pending = {rid: time.monotonic() - 100.0}
+        engine_request._arm_pull(key)
+        ENGINE.runtime(*key).pull_deadline = time.monotonic() - 0.01
+        ENGINE.dirty.clear()
+        ENGINE.last_stall_check = 0.0
         try:
-            self.engine._nudge_stalled_waits()
+            engine_triggers._nudge_stalled_waits()
         finally:
             self.stage.frozen = False
 
-        self.assertNotIn(
-            key, self.engine._pending, "the lost Pull left the request pending"
+        self.assertFalse(ENGINE.is_pending(*
+            key), "the lost Pull left the request pending"
         )
-        self.assertNotIn(
-            key, self.engine._pull_permits, "the lost Pull left its permit armed"
+        self.assertFalse(ENGINE.runtime(*
+            key).pull_permit, "the lost Pull left its permit armed"
         )
-        self.assertNotIn(
-            key, self.engine._pull_deadlines, "the lost Pull left its deadline behind"
+        self.assertFalse(ENGINE.runtime(*
+            key).pull_deadline is not None, "the lost Pull left its deadline behind"
         )
         self.assertEqual(self.stage.state, self.stack_mod.STATE_FROZEN)
         self.assertEqual(self.stage.rid, "")
         self.assertIn("Pull timed out", self.stage.error)
         self.assertNotIn(
             self.obj.name,
-            self.engine._dirty,
+            ENGINE.dirty,
             "the expired Pull dirtied the object",
         )
 
         # An idle second scan must stay quiet: the once-a-second dirty loop this
         # deadline removes is what made a lost Pull cost a pass per second.
-        self.engine._last_stall_check = 0.0
-        self.engine._nudge_stalled_waits()
+        ENGINE.last_stall_check = 0.0
+        engine_triggers._nudge_stalled_waits()
         self.assertNotIn(
             self.obj.name,
-            self.engine._dirty,
+            ENGINE.dirty,
             "the settled Pull kept dirtying the object",
         )

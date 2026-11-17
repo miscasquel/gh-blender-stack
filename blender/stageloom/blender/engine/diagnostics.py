@@ -1,18 +1,21 @@
 """Diagnostics: trace, heartbeat, per-stage timings and wait ages."""
 
-import sys
+import os
+import time
 
-engine = sys.modules[__package__]
+import bpy
+
+from .runtime import ENGINE
 
 
 def _timed_since(started):
     """Milliseconds elapsed since a `time.monotonic()` stamp."""
-    return (engine.time.monotonic() - started) * 1000.0
+    return ENGINE.timed_since(started)
 
 
 def _record_timing(record, stage, field, value):
     """Keep the last measured latency of one stage field."""
-    engine._timings.setdefault((record.stack_id, stage.key), {})[field] = value
+    ENGINE.record_timing(record, stage, field, value)
 
 
 def stage_timings(stack_id, stage_key):
@@ -24,8 +27,7 @@ def stage_timings(stack_id, stage_key):
     draws, and the panel must never be able to change engine state. Fields that
     have not been measured yet are absent.
     """
-    values = engine._timings.get((stack_id, stage_key))
-    return dict(values) if values else {}
+    return ENGINE.stage_timings(stack_id, stage_key)
 
 
 def _age(now, then):
@@ -38,14 +40,7 @@ def trigger_health():
     A frozen trigger age while the scene is edited is the tell for a mute; the
     ages are seconds, or None before the event has happened this session.
     """
-    now = engine.time.monotonic()
-    return {
-        "trigger_age": engine._age(now, engine._heartbeat["trigger_at"]),
-        "trigger_count": engine._heartbeat["trigger_count"],
-        "trigger_updates": engine._heartbeat["trigger_updates"],
-        "send_age": engine._age(now, engine._heartbeat["sent_at"]),
-        "apply_age": engine._age(now, engine._heartbeat["applied_at"]),
-    }
+    return ENGINE.trigger_health()
 
 
 def waiting_seconds(stack_id, stage_key):
@@ -57,13 +52,7 @@ def waiting_seconds(stack_id, stage_key):
     have an old send stamp until it is cleared, and an idle stage must never
     report a wait.
     """
-    key = (stack_id, stage_key)
-    if not engine._pending.get(key):
-        return 0.0
-    since = engine._state_since.get(key)
-    if since is None:
-        return 0.0
-    return engine.time.monotonic() - since
+    return ENGINE.waiting_seconds(stack_id, stage_key)
 
 
 def recent_activity(count=8):
@@ -72,7 +61,7 @@ def recent_activity(count=8):
     The Diagnostics panel shows them so a sync fault is a visible chain
     (trigger -> decision -> request -> answer) instead of a guess.
     """
-    return list(engine._trace)[-count:]
+    return ENGINE.recent_activity(count)
 
 
 _HANDLER_NAMES = (
@@ -105,7 +94,7 @@ def _is_engine_module(module):
 def _enabled_stageloom_addons():
     """The enabled add-on modules that look like a Stageloom install."""
     try:
-        addons = engine.bpy.context.preferences.addons
+        addons = bpy.context.preferences.addons
     except AttributeError:
         return []
     return sorted(item.module for item in addons if "stageloom" in item.module)
@@ -118,12 +107,14 @@ def registration_report():
     through `bpy.app.timers`, but a stale generation with handlers still
     attached is visible here. Never writes engine state.
     """
-    now = engine.time.monotonic()
+    from .triggers import _timer
+
+    now = time.monotonic()
     handlers = {}
     counts = {}
     for name in _HANDLER_NAMES:
         entries = []
-        for handler in getattr(engine.bpy.app.handlers, name):
+        for handler in getattr(bpy.app.handlers, name):
             module = getattr(handler, "__module__", "")
             if not _is_engine_module(module):
                 continue
@@ -139,21 +130,22 @@ def registration_report():
         handlers[name] = entries
         counts[name] = len(entries)
     return {
-        "engine_file": getattr(engine, "__file__", ""),
+        # The facade file names the engine generation, as it always has.
+        "engine_file": os.path.join(os.path.dirname(__file__), "__init__.py"),
         "engine_package": __package__,
-        "timer_module": getattr(engine._timer, "__module__", ""),
-        "timer_id": id(engine._timer),
-        "timer_registered": bool(engine.bpy.app.timers.is_registered(engine._timer)),
-        "registered": bool(engine._registered),
-        "active": bool(engine._active),
+        "timer_module": getattr(_timer, "__module__", ""),
+        "timer_id": id(_timer),
+        "timer_registered": bool(bpy.app.timers.is_registered(_timer)),
+        "registered": bool(ENGINE.registered),
+        "active": bool(ENGINE.active),
         "enabled_addons": _enabled_stageloom_addons(),
         "handler_counts": counts,
         "handlers": handlers,
-        "stack_objects": len(engine._stack_objects),
-        "index_dirty": bool(engine._index_dirty),
-        "dirty": sorted(engine._dirty),
-        "hot_seconds": max(0.0, engine._hot_until - now),
-        "passes": engine.stats["passes"],
+        "stack_objects": len(ENGINE.stack_objects),
+        "index_dirty": bool(ENGINE.index_dirty),
+        "dirty": sorted(ENGINE.dirty),
+        "hot_seconds": max(0.0, ENGINE.hot_until - now),
+        "passes": ENGINE.stats()["passes"],
     }
 
 
@@ -161,16 +153,15 @@ def tick_rate(seconds=5.0):
     """Timer passes per second, sampled by blocking the caller.
 
     `bpy.app.timers` has no public callback list, and a stale timer keeps its
-    own module's `stats`; this measures the current generation only. It is still
-    the way to tell an idle cadence from a hot one. Call it from Blender's
+    own module's counters; this measures the current generation only. It is
+    still the way to tell an idle cadence from a hot one. Call it from Blender's
     Python console; it sleeps, so the window is unresponsive for ``seconds``.
     A dormant engine (a file with no stages) has no timer, so the result is
     zero. In a background session the timer is inert and the result is zero too.
     """
     seconds = max(0.1, float(seconds))
-    before = engine.stats["passes"]
-    started = engine.time.monotonic()
-    engine.time.sleep(seconds)
-    elapsed = engine.time.monotonic() - started
-    return (engine.stats["passes"] - before) / elapsed if elapsed else 0.0
-
+    before = ENGINE.stats()["passes"]
+    started = time.monotonic()
+    time.sleep(seconds)
+    elapsed = time.monotonic() - started
+    return (ENGINE.stats()["passes"] - before) / elapsed if elapsed else 0.0

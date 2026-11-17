@@ -194,7 +194,7 @@ class BaselineGateTests(unittest.TestCase):
         self.assertIn("playback.frame_ms", table)
         self.assertIn("FAIL", table)
 
-    def test_baseline_is_median_of_three_runs(self):
+    def test_baseline_is_best_of_three_runs(self):
         good = make_report()
         bad = make_report()
         scale_playback(bad, 1.20)
@@ -204,16 +204,16 @@ class BaselineGateTests(unittest.TestCase):
         entry = document["metrics"]["playback.frame_ms"]
         self.assertAlmostEqual(entry["p50"], 12.0, places=6)
         self.assertAlmostEqual(entry["p95"], 12.0, places=6)
-        self.assertEqual(document["aggregate"], "median run")
+        self.assertEqual(document["aggregate"], "best run")
 
-    def test_baseline_aggregate_must_be_median(self):
+    def test_baseline_aggregate_must_be_best(self):
         document = copy.deepcopy(self.baseline)
-        document["aggregate"] = "best run"
+        document["aggregate"] = "worst run"
         with self.assertRaises(baseline.BaselineError) as caught:
             baseline.validate_baseline(document)
-        self.assertIn("median run", str(caught.exception))
+        self.assertIn("best run", str(caught.exception))
 
-    def test_one_outlier_is_ignored_by_median(self):
+    def test_one_outlier_is_ignored_by_best(self):
         good = make_report()
         bad = make_report()
         scale_playback(bad, 1.20)

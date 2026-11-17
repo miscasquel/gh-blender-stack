@@ -31,6 +31,9 @@ from harness import (
     start_fake,
     stop_fake,
 )
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import playback as engine_playback
+from stageloom.blender.engine import request as engine_request
 
 
 def wait_for(read, check, seconds=2.0):
@@ -137,39 +140,38 @@ class ChainPlaybackTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.stop_fakes()
-        cls.engine._playback_sync = False
+        ENGINE.playback_sync = False
         bpy.ops.preferences.addon_disable(module="stageloom")
 
     def setUp(self):
-        engine = self.engine
-        engine._pending.clear()
-        engine._sent.clear()
-        engine._verify.clear()
-        engine._last_frame.clear()
-        engine._dirty.clear()
-        engine._playback_sync = False
-        self.playback._reported.clear()
+        ENGINE.clear_runtimes()
+        ENGINE.clear_runtimes()
+        ENGINE.verify.clear()
+        ENGINE.clear_runtimes()
+        ENGINE.dirty.clear()
+        ENGINE.playback_sync = False
+        ENGINE.playback_reports.clear()
         bpy.context.scene.sync_mode = "NONE"
         bpy.context.scene.frame_set(1)
-        self.sends = engine.stats["sends"]
+        self.sends = ENGINE.stats()["sends"]
         self.requests = (requests_of(self.report_a), requests_of(self.report_b))
         self.marker = 0
 
     def tearDown(self):
-        self.engine._playback_sync = False
-        self.playback._reported.clear()
+        ENGINE.playback_sync = False
+        ENGINE.playback_reports.clear()
 
     def _frame_sends(self, frame):
         """Play one frame and return the sends its pass made, in trace order."""
         scene = bpy.context.scene
         self.marker += 1
         marker = "chain frame %d:%d" % (id(self), self.marker)
-        self.engine._trace.append(marker)
+        ENGINE.trace_lines.append(marker)
         scene.frame_set(frame)
         # frame_change_post may or may not fire under -b; call the same gate the
         # handler calls. A duplicate call at the same frame sends nothing.
-        ready = self.engine._sync_playback_frame(scene)
-        lines = list(self.engine._trace)
+        ready = engine_playback._sync_playback_frame(scene)
+        lines = list(ENGINE.trace_lines)
         if marker not in lines:
             raise AssertionError("the trace ring lost the frame marker")
         lines = lines[lines.index(marker) + 1:]
@@ -184,7 +186,7 @@ class ChainPlaybackTests(unittest.TestCase):
         expected_final = {1: 0.5, 2: 2.0, 3: 4.5}
         scene = bpy.context.scene
         seen = {}
-        self.engine._on_playback_pre(scene)
+        engine_playback._on_playback_pre(scene)
         try:
             for frame in frames:
                 ready, sent_a, sent_b = self._frame_sends(frame)
@@ -201,7 +203,7 @@ class ChainPlaybackTests(unittest.TestCase):
                     lambda value: abs(value - expected_prefix[frame]) < 0.01,
                 )
         finally:
-            self.engine._on_playback_post(scene)
+            engine_playback._on_playback_post(scene)
 
         for frame in frames:
             self.assertAlmostEqual(
@@ -213,7 +215,7 @@ class ChainPlaybackTests(unittest.TestCase):
         self.assertAlmostEqual(helper_max(self.obj, self.stage_a.key), 3.0, places=2)
         self.assertAlmostEqual(helper_max(self.obj, self.stage_b.key), 4.5, places=2)
         self.assertEqual(
-            self.engine.stats["sends"] - self.sends,
+            ENGINE.stats()["sends"] - self.sends,
             2 * len(frames),
             "the chain did not ask once per stage per frame",
         )
@@ -223,7 +225,7 @@ class ChainPlaybackTests(unittest.TestCase):
             lambda value: value == expected_requests,
         )
         self.assertEqual(counts, expected_requests, "the fakes did not each receive one request per frame")
-        stats = self.engine.stats
+        stats = ENGINE.stats()
         self.assertGreaterEqual(stats["playback_frames"], len(frames))
         self.assertEqual(stats["playback_synced"], stats["playback_frames"])
         self.assertEqual(stats["playback_failures"], 0)
@@ -232,20 +234,20 @@ class ChainPlaybackTests(unittest.TestCase):
         type(self).start_fakes()
         self.assertTrue(pump(seconds=15.0, until=type(self).settled), "the chain never re-settled")
         scene = bpy.context.scene
-        self.engine._on_playback_pre(scene)
+        engine_playback._on_playback_pre(scene)
         try:
             for frame in (1, 2):
                 self.assertTrue(self._frame_sends(frame)[0])
         finally:
-            self.engine._on_playback_post(scene)
+            engine_playback._on_playback_post(scene)
 
         last_a = helper_max(self.obj, self.stage_a.key)
         last_b = helper_max(self.obj, self.stage_b.key)
         type(self).stop_fakes()
         requests = (requests_of(self.report_a), requests_of(self.report_b))
-        sends = self.engine.stats["sends"]
+        sends = ENGINE.stats()["sends"]
 
-        self.engine._on_playback_pre(scene)
+        engine_playback._on_playback_pre(scene)
         try:
             for frame in (1, 2, 3, 4):
                 ready, sent_a, sent_b = self._frame_sends(frame)
@@ -256,15 +258,15 @@ class ChainPlaybackTests(unittest.TestCase):
                 self.assertAlmostEqual(helper_max(self.obj, self.stage_a.key), last_a, places=2)
                 self.assertAlmostEqual(helper_max(self.obj, self.stage_b.key), last_b, places=2)
         finally:
-            self.engine._on_playback_post(scene)
+            engine_playback._on_playback_post(scene)
 
-        self.assertEqual(self.engine.stats["sends"], sends, "a request left with no client")
+        self.assertEqual(ENGINE.stats()["sends"], sends, "a request left with no client")
         self.assertEqual(
             (requests_of(self.report_a), requests_of(self.report_b)),
             requests,
             "a stopped fake received a request",
         )
-        stats = self.engine.stats
+        stats = ENGINE.stats()
         # One gate pass per frame normally; frame_change_post may add a second,
         # unchanged pass per frame under -b. A failed pass fails once per stage.
         self.assertGreaterEqual(stats["playback_frames"], 4)
@@ -281,8 +283,7 @@ class ChainPlaybackTests(unittest.TestCase):
             pump(seconds=15.0, until=type(self).settled),
             "the chain never settled before the fault",
         )
-        engine = self.engine
-        real_process = engine._process_stage
+        real_process = engine_request._process_stage
 
         def failing_process(obj, record, stage):
             if stage.key == self.stage_a.key:
@@ -290,16 +291,16 @@ class ChainPlaybackTests(unittest.TestCase):
             return real_process(obj, record, stage)
 
         scene = bpy.context.scene
-        engine._process_stage = failing_process
+        engine_request._process_stage = failing_process
         try:
             scene.frame_set(2)
-            engine._playback_sync = True
+            ENGINE.playback_sync = True
             try:
-                ready = engine._sync_playback_frame(scene)
+                ready = engine_playback._sync_playback_frame(scene)
             finally:
-                engine._playback_sync = False
+                ENGINE.playback_sync = False
         finally:
-            engine._process_stage = real_process
+            engine_request._process_stage = real_process
 
         self.assertFalse(ready, "a failed stage reported the chain ready")
         self.assertEqual(self.stage_a.state, "error")

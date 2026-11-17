@@ -10,6 +10,10 @@ import unittest
 import bpy
 
 from harness import free_port, start_fake, stop_fake
+from stageloom.blender import bridge
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import diagnostics as engine_diagnostics
+from stageloom.blender.engine import triggers as engine_triggers
 
 
 class RegistrationOrderTests(unittest.TestCase):
@@ -184,9 +188,9 @@ class ServerStopTests(unittest.TestCase):
         try:
             self.assertTrue(server.start(port))
             deadline = time.time() + 10.0
-            while time.time() < deadline and not self.engine.bridge.state["clients"]:
+            while time.time() < deadline and not bridge.state["clients"]:
                 time.sleep(0.02)
-            self.assertGreater(self.engine.bridge.state["clients"], 0, "the fake never connected")
+            self.assertGreater(bridge.state["clients"], 0, "the fake never connected")
             started = time.monotonic()
             server.stop()
             elapsed = time.monotonic() - started
@@ -285,19 +289,17 @@ class RegistrationReportTests(unittest.TestCase):
         bpy.ops.preferences.addon_disable(module="stageloom")
 
     def _empty_scene(self):
-        import stageloom.blender.engine as engine
 
         bpy.ops.object.select_all(action="SELECT")
         bpy.ops.object.delete()
         # A load (headless has no event loop for the activation settle) leaves
         # a stage-less file dormant.
-        engine._on_load()
+        engine_triggers._on_load()
 
     def test_report_finds_one_engine_generation(self):
-        import stageloom.blender.engine as engine
 
         self._empty_scene()
-        report = engine.registration_report()
+        report = ENGINE.registration_report()
         self.assertFalse(report["active"], "a file with no stages kept the engine active")
         self.assertFalse(
             report["timer_registered"],
@@ -328,7 +330,6 @@ class RegistrationReportTests(unittest.TestCase):
         self.assertEqual(report["stack_objects"], 0)
 
     def test_a_foreign_handler_is_not_counted(self):
-        import stageloom.blender.engine as engine
 
         self._empty_scene()
 
@@ -339,7 +340,7 @@ class RegistrationReportTests(unittest.TestCase):
         handlers = bpy.app.handlers.depsgraph_update_post
         handlers.append(foreign)
         try:
-            report = engine.registration_report()
+            report = ENGINE.registration_report()
             self.assertEqual(len(handlers), 1)
             self.assertEqual(
                 report["handler_counts"]["depsgraph_update_post"],
@@ -350,7 +351,6 @@ class RegistrationReportTests(unittest.TestCase):
             handlers.remove(foreign)
 
     def test_adding_and_removing_a_stage_activates_and_deactivates(self):
-        import stageloom.blender.engine as engine
         import stageloom.blender.nodes as nodes
 
         self._empty_scene()
@@ -359,25 +359,24 @@ class RegistrationReportTests(unittest.TestCase):
         bpy.ops.stageloom.add_stage(label="Dormant")
         stage = obj.gh_stack.stages[0]
 
-        self.assertTrue(engine._active, "adding a stage did not activate the engine")
-        self.assertTrue(bpy.app.timers.is_registered(engine._timer))
-        self.assertIn(engine._on_depsgraph, bpy.app.handlers.depsgraph_update_post)
+        self.assertTrue(ENGINE.active, "adding a stage did not activate the engine")
+        self.assertTrue(bpy.app.timers.is_registered(engine_triggers._timer))
+        self.assertIn(engine_triggers._on_depsgraph, bpy.app.handlers.depsgraph_update_post)
 
         modifier = nodes.modifier_of(obj, stage)
         self.assertIsNotNone(modifier)
         obj.modifiers.remove(modifier)
-        engine._mark_object_dirty(obj)
-        self.assertIsNone(engine._timer(), "the last-stage pass kept the timer alive")
+        ENGINE.mark_object_dirty(obj)
+        self.assertIsNone(engine_triggers._timer(), "the last-stage pass kept the timer alive")
 
         self.assertEqual(len(obj.gh_stack.stages), 0)
-        self.assertFalse(engine._active, "the last stage left the engine active")
-        self.assertFalse(bpy.app.timers.is_registered(engine._timer))
+        self.assertFalse(ENGINE.active, "the last stage left the engine active")
+        self.assertFalse(bpy.app.timers.is_registered(engine_triggers._timer))
 
         bpy.data.objects.remove(obj, do_unlink=True)
-        engine._ensure_active()
+        ENGINE.ensure_active()
 
     def test_load_restores_a_missing_timer(self):
-        import stageloom.blender.engine as engine
         import stageloom.blender.nodes as nodes
 
         self._empty_scene()
@@ -385,26 +384,25 @@ class RegistrationReportTests(unittest.TestCase):
         obj = bpy.context.object
         bpy.ops.stageloom.add_stage(label="Reload Timer")
         stage = obj.gh_stack.stages[0]
-        self.assertTrue(engine._active, "adding a stage did not activate the engine")
+        self.assertTrue(ENGINE.active, "adding a stage did not activate the engine")
 
-        bpy.app.timers.unregister(engine._timer)
+        bpy.app.timers.unregister(engine_triggers._timer)
         try:
-            engine._on_load()
+            engine_triggers._on_load()
             self.assertTrue(
-                bpy.app.timers.is_registered(engine._timer),
+                bpy.app.timers.is_registered(engine_triggers._timer),
                 "a file load with a stage did not re-register the lost engine timer",
             )
         finally:
             modifier = nodes.modifier_of(obj, stage)
             if modifier is not None:
                 obj.modifiers.remove(modifier)
-            engine._mark_object_dirty(obj)
-            engine._timer()
+            ENGINE.mark_object_dirty(obj)
+            engine_triggers._timer()
             bpy.data.objects.remove(obj, do_unlink=True)
-            engine._ensure_active()
+            ENGINE.ensure_active()
 
     def test_predicate_covers_development_and_extension_installs(self):
-        import stageloom.blender.engine as engine
 
         for module in (
             "stageloom.blender.engine",
@@ -413,7 +411,7 @@ class RegistrationReportTests(unittest.TestCase):
             "bl_ext.user_default.stageloom.blender.engine.triggers",
             "bl_ext.system.stageloom.blender.engine.messages",
         ):
-            self.assertTrue(engine._is_engine_module(module), module)
+            self.assertTrue(engine_diagnostics._is_engine_module(module), module)
         for module in (
             "",
             "other.addon",
@@ -421,4 +419,4 @@ class RegistrationReportTests(unittest.TestCase):
             "other.stageloom.blender.engine_extra",
             "my_stageloom.blender.engine",
         ):
-            self.assertFalse(engine._is_engine_module(module), module)
+            self.assertFalse(engine_diagnostics._is_engine_module(module), module)

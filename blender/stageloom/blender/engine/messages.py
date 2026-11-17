@@ -1,8 +1,15 @@
 """Incoming protocol messages: schema, responses, errors and hello."""
 
-import sys
+import time
+import traceback
 
-engine = sys.modules[__package__]
+from .. import bridge, geometry_io, nodes, prefs, props
+from .. import stack as stack_mod
+from . import apply as apply_mod, lifecycle as lifecycle_mod
+from .apply import _nested_rows_of, _payload_missing, _warnings_text
+from .request import _set
+from .runtime import ENGINE
+from .state import _set_state
 
 
 def _topology_token(header):
@@ -31,29 +38,35 @@ def _handle_incoming():
     guard a raise in one handler aborted the pass and every message behind it
     was lost.
     """
-    for header, sections in engine.bridge.drain_incoming():
+    for header, sections in bridge.drain_incoming():
         try:
-            engine._handle_message(header, sections)
+            _handle_message(header, sections)
         except Exception as exc:
             try:
-                engine._report_message_failure(header, exc)
+                _report_message_failure(header, exc)
             except Exception:
                 # The reporter is the last thing between one bad message and
                 # the next one: if it fails too, the rest of the batch still
                 # matters more than the report.
-                engine._trace.append("incoming message failed and could not be reported")
+                ENGINE.trace("incoming message failed and could not be reported")
+
+
+def _pending_at(key):
+    """One stage's pending map, without creating a runtime record."""
+    row = ENGINE.peek_runtime(*key)
+    return row.pending if row is not None else {}
 
 
 def _handle_message(header, sections):
     mtype = header.get("type")
     if mtype == "schema":
-        engine._handle_schema(header)
+        _handle_schema(header)
     elif mtype == "response":
-        engine._handle_response(header, sections)
+        _handle_response(header, sections)
     elif mtype == "error":
-        engine._handle_error(header)
+        _handle_error(header)
     elif mtype == "hello":
-        engine._on_client_hello(header)
+        _on_client_hello(header)
 
 
 def _report_message_failure(header, exc):
@@ -67,19 +80,18 @@ def _report_message_failure(header, exc):
     stage_key = header.get("stage")
     where = "%s %s" % (mtype, stage_key or "?")
     message = "incoming %s failed: %r" % (where, exc)
-    engine.bridge.state["error"] = message
-    if not engine._trace or engine._trace[-1] != message:
-        engine._trace.append(message)
-    import traceback
+    bridge.state["error"] = message
+    if not ENGINE.trace_lines or ENGINE.trace_lines[-1] != message:
+        ENGINE.trace(message)
 
-    engine.prefs.log("[stageloom] incoming %s failed:\n%s" % (where, traceback.format_exc()), flush=True)
+    prefs.log("[stageloom] incoming %s failed:\n%s" % (where, traceback.format_exc()), flush=True)
     if mtype == "response" and stage_key:
         try:
-            engine._clear_failed_response(stage_key, header.get("rid"))
+            _clear_failed_response(stage_key, header.get("rid"))
         except Exception as recovery:
             # Best-effort, like the cleanup: a stage that cannot be recovered
             # must not cost the *other* messages their chance to be handled.
-            engine.prefs.log(
+            prefs.log(
                 "[stageloom] could not recover the failed response for %s: %r"
                 % (stage_key, recovery),
                 flush=True,
@@ -102,32 +114,32 @@ def _clear_failed_response(stage_key, rid=None):
     already delivered. Pending is cleared (idempotent) and the state leaves
     `waiting`, where an empty pending map would look like an answer on its way.
     """
-    for obj, record, stage in engine._stage_views(stage_key):
+    for obj, record, stage in lifecycle_mod._stage_views(stage_key):
         key = (record.stack_id, stage.key)
-        pending = engine._pending.get(key) or {}
+        pending = _pending_at(key)
         if rid:
             if rid in pending:
                 pending.pop(rid, None)
                 if not pending:
-                    engine._pending.pop(key, None)
+                    ENGINE.forget(*key)
             elif rid != stage.rid:
-                engine._trace.append(
+                ENGINE.trace(
                     "%s: ignored a stale failed response" % stage.key
                 )
                 continue
         elif pending:
-            engine._trace.append(
+            ENGINE.trace(
                 "%s: ignored an uncorrelated failed response" % stage.key
             )
             continue
-        engine._clear_pull(key)
-        engine._verify.add(key)
-        engine._set_state(
+        ENGINE.clear_pull(*key)
+        ENGINE.verify.add(key)
+        _set_state(
             stage,
-            engine.stack_mod.STATE_IDLE,
+            stack_mod.STATE_IDLE,
         )
-        engine._dirty.add(obj.name)
-        engine._mark_hot()
+        ENGINE.dirty.add(obj.name)
+        ENGINE.mark_hot()
 
 
 def _on_client_hello(header):
@@ -153,7 +165,7 @@ def _on_client_hello(header):
     """
     doc = (header or {}).get("doc") or ""
     caps = (header or {}).get("caps")
-    engine.bridge.state["caps"] = (
+    bridge.state["caps"] = (
         [cap for cap in caps if isinstance(cap, str)]
         if isinstance(caps, list)
         else []
@@ -165,12 +177,12 @@ def _on_client_hello(header):
         key = entry.get("key")
         if key:
             claims[key] = entry
-    for obj in engine._all_stack_objects():
-        record = engine.stack_mod.stack_of(obj)
+    for obj in lifecycle_mod._all_stack_objects():
+        record = stack_mod.stack_of(obj)
         if not record.stack_id:
-            record.stack_id = engine.stack_mod.ensure_stack(obj).stack_id
+            record.stack_id = stack_mod.ensure_stack(obj).stack_id
         for stage in record.stages:
-            if stage.key in engine._stage_conflicts:
+            if stage.key in ENGINE.stage_conflicts:
                 # An ambiguous key has no owner to adopt a claim for, and no
                 # request may be verified or sent until the user resolves it.
                 continue
@@ -178,20 +190,21 @@ def _on_client_hello(header):
             if entry is not None:
                 _apply_input_mode(stage, entry)
                 _apply_output_presence(stage, entry)
-            if stage.state == engine.stack_mod.STATE_WAITING:
-                engine._forget(record.stack_id, stage.key)
-                engine._set_state(stage, engine.stack_mod.STATE_IDLE)
+            if stage.state == stack_mod.STATE_WAITING:
+                ENGINE.forget(record.stack_id, stage.key)
+                _set_state(stage, stack_mod.STATE_IDLE)
             # A request id names a request this client session was asked. The
             # next client may be a different document: a late response carrying
             # the old id must not apply before the verify request goes out.
-            engine._set(stage, "rid", "")
-            engine._set(stage, "geom_hash", "")
-            engine._sent.pop((record.stack_id, stage.key), None)
-            engine._last_frame.pop((record.stack_id, stage.key), None)
-            engine._verify.add((record.stack_id, stage.key))
-        engine._dirty.add(obj.name)
-    engine._trace.append("client hello: %s" % (doc or "unnamed"))
-    engine._mark_hot()
+            _set(stage, "rid", "")
+            _set(stage, "geom_hash", "")
+            row = ENGINE.runtime(record.stack_id, stage.key)
+            row.sent = None
+            row.last_frame = None
+            ENGINE.verify.add((record.stack_id, stage.key))
+        ENGINE.dirty.add(obj.name)
+    ENGINE.trace("client hello: %s" % (doc or "unnamed"))
+    ENGINE.mark_hot()
 
 
 def _apply_input_mode(stage, entry):
@@ -206,12 +219,12 @@ def _apply_input_mode(stage, entry):
     if not isinstance(has_stage_in, bool):
         return False
     mode = (
-        engine.stack_mod.INPUT_PREFIX
+        stack_mod.INPUT_PREFIX
         if has_stage_in
-        else engine.stack_mod.INPUT_GENERATOR
+        else stack_mod.INPUT_GENERATOR
     )
-    if engine._set(stage, "input_mode", mode):
-        engine._trace.append("%s: input mode %s" % (stage.key, mode))
+    if _set(stage, "input_mode", mode):
+        ENGINE.trace("%s: input mode %s" % (stage.key, mode))
         return True
     return False
 
@@ -227,8 +240,8 @@ def _apply_output_presence(stage, entry):
     has_stage_out = entry.get("has_stage_out")
     if not isinstance(has_stage_out, bool):
         return False
-    if engine._set(stage, "has_stage_out", has_stage_out):
-        engine._trace.append(
+    if _set(stage, "has_stage_out", has_stage_out):
+        ENGINE.trace(
             "%s: Stage Out %s" % (stage.key, "present" if has_stage_out else "missing")
         )
         return True
@@ -237,40 +250,40 @@ def _apply_output_presence(stage, entry):
 
 def _handle_schema(header):
     key = header.get("stage")
-    if engine._stage_key_conflicted(key):
-        engine.prefs.log(
+    if ENGINE.stage_key_conflicted(key):
+        prefs.log(
             "[stageloom] schema for duplicate stage key %r ignored" % (key,),
             flush=True,
         )
         return
     params = header.get("params") or []
     matched = False
-    for obj, record, stage in engine._stage_views(key):
+    for obj, record, stage in lifecycle_mod._stage_views(key):
         matched = True
         if not record.stack_id:
-            record.stack_id = engine.stack_mod.ensure_stack(obj).stack_id
+            record.stack_id = stack_mod.ensure_stack(obj).stack_id
         try:
             # The plugin re-publishes on a heartbeat; only touch the UI when
             # the schema actually changed.
-            if engine.props.schema_signature(stage) == engine.props.incoming_signature(params):
+            if props.schema_signature(stage) == props.incoming_signature(params):
                 continue
-            engine.props.apply_schema(obj, stage, params)
+            props.apply_schema(obj, stage, params)
         except Exception as exc:
             # One bad schema must not take the engine down.
-            engine.bridge.state["error"] = "schema for %s failed: %r" % (key, exc)
+            bridge.state["error"] = "schema for %s failed: %r" % (key, exc)
             import traceback
 
-            engine.prefs.log("[stageloom] schema error:\n%s" % traceback.format_exc(), flush=True)
+            prefs.log("[stageloom] schema error:\n%s" % traceback.format_exc(), flush=True)
             continue
         # A changed schema is a changed definition: ask for a new solve even if
         # the request id and frame have not moved.
-        engine._verify.add((record.stack_id, stage.key))
-        engine._dirty.add(obj.name)
+        ENGINE.verify.add((record.stack_id, stage.key))
+        ENGINE.dirty.add(obj.name)
         obj.update_tag()
     if not matched:
         # A schema for a stage no object has: usually a key pasted into GH that
         # does not belong to any stack, or a stage removed in Blender.
-        engine.prefs.log("[stageloom] schema for unknown stage %r ignored" % (key,), flush=True)
+        prefs.log("[stageloom] schema for unknown stage %r ignored" % (key,), flush=True)
 
 
 def _answer_pending(record, stage, rid):
@@ -280,12 +293,13 @@ def _answer_pending(record, stage, rid):
     stale answer for an older request must not clear a newer pending request
     (the error path has always had this rule; the ok path now matches it).
     """
-    pending = engine._pending.get((record.stack_id, stage.key))
+    key = (record.stack_id, stage.key)
+    pending = _pending_at(key)
     if not pending:
         return None
     sent_at = pending.pop(rid, None)
     if not pending:
-        engine._pending.pop((record.stack_id, stage.key), None)
+        ENGINE.forget(*key)
     return sent_at
 
 
@@ -294,10 +308,10 @@ def _handle_response(header, sections):
     rid = header.get("rid")
     status = header.get("status")
     if not isinstance(key, str) or not key:
-        engine.prefs.log("[stageloom] response without a stage key ignored", flush=True)
+        prefs.log("[stageloom] response without a stage key ignored", flush=True)
         return
-    if engine._stage_key_conflicted(key):
-        engine.prefs.log(
+    if ENGINE.stage_key_conflicted(key):
+        prefs.log(
             "[stageloom] response for duplicate stage key %r ignored" % (key,),
             flush=True,
         )
@@ -305,13 +319,13 @@ def _handle_response(header, sections):
     if not isinstance(rid, str) or not rid:
         # A Stage Out solve that was triggered by another stage has no request
         # to answer. It must not be applied as an empty success.
-        engine.prefs.log(
+        prefs.log(
             "[stageloom] response for %r without a request id ignored" % (key,),
             flush=True,
         )
         return
     if status not in ("ok", "error"):
-        engine.prefs.log(
+        prefs.log(
             "[stageloom] response for %r has invalid status %r ignored"
             % (key, status),
             flush=True,
@@ -320,23 +334,23 @@ def _handle_response(header, sections):
     if status == "ok":
         out_hash = header.get("out_hash")
         if not isinstance(out_hash, str) or not out_hash:
-            engine.prefs.log(
+            prefs.log(
                 "[stageloom] ok response for %r has no output hash ignored" % (key,),
                 flush=True,
             )
             return
 
-    for obj, record, stage in engine._stage_views(key):
+    for obj, record, stage in lifecycle_mod._stage_views(key):
         if not record.stack_id:
-            record.stack_id = engine.stack_mod.ensure_stack(obj).stack_id
+            record.stack_id = stack_mod.ensure_stack(obj).stack_id
 
         if not stage.enabled:
-            engine._forget(record.stack_id, stage.key)
-            engine._clear_pull((record.stack_id, stage.key))
+            ENGINE.forget(record.stack_id, stage.key)
+            ENGINE.clear_pull(record.stack_id, stage.key)
             continue
 
         pending_key = (record.stack_id, stage.key)
-        pending = engine._pending.get(pending_key) or {}
+        pending = _pending_at(pending_key)
         was_pending = rid in pending
         if not stage.has_stage_out:
             # No Stage Out answers this stage: a response left over from when it
@@ -359,7 +373,7 @@ def _handle_response(header, sections):
                 # GH lost the geometry a ref named (reconnect, restarted
                 # document): send it again in full (protocol §4.3). The error is
                 # not a result.
-                engine._resend_in_full(obj, record, stage, "unknown_ref response")
+                _resend_in_full(obj, record, stage, "unknown_ref response")
                 continue
             if was_pending:
                 # Remove only this request. A different pending entry belongs
@@ -367,12 +381,12 @@ def _handle_response(header, sections):
                 _answer_pending(record, stage, rid)
                 # The error ends a Pull as surely as an answer does: without
                 # this the permit would arm one more request while frozen.
-                engine._clear_pull(pending_key)
+                ENGINE.clear_pull(*pending_key)
             # The guard keeps a frozen stage frozen and records the reason; a
             # disabled stage stays disabled.
-            engine._set_state(
+            _set_state(
                 stage,
-                engine.stack_mod.STATE_ERROR,
+                stack_mod.STATE_ERROR,
                 error=error.get("message") if isinstance(error, dict) else str(error),
             )
             # Deliberately no retry here: a solve that just failed would fail
@@ -390,7 +404,7 @@ def _handle_response(header, sections):
             # store to replay it from.
             if was_pending:
                 _answer_pending(record, stage, rid)
-            engine._trace.append(
+            ENGINE.trace(
                 "%s: dropped stale answer %s" % (stage.key, rid[-8:])
             )
             continue
@@ -399,52 +413,52 @@ def _handle_response(header, sections):
         # a newer pending request (the rule the error path has always had).
         sent_at = _answer_pending(record, stage, rid) if was_pending else None
         if sent_at is not None:
-            engine._record_timing(record, stage, "rtt_ms", engine._timed_since(sent_at))
+            ENGINE.record_timing(record, stage, "rtt_ms", ENGINE.timed_since(sent_at))
         applied = False
         # A frozen stage is parked with rid="" and must ignore unsolicited
         # answers. Pull deliberately sends one request while frozen; its answer
         # carries the stage's current rid, so rid equality is the permission.
-        if out_hash != stage.applied_out_hash or engine._payload_missing(obj, stage, sections):
-            started = engine.time.monotonic()
+        if out_hash != stage.applied_out_hash or _payload_missing(obj, stage, sections):
+            started = time.monotonic()
             try:
-                applied_topology = engine._apply(
+                applied_topology = apply_mod._apply(
                     obj, stage, sections, header.get("attributes"),
                     header.get("definitions", []),
                     topology=_topology_token(header),
                 )
-            except engine.geometry_io.GeometryIOError as exc:
+            except geometry_io.GeometryIOError as exc:
                 # A malformed or internally inconsistent section group is a
                 # classified stage error, not an anonymous incoming-frame crash.
-                engine._set(stage, "error", "geometry: %s" % exc)
+                _set(stage, "error", "geometry: %s" % exc)
                 raise
-            engine._record_timing(record, stage, "apply_ms", engine._timed_since(started))
-            engine.stats["applies"] += 1
-            engine._set(stage, "applied_out_hash", out_hash)
+            ENGINE.record_timing(record, stage, "apply_ms", ENGINE.timed_since(started))
+            ENGINE.stats()["applies"] += 1
+            _set(stage, "applied_out_hash", out_hash)
             # A frame without a mesh group (or from an old peer) clears the
             # claim: the helper no longer holds a topology this token names.
-            engine._set(stage, "applied_topology", applied_topology or "")
+            _set(stage, "applied_topology", applied_topology or "")
             applied = True
-            engine._trace.append("%s: applied %s" % (stage.key, (out_hash or "")[-8:]))
+            ENGINE.trace("%s: applied %s" % (stage.key, (out_hash or "")[-8:]))
         else:
             # The displayed answer is already this one, but the node group may
             # predate the current format (a group written by an older build, or
             # a session that has not applied since nesting landed). Rebuilding
             # is cheap and is the only way a same-hash answer can repair it.
-            engine.nodes.ensure_group(obj, stage.key, engine._nested_rows_of(sections))
-        engine._set(stage, "warnings", engine._warnings_text(header))
+            nodes.ensure_group(obj, stage.key, _nested_rows_of(sections))
+        _set(stage, "warnings", _warnings_text(header))
         # An unchanged output is still the solver's current state: it settles
         # normally; a frozen or disabled stage keeps its flag state.
-        engine._set_state(stage, engine.stack_mod.STATE_OK)
-        engine._set(stage, "error", "")
+        _set_state(stage, stack_mod.STATE_OK)
+        _set(stage, "error", "")
         # A Pull is one request: the answer that names its rid ends the permit,
         # so a frozen stage parks again instead of asking forever.
-        engine._clear_pull(pending_key)
+        ENGINE.clear_pull(*pending_key)
         if applied:
-            engine.stats["tags"] += 1
+            ENGINE.stats()["tags"] += 1
             obj.update_tag()
         if applied or was_pending:
-            engine._dirty.add(obj.name)
-            engine._mark_hot()
+            ENGINE.dirty.add(obj.name)
+            ENGINE.mark_hot()
 
 
 def _handle_error(header):
@@ -462,8 +476,8 @@ def _handle_error(header):
     code = header.get("code")
     message = header.get("message") or code or "protocol error"
     rid = header.get("rid")
-    if engine._stage_key_conflicted(header.get("stage")):
-        engine.prefs.log(
+    if ENGINE.stage_key_conflicted(header.get("stage")):
+        prefs.log(
             "[stageloom] error for duplicate stage key %r ignored"
             % (header.get("stage"),),
             flush=True,
@@ -471,13 +485,13 @@ def _handle_error(header):
         return
     if code == "unknown_ref":
         matched = False
-        for obj, record, stage in engine._stage_views(header.get("stage")):
+        for obj, record, stage in lifecycle_mod._stage_views(header.get("stage")):
             matched = True
             key = (record.stack_id, stage.key)
-            pending = engine._pending.get(key) or {}
+            pending = _pending_at(key)
             if rid:
                 if not _request_is_current(record, stage, rid):
-                    engine._trace.append(
+                    ENGINE.trace(
                         "%s: ignored a stale unknown_ref" % stage.key
                     )
                     continue
@@ -485,45 +499,45 @@ def _handle_error(header):
                 # No rid: this could answer a request that has already been
                 # superseded. A full resend forgets the pending map, which
                 # would cancel the newer request.
-                engine._trace.append(
+                ENGINE.trace(
                     "%s: ignored an uncorrelated unknown_ref" % stage.key
                 )
                 continue
-            engine._resend_in_full(obj, record, stage, "unknown_ref")
+            _resend_in_full(obj, record, stage, "unknown_ref")
         if not matched:
-            engine.prefs.log("[stageloom] unknown_ref for unknown stage %r" % (header.get("stage"),), flush=True)
+            prefs.log("[stageloom] unknown_ref for unknown stage %r" % (header.get("stage"),), flush=True)
         return
 
-    engine.prefs.log("[stageloom] protocol error %s: %s" % (code, message), flush=True)
-    for obj, record, stage in engine._stage_views(header.get("stage")):
+    prefs.log("[stageloom] protocol error %s: %s" % (code, message), flush=True)
+    for obj, record, stage in lifecycle_mod._stage_views(header.get("stage")):
         # The request this error answers is over: without this the stage would
         # sit `waiting` for the full timeout for an answer that is already here.
         # The error is left on display and the stage is not dirtied — retrying
         # here would ask a component that just failed, in a loop; the next
         # change or Push retries (protocol §7).
         key = (record.stack_id, stage.key)
-        pending = engine._pending.get(key) or {}
+        pending = _pending_at(key)
         if rid:
             if not _request_is_current(record, stage, rid):
-                engine._trace.append("%s: ignored a stale protocol error" % stage.key)
+                ENGINE.trace("%s: ignored a stale protocol error" % stage.key)
                 continue
             if rid in pending:
                 _answer_pending(record, stage, rid)
-            engine._clear_pull(key)
+            ENGINE.clear_pull(*key)
         elif pending:
-            engine._trace.append(
+            ENGINE.trace(
                 "%s: ignored an uncorrelated protocol error" % stage.key
             )
             continue
-        engine._set(stage, "error", "%s: %s" % (code, message))
-        engine._set_state(stage, engine.stack_mod.STATE_ERROR)
+        _set(stage, "error", "%s: %s" % (code, message))
+        _set_state(stage, stack_mod.STATE_ERROR)
 
 
 def _request_is_current(record, stage, rid):
     """Whether ``rid`` names the request this stage is waiting on now."""
     if not rid:
         return False
-    pending = engine._pending.get((record.stack_id, stage.key)) or {}
+    pending = _pending_at((record.stack_id, stage.key))
     return rid in pending or rid == stage.rid
 
 
@@ -532,14 +546,14 @@ def _resend_in_full(obj, record, stage, reason):
     must carry it. Shared by the `unknown_ref` error message, the response-shaped
     `unknown_ref` and the request timeout, because all three leave the same
     uncertainty behind (protocol §4.3, §8.8)."""
-    engine._forget(record.stack_id, stage.key)
-    engine._sent.pop((record.stack_id, stage.key), None)
+    ENGINE.forget(record.stack_id, stage.key)
+    ENGINE.runtime(record.stack_id, stage.key).sent = None
     # Ask even if the request id and frame have not moved: the whole point of
     # the resend is to tell Grasshopper again.
-    engine._verify.add((record.stack_id, stage.key))
-    engine._set(stage, "geom_hash", "")
-    engine._set_state(stage, engine.stack_mod.STATE_IDLE)
-    engine._set(stage, "error", "")
-    engine._dirty.add(obj.name)
-    engine.prefs.log("[stageloom] %s: resending geometry (%s)" % (stage.key, reason), flush=True)
+    ENGINE.verify.add((record.stack_id, stage.key))
+    _set(stage, "geom_hash", "")
+    _set_state(stage, stack_mod.STATE_IDLE)
+    _set(stage, "error", "")
+    ENGINE.dirty.add(obj.name)
+    prefs.log("[stageloom] %s: resending geometry (%s)" % (stage.key, reason), flush=True)
 

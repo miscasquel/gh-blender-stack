@@ -8,7 +8,9 @@ import numpy as np
 
 from harness import isolate_data_root
 
-from blender.stageloom.core import attributes as attr_mod  # noqa: E402
+from stageloom.core import attributes as attr_mod  # noqa: E402
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import messages as engine_messages
 
 TOKEN_A = "sha256:" + "a" * 64
 TOKEN_B = "sha256:" + "b" * 64
@@ -71,9 +73,9 @@ class TopologyTokenApplyTests(unittest.TestCase):
         bpy.ops.preferences.addon_disable(module="stageloom")
 
     def setUp(self):
-        self.engine._pending.clear()
-        self.engine._sent.clear()
-        self.engine._verify.clear()
+        ENGINE.clear_runtimes()
+        ENGINE.clear_runtimes()
+        ENGINE.verify.clear()
         self.stage.enabled = True
         self.stage.frozen = False
         self.stage.rid = ""
@@ -131,7 +133,7 @@ class TopologyTokenApplyTests(unittest.TestCase):
         if definitions is not None:
             header["definitions"] = definitions
         self.stage.rid = rid
-        self.engine._handle_response(header, sections)
+        engine_messages._handle_response(header, sections)
 
     def forbid_topology_reads(self):
         return mock.patch.object(

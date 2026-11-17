@@ -24,6 +24,7 @@ for path in (REPO, os.path.join(REPO, "blender"), WHEEL):
     if path not in sys.path:
         sys.path.insert(0, path)
 
+
 failures = []
 
 

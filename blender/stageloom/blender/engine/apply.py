@@ -1,8 +1,16 @@
 """Response sections to hidden helpers: geometry, attributes and instances."""
 
-import sys
+import time
 
-engine = sys.modules[__package__]
+import bpy
+import numpy as np
+
+from ...core import attributes as attributes_mod
+from .. import geometry_io, helpers, nodes, prefs
+from .. import stack as stack_mod
+from .lifecycle import _ordered_stages
+from .request import _bump_id
+from .runtime import ENGINE
 
 
 def _warnings_text(header):
@@ -45,18 +53,18 @@ def _helper_has_data(helper, kind):
 
 
 def _definition_helper(obj, stage, index, kind, part=None):
-    return engine.bpy.data.objects.get(
-        engine.helpers.definition_name(obj, stage.key, index, kind, part=part)
+    return bpy.data.objects.get(
+        helpers.definition_name(obj, stage.key, index, kind, part=part)
     )
 
 
 def _cloud_has_rows(obj, stage, index, nested=False):
     name = (
-        engine.helpers.nested_name(obj, stage.key, index)
+        helpers.nested_name(obj, stage.key, index)
         if nested
-        else engine.helpers.instance_name(obj, stage.key, index)
+        else helpers.instance_name(obj, stage.key, index)
     )
-    cloud = engine.bpy.data.objects.get(name)
+    cloud = bpy.data.objects.get(name)
     return cloud is not None and len(cloud.data.points) > 0
 
 
@@ -69,19 +77,19 @@ def _payload_missing(obj, stage, sections):
     still matches.
     """
     for name in sections:
-        index, part, rest = engine._definition_split(name)
+        index, part, rest = _definition_split(name)
         if index is None:
             if rest.startswith("inst."):
                 refs = sections.get("inst.ref_def")
                 if refs is not None and len(refs):
                     for target in set(int(value) for value in refs):
-                        if not engine._cloud_has_rows(obj, stage, target):
+                        if not _cloud_has_rows(obj, stage, target):
                             return True
                 continue
-            kind = engine._kind_of(rest)
-            if kind is not None and engine._group_has_geometry(sections, "", kind):
-                if not engine._helper_has_data(
-                    engine.helpers.helper_for(obj, stage.key, kind), kind
+            kind = _kind_of(rest)
+            if kind is not None and _group_has_geometry(sections, "", kind):
+                if not _helper_has_data(
+                    helpers.helper_for(obj, stage.key, kind), kind
                 ):
                     return True
             continue
@@ -89,17 +97,17 @@ def _payload_missing(obj, stage, sections):
         if part is None and rest.startswith("inst."):
             refs = sections.get("idef.%d.inst.ref_def" % index)
             if refs is not None and len(refs):
-                if not engine._cloud_has_rows(obj, stage, index, nested=True):
+                if not _cloud_has_rows(obj, stage, index, nested=True):
                     return True
             continue
         prefix = (
             "idef.%d." % index if part is None
             else "idef.%d.%d." % (index, part)
         )
-        kind = engine._kind_of(rest)
-        if kind is not None and engine._group_has_geometry(sections, prefix, kind):
-            if not engine._helper_has_data(
-                engine._definition_helper(obj, stage, index, kind, part=part), kind
+        kind = _kind_of(rest)
+        if kind is not None and _group_has_geometry(sections, prefix, kind):
+            if not _helper_has_data(
+                _definition_helper(obj, stage, index, kind, part=part), kind
             ):
                 return True
     return False
@@ -115,21 +123,21 @@ def _invalidate_prefix_batch(obj, stage):
     authoritative: the stage record keeps creation order and a dragged modifier
     must not make an upstream stage look downstream (or the reverse).
     """
-    record = engine.stack_mod.stack_of(obj)
+    record = stack_mod.stack_of(obj)
     if record is None:
-        engine._prefix_batch.pop((obj.as_pointer(), stage.key), None)
+        ENGINE.prefix_batch.pop((obj.as_pointer(), stage.key), None)
         return
-    ordered = engine._ordered_stages(obj, record)
+    ordered = _ordered_stages(obj, record)
     try:
         position = ordered.index(stage)
     except ValueError:
         # A stale response for a stage no longer in the record: only its own
         # entry can be named safely.
-        engine._prefix_batch.pop((obj.as_pointer(), stage.key), None)
+        ENGINE.prefix_batch.pop((obj.as_pointer(), stage.key), None)
         return
     pointer = obj.as_pointer()
     for candidate in ordered[position + 1:]:
-        engine._prefix_batch.pop((pointer, candidate.key), None)
+        ENGINE.prefix_batch.pop((pointer, candidate.key), None)
 
 
 _LEGACY_DEFINITIONS = object()
@@ -169,8 +177,8 @@ def _apply(obj, stage, sections, attributes=None, definitions=_LEGACY_DEFINITION
     # callers that omit the table infer single-part definitions from names.
     table, strict = _definition_table(definitions, sections)
     _validate_attribute_descriptors(attributes, table)
-    top_rows = engine._rows_of(sections, "")
-    nested_rows = engine._nested_rows_of(sections)
+    top_rows = _rows_of(sections, "")
+    nested_rows = _nested_rows_of(sections)
     if strict:
         _validate_row_targets(table, top_rows, nested_rows)
 
@@ -186,17 +194,17 @@ def _apply(obj, stage, sections, attributes=None, definitions=_LEGACY_DEFINITION
     # does not watch. Stamp the apply itself so every real apply — including
     # an instance-only or definition-only frame — retires every prefix memo
     # downstream of it.
-    engine._bump_id(stage)
+    _bump_id(stage)
 
     base = {"mesh": [], "curves": [], "points": []}
     groups = {}
 
     for name, values in sections.items():
-        index, part, rest = engine._definition_split(name)
+        index, part, rest = _definition_split(name)
         if index is not None:
             if part is None and rest.startswith("inst."):
                 continue  # handled with the other row pairs below
-            bucket = engine._kind_of(rest)
+            bucket = _kind_of(rest)
             if bucket is not None:
                 entry = groups.setdefault(
                     (index, part if part is not None else 0),
@@ -206,7 +214,7 @@ def _apply(obj, stage, sections, attributes=None, definitions=_LEGACY_DEFINITION
             continue
         if name.startswith("inst."):
             continue
-        bucket = engine._kind_of(name)
+        bucket = _kind_of(name)
         if bucket is not None:
             base[bucket].append((name, values))
 
@@ -220,7 +228,7 @@ def _apply(obj, stage, sections, attributes=None, definitions=_LEGACY_DEFINITION
             else:
                 # The response names a nested placement whose definition group
                 # is absent: keep it visible instead of building an empty block.
-                engine.prefs.log(
+                prefs.log(
                     "[stageloom] %s: block %d nests definition %d, which the response does not carry"
                     % (stage.key, index, target),
                     flush=True,
@@ -229,9 +237,9 @@ def _apply(obj, stage, sections, attributes=None, definitions=_LEGACY_DEFINITION
 
     # Definitions the response no longer carries go away whole: collection,
     # helpers, nested empties and row cloud.
-    for index in list(engine.helpers.definition_collections(obj, stage.key)):
+    for index in list(helpers.definition_collections(obj, stage.key)):
         if index not in keep:
-            engine.helpers.remove_definition(obj, stage.key, index)
+            helpers.remove_definition(obj, stage.key, index)
 
     # Data first, wiring after: the node group reads the final definition set.
     # The response token covers every base and definition mesh group, so all
@@ -239,39 +247,39 @@ def _apply(obj, stage, sections, attributes=None, definitions=_LEGACY_DEFINITION
     # token once, after the whole apply has succeeded.
     applied_topology = None
     for index in sorted(keep):
-        _collection, part_objects = engine.helpers.ensure_definition_parts(
+        _collection, part_objects = helpers.ensure_definition_parts(
             obj, stage.key, index, parts_by_index[index]
         )
         for part, objects in enumerate(part_objects):
             entry = groups.get((index, part))
             if entry is None:
                 entry = {"mesh": [], "curves": [], "points": []}
-            if engine._apply_mesh(
+            if _apply_mesh(
                 objects["mesh"],
                 entry["mesh"],
                 topology=topology,
                 previous=stage.applied_topology,
             ) is not None:
                 applied_topology = topology
-            engine._apply_curves(objects["curves"], entry["curves"])
-            engine._apply_points(objects["points"], entry["points"])
+            _apply_curves(objects["curves"], entry["curves"])
+            _apply_points(objects["points"], entry["points"])
 
-    if engine._apply_mesh(
-        engine.helpers.ensure_helper(obj, stage.key, "mesh"),
+    if _apply_mesh(
+        helpers.ensure_helper(obj, stage.key, "mesh"),
         base["mesh"],
         topology=topology,
         previous=stage.applied_topology,
     ) is not None:
         applied_topology = topology
-    engine._apply_curves(engine.helpers.ensure_helper(obj, stage.key, "curves"), base["curves"])
-    engine._apply_points(engine.helpers.ensure_helper(obj, stage.key, "points"), base["points"])
-    engine._apply_attributes(obj, stage, sections, attributes, parts_by_index)
-    engine._apply_instance_rows(obj, stage, keep, top_rows, nested_rows)
+    _apply_curves(helpers.ensure_helper(obj, stage.key, "curves"), base["curves"])
+    _apply_points(helpers.ensure_helper(obj, stage.key, "points"), base["points"])
+    _apply_attributes(obj, stage, sections, attributes, parts_by_index)
+    _apply_instance_rows(obj, stage, keep, top_rows, nested_rows)
 
-    engine.nodes.ensure_group(obj, stage.key, nested_rows)
+    nodes.ensure_group(obj, stage.key, nested_rows)
     # The frame is fully on screen: the heartbeat's "applied" stamp. Written
     # here rather than at the callers so every apply path is counted once.
-    engine._heartbeat["applied_at"] = engine.time.monotonic()
+    ENGINE.heartbeat["applied_at"] = time.monotonic()
     return applied_topology
 
 
@@ -325,7 +333,7 @@ def _definition_table(definitions, sections):
                 _reject_unparsed_definition_name(name)
                 continue
             if part is not None:
-                raise engine.geometry_io.GeometryIOError(
+                raise geometry_io.GeometryIOError(
                     "section %r uses a part namespace but the frame has no definitions table"
                     % (name,)
                 )
@@ -334,24 +342,24 @@ def _definition_table(definitions, sections):
         return table, False
 
     if not isinstance(definitions, list):
-        raise engine.geometry_io.GeometryIOError("definitions is not an array")
+        raise geometry_io.GeometryIOError("definitions is not an array")
     table = {}
     for index, entry in enumerate(definitions):
         if not isinstance(entry, dict):
-            raise engine.geometry_io.GeometryIOError(
+            raise geometry_io.GeometryIOError(
                 "definitions[%d] is not an object" % index
             )
         if not isinstance(entry.get("name", ""), str):
-            raise engine.geometry_io.GeometryIOError(
+            raise geometry_io.GeometryIOError(
                 "definitions[%d].name is not a string" % index
             )
         parts = entry.get("parts", 1)
         if isinstance(parts, bool) or not isinstance(parts, int) or parts < 1:
-            raise engine.geometry_io.GeometryIOError(
+            raise geometry_io.GeometryIOError(
                 "definitions[%d].parts is not a positive integer" % index
             )
         if parts > MAX_DEFINITION_PARTS:
-            raise engine.geometry_io.GeometryIOError(
+            raise geometry_io.GeometryIOError(
                 "definitions[%d].parts is %d, over the %d-part cap"
                 % (index, parts, MAX_DEFINITION_PARTS)
             )
@@ -363,24 +371,24 @@ def _definition_table(definitions, sections):
             _reject_unparsed_definition_name(name)
             continue
         if index >= len(table):
-            raise engine.geometry_io.GeometryIOError(
+            raise geometry_io.GeometryIOError(
                 "section %r names definition %d outside the definitions table"
                 % (name, index)
             )
         parts = table[index]
         if part is not None:
             if parts == 1:
-                raise engine.geometry_io.GeometryIOError(
+                raise geometry_io.GeometryIOError(
                     "section %r uses the multi-part namespace on single-part definition %d"
                     % (name, index)
                 )
             if part >= parts:
-                raise engine.geometry_io.GeometryIOError(
+                raise geometry_io.GeometryIOError(
                     "section %r names part %d outside 0..%d"
                     % (name, part, parts - 1)
                 )
         elif parts > 1 and not rest.startswith("inst."):
-            raise engine.geometry_io.GeometryIOError(
+            raise geometry_io.GeometryIOError(
                 "section %r is definition-level in multi-part definition %d"
                 % (name, index)
             )
@@ -397,7 +405,7 @@ def _reject_unparsed_definition_name(name):
     malformed `idef.` name; only the latter is an error here.
     """
     if isinstance(name, str) and name.startswith("idef."):
-        raise engine.geometry_io.GeometryIOError(
+        raise geometry_io.GeometryIOError(
             "section %r does not parse as a definition section" % (name,)
         )
 
@@ -421,7 +429,7 @@ def _validate_definition_rest(name, rest, multi, definition_level):
         allowed = _DEFINITION_GEOMETRY_GROUPS + ("attr",)
     if not separator or head not in allowed:
         where = "multi-part" if multi else "single-part"
-        raise engine.geometry_io.GeometryIOError(
+        raise geometry_io.GeometryIOError(
             "section %r does not parse as a %s definition section" % (name, where)
         )
 
@@ -433,25 +441,25 @@ def _validate_attribute_descriptors(attributes, table):
     another part's helper."""
     for position, descriptor in enumerate(attributes or []):
         if not isinstance(descriptor, dict):
-            raise engine.geometry_io.GeometryIOError(
+            raise geometry_io.GeometryIOError(
                 "attribute descriptor %d is not an object" % position
             )
         definition = descriptor.get("definition")
         part = descriptor.get("part")
         if definition is None:
             if part is not None:
-                raise engine.geometry_io.GeometryIOError(
+                raise geometry_io.GeometryIOError(
                     "attribute descriptor %d has a part but no definition" % position
                 )
             section = descriptor.get("section")
             if isinstance(section, str) and section.startswith("idef."):
-                raise engine.geometry_io.GeometryIOError(
+                raise geometry_io.GeometryIOError(
                     "attribute descriptor %d names definition section %r without "
                     "a definition index" % (position, section)
                 )
             offsets = descriptor.get("offsets")
             if isinstance(offsets, str) and offsets.startswith("idef."):
-                raise engine.geometry_io.GeometryIOError(
+                raise geometry_io.GeometryIOError(
                     "attribute descriptor %d names definition offsets %r without "
                     "a definition index" % (position, offsets)
                 )
@@ -461,14 +469,14 @@ def _validate_attribute_descriptors(attributes, table):
             or not isinstance(definition, int)
             or definition not in table
         ):
-            raise engine.geometry_io.GeometryIOError(
+            raise geometry_io.GeometryIOError(
                 "attribute descriptor %d names definition %r outside the table"
                 % (position, definition)
             )
         parts = table[definition]
         if parts == 1:
             if part is not None:
-                raise engine.geometry_io.GeometryIOError(
+                raise geometry_io.GeometryIOError(
                     "attribute descriptor %d has a part on single-part definition %d"
                     % (position, definition)
                 )
@@ -478,19 +486,19 @@ def _validate_attribute_descriptors(attributes, table):
             or part < 0
             or part >= parts
         ):
-            raise engine.geometry_io.GeometryIOError(
+            raise geometry_io.GeometryIOError(
                 "attribute descriptor %d names part %r outside 0..%d"
                 % (position, part, parts - 1)
             )
         section = descriptor.get("section")
         if not isinstance(section, str):
-            raise engine.geometry_io.GeometryIOError(
+            raise geometry_io.GeometryIOError(
                 "attribute descriptor %d has no section name" % position
             )
         index, section_part, _rest = _definition_split(section)
         expected_part = None if parts == 1 else part
         if index != definition or section_part != expected_part:
-            raise engine.geometry_io.GeometryIOError(
+            raise geometry_io.GeometryIOError(
                 "attribute descriptor %d section %r does not match definition %d part %r"
                 % (position, section, definition, expected_part)
             )
@@ -498,7 +506,7 @@ def _validate_attribute_descriptors(attributes, table):
         if offsets is not None:
             offset_index, offset_part, _offset_rest = _definition_split(offsets)
             if offset_index != definition or offset_part != expected_part:
-                raise engine.geometry_io.GeometryIOError(
+                raise geometry_io.GeometryIOError(
                     "attribute descriptor %d offsets %r do not match its definition/part"
                     % (position, offsets)
                 )
@@ -508,17 +516,17 @@ def _validate_row_targets(table, top_rows, nested_rows):
     """Every row target must index the definition table (§5.2)."""
     for target, _matrix in top_rows:
         if target not in table:
-            raise engine.geometry_io.GeometryIOError(
+            raise geometry_io.GeometryIOError(
                 "instance row references definition %d outside the table" % target
             )
     for scope, rows in nested_rows.items():
         if scope not in table:
-            raise engine.geometry_io.GeometryIOError(
+            raise geometry_io.GeometryIOError(
                 "nested row scope names definition %d outside the table" % scope
             )
         for target, _matrix in rows:
             if target not in table:
-                raise engine.geometry_io.GeometryIOError(
+                raise geometry_io.GeometryIOError(
                     "definition %d nests definition %d outside the table"
                     % (scope, target)
                 )
@@ -531,10 +539,10 @@ def _nested_rows_of(sections):
     (a frame already applied still has to be able to rebuild the node group)."""
     scopes = {}
     for name in sections:
-        index, part, rest = engine._definition_split(name)
+        index, part, rest = _definition_split(name)
         if index is not None and part is None and rest.startswith("inst."):
             scopes.setdefault(index, None)
-    return {index: engine._rows_of(sections, "idef.%d." % index) for index in scopes}
+    return {index: _rows_of(sections, "idef.%d." % index) for index in scopes}
 
 
 def _kind_of(name):
@@ -567,8 +575,8 @@ def _selected_mesh_group(sections, definition=None, part=None, parts=1):
         if name.startswith(prefix)
     }
     try:
-        return engine.geometry_io.select_mesh_group(by_name)
-    except engine.geometry_io.GeometryIOError:
+        return geometry_io.select_mesh_group(by_name)
+    except geometry_io.GeometryIOError:
         # The mesh writer raises the classified error; the attribute pass must
         # not turn it into a second, different failure.
         return None
@@ -584,15 +592,15 @@ def _rows_of(sections, prefix):
     if refs is None and mats is None:
         return []
     if refs is None or mats is None or len(mats) < 16:
-        engine.prefs.log(
+        prefs.log(
             "[stageloom] %sinst.* rows are incomplete (ref_def=%s, transforms=%s); skipped"
             % (prefix, refs is not None, mats is not None),
             flush=True,
         )
         return []
-    matrices = engine.np.asarray(mats, dtype=engine.np.float32).reshape(-1, 16)
+    matrices = np.asarray(mats, dtype=np.float32).reshape(-1, 16)
     if len(refs) != len(matrices):
-        engine.prefs.log(
+        prefs.log(
             "[stageloom] %sinst.* row pair lengths differ (%d rows vs %d matrices); the shorter side is used"
             % (prefix, len(refs), len(matrices)),
             flush=True,
@@ -611,22 +619,22 @@ def _apply_instance_rows(obj, stage, definitions, top_rows, nested_rows):
     # Earlier builds used an Empty with a collection instance for a nested
     # placement; the node graph carries it now, so remove any such object.
     for index in sorted(definitions):
-        collection = engine.bpy.data.collections.get(
-            engine.helpers.definition_collection_name(obj, stage.key, index)
+        collection = bpy.data.collections.get(
+            helpers.definition_collection_name(obj, stage.key, index)
         )
         if collection is None:
             continue
         for child in list(collection.objects):
             if child.type == "EMPTY":
-                engine.bpy.data.collections[collection.name].objects.unlink(child)
-                engine.bpy.data.objects.remove(child, do_unlink=True)
+                bpy.data.collections[collection.name].objects.unlink(child)
+                bpy.data.objects.remove(child, do_unlink=True)
     for index, rows in sorted(nested_rows.items()):
         if not rows:
             continue
-        known = engine.helpers.definition_collections(obj, stage.key)
+        known = helpers.definition_collections(obj, stage.key)
         missing = [target for target, _matrix in rows if target not in known]
         if missing:
-            engine.prefs.log(
+            prefs.log(
                 "[stageloom] %s: block %d nests definition %d, which the response does not carry"
                 % (stage.key, index, missing[0]),
                 flush=True,
@@ -636,24 +644,24 @@ def _apply_instance_rows(obj, stage, definitions, top_rows, nested_rows):
     clouds = {}
     for target, matrix in top_rows:
         clouds.setdefault(target, []).append((target, matrix))
-    for index, existing in sorted(engine.helpers.instance_clouds(obj, stage.key).items()):
+    for index, existing in sorted(helpers.instance_clouds(obj, stage.key).items()):
         if not clouds.get(index):
-            engine.helpers.remove_cloud(existing)
+            helpers.remove_cloud(existing)
     for index, rows in sorted(clouds.items()):
         if rows:
-            engine._write_rows_cloud(
-                engine.helpers.ensure_instance_cloud(obj, stage.key, index), rows, stage.key
+            _write_rows_cloud(
+                helpers.ensure_instance_cloud(obj, stage.key, index), rows, stage.key
             )
 
     # Nested placements: one cloud per definition that nests something, or
     # none when its own rows are gone.
-    for index, existing in sorted(engine.helpers.nested_clouds(obj, stage.key).items()):
+    for index, existing in sorted(helpers.nested_clouds(obj, stage.key).items()):
         if not nested_rows.get(index):
-            engine.helpers.remove_cloud(existing)
+            helpers.remove_cloud(existing)
     for index, rows in sorted(nested_rows.items()):
         if rows:
-            engine._write_rows_cloud(
-                engine.helpers.ensure_nested_cloud(obj, stage.key, index),
+            _write_rows_cloud(
+                helpers.ensure_nested_cloud(obj, stage.key, index),
                 rows,
                 stage.key,
                 with_child=True,
@@ -669,7 +677,7 @@ def _write_rows_cloud(cloud, rows, stage_key, with_child=False):
     n = len(rows)
     if len(data.points) != n:
         data.resize(n)
-    positions = engine.np.empty(n * 3, dtype=engine.np.float32)
+    positions = np.empty(n * 3, dtype=np.float32)
     rotation = data.attributes.get("rotation")
     if rotation is None:
         rotation = data.attributes.new("rotation", "QUATERNION", "POINT")
@@ -683,7 +691,7 @@ def _write_rows_cloud(cloud, rows, stage_key, with_child=False):
             child = data.attributes.new("child", "INT", "POINT")
     warned_shear = False
     for row, (target, matrix) in enumerate(rows):
-        local = engine.helpers.matrix_of(matrix)
+        local = helpers.matrix_of(matrix)
         position = local.to_translation()
         positions[row * 3:row * 3 + 3] = position
         quaternion = local.to_quaternion()
@@ -692,13 +700,13 @@ def _write_rows_cloud(cloud, rows, stage_key, with_child=False):
         scale.data[row].vector = scale_value
         if child is not None:
             child.data[row].value = int(target)
-        if not warned_shear and not engine.helpers.decomposes_cleanly(
+        if not warned_shear and not helpers.decomposes_cleanly(
             local, position, quaternion, scale_value
         ):
             # A shear (or a non-uniform basis Blender cannot rebuild from
             # position/rotation/scale) is the one shape the point-cloud
             # channel cannot carry; the transform is applied lossily.
-            engine.prefs.log(
+            prefs.log(
                 "[stageloom] %s: instance transform %d has shear; "
                 "Blender can only carry position, rotation and scale" % (stage_key, row),
                 flush=True,
@@ -713,9 +721,9 @@ def _has_generic_attributes(owner):
     """Whether the owner still carries a stage-owned generic attribute."""
     for attr in owner.attributes:
         name = attr.name
-        if name.startswith(".") or name in engine.attributes_mod.SKIP_NAMES:
+        if name.startswith(".") or name in attributes_mod.SKIP_NAMES:
             continue
-        if name in (engine.geometry_io.CREASE_ATTRIBUTE, engine.geometry_io.COLOR_ATTRIBUTE):
+        if name in (geometry_io.CREASE_ATTRIBUTE, geometry_io.COLOR_ATTRIBUTE):
             continue
         return True
     return False
@@ -783,10 +791,10 @@ def _apply_attributes(obj, stage, sections, attributes, parts_by_index):
 
     for definition, part, kind in sorted(targets, key=order):
         if definition is None:
-            helper = engine.helpers.helper_for(obj, stage.key, kind)
+            helper = helpers.helper_for(obj, stage.key, kind)
         else:
             parts = parts_by_index.get(int(definition), 1)
-            _collection, part_objects = engine.helpers.ensure_definition_parts(
+            _collection, part_objects = helpers.ensure_definition_parts(
                 obj, stage.key, int(definition), parts
             )
             helper = part_objects[part if part is not None else 0][kind]
@@ -801,11 +809,11 @@ def _apply_attributes(obj, stage, sections, attributes, parts_by_index):
                     for entry in entries
                     if (entry[0].get("group") or "") == chosen
                 ]
-        if not entries and not engine._has_generic_attributes(helper.data):
+        if not entries and not _has_generic_attributes(helper.data):
             continue
-        engine._bump_id(helper)
-        for note in engine.geometry_io.write_attributes(helper.data, entries, prune=True):
-            engine.prefs.log("[stageloom] %s: %s" % (stage.key, note), flush=True)
+        _bump_id(helper)
+        for note in geometry_io.write_attributes(helper.data, entries, prune=True):
+            prefs.log("[stageloom] %s: %s" % (stage.key, note), flush=True)
         helper.update_tag()
 
 
@@ -821,22 +829,22 @@ def _apply_mesh(helper, entries, topology=None, previous=None):
     mesh = helper.data
     if not entries:
         if len(mesh.vertices) or len(mesh.polygons):
-            engine._bump_id(helper)
+            _bump_id(helper)
             mesh.clear_geometry()
             helper.update_tag()
         return None
-    engine._bump_id(helper)
+    _bump_id(helper)
     prepared = []
     for name, values in entries:
-        arr = engine.np.asarray(values)
+        arr = np.asarray(values)
         if name.endswith(".verts"):
             arr = arr.reshape(-1, 3)
         elif name.endswith(".colors"):
             arr = arr.reshape(-1, 4)
         elif name.endswith(".crease_edges"):
             arr = arr.reshape(-1, 2)
-        prepared.append((name, engine._dtype_of(name), arr))
-    engine.geometry_io.sections_to_mesh(
+        prepared.append((name, _dtype_of(name), arr))
+    geometry_io.sections_to_mesh(
         mesh, prepared, topology=topology, previous=previous
     )
     helper.update_tag()
@@ -846,38 +854,38 @@ def _apply_mesh(helper, entries, topology=None, previous=None):
 def _apply_curves(helper, entries):
     if not entries:
         if len(helper.data.splines):
-            engine._bump_id(helper)
+            _bump_id(helper)
             helper.data.splines.clear()
             helper.update_tag()
         return
-    engine._bump_id(helper)
+    _bump_id(helper)
     prepared = []
     for name, values in entries:
-        arr = engine.np.asarray(values)
+        arr = np.asarray(values)
         if name.endswith(".points"):
             arr = arr.reshape(-1, 4)
-        prepared.append((name, engine._dtype_of(name), arr))
-    engine.geometry_io.sections_to_curve(helper.data, prepared)
+        prepared.append((name, _dtype_of(name), arr))
+    geometry_io.sections_to_curve(helper.data, prepared)
     helper.update_tag()
 
 
 def _apply_points(helper, entries):
     if not entries:
         if len(helper.data.points):
-            engine._bump_id(helper)
+            _bump_id(helper)
             helper.data.resize(0)
             helper.update_tag()
         return
-    engine._bump_id(helper)
+    _bump_id(helper)
     prepared = []
     for name, values in entries:
-        arr = engine.np.asarray(values)
+        arr = np.asarray(values)
         if name.endswith(".positions"):
             arr = arr.reshape(-1, 3)
         elif name.endswith(".colors"):
             arr = arr.reshape(-1, 4)
-        prepared.append((name, engine._dtype_of(name), arr))
-    engine.geometry_io.sections_to_points(helper.data, prepared)
+        prepared.append((name, _dtype_of(name), arr))
+    geometry_io.sections_to_points(helper.data, prepared)
     helper.update_tag()
 
 

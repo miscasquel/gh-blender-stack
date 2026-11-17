@@ -17,6 +17,10 @@ from harness import (
     start_fake,
     stop_fake,
 )
+from stageloom.blender.engine import ENGINE
+from stageloom.blender.engine import lifecycle as engine_lifecycle
+from stageloom.blender.engine import request as engine_request
+from stageloom.blender.engine import triggers as engine_triggers
 
 
 class PrefixChainTests(unittest.TestCase):
@@ -113,41 +117,40 @@ class PrefixChainTests(unittest.TestCase):
 
     def test_04_steady_state_is_quiet(self):
         pump(seconds=0.5)
-        self.engine._timer()
-        self.assertFalse(self.engine._dirty, "prefix clones keep the engine dirty")
+        engine_triggers._timer()
+        self.assertFalse(ENGINE.dirty, "prefix clones keep the engine dirty")
         responses_b = report_of(self.report_b).get("responses", 0)
         for _ in range(5):
-            self.engine._timer()
+            engine_triggers._timer()
         self.assertEqual(report_of(self.report_b).get("responses", 0), responses_b)
-        self.assertFalse(self.engine._dirty)
+        self.assertFalse(ENGINE.dirty)
 
     def test_05_one_depsgraph_update_serves_every_stage_prefix(self):
         # Link every stage's clone first, then evaluate them in one update.
         # One update per stage cost ~17 ms each on FiraTower.
-        engine = self.engine
         calls = []
-        original = engine._clone_prefixes
+        original = engine_request._clone_prefixes
 
         def counting(obj, stages, subd):
             calls.append(len(stages))
             return original(obj, stages, subd)
 
-        engine._clone_prefixes = counting
+        engine_request._clone_prefixes = counting
         try:
-            engine._bump_epochs(None)
-            engine._prefix_memo.clear()
-            engine._prefix_batch.clear()
-            engine._prefix_batch_built = False
-            engine._pending.clear()
-            engine._sent.clear()
-            engine._dirty.add(self.obj.name)
-            engine._process_object(self.obj)
+            engine_request._bump_epochs(None)
+            ENGINE.prefix_memo.clear()
+            ENGINE.prefix_batch.clear()
+            ENGINE.prefix_batch_built = False
+            ENGINE.clear_runtimes()
+            ENGINE.clear_runtimes()
+            ENGINE.dirty.add(self.obj.name)
+            engine_lifecycle._process_object(self.obj)
         finally:
-            engine._clone_prefixes = original
+            engine_request._clone_prefixes = original
 
         self.assertEqual(calls, [2])
-        self.assertFalse(engine._prefix_batching)
-        self.assertEqual(engine._prefix_batch, {})
+        self.assertFalse(ENGINE.prefix_batching)
+        self.assertEqual(ENGINE.prefix_batch, {})
 
 
 class WaitingPrefixTests(unittest.TestCase):
@@ -590,7 +593,6 @@ class PrefixCostTests(unittest.TestCase):
         return mesh
 
     def _measure(self, nx, ny, budget_ms):
-        import stageloom.blender.engine as engine
         import stageloom.blender.stack as stack_mod
 
         bpy.ops.object.select_all(action="SELECT")
@@ -608,7 +610,7 @@ class PrefixCostTests(unittest.TestCase):
         record = stack_mod.stack_of(obj)
 
         t0 = time.perf_counter()
-        sections, _geom_hash, _attributes, _definitions = engine._prefix_sections(obj, record, stage)
+        sections, _geom_hash, _attributes, _definitions = engine_request._prefix_sections(obj, record, stage)
         took_ms = (time.perf_counter() - t0) * 1000.0
         tris = (nx - 1) * (ny - 1) * 2
         print(
