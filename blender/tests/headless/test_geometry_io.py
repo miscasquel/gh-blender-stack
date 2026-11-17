@@ -91,6 +91,47 @@ class SectionRoundTripTests(unittest.TestCase):
         target.vertices.foreach_get("co", co)
         np.testing.assert_allclose(co.reshape(-1, 3), by["mesh.verts"], rtol=0, atol=1e-6)
 
+    def test_bulk_rebuild_keeps_face_order_and_ngons(self):
+        """The array rebuild is the from_pydata table: same faces, loops, edges.
+
+        A mixed 3/4/5 table is the shape that would expose a wrong loop_start
+        derivation; rebuilding twice on one mesh also covers clear_geometry.
+        """
+        verts = np.array(
+            [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [2, 0, 0], [2, 1, 0]],
+            dtype=np.float32,
+        )
+        counts = [3, 4, 5]
+        indices = [0, 1, 2, 0, 2, 3, 1, 0, 2, 4, 5, 3]
+        sections = [
+            ("mesh.verts", "f32", verts),
+            ("mesh.face_counts", "u32", np.asarray(counts, dtype=np.uint32)),
+            ("mesh.face_indices", "u32", np.asarray(indices, dtype=np.uint32)),
+        ]
+        reference = bpy.data.meshes.new("bulk-reference")
+        reference.from_pydata(
+            verts.tolist(), [], [(0, 1, 2), (0, 2, 3, 1), (0, 2, 4, 5, 3)]
+        )
+        reference.update()
+
+        target = bpy.data.meshes.new("bulk-target")
+        geometry_io.sections_to_mesh(target, sections)
+        geometry_io.sections_to_mesh(target, sections)
+
+        for name in ("loop_start", "loop_total"):
+            got = np.empty(len(target.polygons), dtype=np.int32)
+            expected = np.empty(len(reference.polygons), dtype=np.int32)
+            target.polygons.foreach_get(name, got)
+            reference.polygons.foreach_get(name, expected)
+            np.testing.assert_array_equal(got, expected)
+        for name in ("vertex_index",):
+            got = np.empty(len(target.loops), dtype=np.int32)
+            expected = np.empty(len(reference.loops), dtype=np.int32)
+            target.loops.foreach_get(name, got)
+            reference.loops.foreach_get(name, expected)
+            np.testing.assert_array_equal(got, expected)
+        self.assertEqual(len(target.edges), len(reference.edges))
+
     def test_sections_to_mesh_in_place_position_update(self):
         verts, faces = grid_verts_faces(5, 5)
         obj = new_mesh_object("inplace", verts, faces)
@@ -151,12 +192,12 @@ class SectionRoundTripTests(unittest.TestCase):
         by = sections_dict(sections)
         moved = by["mesh.verts"] + np.float32(1.0)
 
-        original_faces_from = geometry_mesh._faces_from
+        original_rebuild = geometry_mesh._rebuild_topology
 
         def must_not_rebuild(*args):
             raise AssertionError("a true topology match rebuilt the mesh")
 
-        geometry_mesh._faces_from = must_not_rebuild
+        geometry_mesh._rebuild_topology = must_not_rebuild
         try:
             geometry_io.sections_to_mesh(
                 obj.data,
@@ -164,7 +205,7 @@ class SectionRoundTripTests(unittest.TestCase):
                 + [(n, d, v) for n, d, v in sections if n != "mesh.verts"],
             )
         finally:
-            geometry_mesh._faces_from = original_faces_from
+            geometry_mesh._rebuild_topology = original_rebuild
 
         co = np.empty(len(obj.data.vertices) * 3, dtype=np.float32)
         obj.data.vertices.foreach_get("co", co)

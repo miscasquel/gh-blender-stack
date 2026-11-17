@@ -39,9 +39,9 @@ namespace Stageloom
                 RowNote(note, where, problem);
                 return false;
             }
-            if (mats.Raw.Length % 64 != 0)
+            if (mats.ByteLength % 64 != 0)
             {
-                RowNote(note, where, "inst.transforms holds " + mats.Raw.Length
+                RowNote(note, where, "inst.transforms holds " + mats.ByteLength
                     + " bytes; each row is 16 f32 values");
                 return false;
             }
@@ -74,9 +74,9 @@ namespace Stageloom
             if (section.Dtype != dtype)
                 return section.Name + " must be " + dtype + ", not "
                     + (section.Dtype ?? "(missing)");
-            if (section.Raw == null) return section.Name + " has no bytes";
-            if (section.Raw.Length % 4 != 0)
-                return section.Name + " length " + section.Raw.Length
+            if (!section.HasBytes) return section.Name + " has no bytes";
+            if (section.ByteLength % 4 != 0)
+                return section.Name + " length " + section.ByteLength
                     + " is not a multiple of 4";
             return null;
         }

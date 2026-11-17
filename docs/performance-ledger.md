@@ -1,12 +1,19 @@
 # Performance ledger
 
-**Status: T1–T7 accepted.** The gate reference is the **2026-11-17 best-of-three
+**Status: T1–T8 accepted.** The gate reference is the **2026-11-17 best-of-three
 baseline**: three clean solo runs, with the fastest per-run p50/p95 stored for
 each metric. It replaces the 2026-11-16 median baseline after host CPU
 power/core-state drift was measured and confirmed not to be a T5 regression; the
 T1–T4 rows below remain historical against the old reference. The idle-pass
 diagnostic was ungated in T2: at ~3 µs its p95 is below the timer noise floor,
 and the 2 ms hard budget still applies.
+
+T8 is the performance follow-through: it fixed the bulk mesh rebuild
+(`pipeline.100k.apply_fresh_ms` −88.6% p50), removed the decoded-frame payload
+copy (C# `frame_decode` −98.9% p50) and made a clean publication skip its
+schema/frame work. It changed no wire, fixture or `out_hash` byte. Playback is
+re-measured against the current and historical references: the recorded +7–9%
+does not reproduce (see the T8 verification).
 
 | Field | Value |
 |---|---|
@@ -17,7 +24,7 @@ and the 2 ms hard budget still applies.
 | Gate | `scripts/bench-baseline` (3 sequential runs, best p50/p95 per metric) |
 | Stored baseline | `benchmarks/results/2026-11-17-linux.json` (`aggregate: best run`) |
 | Raw evidence | `benchmarks/results/2026-11-17-linux-run1.json`, `…-run2.json`, `…-run3.json` + SHA-256 in the baseline |
-| C# microbench | `benchmarks/results/2026-11-16-linux-csharp.json` |
+| C# microbench | `benchmarks/results/2026-11-17-linux-csharp-t8.json` (T8; supersedes the 2026-11-16 run) |
 | Gate result | **PASS 26/26 (13 gated metrics, fresh best-of-three gate)** |
 
 The 2026-11-17 baseline was taken with the host quiet from three solo runs. The
@@ -73,7 +80,7 @@ flaked on unrelated timer noise; its 2 ms hard budget remains in `bench.py`.
 | T5 | engine object: 100k/1M in-place, 13× instance repeat, playback, prefix/apply, roundtrip | 2.1453 / 2.1708; 21.6598 / 21.7428; 2.4608 / 2.5706; 12.8405 / 13.3398; 116.8278 / 119.6174; 91.0217 / 92.1573 | 2.1658 / 2.1996; 21.7300 / 21.7899; 2.5115 / 2.5672; 12.8752 / 13.3305; 116.6537 / 118.5319; 90.4581 / 91.1653 | +0.95% / +1.33%; +0.32% / +0.22%; +2.06% / -0.13%; +0.27% / -0.07%; -0.15% / -0.91%; -0.62% / -1.08% | production 24,738 / 19,376 (−208 / −18), 57 files; 454 Blender + 681 C# checks unchanged | accepted: 26/26 on the 2026-11-17 best baseline; decode +0.80% / -2.88%; no >5% metric |
 | T6 | `GhLink` split: no Blender hot-path change | 4.9433 / 5.1213; 4.4018 / 5.2993; 2.1453 / 2.1708; 21.6598 / 21.7428; 2.4608 / 2.5706; 12.8405 / 13.3398 | 4.8043 / 5.0086; 4.1689 / 5.1180; 2.1427 / 2.1572; 21.4043 / 21.4556; 2.4520 / 2.4903; 12.9308 / 13.2672 | -2.81% / -2.20%; -5.29% / -3.42%; -0.13% / -0.62%; -1.18% / -1.32%; -0.36% / -3.13%; +0.70% / -0.54% | production 24,719 / 19,714 (−19 physical, +338 code), 63 files; `GhLink` type 2,489 → 173 code lines; 454 Blender + 685 C# checks | accepted: 26/26 in 173.1 s; worst positive p50 +1.49% (`total_ms`), p95 +1.14% (`total_ms`); no >5% metric |
 | T7 | `Instances` split/table-driven conversion: no Blender hot-path change | 4.9433 / 5.1213; 4.4018 / 5.2993; 2.1453 / 2.1708; 11.8275 / 12.0514; 21.6598 / 21.7428; 2.4608 / 2.5706; 12.8405 / 13.3398; 116.8278 / 119.6174; 91.0217 / 92.1573 | 4.8727 / 4.9639; 4.4787 / 5.2800; 2.1583 / 2.1921; 12.1295 / 12.4563; 21.7090 / 21.8571; 2.4619 / 2.5358; 12.8257 / 13.2868; 116.8876 / 119.4850; 90.9955 / 91.4284 | -1.43% / -3.07%; +1.75% / -0.36%; +0.60% / +0.98%; +2.55% / +3.36%; +0.23% / +0.53%; +0.04% / -1.36%; -0.12% / -0.40%; +0.05% / -0.11%; -0.03% / -0.79% | production 24,711 / 19,800 (−8 physical, +86 code), 69 files; former 2,135-line `Instances` type gone, largest instance type `InstanceEmit` 450 and `DefinitionBuilder` 940 → 424; 454 Blender + 685 C# checks; native Mesh/Curve/Point emit/build probe | accepted: 26/26 in 176.1 s; worst positive p50 +2.55% (`total_ms`), p95 +3.36%; no >5% metric; intermediate p95-only runs recorded below |
-| T8 | pending | — | — | — | — | pending |
+| T8 | performance: 100k fresh apply, in-place, 1M in-place, playback, all gated | see the T8 verification table | see the T8 verification table | fresh apply **-88.51% / -89.55%**; all other p50/p95 within +3.93% | production 24,918 / 19,945 (+207 physical, +145 code), 69 files; C# `frame_decode` p50 **0.4556 → 0.0050 ms** and `frame_mesh_arrays` **0.9210 → 0.4434 ms**; 455 Blender + 687 C# checks; publication heartbeat skips a clean rebuild | accepted: full gate 26/26 in 159.7 s; worst positive p50 +1.81% (`total_ms`), p95 +3.93% (`apply_inplace_ms`); offsetting gain: fresh apply −88.51%/−89.55% and C# `frame_decode` −98.9%; no metric exceeds +5% |
 | T9 | pending | — | — | — | — | pending |
 | T10 | pending | — | — | — | — | pending |
 | T11 | pending | — | — | — | — | pending |
@@ -293,12 +300,141 @@ task: physical LOC is −8, the `Instances` type is gone, the largest instance
 unit dropped from 2,135 to 450, and the curve appenders plus type/kind/
 descriptor dispatch duplication were removed.
 
+### T8 verification
+
+T8 is performance follow-through, not a redesign. It changed three production
+hot paths, each measured before the edit:
+
+1. **Blender mesh rebuild (gated).** `sections_to_mesh` previously built a
+   Python tuple per face and called `from_pydata(verts.tolist(), [], faces)`.
+   It now writes the validated table with `vertices.add`/`loops.add`/
+   `polygons.add` plus `foreach_set` (`geometry_io/mesh.py:_rebuild_topology`).
+   Face order, n-gons, derived edges and the topology-token fast path are
+   unchanged; a new mixed 3/4/5-gon regression compares every loop start/total
+   and the edge count against a `from_pydata` reference.
+   `pipeline.100k.apply_fresh_ms` **77.9507 / 87.1304 → 8.9585 / 9.1022 ms**
+   (**−88.51% / −89.55%**); the 1M scale case went **832.7 → ~85 ms** in the
+   scenario print (ungated scale case). The existing gated metric is the
+   benchmark for this path.
+2. **C# section decode (ungated C# bench).** Decoded sections are
+   owner/offset/length views; `Section.Raw` still returns the bytes and caches
+   one copy on demand, while `ToFloats`/`ToU32` copy once straight from the
+   frame. `frame_decode` **0.4556 / 0.5167 → 0.0050 / 0.0055 ms**
+   (**−98.9% / −98.9%**) and decode plus typed mesh arrays `0.9210 / 1.0338 →
+   0.4434 / 0.4684 ms` (**−51.9% / −54.7%**). The plain typed-copy rows are
+   within the sub-millisecond noise floor (`section_floats` −1.4%/−7.4%,
+   `section_u32` −2.1%/−6.2%).
+3. **Publication (deterministic, no microbench).** A published-view generation
+   is bumped when the registry-derived stages/roles/parameters change, when the
+   connection opens, or when the doc name/units change. A heartbeat with no
+   change returns before snapshotting every stage or computing a canonical
+   schema signature; a change made while a send is in flight stays pending.
+   Hello/schema/reconnect semantics are unchanged and pinned by `LinkTests`
+   plus a new "a clean publication sends no hello" check. The path is
+   GH/Rhino-only in the console harness, so it has a behaviour test and an
+   explicit bench skip, not a fabricated number.
+
+**Playback conclusion.** The recorded +7–9% does not reproduce. Three quiet
+solo playback runs before any T8 edit measured p50 **13.0435 / 12.8746 /
+12.9812 ms** and p95 **13.4197 / 13.3667 / 13.3492 ms**; the stored 2026-11-17
+baseline is **12.8405 / 13.3398**. The accepted T8 gate measured **12.7994 /
+13.2626** (**−0.32% / −0.58%**). Against the historical 0.6 same-machine
+12.7 ms that is **+0.78% p50**, not +7–9%. The handoff's 13.6–13.8 ms reading
+is consistent with a loaded host/browser state, not a code change: the timer
+path was not edited in T8 (the only Blender production edit is the mesh rebuild,
+and playback uses the same-topology position write). The exception is accepted
+with the actual ratio and the host-state caveat recorded here; no A/B against
+0.6 was run or claimed.
+
+**Profiled and deferred (with the measured reason):**
+
+- `nodes.ensure_group` costs **26.7 µs** per apply on a three-stage 10k object
+  (0.2% of a playback frame); a persistent signature cache would add a second
+  identity/invalidation owner for that. Deferred.
+- `_ordered_stages` (three stages) **6.5 µs**, `props.schema_of` **0.3 µs**,
+  `props.canonical_json` **2.5 µs**, `bake.token_stages("")` **0.1 µs**,
+  `_flush_edit_mode` with no dirty work **0.4 µs**, `_ensure_index` **0.5 µs**.
+  No quadratic grouping appears on the measured path; changing it would be
+  unmeasured churn. Deferred.
+- C# `Conversion.BuildMesh`/`MeshSections` bulk APIs and `DecodedFrame.Find`
+  indexing were not changed: RhinoCommon-only, no verifiable native harness in
+  this environment (the console suite prints `SKIP native … RhinoCore is
+  unavailable`), and face-order/n-gon risk outweighs an unmeasurable gain.
+  Deferred.
+- C# `StageRegistry` registration/slot linear scans were not changed:
+  `FindSlotLocked` is dictionary-keyed; the linear registration and
+  no-owner slot scans run on component add/remove or a foreign-key request,
+  not per frame. No C# profiler on the reference host showed them hot. Deferred.
+- `InstanceEmit` now accepts the caller's `RhinoDoc` and uses
+  `RhinoDoc.ActiveDoc` only as the script/test fallback; the Stage Out solve
+  passes `OnPingDocument().RhinoDocument`. Wire output is unchanged. The
+  document lookup is Rhino-only, so it is a behaviour/ownership change with a
+  bench skip, not a claimed microbench win.
+
+The accepted full gate passed **26/26** checks in **159.7 s** (docs, ruff,
+core, bench with the baseline enforced, the Blender CLI proof, Blender headless,
+extension and the full C# suites). Every gated metric:
+
+| Metric | Baseline p50 / p95 | T8 p50 / p95 | Delta p50 / p95 |
+|---|---:|---:|---:|
+| `pipeline.100k.extract_ms` | 4.9433 / 5.1213 | 4.9105 / 4.9375 | -0.66% / -3.59% |
+| `pipeline.100k.decode_ms` | 4.4018 / 5.2993 | 4.3417 / 4.8183 | -1.37% / -9.08% |
+| `pipeline.100k.apply_fresh_ms` | 77.9507 / 87.1304 | 8.9585 / 9.1022 | **-88.51% / -89.55%** |
+| `pipeline.100k.apply_inplace_ms` | 2.1453 / 2.1708 | 2.1680 / 2.2561 | +1.06% / +3.93% |
+| `pipeline.100k.total_ms` | 11.8275 / 12.0514 | 12.0418 / 12.1987 | +1.81% / +1.22% |
+| `pipeline.1m.apply_inplace_ms` | 21.6598 / 21.7428 | 21.6941 / 21.8397 | +0.16% / +0.45% |
+| `instances.13x.prefix_ms` | 10.0813 / 10.2337 | 10.0003 / 10.2169 | -0.80% / -0.16% |
+| `instances.13x.apply_repeat_ms` | 2.4608 / 2.5706 | 2.4584 / 2.4992 | -0.10% / -2.78% |
+| `playback.frame_ms` | 12.8405 / 13.3398 | 12.7994 / 13.2626 | -0.32% / -0.58% |
+| `roundtrip.full.settle_ms` | 116.8278 / 119.6174 | 115.7204 / 118.0590 | -0.95% / -1.30% |
+| `roundtrip.ref.settle_ms` | 91.0217 / 92.1573 | 89.2693 / 90.0883 | -1.93% / -2.25% |
+| `multistage.dirty_pass_ms` | 6.7115 / 6.8452 | 6.6738 / 6.7680 | -0.56% / -1.13% |
+| `multistage.settle_ms` | 76.8907 / 79.0489 | 74.8934 / 77.4964 | -2.60% / -1.96% |
+
+No gated metric exceeds +5%. The worst positive p50 is `pipeline.100k.total_ms`
+**+1.81%**; the largest p95 delta is `pipeline.100k.apply_inplace_ms` **+3.93%**
+(its p50 is +1.06%). Both paths are unchanged and their movement is the sub-2 ms
+timer/allocation noise floor at 200 samples. The 0–5% trade is accepted with the
+quantified offsetting gain recorded in the T8 row: `apply_fresh_ms`
+−88.51%/−89.55% and C# `frame_decode` −98.9%, both on the same tree. The
+threshold was not widened and no metric was excluded.
+
+An independent audit run on the same tree also passed **26/26** in **159.5 s**
+with the baseline enforced; its worst delta was **+2.67%**
+(`pipeline.100k.extract_ms` p95), and every other metric was within +1.61% or
+improved.
+
 ## C# parameter/schema baseline (ungated)
 
-`scripts/bench-gha` measures the pure C# JSON/parameter layer. It is not in the
-Blender gate and does not measure RhinoCommon/Grasshopper object allocation,
-Stage In conversion or the solve. The values below are p50 from the quiet-machine
-run; the JSON also stores p95, min, max and samples.
+`scripts/bench-gha` measures the pure C# JSON/parameter/section-decode layer. It
+is not in the Blender gate and does not measure RhinoCommon/Grasshopper object
+allocation, Stage In conversion, publication or the solve. The values below are
+p50 from the quiet-machine run; the JSON also stores p95, min, max and samples.
+The 2026-11-17 T8 result is
+`benchmarks/results/2026-11-17-linux-csharp-t8.json`; the pre-change run from the
+same code path is `benchmarks/results/2026-11-17-linux-csharp-t8-before.json`,
+and the 2026-11-16 file is the historical pre-T8 run.
+
+| Metric | Before p50 / p95 | T8 p50 / p95 | Delta p50 / p95 |
+|---|---:|---:|---:|
+| `frame_decode` (100k-triangle frame) | 0.4556 / 0.5167 ms | 0.0050 / 0.0055 ms | -98.9% / -98.9% |
+| `frame_mesh_arrays` (decode + typed sections) | 0.9210 / 1.0338 ms | 0.4434 / 0.4684 ms | -51.9% / -54.7% |
+| `section_floats` (151,875 f32) | 0.1699 / 0.1879 ms | 0.1675 / 0.1740 ms | -1.4% / -7.4% |
+| `section_u32` (200,704 u32) | 0.2202 / 0.2368 ms | 0.2156 / 0.2221 ms | -2.1% / -6.2% |
+| `schema_signature` (100 params) | 0.7596 / 0.7748 ms | 0.7501 / 0.7771 ms | -1.3% / +0.3% |
+| `schema_frame` (100 params) | 0.8043 / 0.8233 ms | 0.7964 / 0.8084 ms | -1.0% / -1.8% |
+
+The two typed-section rows are the remaining one copy into a typed array; they
+are unchanged by construction (the source moved from a per-section copy to the
+frame view). The 5% rule does not apply to this ungated bench.
+
+**Rhino/GH-only paths deliberately not measured here:** `Conversion.BuildMesh`
+and `MeshSections` need RhinoCommon geometry; `Publication.SendPublication`
+needs a `GH_Document`/connected `LinkConnection`; `InstanceEmit`'s document
+lookup needs a Rhino document. The local wine harness has no RhinoCore, and the
+console suites print the native skips. Those paths keep their behaviour tests
+(the T7 native probe for emit/build); no microbench claims a number it did not
+measure.
 
 | Metric | p50 | Unit |
 |---|---:|---|

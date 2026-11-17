@@ -407,8 +407,8 @@ namespace Stageloom.Core
         private static float[] ReadFloats(Section section, string name)
         {
             RequireDtype(section, name, "f32");
-            if (section.Raw.Length % 4 != 0)
-                throw new FrameException("bad_frame", name + " length " + section.Raw.Length
+            if (section.ByteLength % 4 != 0)
+                throw new FrameException("bad_frame", name + " length " + section.ByteLength
                     + " is not a whole number of f32 values");
             return section.ToFloats();
         }
@@ -416,8 +416,8 @@ namespace Stageloom.Core
         private static uint[] ReadU32(Section section, string name)
         {
             RequireDtype(section, name, "u32");
-            if (section.Raw.Length % 4 != 0)
-                throw new FrameException("bad_frame", name + " length " + section.Raw.Length
+            if (section.ByteLength % 4 != 0)
+                throw new FrameException("bad_frame", name + " length " + section.ByteLength
                     + " is not a whole number of u32 values");
             return section.ToU32();
         }
@@ -432,7 +432,7 @@ namespace Stageloom.Core
         {
             if (section == null)
                 throw new FrameException("bad_frame", name + " is missing");
-            if (section.Raw == null)
+            if (!section.HasBytes)
                 throw new FrameException("bad_frame", name + " has no bytes");
             if (section.Dtype != expected)
                 throw new FrameException("bad_frame", name + " must be " + expected

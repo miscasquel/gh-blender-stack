@@ -24,18 +24,91 @@ namespace Stageloom.Core
         }
     }
 
-    /// <summary>One binary section: a name, a dtype, and raw little-endian bytes.</summary>
+    /// <summary>One binary section: a name, a dtype, and raw little-endian bytes.
+    ///
+    /// A decoded section is a view into the frame it came from: the decoder
+    /// records owner/offset/length instead of copying every payload out. The
+    /// public <see cref="Raw"/> contract is unchanged — it returns the section's
+    /// bytes, materialising (and caching) a copy on first access — and the
+    /// typed accessors copy once, straight from the frame. Encoded sections
+    /// carry their own array; <see cref="ByteLength"/> reads either without
+    /// touching the bytes. A view keeps its frame alive while the section is
+    /// held, which is what a held request frame retains as a whole anyway.</summary>
     public class Section
     {
         public readonly string Name;
         public readonly string Dtype;
-        public readonly byte[] Raw;
+        private byte[] _bytes;          // owned bytes, or the materialised Raw copy
+        private readonly byte[] _owner; // decoded frame, null for an owned section
+        private readonly int _offset;
+        private readonly int _length;
+        private readonly bool _nullBytes;
 
         public Section(string name, string dtype, byte[] raw)
         {
             Name = name;
             Dtype = dtype;
-            Raw = raw;
+            _bytes = raw;
+            _nullBytes = raw == null;
+            _length = raw == null ? 0 : raw.Length;
+        }
+
+        /// <summary>A zero-copy view of one section payload in a decoded frame.</summary>
+        internal Section(string name, string dtype, byte[] owner, int offset, int length)
+        {
+            Name = name;
+            Dtype = dtype;
+            _owner = owner;
+            _offset = offset;
+            _length = length;
+        }
+
+        /// <summary>The payload length, without materialising <see cref="Raw"/>.</summary>
+        public int ByteLength { get { return _length; } }
+
+        public bool HasBytes { get { return !_nullBytes; } }
+
+        /// <summary>The section bytes. A decoded view copies once on first use,
+        /// exactly like the decoder used to do eagerly; a section built from an
+        /// array returns that array.</summary>
+        public byte[] Raw
+        {
+            get
+            {
+                if (_bytes != null) return _bytes;
+                if (_nullBytes) return null;
+                var copy = new byte[_length];
+                if (_length > 0) Buffer.BlockCopy(_owner, _offset, copy, 0, _length);
+                _bytes = copy;
+                return copy;
+            }
+        }
+
+        /// <summary>Copy the payload into an encoder buffer without forcing
+        /// <see cref="Raw"/> to materialise.</summary>
+        internal void CopyTo(byte[] target, int targetOffset)
+        {
+            if (_bytes != null)
+            {
+                if (_length > 0) Buffer.BlockCopy(_bytes, 0, target, targetOffset, _length);
+            }
+            else if (_length > 0)
+            {
+                Buffer.BlockCopy(_owner, _offset, target, targetOffset, _length);
+            }
+        }
+
+        /// <summary>Hash the payload in place (protocol §6 hashes).</summary>
+        internal void HashInto(HashAlgorithm sha)
+        {
+            if (_bytes != null)
+            {
+                if (_length > 0) sha.TransformBlock(_bytes, 0, _length, null, 0);
+            }
+            else if (_length > 0)
+            {
+                sha.TransformBlock(_owner, _offset, _length, null, 0);
+            }
         }
 
         public static Section Floats(string name, float[] values)
@@ -66,26 +139,29 @@ namespace Stageloom.Core
 
         public float[] ToFloats()
         {
-            var values = new float[Raw.Length / 4];
-            Buffer.BlockCopy(Raw, 0, values, 0, Raw.Length);
+            var values = new float[_length / 4];
+            if (_bytes != null) Buffer.BlockCopy(_bytes, 0, values, 0, _length);
+            else Buffer.BlockCopy(_owner, _offset, values, 0, _length);
             return values;
         }
 
         public uint[] ToU32()
         {
-            var values = new uint[Raw.Length / 4];
-            Buffer.BlockCopy(Raw, 0, values, 0, Raw.Length);
+            var values = new uint[_length / 4];
+            if (_bytes != null) Buffer.BlockCopy(_bytes, 0, values, 0, _length);
+            else Buffer.BlockCopy(_owner, _offset, values, 0, _length);
             return values;
         }
 
         public int[] ToI32()
         {
-            var values = new int[Raw.Length / 4];
-            Buffer.BlockCopy(Raw, 0, values, 0, Raw.Length);
+            var values = new int[_length / 4];
+            if (_bytes != null) Buffer.BlockCopy(_bytes, 0, values, 0, _length);
+            else Buffer.BlockCopy(_owner, _offset, values, 0, _length);
             return values;
         }
 
-        public int ElementCount { get { return Dtype == "u8" ? Raw.Length : Raw.Length / 4; } }
+        public int ElementCount { get { return Dtype == "u8" ? _length : _length / 4; } }
     }
 
     /// <summary>A decoded frame: the header object and the sections, header order.</summary>
@@ -193,12 +269,12 @@ namespace Stageloom.Core
                     if (!IsKnownDtype(s.Dtype))
                         throw new FrameException("bad_frame",
                             "section " + s.Name + " has unknown dtype " + (s.Dtype ?? "(missing)"));
-                    if (s.Raw == null)
+                    if (!s.HasBytes)
                         throw new FrameException("bad_frame",
                             "section " + s.Name + " has no bytes");
-                    if (s.Raw.Length % ItemSize(s.Dtype) != 0)
+                    if (s.ByteLength % ItemSize(s.Dtype) != 0)
                         throw new FrameException("bad_frame",
-                            "section " + s.Name + " length " + s.Raw.Length
+                            "section " + s.Name + " length " + s.ByteLength
                             + " is not a multiple of " + ItemSize(s.Dtype));
                     if (!seen.Add(s.Name))
                         throw new FrameException("bad_frame",
@@ -208,9 +284,9 @@ namespace Stageloom.Core
                     entry["name"] = s.Name;
                     entry["dtype"] = s.Dtype;
                     entry["shape"] = new List<object> { (long)s.ElementCount };
-                    entry["bytes"] = (long)s.Raw.Length;
+                    entry["bytes"] = (long)s.ByteLength;
                     table.Add(entry);
-                    total += s.Raw.Length;
+                    total += s.ByteLength;
                 }
                 head["sections"] = table;
             }
@@ -243,8 +319,8 @@ namespace Stageloom.Core
             {
                 foreach (Section s in sections)
                 {
-                    Buffer.BlockCopy(s.Raw, 0, frame, (int)offset, s.Raw.Length);
-                    offset += s.Raw.Length;
+                    s.CopyTo(frame, (int)offset);
+                    offset += s.ByteLength;
                 }
             }
             return frame;
@@ -422,10 +498,8 @@ namespace Stageloom.Core
                     if (nbytes > frame.Length - offset)
                         throw new FrameException("bad_frame",
                             "section " + name + " runs past the payload");
-                    var raw = new byte[nbytes];
-                    Buffer.BlockCopy(frame, (int)offset, raw, 0, (int)nbytes);
+                    sections.Add(new Section(name, dtype, frame, (int)offset, (int)nbytes));
                     offset += nbytes;
-                    sections.Add(new Section(name, dtype, raw));
                 }
             }
             if (offset != frame.Length)
@@ -740,8 +814,8 @@ namespace Stageloom.Core
             byte[] present = new byte[] { section == null ? (byte)0 : (byte)1 };
             sha.TransformBlock(present, 0, 1, null, 0);
             if (section == null) return;
-            UpdateHashU64(sha, (ulong)section.Raw.Length);
-            sha.TransformBlock(section.Raw, 0, section.Raw.Length, null, 0);
+            UpdateHashU64(sha, (ulong)section.ByteLength);
+            section.HashInto(sha);
         }
 
         /// <summary>Output hash: sections in the given (header) order (protocol
@@ -780,7 +854,7 @@ namespace Stageloom.Core
             byte[] name = Encoding.UTF8.GetBytes(s.Name);
             sha.TransformBlock(name, 0, name.Length, null, 0);
             sha.TransformBlock(Zero, 0, 1, null, 0);
-            sha.TransformBlock(s.Raw, 0, s.Raw.Length, null, 0);
+            s.HashInto(sha);
         }
 
         // ------------------------------------------------------------ helpers

@@ -7,7 +7,9 @@ production code; T4 moved `geometry_io.py` into a package behind the same
 facade; T5 replaced the engine hub with `ENGINE`/`StageRuntime`; T6 split
 `GhLink.cs` into explicit owners with `GhLink` as a facade; T7 split
 `Instances.cs` into build/plan, emit, table-writer and identity owners and
-table-drove the `Conversion`/`Attributes` kind dispatch.
+table-drove the `Conversion`/`Attributes` kind dispatch. T8 is performance
+follow-through: it kept these owners, changed the private mesh rebuild helper
+and the decode/publication internals, and added the tests noted below.
 
 **Measured at T3 (same machine, 2026-11-16):**
 
@@ -93,6 +95,26 @@ table-drove the `Conversion`/`Attributes` kind dispatch.
   namespace and the `blocks/2` fallback split. The wine `scripts/test-gha`
   harness still prints the native skips.
 
+**Measured at T8 (same machine, 2026-11-17):**
+
+- **455** Blender headless tests plus the offline gate (T7: 454; the new mixed
+  n-gon bulk-rebuild regression).
+- **687** passing C# checks (T7: 685; `Program.CheckSectionViews` and the clean
+  publication guard). The two native Rhino halves still print their skips.
+- Production: **24,918 physical / 19,945 code lines across 69 files** (T7:
+  24,711 / 19,800; +207 physical, +145 code). The growth is the decoded-section
+  view, the publication generation, the bulk mesh writer and the optional
+  document owner; no new module or duplicate dispatch.
+- Fourteen golden fixtures; `out_hash`, protocol, fixture bytes and the
+  topology-token format untouched.
+- Performance: the full gate passed **26/26** in 159.7 s. `apply_fresh_ms` fell
+  −88.51%/−89.55% p50/p95, playback measured −0.32%/−0.58% against the stored
+  baseline (no +7–9% regression), and the worst positive metric is
+  `total_ms` p50 **+1.81%** (p95 +3.93%, `apply_inplace_ms`; offsetting gain
+  recorded in the ledger). The complete table is in the
+  performance ledger.
+
+
 Notation: a Python test is `file.py::Class.test_name`; a C# check is
 `Suite::Check("…")` as printed by the console suite. Where a group of checks is
 named as `Suite::CheckGroup`, that means every `Check(...)` inside the group.
@@ -162,7 +184,7 @@ is the classified failure type; `notes` lists are the visible-warning channel.
 **Entry points:** `mesh_to_sections`, `read_colors`, `read_creases`,
 `loose_edge_indices`, `isolated_vertex_indices`, `wire_mesh_to_sections`,
 `select_mesh_group`, `sections_to_mesh`, `_topology_matches`, `write_colors`,
-`write_creases`, `_faces_from`.
+`write_creases`, `_rebuild_topology`.
 
 **Must not change:**
 
@@ -195,6 +217,7 @@ is the classified failure type; `notes` lists are the visible-warning channel.
   `test_topology_change_with_equal_loop_count_rebuilds_faces`,
   `test_quad_diagonal_flip_with_identical_counts_rebuilds_faces`,
   `test_identical_topology_takes_the_position_only_fast_path`,
+  `test_bulk_rebuild_keeps_face_order_and_ngons`,
   `test_token_fast_path_still_writes_colours_and_creases`,
   `test_mesh_and_subd_groups_are_selected_as_units`,
   `test_unmatched_crease_edges_are_noted`, `test_colors_round_trip`,
@@ -224,6 +247,13 @@ SectionGroupTests.test_a_colours_only_group_is_an_incomplete_mesh`,
 `select_mesh_group` shared by the attribute writer. The topology-token branch
 and `_topology_matches` stayed together; `test_geometry_io.py` and
 `test_topology_token.py` now patch the mesh module.
+
+**T8 changed:** the rebuild branch is `_rebuild_topology` (bulk
+`vertices.add`/`loops.add`/`polygons.add` + `foreach_set`), replacing
+`_faces_from` and `from_pydata`. The test's rebuild marker moved with it. Face
+order, n-gons, derived edges and the token path are unchanged; the new
+`test_bulk_rebuild_keeps_face_order_and_ngons` compares the full loop/edge table
+against a `from_pydata` reference.
 
 **Gaps:** duplicate section names at *apply* time are unreachable from a decoded
 frame (the codec rejects duplicates and `_apply` receives a dict); the aggregate
@@ -1037,8 +1067,8 @@ owner. The direct owner guard decodes an `ErrorFrame` and checks the optional
 ### 3.5 `Publication` — hello/schema dirty flags and document snapshot
 
 **Entry points:** `Publish`, `Send`, `SendPublication`, `StagesChangedLocked`,
-`CaptureUnits`, `CaptureDocumentSnapshot`, `ReadDocumentUnits`,
-`SetUnitsSnapshotForTest`, `DocumentScale`.
+`MarkDirtyLocked`, `CaptureUnits`, `CaptureDocumentSnapshot`,
+`ReadDocumentUnits`, `SetUnitsSnapshotForTest`, `DocumentScale`.
 
 **Must not change:**
 
@@ -1051,6 +1081,11 @@ owner. The direct owner guard decodes an `ErrorFrame` and checks the optional
   snapshot; it never reads `RhinoDoc`/`GH_Document` from the socket or sender.
 - A schema for a conflicted key is withheld; a schema for an unknown stage is
   logged and ignored.
+- T8: the published-view generation is bumped only when the derived
+  stages/roles/parameters change (or the connection/doc units change). A clean
+  heartbeat therefore returns before snapshotting stages or computing a schema
+  signature; a change marked while a send is in flight stays pending. Hello and
+  schema content are unchanged.
 
 **Existing tests:**
 
@@ -1060,7 +1095,8 @@ owner. The direct owner guard decodes an `ErrorFrame` and checks the optional
   a stage out`, `a stage in republishes hello`, `removing a stage in
   republishes hello`, `hello reports has_stage_in per key`, `schema stage`,
   `schema declaration`, `unchanged schema is quiet`, `changed schema is sent`,
-  `removing a Param drops its schema declaration`, `registration captures the
+  `a clean publication sends no hello`, `removing a Param drops its schema
+  declaration`, `registration captures the
   UI thread`, `a socket-like thread is not the UI thread`, `hello publishes the
   cached unit name`, `a unit change republishes hello`.
 - `ComponentTests`: `a conflicted key has no schema declaration`, `a
@@ -1255,7 +1291,8 @@ managed grammar tests still cover the full inbound matrix.
 
 ### 4.2 Emit (outbound), `DefinitionWriter`, `DefinitionTableWriter`
 
-**Entry points:** `Instances.Emit`, `InstanceEmit.Emit`, `DefinitionWriter.Definition`,
+**Entry points:** `Instances.Emit`, `InstanceEmit.Emit` (optional caller
+`RhinoDoc` after `counts`), `DefinitionWriter.Definition`,
 `DefinitionTableWriter.Write/TryGet/AttributeCount/PeerSupportsParts`,
 `NestedRow`, `DefinitionContent`/`GeometryPart`.
 
@@ -1322,7 +1359,10 @@ the wine suite. The T7 probe emitted a three-part definition containing a real
 Mesh, Curve and Point, built it back to three objects and checked the
 single-part legacy namespace and the `blocks/2` fallback split. `CheckNativeEmit`
 still skips under wine; the managed `DefinitionTableWriter` tests remain the
-local grammar proof.
+local grammar proof. **T8:** `Emit` accepts the caller's `RhinoDoc` and uses
+`RhinoDoc.ActiveDoc` only when it is omitted; Stage Out passes its own
+`OnPingDocument().RhinoDocument`. The wire table, rows and fallback are
+unchanged.
 
 ### 4.3 Conversion/Attributes per-kind dispatch
 

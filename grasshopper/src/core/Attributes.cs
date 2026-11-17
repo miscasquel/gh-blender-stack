@@ -682,11 +682,11 @@ namespace Stageloom.Core
             if (section.Dtype != expected)
                 return section.Name + " must be " + expected + ", not "
                     + (section.Dtype ?? "(missing)");
-            if (section.Raw == null)
+            if (!section.HasBytes)
                 return section.Name + " has no bytes";
             int itemSize = expected == "u8" ? 1 : 4;
-            if (section.Raw.Length % itemSize != 0)
-                return section.Name + " length " + section.Raw.Length
+            if (section.ByteLength % itemSize != 0)
+                return section.Name + " length " + section.ByteLength
                     + " is not a multiple of " + itemSize;
             return null;
         }

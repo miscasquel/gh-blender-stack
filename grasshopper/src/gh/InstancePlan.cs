@@ -78,21 +78,21 @@ namespace Stageloom
             if (positions.Dtype != "f32")
                 throw new FrameException("bad_frame", positions.Name + " must be f32, not "
                     + (positions.Dtype ?? "(missing)"));
-            if (positions.Raw == null)
+            if (!positions.HasBytes)
                 throw new FrameException("bad_frame", positions.Name + " has no bytes");
-            if (positions.Raw.Length % 12 != 0)
+            if (positions.ByteLength % 12 != 0)
                 throw new FrameException("bad_frame", positions.Name + " has "
-                    + positions.Raw.Length + " bytes; positions are xyz triples");
-            int points = positions.Raw.Length / 12;
+                    + positions.ByteLength + " bytes; positions are xyz triples");
+            int points = positions.ByteLength / 12;
 
             if (radii != null)
             {
                 if (radii.Dtype != "f32")
                     throw new FrameException("bad_frame", radii.Name + " must be f32, not "
                         + (radii.Dtype ?? "(missing)"));
-                if (radii.Raw == null || radii.Raw.Length != points * 4)
+                if (!radii.HasBytes || radii.ByteLength != points * 4)
                     throw new FrameException("bad_frame", radii.Name + " has "
-                        + (radii.Raw == null ? 0 : radii.Raw.Length) + " bytes for "
+                        + (radii.HasBytes ? radii.ByteLength : 0) + " bytes for "
                         + points + " point(s)");
             }
             if (colors != null)
@@ -100,9 +100,9 @@ namespace Stageloom
                 if (colors.Dtype != "u8")
                     throw new FrameException("bad_frame", colors.Name + " must be u8, not "
                         + (colors.Dtype ?? "(missing)"));
-                if (colors.Raw == null || colors.Raw.Length != points * 4)
+                if (!colors.HasBytes || colors.ByteLength != points * 4)
                     throw new FrameException("bad_frame", colors.Name + " has "
-                        + (colors.Raw == null ? 0 : colors.Raw.Length) + " bytes for "
+                        + (colors.HasBytes ? colors.ByteLength : 0) + " bytes for "
                         + points + " point(s); colours are RGBA");
             }
         }

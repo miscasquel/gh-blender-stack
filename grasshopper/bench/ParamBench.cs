@@ -2,9 +2,12 @@
 //
 // This measures the pure managed layer that the Blender matrix cannot see:
 // Json.FormatDouble over the number corpus, ParamValues.Cast/JsonValue for
-// every declared parameter type, and the canonical JSON/schema-header encode
-// for a representative 100-parameter stage. It does not measure RhinoCommon or
-// Grasshopper object allocation, Stage In conversion, or the solve.
+// every declared parameter type, the canonical JSON/schema-header encode for a
+// representative 100-parameter stage, and the frame/section decode path over a
+// 100k-triangle mesh frame (whole-frame decode and typed section access). It
+// does not measure RhinoCommon or Grasshopper object allocation, Stage In
+// conversion, publication or the solve; those are Rhino/GH-only paths and are
+// recorded as skips in benchmarks/README.md.
 //
 //     StageloomParamBench.exe > result.json
 //
@@ -82,9 +85,9 @@ namespace Stageloom.Bench
             meta["processor_count"] = Environment.ProcessorCount;
             meta["samples"] = Samples;
             meta["note"] =
-                "Measures the pure C# JSON/parameter layer only; it excludes "
-                + "RhinoCommon/Grasshopper object allocation, Stage In conversion "
-                + "and the solve.";
+                "Measures the pure C# JSON/parameter layer and the frame/section "
+                + "decode path only; it excludes RhinoCommon/Grasshopper object "
+                + "allocation, Stage In conversion, publication and the solve.";
             return meta;
         }
 
@@ -94,6 +97,7 @@ namespace Stageloom.Bench
             metrics.Add(FormatDoubleMetric());
             metrics.AddRange(ParamValueMetrics());
             metrics.AddRange(SchemaMetrics());
+            metrics.AddRange(FrameMetrics());
             return metrics;
         }
 
@@ -212,6 +216,93 @@ namespace Stageloom.Bench
                 1.0,
                 50,
                 delegate { _sink = FrameCodec.Encode(schema, null); }));
+            return metrics;
+        }
+
+        /// <summary>One encoded 100k-triangle mesh frame: the same section shape
+        /// the link decodes and the Stage In converters read.</summary>
+        private sealed class FrameCorpus
+        {
+            public byte[] Bytes;
+            public Section Verts;
+            public Section Counts;
+            public Section Indices;
+        }
+
+        private static FrameCorpus BuildFrameCorpus()
+        {
+            const int n = 225;
+            int vertices = n * n;
+            int quads = (n - 1) * (n - 1);
+            var positions = new float[vertices * 3];
+            for (int i = 0; i < positions.Length; i++)
+                positions[i] = (float)(i % 17) * 0.125f;
+            var counts = new uint[quads];
+            var indices = new uint[quads * 4];
+            for (int quad = 0; quad < quads; quad++)
+            {
+                counts[quad] = 4;
+                int x = quad % (n - 1);
+                int y = quad / (n - 1);
+                int a = y * n + x;
+                indices[quad * 4] = (uint)a;
+                indices[quad * 4 + 1] = (uint)(a + n);
+                indices[quad * 4 + 2] = (uint)(a + n + 1);
+                indices[quad * 4 + 3] = (uint)(a + 1);
+            }
+            var header = new Dictionary<string, object>();
+            header["type"] = "request";
+            header["stage"] = "bench-stage";
+            var sections = new List<Section>();
+            var corpus = new FrameCorpus();
+            corpus.Verts = Section.Floats("mesh.verts", positions);
+            corpus.Counts = Section.U32("mesh.face_counts", counts);
+            corpus.Indices = Section.U32("mesh.face_indices", indices);
+            sections.Add(corpus.Verts);
+            sections.Add(corpus.Counts);
+            sections.Add(corpus.Indices);
+            corpus.Bytes = FrameCodec.Encode(header, sections);
+            return corpus;
+        }
+
+        private static List<Metric> FrameMetrics()
+        {
+            FrameCorpus corpus = BuildFrameCorpus();
+            var metrics = new List<Metric>();
+            metrics.Add(Measure(
+                "frame_decode",
+                "ms/frame",
+                1.0,
+                10,
+                delegate
+                {
+                    DecodedFrame decoded = FrameCodec.Decode(corpus.Bytes);
+                    _sink = decoded.Sections.Count + decoded.Header.Count;
+                }));
+            metrics.Add(Measure(
+                "section_floats",
+                "ms/op",
+                1.0,
+                100,
+                delegate { _sink = corpus.Verts.ToFloats(); }));
+            metrics.Add(Measure(
+                "section_u32",
+                "ms/op",
+                1.0,
+                100,
+                delegate { _sink = corpus.Indices.ToU32(); }));
+            metrics.Add(Measure(
+                "frame_mesh_arrays",
+                "ms/frame",
+                1.0,
+                10,
+                delegate
+                {
+                    DecodedFrame decoded = FrameCodec.Decode(corpus.Bytes);
+                    _sink = decoded.Find("mesh.verts").ToFloats();
+                    _sink = decoded.Find("mesh.face_counts").ToU32();
+                    _sink = decoded.Find("mesh.face_indices").ToU32();
+                }));
             return metrics;
         }
 

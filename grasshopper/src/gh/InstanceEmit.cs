@@ -23,11 +23,12 @@ namespace Stageloom
                                 List<Dictionary<string, object>> definitions,
                                 List<WireWarning> warnings,
                                 bool peerSupportsParts,
-                                Dictionary<string, object> counts = null)
+                                Dictionary<string, object> counts = null,
+                                RhinoDoc document = null)
         {
             if (instances == null || instances.Count == 0) return;
             var writer = new DefinitionWriter(scale, sections, attributes, definitions, warnings,
-                                              peerSupportsParts);
+                                              peerSupportsParts, document);
             var refDef = new List<uint>();
             var transforms = new List<float>();
             foreach (GH_InstanceReference instance in instances)
@@ -113,6 +114,7 @@ namespace Stageloom
             private readonly double _scale;
             private readonly List<WireWarning> _warnings;
             private readonly DefinitionTableWriter _table;
+            private readonly RhinoDoc _document;
             private readonly Dictionary<string, DefinitionContent> _contents =
                 new Dictionary<string, DefinitionContent>(StringComparer.Ordinal);
 
@@ -120,10 +122,12 @@ namespace Stageloom
                                     List<Dictionary<string, object>> attributes,
                                     List<Dictionary<string, object>> definitions,
                                     List<WireWarning> warnings,
-                                    bool peerSupportsParts)
+                                    bool peerSupportsParts,
+                                    RhinoDoc document)
             {
                 _scale = scale;
                 _warnings = warnings;
+                _document = document;
                 _table = new DefinitionTableWriter(sections, attributes, definitions,
                                                    warnings, peerSupportsParts);
             }
@@ -144,7 +148,11 @@ namespace Stageloom
 
                 if (referenceId != Guid.Empty)
                 {
-                    RhinoDoc document = RhinoDoc.ActiveDoc;
+                    // The caller's document wins: a solve already knows which
+                    // document owns the component. The ActiveDoc fallback keeps
+                    // the public facade usable from a script/tests without
+                    // changing the wire result.
+                    RhinoDoc document = _document == null ? RhinoDoc.ActiveDoc : _document;
                     InstanceDefinition docDef = document == null
                         ? null : document.InstanceDefinitions.Find(referenceId, true);
                     if (docDef == null)

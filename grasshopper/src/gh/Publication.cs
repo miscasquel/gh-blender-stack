@@ -31,6 +31,21 @@ namespace Stageloom
         private static string _cachedUnits = "Meters";
         private static double _cachedUnitScale = 1.0;
 
+        // A publication is rebuilt only when the owner says something changed.
+        // RebuildPublicationLocked compares the derived view and bumps this
+        // generation; a heartbeat with no change returns before snapshotting or
+        // computing a schema signature. The generation (not a bool) keeps a
+        // mark made while a publication is in flight from being cleared by it.
+        private static long _dirtyGeneration = 1;       // under State
+        private static long _publishedGeneration = 0;   // under State
+
+        /// <summary>Record that the published view may have changed. Callers
+        /// hold State.</summary>
+        internal static void MarkDirtyLocked()
+        {
+            _dirtyGeneration++;
+        }
+
         private static DateTime LastPublishAt()
         {
             return new DateTime(Interlocked.Read(ref _lastPublishTicks), DateTimeKind.Utc);
@@ -77,11 +92,14 @@ namespace Stageloom
         {
             _publishedThisConnection = false;
             _lastSchema.Clear();
+            MarkDirtyLocked();
+            _publishedGeneration = -1;
         }
 
         internal static void ResetConnectionLocked()
         {
             _lastSchema.Clear();
+            MarkDirtyLocked();
         }
 
         internal static void Clear()
@@ -96,6 +114,8 @@ namespace Stageloom
                 _cachedUnits = "Meters";
                 _cachedUnitScale = 1.0;
                 _lastUnits = "";
+                MarkDirtyLocked();
+                _publishedGeneration = -1;
             }
         }
 
@@ -103,6 +123,16 @@ namespace Stageloom
         {
             MarkPublished();
             if (!LinkConnection.Connected) return;
+            long generation;
+            lock (LinkSync.State)
+            {
+                generation = _dirtyGeneration;
+                // Nothing changed since the last successful publication and a
+                // hello has already gone out on this connection: a heartbeat
+                // must not snapshot every stage or re-encode every schema.
+                if (_publishedThisConnection && generation == _publishedGeneration)
+                    return;
+            }
             Dictionary<string, bool> stages;
             HashSet<string> stageIns;
             HashSet<string> stageOuts;
@@ -176,7 +206,7 @@ namespace Stageloom
             foreach (KeyValuePair<string, List<Dictionary<string, object>>> kv in paramsByStage)
             {
                 // Publish a schema only when its canonical content changes; the
-                // periodic hello remains the safety net.
+                // dirty generation has already forced this publication.
                 string signature = Json.WriteCanonical(kv.Value);
                 bool changed;
                 lock (LinkSync.State)
@@ -195,6 +225,13 @@ namespace Stageloom
                 foreach (Dictionary<string, object> p in kv.Value) list.Add(p);
                 schema["params"] = list;
                 LinkOutbox.Enqueue(FrameCodec.Encode(schema, null));
+            }
+
+            lock (LinkSync.State)
+            {
+                // A change marked while this publication was in flight stays
+                // pending for the next heartbeat; do not clear it.
+                if (_dirtyGeneration == generation) _publishedGeneration = generation;
             }
         }
 
@@ -238,6 +275,7 @@ namespace Stageloom
             ReadDocumentUnits(document, out units, out scale);
             lock (LinkSync.State)
             {
+                if (_cachedUnits != units || _cachedUnitScale != scale) MarkDirtyLocked();
                 _cachedUnits = units;
                 _cachedUnitScale = scale;
             }
@@ -258,6 +296,9 @@ namespace Stageloom
             catch (Exception) { }
             lock (LinkSync.State)
             {
+                if (_cachedUnits != units || _cachedUnitScale != scale
+                    || (!string.IsNullOrEmpty(name) && name != _lastDocName))
+                    MarkDirtyLocked();
                 _cachedUnits = units;
                 _cachedUnitScale = scale;
                 if (!string.IsNullOrEmpty(name)) _lastDocName = name;
@@ -268,7 +309,9 @@ namespace Stageloom
         {
             lock (LinkSync.State)
             {
-                _cachedUnits = string.IsNullOrEmpty(units) ? "Meters" : units;
+                string next = string.IsNullOrEmpty(units) ? "Meters" : units;
+                if (_cachedUnits != next || _cachedUnitScale != scale) MarkDirtyLocked();
+                _cachedUnits = next;
                 _cachedUnitScale = scale;
             }
         }

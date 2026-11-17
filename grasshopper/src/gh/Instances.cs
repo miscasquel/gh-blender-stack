@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using Grasshopper.Kernel.Types;
+using Rhino;
 using Rhino.Geometry;
 using Stageloom.Core;
 
@@ -39,10 +40,11 @@ namespace Stageloom
                                 List<Dictionary<string, object>> definitions,
                                 List<WireWarning> warnings,
                                 bool peerSupportsParts,
-                                Dictionary<string, object> counts = null)
+                                Dictionary<string, object> counts = null,
+                                RhinoDoc document = null)
         {
             InstanceEmit.Emit(instances, scale, sections, attributes, definitions, warnings,
-                              peerSupportsParts, counts);
+                              peerSupportsParts, counts, document);
         }
     }
 }

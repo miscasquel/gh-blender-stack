@@ -12,6 +12,7 @@ using System.Drawing;
 using GH_IO.Serialization;
 using Grasshopper.Kernel;
 using Grasshopper.Kernel.Types;
+using Rhino;
 using Rhino.Geometry;
 using Stageloom.Core;
 
@@ -340,9 +341,11 @@ namespace Stageloom
                     // instance references name, plus the inst.* row pair (§5.2).
                     // Emit also adds the definitions/instances counts.
                     var definitions = new List<Dictionary<string, object>>();
+                    GH_Document owner = OnPingDocument();
                     Instances.Emit(instances, scale, sections, attributes,
                                    definitions, warnings,
-                                   GhLink.PeerSupports(GhLink.Blocks2Capability), counts);
+                                   GhLink.PeerSupports(GhLink.Blocks2Capability), counts,
+                                   owner == null ? null : owner.RhinoDocument);
                     // Present even with no blocks: a reader should not have to
                     // branch on section names to tell a plain response from an
                     // instanced one.

@@ -149,6 +149,19 @@ IEEE-754 rounding.
 decodes and applies in sequence; it is not a sum of independently warmed phase
 timings.
 
+`pipeline.100k.apply_fresh_ms` measures the full topology build. T8 replaced the
+per-face Python table plus `from_pydata` with one validated bulk
+`vertices`/`loops`/`polygons` write; the metric fell from 77.95/87.13 ms to
+8.96/9.10 ms p50/p95 with the same face order, n-gons and token path. The metric
+set is unchanged, so the 2026-11-17 best-of-three baseline remains the gate
+reference; no baseline rebuild was needed.
+
+`playback.frame_ms` is the timer send-to-apply frame. T8 re-measured it without
+editing the playback path: the stored baseline is 12.8405/13.3398 ms and the
+accepted gate is 12.7994/13.2626 ms p50/p95. The 13.6–13.8 ms reading in the
+2026-11-16 handoff does not reproduce; see the performance ledger's T8 section
+for the three solo pre-edit runs and the host-state caveat.
+
 The idle pass is not gated. It times 1000 timer ticks and divides, but even the
 amortized value is about 3 µs; 5% of that is below the timer/scheduler noise
 floor (a p95-only run produced a +13% swing with no code change). `bench.py`
@@ -207,21 +220,42 @@ mutation; it is part of the full `scripts/check-all` gate.
 
 ## C# parameter/schema microbenchmark
 
-The Blender matrix cannot see the C# parameter path. `scripts/bench-gha` builds
-`grasshopper/bench/ParamBench.cs` with the same wine/Mono `csc` environment as
-the console suites and writes a JSON result under `benchmarks/results/`:
+The Blender matrix cannot see the C# parameter path or the frame decoder.
+`scripts/bench-gha` builds `grasshopper/bench/ParamBench.cs` with the same
+wine/Mono `csc` environment as the console suites and writes a JSON result under
+`benchmarks/results/`:
 
 ```bash
-scripts/bench-gha benchmarks/results/2026-11-16-linux-csharp.json
+scripts/bench-gha benchmarks/results/2026-11-17-linux-csharp-t8.json
 ```
 
 It measures `Json.FormatDouble` over a representative double corpus
 (`1e15`/`1e16`, `-0.0`, integers-as-doubles, shortest-repr values), every
-`ParamValues.Cast`/`ParamValues.JsonValue` parameter type, and the canonical
-JSON/schema-frame encode for a 100-parameter stage. It is separate from
+`ParamValues.Cast`/`ParamValues.JsonValue` parameter type, the canonical
+JSON/schema-frame encode for a 100-parameter stage, and the frame/section decode
+path over a 100k-triangle mesh frame (`frame_decode`, `section_floats`,
+`section_u32`, `frame_mesh_arrays`). It is separate from
 `StageloomCoreTests.exe`, so normal test runs do not pay for it. The result
-measures the pure JSON/parameter layer only; it excludes RhinoCommon/Grasshopper
-object allocation, Stage In conversion and the solve.
+measures the pure managed layer only; it excludes RhinoCommon/Grasshopper object
+allocation, Stage In conversion, publication and the solve.
+
+The decode cases are the T8 benchmark: a decoded `Section` is a view into the
+frame, `ByteLength` reads its extent without a copy, and `Raw` materialises one
+copy on demand. `frame_decode` fell from 0.4556/0.5167 ms to 0.0050/0.0055 ms
+p50/p95, and `frame_mesh_arrays` from 0.9210/1.0338 to 0.4434/0.4684 ms; the
+remaining typed copy (`section_floats`/`section_u32`) is within sub-millisecond
+noise. The result file is stored at
+`results/2026-11-17-linux-csharp-t8.json`; the pre-change measurement of the
+same new cases is `results/2026-11-17-linux-csharp-t8-before.json`.
+
+**Rhino/GH-only skips.** `Conversion.BuildMesh`/`MeshSections` (RhinoCommon
+geometry), `Publication.SendPublication` (a `GH_Document` and connected
+`LinkConnection`) and `InstanceEmit`'s document lookup (a Rhino document) are
+not measured by this bench. The local wine harness has no RhinoCore; the
+console suites print their `SKIP native …` lines, and the T7 native probe is the
+behaviour proof for emit/build. No microbench number is claimed for those
+paths.
+
 
 ## Live Rhino measurement
 

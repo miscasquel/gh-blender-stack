@@ -193,9 +193,14 @@ namespace Stageloom.Tests.Console
                     "params=" + Json.WriteCanonical(schemaParams));
 
                 // 4b. an unchanged schema is quiet; a changed declaration is
-                //     sent again. The periodic hello remains the safety net.
+                //     sent again. A clean publication sends neither schema nor
+                //     hello, and a dirty generation forces the next publish.
                 GhLink.Publish(null);
                 Check("unchanged schema is quiet", NoFrameOfType(server, "schema", 600), "");
+                // A clean publication must also stay quiet for hello: the
+                // heartbeat is allowed to skip its snapshot and schema encodes
+                // when no owner marked a change.
+                Check("a clean publication sends no hello", NoFrameOfType(server, "hello", 600), "");
                 declaration["default"] = 3.0;
                 GhLink.PublishParam(stage, "k1", declaration);
                 GhLink.Publish(null);

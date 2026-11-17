@@ -273,7 +273,8 @@ def sections_to_mesh(mesh, sections, notes=None, topology=None, previous=None):
 
     Exactly one complete group is selected first (``select_mesh_group``). Its
     positions are written with ``foreach_set`` only when the topology matches;
-    otherwise the mesh is rebuilt with ``clear_geometry`` + ``from_pydata``.
+    otherwise the validated table is written in bulk with
+    ``vertices.add``/``loops.add``/``polygons.add`` and ``foreach_set``.
 
     ``topology`` is the producer's additive mesh-topology token (protocol §4.4)
     and ``previous`` is the token stored with the helper's displayed geometry.
@@ -331,9 +332,7 @@ def sections_to_mesh(mesh, sections, notes=None, topology=None, previous=None):
     if same_topology:
         mesh.vertices.foreach_set("co", verts.reshape(-1))
     else:
-        mesh.clear_geometry()
-        faces = _faces_from(counts, indices)
-        mesh.from_pydata(verts.tolist(), [], faces)
+        _rebuild_topology(mesh, verts, counts, indices)
 
     colors = by_name.get("mesh.colors") if group == "mesh" else None
     write_colors(
@@ -356,6 +355,36 @@ def sections_to_mesh(mesh, sections, notes=None, topology=None, previous=None):
     return mesh
 
 
+def _rebuild_topology(mesh, verts, counts, indices):
+    """Replace the mesh topology with one bulk array write.
+
+    The whole group is already validated (contiguous N×3 float positions, face
+    counts with every entry ≥ 3, and a flat vertex-index array that sums to the
+    counts). ``vertices.add``/``loops.add``/``polygons.add`` plus
+    ``foreach_set`` writes that validated table in place, which avoids building
+    a Python tuple per face and the ``from_pydata`` conversion. Face order,
+    n-gons and derived edges are identical to the old builder.
+    """
+    mesh.clear_geometry()
+    if len(verts):
+        mesh.vertices.add(len(verts))
+        mesh.vertices.foreach_set("co", verts.reshape(-1))
+    if len(indices):
+        mesh.loops.add(len(indices))
+        mesh.loops.foreach_set("vertex_index", indices)
+    if len(counts):
+        mesh.polygons.add(len(counts))
+        starts = np.empty(len(counts), dtype=np.int32)
+        starts[0] = 0
+        if len(counts) > 1:
+            starts[1:] = np.cumsum(counts[:-1], dtype=np.int32)
+        mesh.polygons.foreach_set("loop_start", starts)
+    # Edges are derived data: the crease writer and the wire reader both need
+    # them immediately, so build them in this update rather than leaving them
+    # to a later lazy evaluation.
+    mesh.update(calc_edges=True)
+
+
 def _topology_matches(mesh, counts, indices):
     """The verified-path comparison: read the mesh's loops and compare them.
 
@@ -369,15 +398,6 @@ def _topology_matches(mesh, counts, indices):
     mesh.loops.foreach_get("vertex_index", current_indices)
     return bool(np.array_equal(current_counts, counts)
                 and np.array_equal(current_indices, indices))
-
-
-def _faces_from(counts, indices):
-    faces = []
-    at = 0
-    for count in counts.tolist():
-        faces.append(tuple(int(i) for i in indices[at : at + count]))
-        at += count
-    return faces
 
 
 def write_colors(mesh, colors):

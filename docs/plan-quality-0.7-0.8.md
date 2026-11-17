@@ -1,10 +1,10 @@
 # Stageloom 0.7.0 / 0.8.0 — quality plan (rev. 2)
 
 **Status:** 0.7.0 complete, 2026-11-16. 0.8.0 is in progress: T1 (baseline,
-performance gate, code health) through T7 (`Instances` split and table-driven
-conversion) are complete and recorded below. W7's `geometry_io`, engine-object,
-`GhLink` and `Instances` splits are done; W8 (performance, T8) remains, with the
-remaining W9/W10 items.
+performance gate, code health) through T8 (performance follow-through) are
+complete and recorded below. W7's `geometry_io`, engine-object, `GhLink` and
+`Instances` splits are done; W8 (performance, T8) is done, with the remaining
+W9/W10 items.
 **Baseline:** v0.6.0 plus the 2026-11-15 audit (seven module reviews), plus the
 post-audit bake/upstream work (`102f9c8..254d796`). That was the starting point:
 305 Blender headless tests in ~86 s, 57 core tests, C# and extension suites
@@ -74,6 +74,21 @@ p50 is +2.55% (`total_ms`, p95 +3.36%) and no metric exceeds +5%. A native Rhino
 probe built and emitted a real mesh/curve/point definition, round-tripped it and
 checked the `blocks/2` fallback; the wine harness still prints the native skips.
 See [`seams-0.8.md`](seams-0.8.md) §4 and the ledger.
+
+T8 then measured before editing, fixed the three highest-value remaining costs
+and kept every gated metric green. Production is **24,918 physical / 19,945 code
+lines across 69 files** (+207 physical / +145 code): the mesh rebuild writes
+validated arrays through `vertices.add`/`loops.add`/`polygons.add`, decoded C#
+sections are owner/offset/length views with the `Raw` contract preserved, and a
+publication generation makes a clean heartbeat skip its snapshot and schema
+encodes. `pipeline.100k.apply_fresh_ms` fell **77.95/87.13 → 8.96/9.10 ms**
+(−88.51%/−89.55%); C# `frame_decode` fell **0.4556/0.5167 → 0.0050/0.0055 ms**
+and `frame_mesh_arrays` **0.9210/1.0338 → 0.4434/0.4684 ms**. The full gate
+passed 26/26 in **159.7 s**; the worst positive p50 is **+1.81%**
+(`total_ms`, p95 +3.93% on the unchanged in-place apply). Playback measured **12.7994/13.2626 ms** vs
+the stored 12.8405/13.3398: the handoff's +7–9% does not reproduce. The 455 Blender tests
+(+1 n-gon rebuild) and **687** C# checks (+2) pass; the wine harness still
+prints its native skips. See the T8 verification below and the ledger.
 
 **0.7.0 completion record (2026-11-16).** Q1–Q19 are complete; Q5 was merged
 into Q4 (the cache and the `Live` toggle were one removal). The release was
@@ -850,10 +865,57 @@ acceptance criteria, then committed before the next starts.
 | T5 | Blender engine object | explicit `Engine`/runtime records; no package-global hub; lifecycle/playback/bake tests unchanged | Done 2026-11-17; 26/26 on the 2026-11-17 best baseline |
 | T6 | `GhLink` split | registry/connection/scheduler/protocol/publication/slots split; document isolation and threading preserved | Done 2026-11-17; 685 C# checks, 26/26 in 173.1 s |
 | T7 | `Instances` split and table-driven conversion | single-part/multi-part/nested/attribute round trips unchanged; production LOC down or flat | Done 2026-11-17; 685 C# checks, 26/26 in 176.1 s; native probe green |
-| T8 | Performance follow-through | playback resolved or traded; p50/p95 within 5%; each fixed path measured | Pending |
+| T8 | Performance follow-through | playback resolved or traded; p50/p95 within 5%; each fixed path measured | Done 2026-11-17; 26/26 in 159.7 s, worst p50 +1.81%; fresh apply −88.5%, C# decode −98.9% |
 | T9 | Lean/docs/CI/build/framework | protocol tables generated; docs/ADR truth pass; reproducible artifacts; framework go/no-go | Pending |
 | T10 | Verification | fuzz, coverage, scale and 1-hour soak green | Pending |
 | T11 | 0.8.0 release | version/changelog/artifacts match the tagged commit | Pending |
+
+### T8 verification (performance follow-through)
+
+T8 measured before editing, then fixed the highest-value remaining costs. It
+changes no protocol, fixture, `out_hash` or topology-token byte.
+
+- **Blender mesh rebuild.** `geometry_io/mesh.py` writes the validated
+  vertex/loop/polygon table in one bulk pass instead of a Python tuple per face
+  plus `from_pydata`. The mixed 3/4/5-gon regression compares loop start/total
+  and edge count against a `from_pydata` reference, and the existing
+  `test_identical_topology_takes_the_position_only_fast_path` now patches the
+  rebuild owner. `pipeline.100k.apply_fresh_ms` **77.9507 / 87.1304 →
+  8.9585 / 9.1022 ms** (−88.51% / −89.55%).
+- **C# section views.** A decoded `Section` is a frame owner/offset/length
+  view; `ByteLength` reads the extent without a copy, `Raw` still returns the
+  bytes with one cached materialisation, and typed access copies once. Fixtures,
+  re-encode and hashes are byte-identical. `frame_decode` **0.4556 / 0.5167 →
+  0.0050 / 0.0055 ms**; `frame_mesh_arrays` **0.9210 / 1.0338 → 0.4434 /
+  0.4684 ms**. `Program.CheckSectionViews` pins the view/Raw semantics.
+- **Publication generation.** `RebuildPublicationLocked` marks a generation
+  only when the derived stages/roles/parameters change; connection open and
+  doc/unit changes mark it too. A clean heartbeat returns before snapshotting
+  or encoding signatures, and a mark made during a send stays pending.
+  `LinkTests` adds "a clean publication sends no hello"; schema/reconnect/unit
+  tests are unchanged and green.
+- **Instance owner.** `InstanceEmit` accepts the caller's `RhinoDoc`; Stage Out
+  passes `OnPingDocument().RhinoDocument`, and the `ActiveDoc` fallback remains
+  for scripts/tests. The wire result is unchanged.
+- **Playback.** Three quiet pre-edit solo runs measured p50 **13.0435 / 12.8746
+  / 12.9812 ms** (p95 13.4197 / 13.3667 / 13.3492) against the stored
+  12.8405/13.3398; the accepted gate measured **12.7994 / 13.2626**. That is
+  +0.78% p50 against the historical 0.6 same-machine 12.7 ms, not +7–9%. The
+  timer path was not edited; the exception is accepted with the actual ratio and
+  the loaded-host caveat in the ledger.
+- **Deferred, measured.** `ensure_group` 26.7 µs/apply, `_ordered_stages` 6.5 µs,
+  `props.schema_of` 0.3 µs, `props.canonical_json` 2.5 µs,
+  `bake.token_stages("")` 0.1 µs, `_flush_edit_mode` 0.4 µs and `_ensure_index`
+  0.5 µs on the measured path. No C# profiler showed `StageRegistry`
+  registration/slot scans or `DecodedFrame.Find` hot; `BuildMesh`/`MeshSections`
+  have no verifiable native harness here. They are deferred with those reasons
+  in the ledger, not silently dropped.
+
+The full gate passed **26/26** in **159.7 s**; C# `scripts/test-gha` passed
+**687** checks plus fourteen fixtures (the two native Rhino halves still print
+their skips); the Blender suite is **455** tests plus the offline gate. The
+complete p50/p95 table is in the
+[performance ledger](performance-ledger.md) T8 verification.
 
 **Commit rule:** a task is committed only after its acceptance tests plus
 `scripts/test-core` and the relevant Blender/C# suite pass, and the audit finds

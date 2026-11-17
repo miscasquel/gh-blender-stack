@@ -59,6 +59,8 @@ namespace Stageloom.Tests.Console
 
             CheckDecoderBoundary();
 
+            CheckSectionViews();
+
             CheckFloatText();
 
             CheckNumberCorpus(root);
@@ -1317,6 +1319,58 @@ namespace Stageloom.Tests.Console
             head.Add(0xFF);
             head.AddRange(Encoding.UTF8.GetBytes("\"}"));
             return head.ToArray();
+        }
+
+        /// <summary>A decoded section is a view into the frame. Raw still
+        /// returns the section's bytes (materialised once, mutable without
+        /// corrupting later decodes of the same frame), ByteLength reads the
+        /// frame extent without a copy, and typed access is unchanged.</summary>
+        private static void CheckSectionViews()
+        {
+            var problems = new List<string>();
+            var header = new Dictionary<string, object>();
+            header["type"] = "request";
+            header["stage"] = "views";
+            var floats = Section.Floats("a", new float[] { 1.0f, 2.0f, 3.0f });
+            var bytes = Section.Bytes("b", new byte[] { 9, 8, 7 });
+            byte[] rawFloats = floats.Raw;
+            byte[] rawBytes = bytes.Raw;
+            byte[] frame = FrameCodec.Encode(header, new List<Section> { floats, bytes });
+            DecodedFrame decoded = FrameCodec.Decode(frame);
+            Section a = decoded.Find("a");
+            Section b = decoded.Find("b");
+
+            if (a == null || b == null)
+            {
+                problems.Add("decoded sections are missing");
+            }
+            else
+            {
+                if (a.ByteLength != 12 || b.ByteLength != 3)
+                    problems.Add("ByteLength does not match the frame extent: "
+                        + a.ByteLength + "/" + b.ByteLength);
+                if (!BytesEqual(a.Raw, rawFloats) || !BytesEqual(b.Raw, rawBytes))
+                    problems.Add("Raw does not return the section bytes");
+                byte[] first = a.Raw;
+                if (!object.ReferenceEquals(first, a.Raw))
+                    problems.Add("Raw materialised a second copy");
+
+                // The Raw copy belongs to the section, not to the decoded
+                // frame: mutating it must not rewrite the next decode.
+                first[0] = 0xFF;
+                DecodedFrame again = FrameCodec.Decode(frame);
+                if (again.Find("a").ToFloats()[0] != 1.0f)
+                    problems.Add("mutating Raw changed the frame");
+                if (!BytesEqual(FrameCodec.Encode(
+                        new Dictionary<string, object>(again.Header), again.Sections), frame))
+                    problems.Add("re-encode of a viewed frame is not byte-identical");
+            }
+
+            var nullSection = new Section("c", "u8", null);
+            if (nullSection.HasBytes || nullSection.Raw != null
+                || nullSection.ByteLength != 0)
+                problems.Add("a null payload no longer stays null");
+            Report("section views", problems);
         }
 
         /// <summary>FormatDouble's boundary cases: byte-identical to Python's

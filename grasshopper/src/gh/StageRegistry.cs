@@ -258,6 +258,12 @@ namespace Stageloom
                 claim.ParamKey = key;
                 claim.ParamId = id;
                 claim.Declaration = declaration;
+                // A declaration object can be mutated and republished (the
+                // console suites do exactly that), so reference comparison in
+                // RebuildPublicationLocked cannot prove it unchanged. Mark the
+                // content dirty here; SendPublication still compares canonical
+                // signatures and sends a frame only when one actually changed.
+                Publication.MarkDirtyLocked();
                 RebuildPublicationLocked();
             }
         }
@@ -671,6 +677,12 @@ namespace Stageloom
             // component already running cannot emit a response.
             foreach (string key in conflicts.Keys) RequestScheduler.DropKeyLocked(key);
 
+            bool publishedChanged =
+                !SameEnabled(StageEnabled, enabled)
+                || !SameSet(StageHasIn, hasIn)
+                || !SameSet(StageHasOut, hasOut)
+                || !SameParameterLists(StageParams, parameters);
+
             StageEnabled = enabled;
             StageHasIn = hasIn;
             StageHasOut = hasOut;
@@ -678,6 +690,7 @@ namespace Stageloom
             StageParams = parameters;
             KeyOwners = owners;
             Conflicts = conflicts;
+            if (publishedChanged) Publication.MarkDirtyLocked();
 
             // Keys that left the published view entirely are tombstones.
             var removed = new HashSet<string>(previousKeys);
@@ -714,6 +727,50 @@ namespace Stageloom
         {
             if (claim.Role == ClaimRole.Param) return claim.ParamKey;
             return claim.StageKey;
+        }
+
+        /// <summary>Whether two published stage maps say the same thing.
+        /// Publication uses this to keep a no-op rebuild from dirtying the
+        /// heartbeat: a repeated claim is not a change.</summary>
+        private static bool SameEnabled(Dictionary<string, bool> previous,
+                                        Dictionary<string, bool> next)
+        {
+            if (previous.Count != next.Count) return false;
+            foreach (KeyValuePair<string, bool> pair in next)
+            {
+                bool value;
+                if (!previous.TryGetValue(pair.Key, out value) || value != pair.Value)
+                    return false;
+            }
+            return true;
+        }
+
+        private static bool SameSet(HashSet<string> previous, HashSet<string> next)
+        {
+            if (previous.Count != next.Count) return false;
+            foreach (string value in next)
+                if (!previous.Contains(value)) return false;
+            return true;
+        }
+
+        /// <summary>Whether every published parameter list names the same
+        /// declaration slots. Content changes are marked by PublishParam, which
+        /// cannot use reference identity because a caller may mutate and
+        /// republish one declaration object.</summary>
+        private static bool SameParameterLists(
+            Dictionary<string, List<Dictionary<string, object>>> previous,
+            Dictionary<string, List<Dictionary<string, object>>> next)
+        {
+            if (previous.Count != next.Count) return false;
+            foreach (KeyValuePair<string, List<Dictionary<string, object>>> pair in next)
+            {
+                List<Dictionary<string, object>> old;
+                if (!previous.TryGetValue(pair.Key, out old)) return false;
+                if (old.Count != pair.Value.Count) return false;
+                for (int i = 0; i < old.Count; i++)
+                    if (!object.ReferenceEquals(old[i], pair.Value[i])) return false;
+            }
+            return true;
         }
 
         private static string ConflictMessage(string key, HashSet<Guid> documents)
