@@ -135,7 +135,10 @@ The authoritative roadmap and scope are in [docs/plan.md](docs/plan.md).
   (mac needs testing). Development and testing happen on one Linux machine; the
   build scripts assume `~/.local/share/wine-rhino` and a `rhino8` wine prefix,
   both overridable with the `WINE` and `WINEPREFIX` environment variables.
-  Mono's `csc.exe` (ships with wine) builds the plugin.
+  Mono's `csc.exe` (ships with wine) builds the C# 5 plugin; a
+  `net48`/`net7.0-windows` migration is a recorded no-go through 1.0
+  ([ADR 0019](docs/decisions/0019-keep-csharp5-mono.md)), revisited only after
+  native Windows/Rhino acceptance (1.0 or later).
 
 The Grasshopper half is built from this same repository (`grasshopper/`,
 GPL-3.0-or-later), so no closed component is required. **Without Rhino** the

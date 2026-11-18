@@ -866,7 +866,7 @@ acceptance criteria, then committed before the next starts.
 | T6 | `GhLink` split | registry/connection/scheduler/protocol/publication/slots split; document isolation and threading preserved | Done 2026-11-17; 685 C# checks, 26/26 in 173.1 s |
 | T7 | `Instances` split and table-driven conversion | single-part/multi-part/nested/attribute round trips unchanged; production LOC down or flat | Done 2026-11-17; 685 C# checks, 26/26 in 176.1 s; native probe green |
 | T8 | Performance follow-through | playback resolved or traded; p50/p95 within 5%; each fixed path measured | Done 2026-11-17; 26/26 in 159.7 s, worst p50 +1.81%; fresh apply −88.5%, C# decode −98.9% |
-| T9 | Lean/docs/CI/build/framework | protocol tables generated; docs/ADR truth pass; reproducible artifacts; framework go/no-go | Pending |
+| T9 | Lean/docs/CI/build/framework | protocol tables generated; docs/ADR truth pass; reproducible artifacts; framework go/no-go | T9c no-go recorded 2026-11-18 ([ADR 0019](decisions/0019-keep-csharp5-mono.md)); T9a/T9b pending |
 | T10 | Verification | fuzz, coverage, scale and 1-hour soak green | Pending |
 | T11 | 0.8.0 release | version/changelog/artifacts match the tagged commit | Pending |
 
@@ -916,6 +916,19 @@ The full gate passed **26/26** in **159.7 s**; C# `scripts/test-gha` passed
 their skips); the Blender suite is **455** tests plus the offline gate. The
 complete p50/p95 table is in the
 [performance ledger](performance-ledger.md) T8 verification.
+
+### T9c framework decision (no-go)
+
+**2026-11-18.** The `net48`/`net7.0-windows` spike is a **no-go for 0.8.0**.
+C# 5/Mono and the hand-written `MiniWsClient`/`Json.cs` stay; no transport or
+JSON migration is added now. The reasons are the verified `csc.exe`/wine loop as
+the only development/test path, no `dotnet` SDK or native Mono coverage tooling,
+native Windows/Rhino acceptance deferred until after 0.8.0, and the second
+runtime/platform or replacement dev-loop cost of `net7.0-windows`/`net48`. The
+spike is closed in [ADR 0019](decisions/0019-keep-csharp5-mono.md) and revisits
+only after native Windows acceptance (post-0.8 / 1.0). **T9a and T9b remain
+pending, along with the rest of the T9 scope (protocol tables, docs/CI/build
+truth and reproducible artifacts); T9 is not complete.**
 
 **Commit rule:** a task is committed only after its acceptance tests plus
 `scripts/test-core` and the relevant Blender/C# suite pass, and the audit finds

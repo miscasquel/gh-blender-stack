@@ -22,3 +22,4 @@ Short records of decisions that shape the project. Format: context, decision, co
 | [0016](0016-live-only-stages.md) | Live-only stages; native bake is the offline path | Accepted; supersedes 0008 |
 | [0017](0017-compatibility-shims.md) | Compatibility shims and their removal versions | Accepted; removes the test-only aliases |
 | [0018](0018-official-wheel-only.md) | The official websockets wheel is the only source | Accepted; decides against 0006's vendor fallback |
+| [0019](0019-keep-csharp5-mono.md) | Keep C# 5/Mono through 1.0; .NET spike no-go | Accepted |

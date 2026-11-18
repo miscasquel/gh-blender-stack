@@ -124,6 +124,10 @@ floor.
 - Native B-rep/surface transfer; Breps remain a warned, lossy mesh conversion.
 - Grasshopper 2 / Rhino 9 support; out of scope through 1.0, with no separate
   plan carried in this repository.
+- A .NET framework migration (`net48`/`net7.0-windows`): C# 5/Mono and the
+  hand-written MiniWs/JSON transport remain through 1.0, and the spike is a
+  recorded no-go ([ADR 0019](decisions/0019-keep-csharp5-mono.md)); revisit it
+  only after native Windows/Rhino acceptance (1.0 or later).
 - A custom frame cache or any second offline cache; Freeze and the native Bake
   node are the offline path. A simulation-zone cache stays later R&D.
 
@@ -291,7 +295,7 @@ after 0.8 except fixes required by a gate.
 |---|---|---|
 | **0.6** | Performance harness and instance fix; units matrix; plugin endpoint; bake undo safety | Shipped 2026-11-14 |
 | **0.7** | Quality release: live-only stages, nested/multi-part blocks, bake dependents, codec/geometry hardening, lifecycle/UI/state; custom cache and `Live` removed | Shipped 2026-11-16; full gate green, no known blocker or major from the 2026-11-15 audit |
-| **0.8** | Architecture seams (W7), performance gates (W8), lean/docs/CI/framework (W9), verification (W10); Windows acceptance; tag-triggered distribution | Every module ≥ 8.5; baseline gate green; docs/CI true; Windows matrix passes; reproducible artifacts from a tag |
+| **0.8** | Architecture seams (W7), performance gates (W8), lean/docs/CI (W9), verification (W10), tag-triggered distribution; native Windows/Rhino acceptance deferred beyond 0.8; .NET migration recorded as a no-go ([ADR 0019](decisions/0019-keep-csharp5-mono.md)) | Every module ≥ 8.5; baseline gate green; docs/CI true; reproducible artifacts from a tag; no native-parity or framework-migration claim |
 | **0.9** | Release candidate; soak; freeze protocol v2 and file formats; full acceptance on supported platforms | No open release-blocking defect; all gates below pass |
 | **1.0** | Release | Artifacts, notes and hashes published; support matrix signed off |
 
@@ -386,7 +390,8 @@ The old A1–A10 remain the functional core. Add the release gates that the
 
 - [`protocol.md`](protocol.md) — wire protocol v2.
 - [`decisions/`](decisions/) — architecture decisions, including live-only
-  stages (0016), compatibility shims (0017) and the official wheel (0018).
+  stages (0016), compatibility shims (0017), the official wheel (0018) and the
+  C# 5/Mono no-go (0019).
 - [`extensions-compliance.md`](extensions-compliance.md) — current platform
   compliance record.
 - [`../README.md`](../README.md) — product overview and supported requirements.
