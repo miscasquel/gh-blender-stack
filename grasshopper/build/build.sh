@@ -54,6 +54,22 @@ run_csc \
 [ -f "$MINIWS_OUT" ] || { echo "build failed: $MINIWS_OUT not produced" >&2; exit 1; }
 echo "built $MINIWS_OUT ($(stat -c%s "$MINIWS_OUT") bytes)"
 
+# The frame fuzz campaign: 10,000 fixed-seed mutations of valid frames plus a
+# Json.Parse campaign. The codec and JSON writer have no Rhino references, so
+# this builds and runs without Rhino's managed assemblies.
+FUZZ_OUT="$OUT_DIR/StageloomFuzzTests.exe"
+rm -f "$FUZZ_OUT"
+run_csc \
+  /nologo /target:exe \
+  /out:"$(win_path "$FUZZ_OUT")" \
+  /r:System.Numerics.dll \
+  "$(win_path "$REPO/grasshopper/src/core/Json.cs")" \
+  "$(win_path "$REPO/grasshopper/src/core/ProtocolTables.generated.cs")" \
+  "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
+  "$(win_path "$REPO/grasshopper/tests/console/FuzzTests.cs")"
+[ -f "$FUZZ_OUT" ] || { echo "build failed: $FUZZ_OUT not produced" >&2; exit 1; }
+echo "built $FUZZ_OUT ($(stat -c%s "$FUZZ_OUT") bytes)"
+
 # The attribute-store tests reference RhinoCommon (a managed assembly: the
 # ArchivableDictionary runs without a Rhino process, but the types must be
 # present). They build only where the Rhino install is; the codec tests above

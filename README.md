@@ -10,9 +10,9 @@ curves, points, SubD cages) driven by a real Grasshopper definition, with named
 attributes and Grasshopper blocks (instances, including nested and multi-part
 definitions) travelling both ways, parameters you can edit and keyframe in
 Blender, packaged as a Blender extension. 0.8.0 is in progress on `main`
-(T1–T9 done; T10/T11 remain); the manifest and shipped version
-stay **0.7.0** until the T11 release bump. [DEMO.md](DEMO.md) walks through the
-loop.
+(T1–T9 and T10a done; the T10b coverage/scale/soak and T11 release remain); the
+manifest and shipped version stay **0.7.0** until the T11 release bump.
+[DEMO.md](DEMO.md) walks through the loop.
 
 ```
 Blender                                          Rhino / Grasshopper (wine)
@@ -100,16 +100,20 @@ Blender                                          Rhino / Grasshopper (wine)
 - **Tests.** `scripts/check-all` is the local gate: docs, protocol-table drift,
   core, Blender headless (plus the offline gate), benchmarks, the installed
   extension round trip, the reproducible-zip and `.gha` checks and the C#
-  suites, with per-step timing. The current tree is checked by 132 core tests,
-  455 Blender headless tests, fourteen golden fixtures and the C# suites (689
-  passing checks; the native Rhino halves skip under wine).
+  suites, with per-step timing. The current tree is checked by 133 core tests,
+  468 Blender headless tests, fourteen golden fixtures and the C# suites (689
+  passing checks across the codec fixture runner and eight console suites, plus
+  a fixed-seed 10,000-case frame fuzz; the native Rhino halves skip under
+  wine). The Blender headless suite also runs deterministic randomized
+  geometry, attribute, instance and bake-marker round trips.
   `scripts/check-protocol-tables` (generated tables and fixture inventory),
   `scripts/test-core` (standard library only),
   `scripts/test-blender` (Blender headless against `tools/fake_gh`),
-  `scripts/test-gha` (the C# codec against the golden fixtures, plus the
-  conversion, attribute, instance, transport, link, component and stage
-  suites, under wine), `scripts/test-extension` (installed extension round
-  trip), `scripts/test-reproducible` (two-build extension zip comparison) and
+  `scripts/test-gha` (the C# codec against the golden fixtures, the 10,000-case
+  frame fuzz, plus the conversion, attribute, instance, transport, link,
+  component and stage suites, under wine), `scripts/test-extension` (installed
+  extension round trip), `scripts/test-reproducible` (two-build extension zip
+  comparison) and
   `scripts/test-reproducible-gha` (two-build plus copied-tree `.gha`
   comparison) are its steps.
 

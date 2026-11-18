@@ -1,8 +1,8 @@
 # Stageloom compliance record
 
 **Status:** v0.7.0 is the released compliance baseline; the 0.8.0 quality work
-is in progress (T1–T9 complete; T10/T11 remain; see
-[`plan-quality-0.7-0.8.md`](plan-quality-0.7-0.8.md)). The release version stays
+is in progress (T1–T9 and T10a complete; T10b coverage/scale/soak and T11
+remain; see [`plan-quality-0.7-0.8.md`](plan-quality-0.7-0.8.md)). The release version stays
 `0.7.0` until T11. **1.0 planning** continues in [`plan.md`](plan.md). The
 extensions.blender.org upload is deferred. Release history is in
 [`../CHANGELOG.md`](../CHANGELOG.md) and the GitHub releases.
@@ -126,6 +126,15 @@ The hashes differ from T9a because the zip now ships `core/_protocol_tables.py`
 and the edited core modules, and the `.gha` ships
 `ProtocolTables.generated.cs` plus the edited C# core; the version stays
 `0.7.0`. T11 records the final release-tree hashes.
+
+**0.8.0 T10a verification (2026-11-18).** Tests only; production source and the
+release artifacts are unchanged. The tree has **133 core**, **468 Blender
+headless** and **689 C#** checks, plus the fixed-seed 10,000-case Python and C#
+frame fuzz campaigns. `scripts/test-core` passed in 0.38 s,
+`scripts/test-blender` passed 468 tests in 86.9 s plus the offline gate, and
+`scripts/test-gha` passed the fixture runner and all eight console suites in
+25.5 s. No benchmark or full
+`check-all` was run; T10b owns coverage, scale and the 1-hour soak.
 
 The 1.0 workstreams, platform matrix and release gates are in
 [`plan.md`](plan.md). A new listing packet is prepared from the 1.0 release

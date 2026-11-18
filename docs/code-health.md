@@ -217,7 +217,7 @@ Top-level public Python names and public C# type declarations with no reference 
 | Python | blender/stageloom/blender/ops.py | LINKED_MESSAGE | constant | 0 | 0 | 0 | unreferenced |
 | Python | blender/stageloom/blender/ops.py | STAGELOOM_OT_add_stage | class | 0 | 5 | 0 | non-production consumers |
 | Python | blender/stageloom/blender/ops.py | STAGELOOM_OT_bake | class | 0 | 4 | 0 | non-production consumers |
-| Python | blender/stageloom/blender/ops.py | STAGELOOM_OT_clear_bake | class | 0 | 6 | 0 | non-production consumers |
+| Python | blender/stageloom/blender/ops.py | STAGELOOM_OT_clear_bake | class | 0 | 7 | 0 | non-production consumers |
 | Python | blender/stageloom/blender/ops.py | STAGELOOM_OT_copy_key | class | 0 | 2 | 0 | non-production consumers |
 | Python | blender/stageloom/blender/ops.py | STAGELOOM_OT_freeze | class | 0 | 5 | 0 | non-production consumers |
 | Python | blender/stageloom/blender/ops.py | STAGELOOM_OT_key_all | class | 0 | 3 | 0 | non-production consumers |
@@ -260,9 +260,9 @@ Top-level public Python names and public C# type declarations with no reference 
 | Python | blender/stageloom/blender/ui.py | STAGELOOM_PT_diagnostics | class | 0 | 0 | 0 | unreferenced |
 | Python | blender/stageloom/blender/ui.py | STAGELOOM_PT_panel | class | 0 | 6 | 0 | non-production consumers |
 | Python | blender/stageloom/core/codec.py | HeaderError | class | 0 | 33 | 0 | non-production consumers |
-| Python | blender/stageloom/core/codec.py | INT64_MAX | constant | 0 | 4 | 0 | non-production consumers |
+| Python | blender/stageloom/core/codec.py | INT64_MAX | constant | 0 | 8 | 0 | non-production consumers |
 | Python | blender/stageloom/core/codec.py | INT64_MIN | constant | 0 | 4 | 0 | non-production consumers |
-| Python | blender/stageloom/core/codec.py | MAX_HEADER_BYTES | constant | 0 | 2 | 0 | non-production consumers |
+| Python | blender/stageloom/core/codec.py | MAX_HEADER_BYTES | constant | 0 | 3 | 0 | non-production consumers |
 | Python | blender/stageloom/core/codec.py | MAX_MESSAGE_BYTES | constant | 0 | 2 | 0 | non-production consumers |
 | Python | blender/stageloom/core/codec.py | SectionError | class | 0 | 17 | 0 | non-production consumers |
 | Python | blender/stageloom/core/codec.py | element_count | function | 0 | 0 | 0 | unreferenced |
@@ -515,7 +515,7 @@ Edges from a production file to the file that declares a public type it mentions
 
 ## Test inventory
 
-Source-derived counts; this is not a claim about how many tests a run executed. C# suites use a `Check(...)` helper, so the count is assertion calls rather than methods; `Program.cs` is a fixture runner and contributes no `Check(...)` calls.
+Source-derived counts; this is not a claim about how many tests a run executed. C# suites use a `Check(...)` helper, so the count is assertion calls rather than methods; `Program.cs` is a fixture runner and `FuzzTests.cs` is a campaign runner, so neither contributes `Check(...)` calls.
 
 | suite | file | count | unit |
 |---|---|---|---|
@@ -527,6 +527,7 @@ Source-derived counts; this is not a claim about how many tests a run executed. 
 | Blender headless | blender/tests/headless/test_engine_activity.py | 3 | test_* functions |
 | Blender headless | blender/tests/headless/test_engine_demo.py | 7 | test_* functions |
 | Blender headless | blender/tests/headless/test_engine_facade.py | 8 | test_* functions |
+| Blender headless | blender/tests/headless/test_fuzz_roundtrip.py | 13 | test_* functions |
 | Blender headless | blender/tests/headless/test_geometry_io.py | 18 | test_* functions |
 | Blender headless | blender/tests/headless/test_geometry_io_edges.py | 18 | test_* functions |
 | Blender headless | blender/tests/headless/test_geometry_kinds.py | 29 | test_* functions |
@@ -556,6 +557,7 @@ Source-derived counts; this is not a claim about how many tests a run executed. 
 | C# console | grasshopper/tests/console/ComponentTests.cs | 147 | Check(...) calls |
 | C# console | grasshopper/tests/console/ConversionTests.cs | 37 | Check(...) calls |
 | C# console | grasshopper/tests/console/FakeServer.cs | 0 | Check(...) calls |
+| C# console | grasshopper/tests/console/FuzzTests.cs | 0 | Check(...) calls |
 | C# console | grasshopper/tests/console/InstanceTests.cs | 114 | Check(...) calls |
 | C# console | grasshopper/tests/console/LinkTests.cs | 143 | Check(...) calls |
 | C# console | grasshopper/tests/console/MiniWsTests.cs | 57 | Check(...) calls |
@@ -563,6 +565,7 @@ Source-derived counts; this is not a claim about how many tests a run executed. 
 | C# console | grasshopper/tests/console/StageTests.cs | 2 | Check(...) calls |
 | core | blender/tests/core/test_bench_baseline.py | 16 | test_* functions |
 | core | blender/tests/core/test_codec_boundaries.py | 61 | test_* functions |
+| core | blender/tests/core/test_codec_fuzz.py | 1 | test_* functions |
 | core | blender/tests/core/test_core.py | 35 | test_* functions |
 | core | blender/tests/core/test_core_is_pure.py | 2 | test_* functions |
 | core | blender/tests/core/test_fixtures.py | 8 | test_* functions |

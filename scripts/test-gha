@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Layer C: build the C# suites and run them under wine.
 #
-#     scripts/test-gha               # full suite: codec, transport, conversion, attributes, instances, link, components, stage guard
-#     scripts/test-gha --codec-only  # only StageloomCoreTests.exe; no Rhino managed assemblies
+#     scripts/test-gha               # full suite: codec, frame fuzz, transport, conversion, attributes, instances, link, components, stage guard
+#     scripts/test-gha --codec-only  # codec fixtures + frame fuzz; no Rhino managed assemblies
 #
 # The full suite requires wine with Mono's csc *and* Rhino 8's managed
 # assemblies (RhinoCommon, Grasshopper, GH_IO). A machine with only the codec
@@ -22,7 +22,7 @@ for arg in "$@"; do
 usage: scripts/test-gha [--codec-only]
 
   (default)     full C# suite; requires Rhino 8's managed assemblies
-  --codec-only  run only StageloomCoreTests.exe against the golden fixtures
+  --codec-only  run StageloomCoreTests.exe (golden fixtures) and the frame fuzz only
 EOF
       exit 0
       ;;
@@ -38,6 +38,7 @@ OUT_DIR="$PWD/grasshopper/build/out"
 CORE="$OUT_DIR/StageloomCoreTests.exe"
 FULL=(
   "$CORE"
+  "$OUT_DIR/StageloomFuzzTests.exe"
   "$OUT_DIR/StageloomMiniWsTests.exe"
   "$OUT_DIR/StageloomConversionTests.exe"
   "$OUT_DIR/StageloomAttrTests.exe"
@@ -51,7 +52,7 @@ FULL=(
 # exist. Remove the outputs first so an old binary from a previous environment
 # cannot make the full suite look complete after a Rhino-less build.
 if [ "$CODEC_ONLY" -eq 1 ]; then
-  rm -f "$CORE"
+  rm -f "$CORE" "$OUT_DIR/StageloomFuzzTests.exe"
 else
   rm -f "${FULL[@]}"
 fi
@@ -59,11 +60,11 @@ fi
 grasshopper/build/build.sh
 
 if [ "$CODEC_ONLY" -eq 1 ]; then
-  if [ ! -f "$CORE" ]; then
-    echo "csharp: codec-only: missing $CORE after grasshopper/build/build.sh" >&2
+  if [ ! -f "$CORE" ] || [ ! -f "$OUT_DIR/StageloomFuzzTests.exe" ]; then
+    echo "csharp: codec-only: build.sh did not produce the codec/fuzz suites" >&2
     exit 1
   fi
-  echo "csharp: codec-only — running StageloomCoreTests.exe only (no Rhino managed assemblies required)"
+  echo "csharp: codec-only — running StageloomCoreTests.exe and StageloomFuzzTests.exe (no Rhino managed assemblies required)"
 else
   MISSING=()
   for exe in "${FULL[@]}"; do
@@ -93,11 +94,19 @@ if [ "$CODEC_ONLY" -eq 1 ]; then
     "$(win_path "$CORE")" \
     "$(win_path "$PWD/protocol/fixtures")" >"$LOG" 2>&1
   CODE=$?
+  run_wine \
+    "$(win_path "$OUT_DIR/StageloomFuzzTests.exe")" >>"$LOG" 2>&1
+  CODE=$(( CODE | $? ))
 else
   CODE=0
   run_wine \
     "$(win_path "$CORE")" \
     "$(win_path "$PWD/protocol/fixtures")" >"$LOG" 2>&1
+  CODE=$(( CODE | $? ))
+  # The codec trust boundary under 10,000 deterministic frame mutations plus
+  # the Json.Parse contract. No Rhino process or managed assembly is involved.
+  run_wine \
+    "$(win_path "$OUT_DIR/StageloomFuzzTests.exe")" >>"$LOG" 2>&1
   CODE=$(( CODE | $? ))
   # The transport: handshake verification, frame caps, fragmentation, ping/pong
   # and close handling against an in-process scripted peer. No Rhino process.

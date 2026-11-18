@@ -776,8 +776,9 @@ def generate(root: Path) -> str:
     lines.append(
         "Source-derived counts; this is not a claim about how many tests a run "
         "executed. C# suites use a `Check(...)` helper, so the count is assertion "
-        "calls rather than methods; `Program.cs` is a fixture runner and contributes "
-        "no `Check(...)` calls."
+        "calls rather than methods; `Program.cs` is a fixture runner and "
+        "`FuzzTests.cs` is a campaign runner, so neither contributes `Check(...)` "
+        "calls."
     )
     lines.append("")
     lines.append(_markdown_table(("suite", "file", "count", "unit"), test_rows))

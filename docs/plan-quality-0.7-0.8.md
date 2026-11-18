@@ -2,10 +2,11 @@
 
 **Status:** 0.7.0 complete, 2026-11-16. 0.8.0 is in progress: T1 (baseline,
 performance gate, code health) through T8 (performance follow-through) are
-complete; T9c (the .NET no-go) and T9a/T9b (build/CI/docs truth and the
-protocol single-source tables) are complete; T10 (verification) and T11
-(release) remain. W7's `geometry_io`, engine-object, `GhLink` and `Instances`
-splits are done; W8 (performance, T8) is done, with the remaining W9/W10 items.
+complete; T9c (the .NET no-go), T9a/T9b (build/CI/docs truth and the protocol
+single-source tables) and T10a (fuzz/invariants) are complete; T10b
+(coverage/scale/1-hour soak) and T11 (release) remain. W7's `geometry_io`,
+engine-object, `GhLink` and `Instances` splits are done; W8 (performance, T8) is
+done, with the remaining W9/W10 items.
 **Baseline:** v0.6.0 plus the 2026-11-15 audit (seven module reviews), plus the
 post-audit bake/upstream work (`102f9c8..254d796`). That was the starting point:
 305 Blender headless tests in ~86 s, 57 core tests, C# and extension suites
@@ -104,8 +105,11 @@ benchmark and the local-only C# suite and `.gha` check. T9b then made
 attribute types, warning codes, codec error codes and fixture inventory; both
 codecs consume generated tables, `scripts/check-protocol-tables` gates drift,
 and `scripts/check-docs` checks the fixture source and README together. T9 is
-complete; T10 (verification) and T11 (release) remain. See the T9a and T9b
-verification below.
+complete; T10a (fuzz/invariants) then added the deterministic frame campaigns
+(10,000 fixed-seed cases per language), randomized mesh/attribute/instance
+round trips and malformed bake-marker recovery without a production change.
+T10b (coverage/scale/1-hour soak) and T11 (release) remain. See the T9a, T9b and
+T10a verification below.
 
 **0.7.0 completion record (2026-11-16).** Q1–Q19 are complete; Q5 was merged
 into Q4 (the cache and the `Live` toggle were one removal). The release was
@@ -744,9 +748,9 @@ same tree/toolchain; framework decision recorded.
 ### W10 — Verification (continuous, completed in 0.8.0)
 
 - **Regression rule:** every closed defect gets a test that fails before the fix.
-- **Fuzzing:** deterministic frame mutator (10k cases/language) asserting only
-  classified errors; random geometry/attribute/instance round trips; malformed
-  bake/cache state.
+- **Fuzzing (T10a, done):** deterministic frame mutator (10k cases/language)
+  asserting only classified errors; random geometry/attribute/instance round
+  trips; malformed bake-marker state.
 - **Conformance corpus:** Python↔C# frames, number formatting, hashes,
   attributes, empty geometry, multi-part/nested blocks; both suites consume it.
 - **Coverage:** core 90%, engine/geometry 80%, GH core 80%; explicit exclude
@@ -890,7 +894,7 @@ acceptance criteria, then committed before the next starts.
 | T7 | `Instances` split and table-driven conversion | single-part/multi-part/nested/attribute round trips unchanged; production LOC down or flat | Done 2026-11-17; 685 C# checks, 26/26 in 176.1 s; native probe green |
 | T8 | Performance follow-through | playback resolved or traded; p50/p95 within 5%; each fixed path measured | Done 2026-11-17; 26/26 in 159.7 s, worst p50 +1.81%; fresh apply −88.5%, C# decode −98.9% |
 | T9 | Lean/docs/CI/build/framework | protocol tables generated; docs/ADR truth pass; reproducible extension zip and `.gha`; framework go/no-go | T9c no-go 2026-11-18 ([ADR 0019](decisions/0019-keep-csharp5-mono.md)); T9a done 2026-11-18 (one version source, reproducible zip and `.gha`, derived wine user, honest CI); T9b done 2026-11-18 (`protocol/sections.json`, generated Python/C# tables, drift and fixture checks; [ADR 0021](decisions/0021-generated-protocol-tables.md)); T9 complete |
-| T10 | Verification | fuzz, coverage, scale and 1-hour soak green | Pending |
+| T10 | Verification | fuzz, coverage, scale and 1-hour soak green | T10a done 2026-11-18: 10,000 fixed-seed Python and C# frame mutations, geometry/attribute/instance round-trip fuzz, malformed bake markers; 133 core, 468 Blender and 689 C# checks. T10b (coverage/scale/1-hour soak) pending |
 | T11 | 0.8.0 release | version/changelog/artifacts match the tagged commit | Pending |
 
 ### T8 verification (performance follow-through)
@@ -950,7 +954,8 @@ native Windows/Rhino acceptance deferred until after 0.8.0, and the second
 runtime/platform or replacement dev-loop cost of `net7.0-windows`/`net48`. The
 spike is closed in [ADR 0019](decisions/0019-keep-csharp5-mono.md) and revisits
 only after native Windows acceptance (post-0.8 / 1.0). **T9a and T9b are
-complete (2026-11-18); T10/T11 remain, so T9 is complete.**
+complete (2026-11-18); T10a later completed the fuzz/invariant half, and
+T10b/T11 remain, so T9 is complete.**
 
 ### T9a verification (build/CI/docs truth)
 
@@ -1082,6 +1087,53 @@ tables without changing a wire byte, fixture, `out_hash` or runtime algorithm
   before/after run over every fixture produced identical frame, `sections_hash`
   and Python `output_hash` values. The C# `GeometryHash`/`OutputHash` bodies were
   not edited.
+
+### T10a verification (fuzz and invariants)
+
+**2026-11-18.** T10a adds tests only; production source is unchanged and no
+benchmark was run. Seeds are fixed (`20261118` in both languages) and every
+campaign is bounded.
+
+- **Python frame fuzz.** `blender/tests/core/test_codec_fuzz.py` runs exactly
+  **10,000** fixed-seed cases in `scripts/test-core` (0.27 s standalone, 0.38 s
+  for the 133-test core suite). Ten strategies mutate valid encoded frames:
+  length prefix, raw byte, truncation, appended junk, random bytes, header text,
+  structured header, frame splice, oversized declaration and section/payload
+  surgery; 35% of cases add a second mutation. Every failure must be
+  `codec.CodecError` with a code in `CODEC_CODES`; successes must agree with the
+  declared table and payload bytes and survive a re-encode. The campaign
+  observed `bad_frame`, `too_large` and `proto_mismatch`; no unclassified
+  exception was found, so no production fix was needed.
+- **C# frame fuzz.** `grasshopper/tests/console/FuzzTests.cs` builds
+  `StageloomFuzzTests.exe` in `grasshopper/build/build.sh` and runs it from
+  `scripts/test-gha` (full and `--codec-only`). It mutates the same ten
+  categories with a deterministic xorshift32 stream: **10,000** frame cases plus
+  **1,000** direct `Json.Parse` cases (0.53 s standalone under wine). Only
+  `FrameException` with `bad_frame`, `too_large` or `proto_mismatch` (or
+  `JsonException` on the direct JSON boundary) is accepted; successful frames
+  get the same table/payload/re-encode coherence check. No unclassified
+  exception was found.
+- **Geometry/attribute/instance fuzz.** `blender/tests/headless/test_fuzz_roundtrip.py`
+  adds 13 tests: 80 random mixed tri/quad/n-gon meshes through
+  `mesh_to_sections`/`sections_to_mesh`, colours (POINT and folded CORNER,
+  BYTE/FLOAT) and creases; 80 topology-token cases proving the fast path reads
+  no polygon/loop arrays and a changed token rebuilds; 80 generated meshes
+  exercised through the wire `crv`/`pts` path (face meshes skipped), including
+  loose edges, isolated vertices and the counted crease loss note; random
+  attributes across every wire type and domain, 60 malformed
+  wire attributes (notes, never a crash) and a randomized prune; 20 valid
+  definition frames with multi-part/empty parts/nested rows/cycles/attributes,
+  40 malformed definition frames classified as `GeometryIOError`, and 8
+  randomized scenes through the existing Geometry Nodes builders; 80 bake-marker
+  cases plus stale deleted records and a malformed clear-bake recovery. No
+  production bug was exposed.
+- **Counts and deferrals.** `scripts/test-core` passed **133 tests**;
+  `scripts/test-blender` passed **468 tests** in 86.9 s plus the offline gate;
+  `scripts/test-gha` passed the fixture runner and all eight console suites
+  (**689 checks**, 14 fixtures, **10,000** fuzz cases) in 25.5 s. Per the task
+  constraints, the reference benchmark, `scripts/bench-baseline`, the full
+  `scripts/check-all` and the 1-hour soak were not run; T10b owns coverage,
+  scale and soak.
 
 **Commit rule:** a task is committed only after its acceptance tests plus
 `scripts/test-core` and the relevant Blender/C# suite pass, and the audit finds
