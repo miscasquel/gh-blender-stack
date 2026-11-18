@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# One local quality gate: docs, lint, core, Blender, benchmarks, extension,
-# extension/.gha reproducibility, C#.
+# One local quality gate: docs, protocol-table drift, lint, core, Blender,
+# benchmarks, extension, extension/.gha reproducibility, C#.
 #
 #     scripts/check-all          # the full gate
-#     scripts/check-all --quick  # inner loop: docs, core, ruff only
+#     scripts/check-all --quick  # inner loop: docs, protocol tables, core, ruff only
 #     scripts/check-all --ci     # full gate, with benchmark and C# steps skipped
 #
 # The bench step runs three sequential benchmarks and compares the fastest
@@ -33,7 +33,7 @@ for arg in "$@"; do
 usage: scripts/check-all [--quick|--ci]
 
   (default)  full gate: docs, lint, core, Blender, bench, extension, repro, .gha repro, C#
-  --quick    inner loop: docs, core, ruff
+  --quick    inner loop: docs, protocol tables, core, ruff
   --ci       full gate with the reference-machine bench and C# steps skipped
 EOF
       exit 0
@@ -54,6 +54,7 @@ fi
 # The per-step caps are backstops, not expected runtimes. test-blender already
 # owns its per-suite watchdog; this cap matches that script's own timeout.
 CAP_DOCS="${STAGELOOM_DOCS_TIMEOUT:-120}"
+CAP_PROTOCOL="${STAGELOOM_PROTOCOL_TIMEOUT:-60}"
 CAP_RUFF="${STAGELOOM_RUFF_TIMEOUT:-120}"
 CAP_CORE="${STAGELOOM_CORE_TIMEOUT:-120}"
 CAP_BLENDER="${STAGELOOM_TEST_BLENDER_TIMEOUT:-900}"
@@ -190,13 +191,15 @@ fi
 GATE_START="$(now_ms)"
 
 if [ "$MODE" = "quick" ]; then
-  echo "check-all: quick gate (docs, core, ruff); full gate adds Blender, bench, extension, reproducibility, .gha reproducibility, C#"
+  echo "check-all: quick gate (docs, protocol tables, core, ruff); full gate adds Blender, bench, extension, reproducibility, .gha reproducibility, C#"
   run_step "check-docs" "$CAP_DOCS" scripts/check-docs
+  run_step "check-protocol-tables" "$CAP_PROTOCOL" scripts/check-protocol-tables
   run_step "test-core" "$CAP_CORE" scripts/test-core
   run_step "ruff" "$CAP_RUFF" "${RUFF[@]}" check --output-format=concise .
 else
   echo "check-all: full gate from $REPO"
   run_step "check-docs" "$CAP_DOCS" scripts/check-docs
+  run_step "check-protocol-tables" "$CAP_PROTOCOL" scripts/check-protocol-tables
   run_step "ruff" "$CAP_RUFF" "${RUFF[@]}" check --output-format=concise .
   run_step "test-core" "$CAP_CORE" scripts/test-core
   if [ "$CI" -eq 1 ]; then

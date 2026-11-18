@@ -24,3 +24,4 @@ Short records of decisions that shape the project. Format: context, decision, co
 | [0018](0018-official-wheel-only.md) | The official websockets wheel is the only source | Accepted; decides against 0006's vendor fallback |
 | [0019](0019-keep-csharp5-mono.md) | Keep C# 5/Mono through 1.0; .NET spike no-go | Accepted |
 | [0020](0020-version-source-and-reproducible-artifacts.md) | One version source; reproducible extension zip and `.gha`; derived deploy user | Accepted |
+| [0021](0021-generated-protocol-tables.md) | One source for the protocol tables; generated Python/C# outputs and drift checks | Accepted |

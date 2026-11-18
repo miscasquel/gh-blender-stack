@@ -26,6 +26,7 @@ run_csc \
   /out:"$(win_path "$OUT")" \
   /r:System.Numerics.dll \
   "$(win_path "$REPO/grasshopper/src/core/Json.cs")" \
+  "$(win_path "$REPO/grasshopper/src/core/ProtocolTables.generated.cs")" \
   "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
   "$(win_path "$REPO/grasshopper/src/core/ParamValues.cs")" \
   "$(win_path "$REPO/grasshopper/src/core/Endpoint.cs")" \
@@ -45,6 +46,7 @@ run_csc \
   /out:"$(win_path "$MINIWS_OUT")" \
   /r:System.Numerics.dll \
   "$(win_path "$REPO/grasshopper/src/core/Json.cs")" \
+  "$(win_path "$REPO/grasshopper/src/core/ProtocolTables.generated.cs")" \
   "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
   "$(win_path "$REPO/grasshopper/src/gh/MiniWsClient.cs")" \
   "$(win_path "$REPO/grasshopper/tests/console/FakeServer.cs")" \
@@ -65,6 +67,7 @@ if [ -f "$RC_DLL" ]; then
     /out:"$(win_path "$ATTR_OUT")" \
     /r:"$(win_path "$RC_DLL")" /r:System.Numerics.dll \
     "$(win_path "$REPO/grasshopper/src/core/Json.cs")" \
+    "$(win_path "$REPO/grasshopper/src/core/ProtocolTables.generated.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Conversion.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Attributes.cs")" \
@@ -88,6 +91,7 @@ if [ -f "$RC_DLL" ]; then
     /out:"$(win_path "$CONV_OUT")" \
     /r:"$(win_path "$RC_DLL")" /r:System.Drawing.dll /r:System.Numerics.dll \
     "$(win_path "$REPO/grasshopper/src/core/Json.cs")" \
+    "$(win_path "$REPO/grasshopper/src/core/ProtocolTables.generated.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Conversion.cs")" \
     "$(win_path "$REPO/grasshopper/tests/console/ConversionTests.cs")"
@@ -111,6 +115,7 @@ if [ -f "$GH_DLL" ] && [ -f "$GHIO_DLL" ] && [ -f "$RC_DLL" ]; then
     /r:"$(win_path "$GH_DLL")" /r:"$(win_path "$GHIO_DLL")" /r:"$(win_path "$RC_DLL")" \
     /r:System.Drawing.dll /r:System.Numerics.dll \
     "$(win_path "$REPO/grasshopper/src/core/Json.cs")" \
+    "$(win_path "$REPO/grasshopper/src/core/ProtocolTables.generated.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Conversion.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Attributes.cs")" \
@@ -178,6 +183,7 @@ if [ -f "$GH_DLL" ] && [ -f "$GHIO_DLL" ] && [ -f "$RC_DLL" ]; then
     /r:"$(win_path "$GH_DLL")" /r:"$(win_path "$GHIO_DLL")" /r:"$(win_path "$RC_DLL")" \
     /r:System.Drawing.dll /r:System.Numerics.dll \
     "$(win_path "$REPO/grasshopper/src/core/Json.cs")" \
+    "$(win_path "$REPO/grasshopper/src/core/ProtocolTables.generated.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Frame.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Conversion.cs")" \
     "$(win_path "$REPO/grasshopper/src/core/Attributes.cs")" \

@@ -7,14 +7,15 @@
 stackable Blender modifiers, with geometry and parameters flowing both ways,
 animation and playback, live stages, and renderable native bakes.
 
-**0.8.0 status (2026-11-18).** T1–T8 and T9c/T9a are complete; T9b (protocol
-single-source tables), T10 (verification) and T11 (release) remain. Production
-is 24,918 physical / 19,945 code lines across 69 files, with 123 core, 455
-Blender headless and 687 C# checks. The release version stays **0.7.0** until
-T11. Native Windows/Rhino acceptance is deferred until after 0.8.0; 0.8.0 makes
-no native-parity claim. The `.NET` framework migration is a recorded no-go
-through 1.0 ([ADR 0019](decisions/0019-keep-csharp5-mono.md)); C# 5/Mono and
-the hand-written MiniWs/JSON transport stay.
+**0.8.0 status (2026-11-18).** T1–T9 are complete; T10 (verification) and T11
+(release) remain. Production is 25,040 physical / 20,035 code lines across 71
+files, with 131 core, 455 Blender headless and 689 C# checks. The release version
+stays **0.7.0** until T11. Native Windows/Rhino acceptance is deferred until
+after 0.8.0; 0.8.0 makes no native-parity claim. The `.NET` framework migration
+is a recorded no-go through 1.0 ([ADR 0019](decisions/0019-keep-csharp5-mono.md));
+C# 5/Mono and the hand-written MiniWs/JSON transport stay. The protocol tables
+are generated from `protocol/sections.json` and drift-checked in CI
+([ADR 0021](decisions/0021-generated-protocol-tables.md)).
 
 **Authority:** this document is the roadmap for 1.0. The wire contract is
 [`protocol.md`](protocol.md); architecture decisions are in

@@ -51,6 +51,8 @@ namespace Stageloom.Tests.Console
                 CheckFixture(Path.GetFileName(dir), framePath, expectPath);
             }
 
+            CheckProtocolTables();
+
             CheckParamValues();
 
             CheckHashOrder();
@@ -221,6 +223,101 @@ namespace Stageloom.Tests.Console
                         problems.Add("typed access: crv.counts looks wrong");
                 }
             }
+        }
+
+        /// <summary>The generated protocol vocabulary. This pins the values the
+        /// C# production code consumes (version, dtype sizes, hash order,
+        /// attribute rows and warning codes).</summary>
+        private static void CheckProtocolTables()
+        {
+            var problems = new List<string>();
+
+            int version = FrameCodec.ProtocolVersion;
+            int tableVersion = ProtocolTables.ProtocolVersion;
+            if (version != 2 || tableVersion != 2)
+                problems.Add("protocol version is not 2");
+            if (FrameCodec.HashSectionOrder.Length != ProtocolTables.HashSectionOrder.Length)
+                problems.Add("FrameCodec.HashSectionOrder length differs from the generated table");
+            else
+                for (int i = 0; i < ProtocolTables.HashSectionOrder.Length; i++)
+                    if (FrameCodec.HashSectionOrder[i] != ProtocolTables.HashSectionOrder[i])
+                    {
+                        problems.Add("FrameCodec.HashSectionOrder differs at index " + i);
+                        break;
+                    }
+            if (ProtocolTables.HashSectionOrder.Length != 22
+                || ProtocolTables.HashSectionOrder[0] != "mesh.verts"
+                || ProtocolTables.HashSectionOrder[21] != "inst.transforms")
+                problems.Add("generated hash order is not the protocol §6.1 order");
+
+            string[] dtypes = new string[] { "f32", "i32", "u32", "u8" };
+            int[] sizes = new int[] { 4, 4, 4, 1 };
+            for (int i = 0; i < dtypes.Length; i++)
+            {
+                if (!ProtocolTables.IsKnownDtype(dtypes[i]))
+                    problems.Add("generated dtype table does not know " + dtypes[i]);
+                if (ProtocolTables.ItemSize(dtypes[i]) != sizes[i])
+                    problems.Add(dtypes[i] + " item size is " + ProtocolTables.ItemSize(dtypes[i]));
+            }
+            if (ProtocolTables.IsKnownDtype("f64") || ProtocolTables.IsKnownDtype(null))
+                problems.Add("generated dtype table accepted an unknown dtype");
+            if (ProtocolTables.ItemSize("f64") != 0)
+                problems.Add("ItemSize returned a size for an unknown dtype");
+
+            var attributeIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (ProtocolAttributeType row in ProtocolTables.AttributeTypes)
+            {
+                if (!attributeIds.Add(row.Id))
+                    problems.Add("attribute type table repeats " + row.Id);
+                if (!ProtocolTables.IsKnownDtype(row.Dtype))
+                    problems.Add("attribute type " + row.Id + " names unknown dtype " + row.Dtype);
+                if (row.Components <= 0)
+                    problems.Add("attribute type " + row.Id + " has no components");
+                if (string.IsNullOrEmpty(row.Label))
+                    problems.Add("attribute type " + row.Id + " has no label");
+            }
+            if (attributeIds.Count != 14)
+                problems.Add("generated attribute type count is " + attributeIds.Count);
+
+            var warningValues = new Dictionary<string, string>(StringComparer.Ordinal);
+            warningValues.Add("BrepMeshed", WarningCodes.BrepMeshed);
+            warningValues.Add("CurveApproximated", WarningCodes.CurveApproximated);
+            warningValues.Add("CurveDeviation", WarningCodes.CurveDeviation);
+            warningValues.Add("CurveSampled", WarningCodes.CurveSampled);
+            warningValues.Add("CurveSkipped", WarningCodes.CurveSkipped);
+            warningValues.Add("InstanceSkipped", WarningCodes.InstanceSkipped);
+            warningValues.Add("InstanceSplit", WarningCodes.InstanceSplit);
+            warningValues.Add("NgonHoles", WarningCodes.NgonHoles);
+            warningValues.Add("SubdCreases", WarningCodes.SubdCreases);
+            warningValues.Add("SubdJoined", WarningCodes.SubdJoined);
+            string[][] expectedWarnings = new string[][]
+            {
+                new string[] { "BrepMeshed", "brep_meshed" },
+                new string[] { "CurveApproximated", "curve_approximated" },
+                new string[] { "CurveDeviation", "curve_deviation" },
+                new string[] { "CurveSampled", "curve_sampled" },
+                new string[] { "CurveSkipped", "curve_skipped" },
+                new string[] { "InstanceSkipped", "instance_skipped" },
+                new string[] { "InstanceSplit", "instance_split" },
+                new string[] { "NgonHoles", "ngon_holes" },
+                new string[] { "SubdCreases", "subd_creases" },
+                new string[] { "SubdJoined", "subd_joined" },
+            };
+            foreach (string[] pair in expectedWarnings)
+            {
+                string got;
+                if (!warningValues.TryGetValue(pair[0], out got) || got != pair[1])
+                    problems.Add("warning code " + pair[0] + " is wrong");
+            }
+
+            if (problems.Count == 0)
+            {
+                System.Console.WriteLine("PASS protocol-tables");
+                return;
+            }
+            _failures += problems.Count;
+            System.Console.WriteLine("FAIL protocol-tables");
+            foreach (string p in problems) System.Console.WriteLine("     " + p);
         }
 
         /// <summary>Parameter value conversion, the pure half of the Param

@@ -2,10 +2,10 @@
 
 **Status:** 0.7.0 complete, 2026-11-16. 0.8.0 is in progress: T1 (baseline,
 performance gate, code health) through T8 (performance follow-through) are
-complete; T9c (the .NET no-go) and T9a (build/CI/docs truth) are complete;
-T9b (protocol single-source tables), T10 and T11 remain. W7's `geometry_io`,
-engine-object, `GhLink` and `Instances` splits are done; W8 (performance, T8)
-is done, with the remaining W9/W10 items.
+complete; T9c (the .NET no-go) and T9a/T9b (build/CI/docs truth and the
+protocol single-source tables) are complete; T10 (verification) and T11
+(release) remain. W7's `geometry_io`, engine-object, `GhLink` and `Instances`
+splits are done; W8 (performance, T8) is done, with the remaining W9/W10 items.
 **Baseline:** v0.6.0 plus the 2026-11-15 audit (seven module reviews), plus the
 post-audit bake/upstream work (`102f9c8..254d796`). That was the starting point:
 305 Blender headless tests in ~86 s, 57 core tests, C# and extension suites
@@ -99,8 +99,13 @@ manifest is the only version source (`scripts/version`), the extension zip and
 `.gha` are reproducible (`scripts/test-reproducible`,
 `scripts/test-reproducible-gha`), the deploy script derives the wine user
 instead of hardcoding one, and CI explicitly skips the reference-machine
-benchmark and the local-only C# suite and `.gha` check. T9b (protocol tables)
-and T10/T11 remain; T9 is not complete. See the T9a verification below.
+benchmark and the local-only C# suite and `.gha` check. T9b then made
+`protocol/sections.json` the single source for the version, dtypes, hash order,
+attribute types, warning codes, codec error codes and fixture inventory; both
+codecs consume generated tables, `scripts/check-protocol-tables` gates drift,
+and `scripts/check-docs` checks the fixture source and README together. T9 is
+complete; T10 (verification) and T11 (release) remain. See the T9a and T9b
+verification below.
 
 **0.7.0 completion record (2026-11-16).** Q1–Q19 are complete; Q5 was merged
 into Q4 (the cache and the `Live` toggle were one removal). The release was
@@ -701,9 +706,10 @@ accepted offsetting gain; no unbounded growth in a 10k-touch/1k-frame soak;
   `.gitkeep`, old local artifacts.
 - **Compatibility policy (D3):** inventory every shim; ADR + migration test +
   removal version; rename internal node-group keys with a format bump.
-- **Protocol tables:** one source (e.g. `protocol/sections.json`) generating
-  dtype/hash-order/fixture/warning-code tables for Python and C#; CI checks the
-  generated files are current.
+- **Protocol tables (done T9b):** `protocol/sections.json` is the one source for
+  dtype/hash-order/fixture/warning/version tables, generating the Python and C#
+  tables; `scripts/check-protocol-tables` fails CI when either or the fixture
+  inventory drifts.
 - **Docs truth pass:** Python 3.13; `MiniWsClient` transport; ADR 0006/0008 data
   root and cache removal; ADR 0009/0014/0015 bake semantics; ADR 0010 status;
   ADR 0003 configurable-vs-fixed deviation; unsupported §8.8; fixture list;
@@ -883,7 +889,7 @@ acceptance criteria, then committed before the next starts.
 | T6 | `GhLink` split | registry/connection/scheduler/protocol/publication/slots split; document isolation and threading preserved | Done 2026-11-17; 685 C# checks, 26/26 in 173.1 s |
 | T7 | `Instances` split and table-driven conversion | single-part/multi-part/nested/attribute round trips unchanged; production LOC down or flat | Done 2026-11-17; 685 C# checks, 26/26 in 176.1 s; native probe green |
 | T8 | Performance follow-through | playback resolved or traded; p50/p95 within 5%; each fixed path measured | Done 2026-11-17; 26/26 in 159.7 s, worst p50 +1.81%; fresh apply −88.5%, C# decode −98.9% |
-| T9 | Lean/docs/CI/build/framework | protocol tables generated; docs/ADR truth pass; reproducible extension zip and `.gha`; framework go/no-go | T9c no-go 2026-11-18 ([ADR 0019](decisions/0019-keep-csharp5-mono.md)); T9a done 2026-11-18 (one version source, reproducible zip and `.gha`, derived wine user, honest CI); T9b pending |
+| T9 | Lean/docs/CI/build/framework | protocol tables generated; docs/ADR truth pass; reproducible extension zip and `.gha`; framework go/no-go | T9c no-go 2026-11-18 ([ADR 0019](decisions/0019-keep-csharp5-mono.md)); T9a done 2026-11-18 (one version source, reproducible zip and `.gha`, derived wine user, honest CI); T9b done 2026-11-18 (`protocol/sections.json`, generated Python/C# tables, drift and fixture checks; [ADR 0021](decisions/0021-generated-protocol-tables.md)); T9 complete |
 | T10 | Verification | fuzz, coverage, scale and 1-hour soak green | Pending |
 | T11 | 0.8.0 release | version/changelog/artifacts match the tagged commit | Pending |
 
@@ -943,8 +949,8 @@ the only development/test path, no `dotnet` SDK or native Mono coverage tooling,
 native Windows/Rhino acceptance deferred until after 0.8.0, and the second
 runtime/platform or replacement dev-loop cost of `net7.0-windows`/`net48`. The
 spike is closed in [ADR 0019](decisions/0019-keep-csharp5-mono.md) and revisits
-only after native Windows acceptance (post-0.8 / 1.0). **T9a is complete
-(2026-11-18); T9b (protocol tables) and T10/T11 remain, so T9 is not complete.**
+only after native Windows acceptance (post-0.8 / 1.0). **T9a and T9b are
+complete (2026-11-18); T10/T11 remain, so T9 is complete.**
 
 ### T9a verification (build/CI/docs truth)
 
@@ -964,7 +970,8 @@ byte, and runs no benchmark. It makes the surrounding claims true
   `1980-01-01 00:00:00`, fixed Unix file modes, preserved per-entry compression
   (the wheel stays stored), then Blender validates the rewritten zip. It prints
   and writes `dist/stageloom-<version>.zip.sha256`. Two independent builds from
-  the same tree produced the same archive:
+  the **T9a tree** (historical; T9b later changed production source and rebuilt
+  both artifacts) produced the same archive:
   `bfb250609feb188a458541c020be8c96049dab53ffb627e7d56a2f128882eb80`;
   `scripts/test-reproducible` proves it and is part of the full gate.
   The manifest, wheel digest and extracted contents were compared with the
@@ -972,12 +979,14 @@ byte, and runs no benchmark. It makes the surrounding claims true
 - **Reproducible `.gha`.** `grasshopper/build/build-gha.sh` passes Mono `csc`
   `/deterministic`, which fixes the assembly timestamp, module version GUID and
   MVID. No `/pathmap` is used: the build emits no debug info, and a build from
-  a copy of the tree at another absolute path matched. Three builds (two in the
-  tree, one copied tree) produced SHA-256
+  a copy of the tree at another absolute path matched. Three builds of the
+  **T9a tree** (historical; two in the tree, one copied tree) produced SHA-256
   `05c904d5bf5cd2012347aa9680edc3d8ade7f3854cc526e19a4cd77879d5efe4`;
   `scripts/test-reproducible-gha` proves it and restores the original built
   `.gha` on exit. Same tree + same Mono/`csc` and referenced Rhino/Grasshopper
-  assemblies is the claim; a different toolchain can differ.
+  assemblies is the claim; a different toolchain can differ. T9b rebuilt both
+  artifacts on the current tree; see the T9b verification below for those
+  hashes.
 - **Deploy user.** `grasshopper/deploy/deploy.sh` resolves the Windows user
   under `$WINEPREFIX/drive_c/users` rather than hardcoding one; it prefers
   `STAGELOOM_WINE_USER`, skips `Public`, and fails with the candidates when
@@ -1004,6 +1013,69 @@ byte, and runs no benchmark. It makes the surrounding claims true
   tree, so they are environmental/test isolation, not a T9a regression. Core,
   extension, extension-reproducibility, `.gha` reproducibility, docs, ruff and
   codec-only checks passed.
+
+### T9b verification (protocol single-source tables)
+
+**2026-11-18.** T9b adds one checked-in protocol source and generated language
+tables without changing a wire byte, fixture, `out_hash` or runtime algorithm
+([ADR 0021](decisions/0021-generated-protocol-tables.md)):
+
+- **Single source.** `protocol/sections.json` is canonical JSON for the protocol
+  version, the four dtypes (size, struct format, numpy dtype), the fixed
+  geometry-hash section order, all 14 attribute types (wire dtype, components,
+  UI label), the 10 warning codes, the three codec error codes and the 14 fixture
+  names with coverage notes. Fixture directories still own the bytes.
+- **Generated outputs.** `scripts/generate-protocol-tables` writes
+  `blender/stageloom/core/_protocol_tables.py` (Python 3.13) and
+  `grasshopper/src/core/ProtocolTables.generated.cs` (C# 5). Python production
+  imports the generated version/dtype/codec-code/hash-order/`WIRE_TYPES`
+  constants with the existing public names; `FrameCodec` aliases the generated
+  version, hash order, dtype set and item sizes; `AttributeStore.Types` is built
+  from the generated attribute rows plus the fixed `StorageKind` selection; and
+  the generated `WarningCodes` partial class replaces the hand-written literals.
+- **Drift gate.** `scripts/check-protocol-tables` regenerates in memory, compares
+  both files byte for byte and validates the source fixture names against the
+  directories and their `frame.bin`/`expect.json`. It is wired into
+  `scripts/check-all` quick and full and the stock-runner `core` CI job.
+  `scripts/check-docs` now requires the source names to match the directories and
+  the `protocol/fixtures/README.md` table to match the source.
+- **Tests.** The new `blender/tests/core/test_protocol_tables.py` checks the
+  source, generated Python, live Python tables and fixture dirs, and proves a
+  mutated temporary source and a missing fixture directory make the drift check
+  fail. The C# console suite pins the generated version, dtype sizes, hash order,
+  attribute rows and warning values; `AttrTests` checks every generated label in
+  `AttributeStore`.
+- **Measurements.** Production is **25,040 physical / 20,035 code lines across
+  71 files** (+122 / +90 against T8's 24,918 / 19,945 / 69). The two generated
+  files are 184 physical / 156 code lines; the hand-written diff is
+  +59/−121 physical (net −62) and −66 code lines, so the duplicate literals are
+  gone and the checked-in generated tables are the net addition. No benchmark or
+  full gate was run, per the task's correctness-only constraint.
+- **Artifacts.** T9b adds generated files to the shipped add-on and plugin, so
+  the T9a artifact hashes no longer describe this tree. On the T9b working tree,
+  `scripts/test-reproducible` built the extension twice and reproduced
+  `d12b6f504196d24ceaeb8c3896f162f48dbdef36346dd7112100b8e539b79b88`;
+  `scripts/test-reproducible-gha` built twice in-tree and once from a copied
+  tree and reproduced
+  `18c629e3fba03d30b6605ea53b2dd77221533f3f469e9b10a3ff1c57ee8ceafb`;
+  both passed. `scripts/test-extension` passed the installed-extension round trip
+  on the rebuilt zip. The hashes differ from T9a because the zip now contains
+  `core/_protocol_tables.py` and the edited core modules, and the `.gha`
+  contains `ProtocolTables.generated.cs` plus the edited `Frame.cs`,
+  `Attributes.cs` and `Conversion.cs`; the version and build toolchain are
+  unchanged. T11 records the final release-tree hashes.
+- **Verification.** `scripts/test-core` passed **131 tests** (123 before; +8
+  protocol-table tests); `scripts/test-gha` passed **689 checks** including the
+  fourteen fixture checks across the eight console suites (687 before; +2
+  generated-table checks, the attribute-store label conformance included);
+  `--codec-only` passed as well. `scripts/check-protocol-tables`, `scripts/check-docs`,
+  `uvx ruff@0.17.2 check .`, `git diff --check` and
+  `scripts/code-health --check` passed. The fixture tree is byte-identical
+  (aggregate `sha256sum` of all `frame.bin` files before/after:
+  `ebb0e33cded09bc48c0742a14e1468c8bb3a191b78a7f5e181b04050315a6a59`), and a
+  before/after run over every fixture produced identical frame, `sections_hash`
+  and Python `output_hash` values. The C# `GeometryHash`/`OutputHash` bodies were
+  not edited.
 
 **Commit rule:** a task is committed only after its acceptance tests plus
 `scripts/test-core` and the relevant Blender/C# suite pass, and the audit finds

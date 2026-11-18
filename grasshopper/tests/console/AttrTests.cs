@@ -229,6 +229,7 @@ namespace Stageloom.Tests.Console
                 new string[] { "INT8", "8-Bit Integer" },
                 new string[] { "INT16_2D", "2D Integer Vector" },
                 new string[] { "INT32_2D", "2D Integer Vector" },
+                new string[] { "STRING", "String" },
             };
             string first = null;
             foreach (string[] pair in wanted)
@@ -238,6 +239,18 @@ namespace Stageloom.Tests.Console
                     first = pair[0] + " -> " + got + ", expected " + pair[1];
             }
             Check("labels match Blender's vocabulary", first == null, first ?? "");
+
+            string generatedMismatch = null;
+            int generatedRows = 0;
+            foreach (ProtocolAttributeType row in ProtocolTables.AttributeTypes)
+            {
+                generatedRows++;
+                string got = AttributeStore.Label(row.Id);
+                if (got != row.Label && generatedMismatch == null)
+                    generatedMismatch = row.Id + " -> " + got + ", generated " + row.Label;
+            }
+            Check("every generated attribute row is in the store", generatedMismatch == null,
+                generatedMismatch ?? (generatedRows + " generated rows"));
 
             string[][] domains = new string[][]
             {

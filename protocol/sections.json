@@ -1,0 +1,244 @@
+{
+  "attribute_types": [
+    {
+      "components": 1,
+      "dtype": "u8",
+      "label": "Boolean",
+      "type": "BOOLEAN"
+    },
+    {
+      "components": 4,
+      "dtype": "u8",
+      "label": "Byte Color",
+      "type": "BYTE_COLOR"
+    },
+    {
+      "components": 1,
+      "dtype": "f32",
+      "label": "Float",
+      "type": "FLOAT"
+    },
+    {
+      "components": 2,
+      "dtype": "f32",
+      "label": "2D Vector",
+      "type": "FLOAT2"
+    },
+    {
+      "components": 4,
+      "dtype": "f32",
+      "label": "4D Vector",
+      "type": "FLOAT4"
+    },
+    {
+      "components": 16,
+      "dtype": "f32",
+      "label": "4x4 Matrix",
+      "type": "FLOAT4X4"
+    },
+    {
+      "components": 4,
+      "dtype": "f32",
+      "label": "Color",
+      "type": "FLOAT_COLOR"
+    },
+    {
+      "components": 3,
+      "dtype": "f32",
+      "label": "Vector",
+      "type": "FLOAT_VECTOR"
+    },
+    {
+      "components": 1,
+      "dtype": "i32",
+      "label": "Integer",
+      "type": "INT"
+    },
+    {
+      "components": 2,
+      "dtype": "i32",
+      "label": "2D Integer Vector",
+      "type": "INT16_2D"
+    },
+    {
+      "components": 2,
+      "dtype": "i32",
+      "label": "2D Integer Vector",
+      "type": "INT32_2D"
+    },
+    {
+      "components": 1,
+      "dtype": "i32",
+      "label": "8-Bit Integer",
+      "type": "INT8"
+    },
+    {
+      "components": 4,
+      "dtype": "f32",
+      "label": "Quaternion",
+      "type": "QUATERNION"
+    },
+    {
+      "components": 1,
+      "dtype": "u8",
+      "label": "String",
+      "type": "STRING"
+    }
+  ],
+  "codec_error_codes": [
+    "proto_mismatch",
+    "bad_frame",
+    "too_large"
+  ],
+  "dtypes": [
+    {
+      "bytes": 4,
+      "name": "f32",
+      "numpy": "<f4",
+      "struct": "f"
+    },
+    {
+      "bytes": 4,
+      "name": "i32",
+      "numpy": "<i4",
+      "struct": "i"
+    },
+    {
+      "bytes": 4,
+      "name": "u32",
+      "numpy": "<u4",
+      "struct": "I"
+    },
+    {
+      "bytes": 1,
+      "name": "u8",
+      "numpy": "u1",
+      "struct": "B"
+    }
+  ],
+  "fixtures": [
+    {
+      "covers": "the `error` message type for an unknown geometry ref",
+      "name": "error-unknown-ref"
+    },
+    {
+      "covers": "the stage list, including a disabled stage",
+      "name": "hello"
+    },
+    {
+      "covers": "a message with no sections and a float field",
+      "name": "ping"
+    },
+    {
+      "covers": "block definitions and instances, including a nested placement and a per-definition point attribute",
+      "name": "request-instances"
+    },
+    {
+      "covers": "a two-part definition (`parts: 2`), both part namespaces, an attribute on part 1, a definition-level nested row and a single-part definition that omits `parts`",
+      "name": "request-instances-multipart"
+    },
+    {
+      "covers": "`mesh.*` sections including colours and crease edges",
+      "name": "request-mesh"
+    },
+    {
+      "covers": "a parameter-only request (`geom.mode = \"ref\"`, no sections)",
+      "name": "request-ref"
+    },
+    {
+      "covers": "`subd.*` sections with a crease",
+      "name": "request-subd"
+    },
+    {
+      "covers": "attributes: `i32` face ids, `f32` point loads, boolean flags, an UTF-8 string tag with its offsets section",
+      "name": "response-attributes"
+    },
+    {
+      "covers": "a solve failure (`status = \"error\"`)",
+      "name": "response-error"
+    },
+    {
+      "covers": "the response direction of the two-part definition: an attribute on part 0, a nested row and a top-level placement",
+      "name": "response-instances-multipart"
+    },
+    {
+      "covers": "a two-triangle mesh response",
+      "name": "response-mesh"
+    },
+    {
+      "covers": "mesh + curves + points in one response, with a warning",
+      "name": "response-mixed"
+    },
+    {
+      "covers": "float and value-list parameters, with ranges and values",
+      "name": "schema"
+    }
+  ],
+  "hash_section_order": [
+    "mesh.verts",
+    "mesh.face_counts",
+    "mesh.face_indices",
+    "mesh.colors",
+    "mesh.crease_edges",
+    "mesh.crease_values",
+    "subd.verts",
+    "subd.face_counts",
+    "subd.face_indices",
+    "subd.crease_edges",
+    "subd.crease_values",
+    "crv.points",
+    "crv.counts",
+    "crv.types",
+    "crv.orders",
+    "crv.knots_mode",
+    "crv.cyclic",
+    "pts.positions",
+    "pts.radii",
+    "pts.colors",
+    "inst.ref_def",
+    "inst.transforms"
+  ],
+  "version": 2,
+  "warning_codes": [
+    {
+      "name": "BrepMeshed",
+      "value": "brep_meshed"
+    },
+    {
+      "name": "CurveApproximated",
+      "value": "curve_approximated"
+    },
+    {
+      "name": "CurveDeviation",
+      "value": "curve_deviation"
+    },
+    {
+      "name": "CurveSampled",
+      "value": "curve_sampled"
+    },
+    {
+      "name": "CurveSkipped",
+      "value": "curve_skipped"
+    },
+    {
+      "name": "InstanceSkipped",
+      "value": "instance_skipped"
+    },
+    {
+      "name": "InstanceSplit",
+      "value": "instance_split"
+    },
+    {
+      "name": "NgonHoles",
+      "value": "ngon_holes"
+    },
+    {
+      "name": "SubdCreases",
+      "value": "subd_creases"
+    },
+    {
+      "name": "SubdJoined",
+      "value": "subd_joined"
+    }
+  ]
+}

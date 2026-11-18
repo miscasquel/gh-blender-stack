@@ -22,7 +22,10 @@ import json
 import math
 import struct
 
-PROTOCOL_VERSION = 2
+from ._protocol_tables import CODEC_CODES as CODEC_CODES
+from ._protocol_tables import DTYPE_FORMATS as _DTYPE_FMT
+from ._protocol_tables import NUMPY_DTYPES as _NP_DTYPE
+from ._protocol_tables import PROTOCOL_VERSION as PROTOCOL_VERSION
 
 # Header size cap (protocol §2). A frame with a longer header is not decodable.
 MAX_HEADER_BYTES = 1024 * 1024
@@ -31,9 +34,10 @@ MAX_MESSAGE_BYTES = 512 * 1024 * 1024
 
 _HEADER_LEN = struct.Struct("<I")
 
-# The protocol §4.6 codes this codec can raise. The code travels on the
-# exception so no caller has to infer it from message text.
-CODEC_CODES = ("proto_mismatch", "bad_frame", "too_large")
+# PROTOCOL_VERSION, CODEC_CODES, _DTYPE_FMT and _NP_DTYPE are generated from
+# protocol/sections.json. CODEC_CODES are the protocol §4.6 codes this codec
+# can raise; the code travels on the exception so no caller has to infer it
+# from message text.
 
 # JSON integers on the wire are signed 64-bit. Python's json decoder is
 # arbitrary-precision and the C# decoder holds a long, so an out-of-range
@@ -139,17 +143,6 @@ def canonical_json(obj):
         ensure_ascii=False,
         allow_nan=False,
     )
-
-
-_DTYPE_FMT = {
-    "f32": ("f", 4),
-    "i32": ("i", 4),
-    "u32": ("I", 4),
-    "u8": ("B", 1),
-}
-
-# numpy dtype strings, little-endian, used when the input carries its own buffer.
-_NP_DTYPE = {"f32": "<f4", "i32": "<i4", "u32": "<u4", "u8": "u1"}
 
 
 def element_count(array_like):

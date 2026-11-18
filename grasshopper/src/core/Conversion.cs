@@ -32,23 +32,6 @@ namespace Stageloom.Core
         }
     }
 
-    /// <summary>The warning codes the converter emits (protocol §4.4).</summary>
-    public static class WarningCodes
-    {
-        public const string CurveApproximated = "curve_approximated";
-        public const string CurveDeviation = "curve_deviation";
-        public const string CurveSampled = "curve_sampled";
-        public const string CurveSkipped = "curve_skipped";
-        public const string SubdCreases = "subd_creases";
-        public const string SubdJoined = "subd_joined";
-        public const string BrepMeshed = "brep_meshed";
-        public const string InstanceSkipped = "instance_skipped";
-        /// <summary>A multi-part definition was split into single-part ones
-        /// because the peer did not advertise `blocks/2` (protocol §8).</summary>
-        public const string InstanceSplit = "instance_split";
-        public const string NgonHoles = "ngon_holes";
-    }
-
     public static class Conversion
     {
         // ------------------------------------------------------- sections -> mesh

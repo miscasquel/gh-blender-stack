@@ -1,7 +1,7 @@
 # Stageloom compliance record
 
 **Status:** v0.7.0 is the released compliance baseline; the 0.8.0 quality work
-is in progress (T1–T8 and T9c/T9a complete; T9b/T10/T11 remain; see
+is in progress (T1–T9 complete; T10/T11 remain; see
 [`plan-quality-0.7-0.8.md`](plan-quality-0.7-0.8.md)). The release version stays
 `0.7.0` until T11. **1.0 planning** continues in [`plan.md`](plan.md). The
 extensions.blender.org upload is deferred. Release history is in
@@ -67,11 +67,13 @@ installed-extension round trip). Current measurements are in
 [`plan-quality-0.7-0.8.md`](plan-quality-0.7-0.8.md); this record does not
 duplicate them.
 
-**0.8.0 T8/T9a verification (2026-11-18).** Production is **24,918 physical /
-19,945 code lines across 69 files**; the tree has **123 core**, **455 Blender
-headless** and **687 C#** checks. T8 changed no wire, fixture or `out_hash`
-byte and passed 26/26 gated metrics (worst positive p50 +1.81%). T9a makes the
-compliance claims true without touching production:
+**0.8.0 T8/T9a verification (2026-11-18; T9a tree, historical).** Production is
+**24,918 physical / 19,945 code lines across 69 files**; the tree has **123
+core**, **455 Blender headless** and **687 C#** checks. T8 changed no wire,
+fixture or `out_hash` byte and passed 26/26 gated metrics (worst positive p50
++1.81%). T9a makes the compliance claims true without touching production. The
+artifact hashes in this block describe the T9a tree; T9b rebuilt both artifacts
+on the current tree and records those hashes below:
 
 - one version source: `blender_manifest.toml` + `scripts/version`; the build,
   install and test scripts use it, and `scripts/check-docs` checks the C# hello
@@ -100,6 +102,25 @@ compliance claims true without touching production:
   baseline-gate self-test and the two-build extension-zip reproducibility check.
   It skips the reference-machine benchmark and the local-only C# suite and
   `.gha` check explicitly and claims neither.
+
+**0.8.0 T9b verification (2026-11-18).** The generated protocol tables add
+`_protocol_tables.py` and `ProtocolTables.generated.cs` and edit the Python/C#
+core. Production is **25,040 physical / 20,035 code lines across 71 files**;
+the tree has **131 core**, **455 Blender headless** and **689 C#** checks. No
+wire, fixture or `out_hash` byte changed. The T9a hashes above are historical;
+the T9b working tree reproduced:
+
+```text
+scripts/test-reproducible      two builds PASS; zip sha256 d12b6f504196d24ceaeb8c3896f162f48dbdef36346dd7112100b8e539b79b88
+scripts/test-reproducible-gha  three builds PASS; .gha sha256 18c629e3fba03d30b6605ea53b2dd77221533f3f469e9b10a3ff1c57ee8ceafb
+scripts/test-extension         installed-extension round trip PASS
+scripts/check-all --quick      PASS (docs, protocol tables, core, ruff)
+```
+
+The hashes differ from T9a because the zip now ships `core/_protocol_tables.py`
+and the edited core modules, and the `.gha` ships
+`ProtocolTables.generated.cs` plus the edited C# core; the version stays
+`0.7.0`. T11 records the final release-tree hashes.
 
 The 1.0 workstreams, platform matrix and release gates are in
 [`plan.md`](plan.md). A new listing packet is prepared from the 1.0 release

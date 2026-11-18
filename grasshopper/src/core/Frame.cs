@@ -161,7 +161,14 @@ namespace Stageloom.Core
             return values;
         }
 
-        public int ElementCount { get { return Dtype == "u8" ? _length : _length / 4; } }
+        public int ElementCount
+        {
+            get
+            {
+                int itemSize = ProtocolTables.ItemSize(Dtype);
+                return itemSize > 0 ? _length / itemSize : 0;
+            }
+        }
     }
 
     /// <summary>A decoded frame: the header object and the sections, header order.</summary>
@@ -195,7 +202,7 @@ namespace Stageloom.Core
 
     public static class FrameCodec
     {
-        public const int ProtocolVersion = 2;
+        public const int ProtocolVersion = ProtocolTables.ProtocolVersion;
         public const int MaxHeaderBytes = 1024 * 1024;
         public const long MaxMessageBytes = 512L * 1024 * 1024;
 
@@ -204,18 +211,9 @@ namespace Stageloom.Core
         // decodes the header strictly (codec.py), so this side must too.
         private static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
-        /// <summary>The fixed geometry-hash order (protocol §5 table order).</summary>
-        public static readonly string[] HashSectionOrder = new string[]
-        {
-            "mesh.verts", "mesh.face_counts", "mesh.face_indices", "mesh.colors",
-            "mesh.crease_edges", "mesh.crease_values",
-            "subd.verts", "subd.face_counts", "subd.face_indices",
-            "subd.crease_edges", "subd.crease_values",
-            "crv.points", "crv.counts", "crv.types", "crv.orders",
-            "crv.knots_mode", "crv.cyclic",
-            "pts.positions", "pts.radii", "pts.colors",
-            "inst.ref_def", "inst.transforms",
-        };
+        /// <summary>The fixed geometry-hash order (protocol §5 table order),
+        /// generated from protocol/sections.json.</summary>
+        public static readonly string[] HashSectionOrder = ProtocolTables.HashSectionOrder;
 
         // -------------------------------------------------------------- encode
 
@@ -266,16 +264,16 @@ namespace Stageloom.Core
                         throw new FrameException("bad_frame", "null section");
                     if (string.IsNullOrEmpty(s.Name))
                         throw new FrameException("bad_frame", "section name must be a non-empty string");
-                    if (!IsKnownDtype(s.Dtype))
+                    if (!ProtocolTables.IsKnownDtype(s.Dtype))
                         throw new FrameException("bad_frame",
                             "section " + s.Name + " has unknown dtype " + (s.Dtype ?? "(missing)"));
                     if (!s.HasBytes)
                         throw new FrameException("bad_frame",
                             "section " + s.Name + " has no bytes");
-                    if (s.ByteLength % ItemSize(s.Dtype) != 0)
+                    if (s.ByteLength % ProtocolTables.ItemSize(s.Dtype) != 0)
                         throw new FrameException("bad_frame",
                             "section " + s.Name + " length " + s.ByteLength
-                            + " is not a multiple of " + ItemSize(s.Dtype));
+                            + " is not a multiple of " + ProtocolTables.ItemSize(s.Dtype));
                     if (!seen.Add(s.Name))
                         throw new FrameException("bad_frame",
                             "duplicate section name " + s.Name);
@@ -416,7 +414,7 @@ namespace Stageloom.Core
                     object dtypeObj;
                     entry.TryGetValue("dtype", out dtypeObj);
                     string dtype = dtypeObj as string;
-                    if (!IsKnownDtype(dtype))
+                    if (!ProtocolTables.IsKnownDtype(dtype))
                         throw new FrameException("bad_frame",
                             "section " + name + " has unknown dtype " + (dtype ?? "(missing)"));
 
@@ -434,7 +432,7 @@ namespace Stageloom.Core
                     if (!seen.Add(name))
                         throw new FrameException("bad_frame", "duplicate section name " + name);
 
-                    int itemSize = ItemSize(dtype);
+                    int itemSize = ProtocolTables.ItemSize(dtype);
                     object shapeObj;
                     if (entry.TryGetValue("shape", out shapeObj))
                     {
@@ -506,16 +504,6 @@ namespace Stageloom.Core
                 throw new FrameException("bad_frame",
                     (frame.Length - offset) + " trailing bytes after the declared sections");
             return sections;
-        }
-
-        private static bool IsKnownDtype(string dtype)
-        {
-            return dtype == "f32" || dtype == "i32" || dtype == "u32" || dtype == "u8";
-        }
-
-        private static int ItemSize(string dtype)
-        {
-            return dtype == "u8" ? 1 : 4;
         }
 
         // --------------------------------------------------------------- hash

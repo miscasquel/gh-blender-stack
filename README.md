@@ -10,7 +10,7 @@ curves, points, SubD cages) driven by a real Grasshopper definition, with named
 attributes and Grasshopper blocks (instances, including nested and multi-part
 definitions) travelling both ways, parameters you can edit and keyframe in
 Blender, packaged as a Blender extension. 0.8.0 is in progress on `main`
-(T1–T8 and T9c/T9a done; T9b/T10/T11 remain); the manifest and shipped version
+(T1–T9 done; T10/T11 remain); the manifest and shipped version
 stay **0.7.0** until the T11 release bump. [DEMO.md](DEMO.md) walks through the
 loop.
 
@@ -69,8 +69,9 @@ Blender                                          Rhino / Grasshopper (wine)
   any optional input that has no value and no wire. The parameter list is saved
   with the definition, so the choice sticks.
 - **Protocol.** Binary frames with a canonical JSON header; geometry and
-  parameters in the same stream. The Python and C# codecs are checked against
-  fourteen shared golden fixtures.
+  parameters in the same stream. The Python and C# codecs share fourteen golden
+  fixtures; the dtype, hash-order, attribute, warning and fixture tables are
+  generated from `protocol/sections.json` and checked for drift in CI.
 - **Lifecycle.** States (`idle`, `waiting`, `ok`, `error`, `disconnected`,
   `disabled`, `frozen`, `unbound`, `conflict`), timeouts, latest-wins requests,
   and reconnect with backoff. `disabled`/`frozen`/`conflict` follow the stage's
@@ -96,12 +97,14 @@ Blender                                          Rhino / Grasshopper (wine)
   baked in turn. Clear Bake deletes only this stage's bake and unfreezes the
   stages this bake froze (upstream or downstream); another stage's bake and a
   manual freeze are untouched. A packed bake is kept when the `.blend` is saved.
-- **Tests.** `scripts/check-all` is the local gate: docs, core, Blender headless
-  (plus the offline gate), benchmarks, the installed extension round trip, the
-  reproducible-zip and `.gha` checks and the C# suites, with per-step timing.
-  The current tree is checked by 123 core tests, 455 Blender headless tests,
-  fourteen golden fixtures and the C# suites (687 passing checks; the native
-  Rhino halves skip under wine). `scripts/test-core` (standard library only),
+- **Tests.** `scripts/check-all` is the local gate: docs, protocol-table drift,
+  core, Blender headless (plus the offline gate), benchmarks, the installed
+  extension round trip, the reproducible-zip and `.gha` checks and the C#
+  suites, with per-step timing. The current tree is checked by 131 core tests,
+  455 Blender headless tests, fourteen golden fixtures and the C# suites (689
+  passing checks; the native Rhino halves skip under wine).
+  `scripts/check-protocol-tables` (generated tables and fixture inventory),
+  `scripts/test-core` (standard library only),
   `scripts/test-blender` (Blender headless against `tools/fake_gh`),
   `scripts/test-gha` (the C# codec against the golden fixtures, plus the
   conversion, attribute, instance, transport, link, component and stage
@@ -249,8 +252,9 @@ pointed at a remote machine.
 ## Working on it
 
 ```
-scripts/check-all          # the gate: docs, core, Blender, bench, extension, reproducibility, .gha, C#
-scripts/check-all --quick  # inner loop: docs, core and ruff only
+scripts/check-all          # the gate: docs, protocol tables, core, Blender, bench, extension, reproducibility, .gha, C#
+scripts/check-all --quick  # inner loop: docs, protocol tables, core and ruff only
+scripts/check-protocol-tables # generated tables and fixture inventory are current
 scripts/test-core        # layer A: pure Python core, no Blender needed
 scripts/test-blender     # layer B: Blender headless, against tools/fake_gh
 scripts/test-gha         # layer C: the C# codec and conversion suites under wine
@@ -266,10 +270,12 @@ scripts/code-health      # regenerate docs/code-health.md (not a gate)
 python3 scripts/make-fixtures   # regenerate protocol/fixtures after a protocol change
 ```
 
-CI runs the core layer on Python 3.13 and 3.14. A second job installs Blender
-5.3 on Ubuntu and runs `scripts/check-all --ci`: docs, ruff, core, Blender
-headless with the offline gate, the installed-extension round trip, the
-baseline-gate self-test and the two-build extension-zip reproducibility check.
+CI runs the core layer on Python 3.13 and 3.14, including the protocol-table and
+fixture-inventory drift check. A second job installs Blender
+5.3 on Ubuntu and runs `scripts/check-all --ci`: docs, protocol-table drift,
+ruff, core, Blender headless with the offline gate, the installed-extension
+round trip, the baseline-gate self-test and the two-build extension-zip
+reproducibility check.
 The timing benchmark is **not** run in CI: the stored 2026-11-17 best-of-three
 baseline is reference-machine-specific, so `scripts/bench-baseline` is a
 local/release check and CI makes no performance claim. That job names and skips

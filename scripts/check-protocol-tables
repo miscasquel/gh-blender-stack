@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Fail when the checked-in protocol tables or the fixture inventory drift from
+# protocol/sections.json. Pure stdlib; no Blender, Rhino or network.
+set -euo pipefail
+exec "$(dirname "$0")/generate-protocol-tables" --check "$@"

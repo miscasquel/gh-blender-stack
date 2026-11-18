@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import re
 import sys
 from pathlib import Path
@@ -217,19 +218,76 @@ def check_protocol_transport(check: Checker) -> None:
 
 
 def check_fixture_inventory(check: Checker) -> None:
+    """The source owns the fixture names; the directories own the bytes.
+
+    ``protocol/sections.json`` is generated into both codecs, so a fixture
+    added or removed without updating it is real drift. The README table is a
+    checked mirror, and the directories must match the source exactly.
+    """
     rel = "protocol/fixtures/README.md"
+    source_rel = "protocol/sections.json"
+    source_path = check.root / source_rel
+    try:
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        check.fail(source_rel, 1, f"cannot read the fixture source: {exc}")
+        return
+    fixtures = source.get("fixtures") if isinstance(source, dict) else None
+    if not isinstance(fixtures, list) or not fixtures:
+        check.fail(source_rel, 1, "no non-empty 'fixtures' array")
+        return
+    names: list[str] = []
+    for index, entry in enumerate(fixtures):
+        if not isinstance(entry, dict):
+            check.fail(source_rel, 1, f"fixtures[{index}] is not an object")
+            return
+        name = entry.get("name")
+        covers = entry.get("covers")
+        if not isinstance(name, str) or not name:
+            check.fail(source_rel, 1, f"fixtures[{index}].name is not a string")
+            return
+        if not isinstance(covers, str) or not covers:
+            check.fail(source_rel, 1, f"fixture {name} has no coverage note")
+        names.append(name)
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        check.fail(source_rel, 1, "fixture source repeats: " + ", ".join(duplicates))
+    if names != sorted(names):
+        check.fail(source_rel, 1, "fixture source names must be sorted")
+
     fixture_root = check.root / "protocol" / "fixtures"
     try:
         directories = sorted(
             path.name for path in fixture_root.iterdir() if path.is_dir()
         )
     except OSError as exc:
-        check.fail(rel, 1, f"cannot list protocol/fixtures: {exc}")
+        check.fail(source_rel, 1, f"cannot list protocol/fixtures: {exc}")
         return
 
-    rows: list[tuple[int, str]] = []
-    for number, _line, match in check.find(rel, r"^\|\s*`([^`]+)`\s*\|"):
-        rows.append((number, match.group(1)))
+    source_set = set(names)
+    actual = set(directories)
+    missing = sorted(actual - source_set)
+    extra = sorted(source_set - actual)
+    if missing:
+        check.fail(
+            source_rel,
+            1,
+            "fixture source is missing directories: "
+            + ", ".join(f"`{name}`" for name in missing),
+        )
+    if extra:
+        check.fail(
+            source_rel,
+            1,
+            "fixture source names directories that do not exist: "
+            + ", ".join(f"`{name}`" for name in extra),
+        )
+
+    rows: list[tuple[int, str, str]] = []
+    for number, _line, match in check.find(
+        rel, r"^\|\s*`([^`]+)`\s*\|\s*(.*?)\s*\|\s*$"
+    ):
+        rows.append((number, match.group(1), match.group(2)))
 
     # Point inventory failures at the table itself, not at line 1.
     anchor = 1
@@ -239,34 +297,45 @@ def check_fixture_inventory(check: Checker) -> None:
             anchor = number
             break
 
-    names = [name for _number, name in rows]
-    listed = set(names)
-    actual = set(directories)
-    missing = sorted(actual - listed)
-    extra = sorted(listed - actual)
-    duplicates = sorted({name for name in names if names.count(name) > 1})
+    listed = {name for _number, name, _covers in rows}
+    readme_missing = sorted(source_set - listed)
+    readme_extra = sorted(listed - source_set)
+    readme_duplicates = sorted(
+        {name for _number, name, _covers in rows
+         if sum(1 for _n, n, _c in rows if n == name) > 1}
+    )
 
-    if missing:
+    if readme_missing:
         check.fail(
             rel,
             anchor,
-            "fixture table is missing: " + ", ".join(f"`{name}`" for name in missing),
+            "fixture table is missing: "
+            + ", ".join(f"`{name}`" for name in readme_missing),
         )
-    if extra:
+    if readme_extra:
         check.fail(
             rel,
             anchor,
-            "fixture table names directories that do not exist: "
-            + ", ".join(f"`{name}`" for name in extra),
+            "fixture table names entries not in the source: "
+            + ", ".join(f"`{name}`" for name in readme_extra),
         )
-    if duplicates:
-        check.fail(rel, anchor, "fixture table repeats: " + ", ".join(duplicates))
-    if len(directories) != len(names):
+    if readme_duplicates:
+        check.fail(rel, anchor, "fixture table repeats: " + ", ".join(readme_duplicates))
+    if len(rows) != len(names):
         check.fail(
             rel,
             anchor,
-            f"fixture table lists {len(names)} entries; the tree has {len(directories)} directories",
+            f"fixture table lists {len(rows)} entries; the source has {len(names)}",
         )
+
+    covers = {row["name"]: row["covers"] for row in fixtures}
+    for number, name, claimed in rows:
+        if name in covers and claimed != covers[name]:
+            check.fail(
+                rel,
+                number,
+                f"fixture coverage note for `{name}` differs from protocol/sections.json",
+            )
 
 
 def check_wheel_pin(check: Checker) -> None:

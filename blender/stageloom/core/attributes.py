@@ -18,23 +18,11 @@ This module is pure Python: the codec, the engine, the fake GH peer and the
 tests all build the same descriptors from it.
 """
 
-# Blender data type -> (wire dtype, components per element).
-WIRE_TYPES = {
-    "FLOAT": ("f32", 1),
-    "INT": ("i32", 1),
-    "BOOLEAN": ("u8", 1),
-    "FLOAT_VECTOR": ("f32", 3),
-    "FLOAT2": ("f32", 2),
-    "FLOAT4": ("f32", 4),
-    "FLOAT_COLOR": ("f32", 4),
-    "BYTE_COLOR": ("u8", 4),
-    "QUATERNION": ("f32", 4),
-    "FLOAT4X4": ("f32", 16),
-    "INT8": ("i32", 1),
-    "INT16_2D": ("i32", 2),
-    "INT32_2D": ("i32", 2),
-    "STRING": ("u8", 1),
-}
+from ._protocol_tables import WIRE_TYPES as WIRE_TYPES
+
+# WIRE_TYPES is generated from protocol/sections.json: Blender data type ->
+# (wire dtype, components per element). The source owns the vocabulary; the
+# Blender geometry layer and the C# AttributeStore consume the same rows.
 
 # Attribute names that are not data: the position is the geometry itself, and
 # leading-dot names are Blender's internal attributes.

@@ -167,23 +167,30 @@ namespace Stageloom.Core
             delegate(object flat, int start, int count, int components)
             { return SliceArray((string[])flat, start, count, components); });
 
-        private static readonly Dictionary<string, TypeInfo> Types = new Dictionary<string, TypeInfo>
+        // Blender data type -> storage kind, components, wire dtype and UI label.
+        // The rows come from protocol/sections.json via ProtocolTables; only the
+        // small storage-kind selection below stays hand-written because it maps
+        // the wire vocabulary onto Rhino's dictionary value types.
+        private static readonly Dictionary<string, TypeInfo> Types = BuildTypes();
+
+        private static Dictionary<string, TypeInfo> BuildTypes()
         {
-            { "FLOAT", new TypeInfo(DoubleKind, 1, "Float", "f32") },
-            { "INT", new TypeInfo(IntKind, 1, "Integer", "i32") },
-            { "BOOLEAN", new TypeInfo(BoolKind, 1, "Boolean", "u8") },
-            { "FLOAT_VECTOR", new TypeInfo(DoubleKind, 3, "Vector", "f32") },
-            { "FLOAT2", new TypeInfo(DoubleKind, 2, "2D Vector", "f32") },
-            { "FLOAT4", new TypeInfo(DoubleKind, 4, "4D Vector", "f32") },
-            { "FLOAT_COLOR", new TypeInfo(DoubleKind, 4, "Color", "f32") },
-            { "BYTE_COLOR", new TypeInfo(ByteKind, 4, "Byte Color", "u8") },
-            { "QUATERNION", new TypeInfo(DoubleKind, 4, "Quaternion", "f32") },
-            { "FLOAT4X4", new TypeInfo(DoubleKind, 16, "4x4 Matrix", "f32") },
-            { "INT8", new TypeInfo(IntKind, 1, "8-Bit Integer", "i32") },
-            { "INT16_2D", new TypeInfo(IntKind, 2, "2D Integer Vector", "i32") },
-            { "INT32_2D", new TypeInfo(IntKind, 2, "2D Integer Vector", "i32") },
-            { "STRING", new TypeInfo(StringKind, 1, "String", "u8") },
-        };
+            var types = new Dictionary<string, TypeInfo>(StringComparer.Ordinal);
+            foreach (ProtocolAttributeType row in ProtocolTables.AttributeTypes)
+                types.Add(row.Id, new TypeInfo(StorageKindFor(row), row.Components, row.Label, row.Dtype));
+            return types;
+        }
+
+        private static StorageKind StorageKindFor(ProtocolAttributeType row)
+        {
+            if (row.Id == "STRING") return StringKind;
+            if (row.Dtype == "f32") return DoubleKind;
+            if (row.Dtype == "i32") return IntKind;
+            if (row.Id == "BOOLEAN") return BoolKind;
+            if (row.Dtype == "u8") return ByteKind;
+            throw new FrameException("bad_frame",
+                "attribute type " + row.Id + " has no storage kind");
+        }
 
         /// <summary>The Blender UI name of a wire type id ("FLOAT" -> "Float").</summary>
         public static string Label(string type)
@@ -684,7 +691,7 @@ namespace Stageloom.Core
                     + (section.Dtype ?? "(missing)");
             if (!section.HasBytes)
                 return section.Name + " has no bytes";
-            int itemSize = expected == "u8" ? 1 : 4;
+            int itemSize = ProtocolTables.ItemSize(expected);
             if (section.ByteLength % itemSize != 0)
                 return section.Name + " length " + section.ByteLength
                     + " is not a multiple of " + itemSize;

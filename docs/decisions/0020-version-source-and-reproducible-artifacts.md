@@ -55,12 +55,20 @@ deploy script that assumes one developer's user is wrong on every other prefix.
 ## Consequences
 
 - Same tree + same toolchain produces the same extension zip and `.gha`. The
-  verified `.gha` hash for the 2026-11-18 tree is
+  T9a tree (before T9b's generated protocol tables) produced extension zip
+  `bfb250609feb188a458541c020be8c96049dab53ffb627e7d56a2f128882eb80` and `.gha`
   `05c904d5bf5cd2012347aa9680edc3d8ade7f3854cc526e19a4cd77879d5efe4` from three
-  builds (two in the tree, one from a copy at a different absolute path). A
-  different zlib build can change deflated zip bytes, and a different Mono
-  `csc`/referenced Rhino or Grasshopper assembly can change the `.gha`; the
-  claim is same-toolchain/same-tree, not universal bit-for-bit reproduction.
+  builds (two in the tree, one from a copy at a different absolute path). Those
+  hashes are historical and do **not** describe the T9b tree. On the T9b working
+  tree the same checks reproduced extension zip
+  `d12b6f504196d24ceaeb8c3896f162f48dbdef36346dd7112100b8e539b79b88` (two builds)
+  and `.gha`
+  `18c629e3fba03d30b6605ea53b2dd77221533f3f469e9b10a3ff1c57ee8ceafb` (two in-tree
+  builds plus a copied-tree build); `scripts/test-extension` also passed. T11
+  records the final release-tree hashes. A different zlib build can change
+  deflated zip bytes, and a different Mono `csc`/referenced Rhino or Grasshopper
+  assembly can change the `.gha`; the claim is same-toolchain/same-tree, not
+  universal bit-for-bit reproduction.
 - `scripts/test-reproducible-gha` is local/release only: it needs wine with
   Mono's `csc` and Rhino 8's managed assemblies. `scripts/check-all` runs it in
   the full local gate and `--ci` skips it explicitly; CI does not claim it.

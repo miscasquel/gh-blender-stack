@@ -168,6 +168,15 @@ Liveness is the WebSocket layer's keepalive (§2).
 
 ## 5. Sections
 
+**Generated tables.** The dtype table, the fixed geometry-hash section order,
+the attribute-type vocabulary (§5.1), the warning codes (§4.4), the codec error
+codes (§4.6) and the fixture inventory (§9) are generated from
+[`protocol/sections.json`](../protocol/sections.json) into
+`blender/stageloom/core/_protocol_tables.py` and
+`grasshopper/src/core/ProtocolTables.generated.cs`. Change the source and run
+`scripts/generate-protocol-tables`; `scripts/check-protocol-tables` fails when a
+generated file or the fixture directory list drifts.
+
 Sections come in two groups. Plain meshes use `mesh.*`. SubD cages use `subd.*`. A message can contain both. Names, dtypes, and shapes are fixed:
 
 | Name | dtype | Shape | Meaning |
@@ -437,7 +446,17 @@ Both the Python and C# codecs must decode every fixture to the same values, and 
 - C# under wine: `scripts/test-gha`, via `grasshopper/tests/console/StageloomCoreTests.exe`.
 - Regenerate with `python3 scripts/make-fixtures`.
 
-Fourteen fixtures, covering `ping`, `hello`, `schema`, a `ref` request, a mesh request, a SubD request, a request with a definition table, nested instance rows and a per-definition attribute, a request and a response with a two-part definition (part namespaces, a part attribute and a definition-level nested row), a mesh response, a mixed mesh/curve/point response, a response with attributes (`i32`, `f32`, `u8` and a STRING offsets section), an error response, and the `error` message. Floats in fixtures are exactly representable in f32, so both codecs agree byte for byte without a tolerance. The `hello` fixture predates `caps` and remains a valid frame without it.
+The fourteen fixtures (named and noted in `protocol/sections.json` and checked
+against the directories by `scripts/check-protocol-tables`) cover `ping`,
+`hello`, `schema`, a `ref` request, a mesh request, a SubD request, a request
+with a definition table, nested instance rows and a per-definition attribute, a
+request and a response with a two-part definition (part namespaces, a part
+attribute and a definition-level nested row), a mesh response, a mixed
+mesh/curve/point response, a response with attributes (`i32`, `f32`, `u8` and a
+STRING offsets section), an error response, and the `error` message. Floats in
+fixtures are exactly representable in f32, so both codecs agree byte for byte
+without a tolerance. The `hello` fixture predates `caps` and remains a valid
+frame without it.
 
 ## 10. Changes from plan rev 2
 
@@ -494,3 +513,6 @@ Fourteen fixtures, covering `ping`, `hello`, `schema`, a `ref` request, a mesh r
   geometry hash orders parts numerically after the definition index and keeps a
   definition's nested rows last. `request-instances-multipart` and
   `response-instances-multipart` pin both directions. Additive inside v2.
+- 2026-11-18: no wire change. The version, dtype, hash-order, attribute,
+  warning-code, codec-error and fixture vocabularies are now generated from
+  `protocol/sections.json` into both codecs ([ADR 0021](decisions/0021-generated-protocol-tables.md)).

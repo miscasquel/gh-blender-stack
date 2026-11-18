@@ -24,6 +24,11 @@ type; an uncommitted diff means a codec change broke the canonical form):
 python3 scripts/make-fixtures
 ```
 
+`protocol/sections.json` owns the fixture names and their coverage notes; this
+table is a checked mirror. `scripts/check-protocol-tables` validates the source
+against these directories, and `scripts/check-docs` validates this table against
+the source. The directories remain the source of truth for the bytes.
+
 ## The fixtures
 
 | Name | Covers |

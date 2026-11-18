@@ -7,34 +7,13 @@ This module is pure Python: the hash is over bytes the caller already has
 
 import hashlib
 
+from ._protocol_tables import HASH_SECTION_ORDER as HASH_SECTION_ORDER
+
 B_PREFIX = b"sha256:"
 
-# The order the protocol fixes for the geometry hash (protocol §5 table order).
-# Sections not present are skipped, in this order.
-HASH_SECTION_ORDER = (
-    "mesh.verts",
-    "mesh.face_counts",
-    "mesh.face_indices",
-    "mesh.colors",
-    "mesh.crease_edges",
-    "mesh.crease_values",
-    "subd.verts",
-    "subd.face_counts",
-    "subd.face_indices",
-    "subd.crease_edges",
-    "subd.crease_values",
-    "crv.points",
-    "crv.counts",
-    "crv.types",
-    "crv.orders",
-    "crv.knots_mode",
-    "crv.cyclic",
-    "pts.positions",
-    "pts.radii",
-    "pts.colors",
-    "inst.ref_def",
-    "inst.transforms",
-)
+# HASH_SECTION_ORDER is generated from protocol/sections.json. It is the order
+# the protocol fixes for the geometry hash (protocol §5 table order). Sections
+# not present are skipped, in this order.
 
 # Historical hash domain: saved stage records carry request IDs derived from
 # this string. Keep it across the rebrand so existing .blend records stay coherent.

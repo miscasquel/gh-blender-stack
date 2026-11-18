@@ -1,0 +1,460 @@
+#!/usr/bin/env python3
+"""Generate the Python and C# protocol tables from ``protocol/sections.json``.
+
+    scripts/generate-protocol-tables
+    scripts/generate-protocol-tables --check [--root DIR]
+
+``protocol/sections.json`` is the hand-written, canonical single source for the
+protocol version, dtypes, fixed geometry-hash section order, attribute types,
+warning codes, codec error codes and the golden-fixture inventory. The fixture
+directories remain the source of truth for the bytes; their names are checked
+against this list.
+
+The generator is pure Python 3.13 standard library: no Blender, no Rhino, no
+network. Output is deterministic (source order, sorted source arrays), so the
+same source always produces the same bytes. ``--check`` regenerates in memory
+and fails when either checked-in table, or the fixture directory list, differs.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import struct
+import sys
+from pathlib import Path
+
+SOURCE = "protocol/sections.json"
+PYTHON_OUT = "blender/stageloom/core/_protocol_tables.py"
+CSHARP_OUT = "grasshopper/src/core/ProtocolTables.generated.cs"
+FIXTURE_ROOT = "protocol/fixtures"
+
+TOP_LEVEL_KEYS = (
+    "attribute_types",
+    "codec_error_codes",
+    "dtypes",
+    "fixtures",
+    "hash_section_order",
+    "version",
+    "warning_codes",
+)
+DTYPE_KEYS = ("bytes", "name", "numpy", "struct")
+ATTRIBUTE_KEYS = ("components", "dtype", "label", "type")
+WARNING_KEYS = ("name", "value")
+FIXTURE_KEYS = ("covers", "name")
+
+
+class SourceError(Exception):
+    """``protocol/sections.json`` is malformed, or the tree disagrees with it."""
+
+
+def _fail(message):
+    raise SourceError(message)
+
+
+def _fields(value, expected, where):
+    if not isinstance(value, dict):
+        _fail("%s must be a JSON object" % (where,))
+    keys = tuple(sorted(value.keys()))
+    if keys != tuple(sorted(expected)):
+        _fail("%s keys are %s; expected %s" % (where, ", ".join(keys), ", ".join(expected)))
+
+
+def _text(value, where):
+    if not isinstance(value, str) or not value:
+        _fail("%s must be a non-empty string" % (where,))
+    return value
+
+
+def _positive_int(value, where):
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        _fail("%s must be a positive integer" % (where,))
+    return value
+
+
+def _sorted_by(items, key, where):
+    names = [item[key] for item in items]
+    if names != sorted(names):
+        _fail("%s must be sorted by %s" % (where, key))
+    if len(names) != len(set(names)):
+        _fail("%s repeats a %s" % (where, key))
+    return names
+
+
+def load_source(path):
+    """Parse and validate one canonical source file."""
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        _fail("cannot read %s: %s" % (path, exc))
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        _fail("%s is not valid JSON: %s" % (path, exc))
+
+    if not isinstance(data, dict):
+        _fail("%s must contain a JSON object" % (path,))
+    if tuple(data.keys()) != tuple(sorted(data.keys())):
+        _fail("%s top-level keys must be sorted for canonical source" % (path,))
+    _fields(data, TOP_LEVEL_KEYS, str(path))
+
+    version = data["version"]
+    if isinstance(version, bool) or not isinstance(version, int) or version <= 0:
+        _fail("%s: version must be a positive integer" % (path,))
+
+    dtypes = data["dtypes"]
+    if not isinstance(dtypes, list) or not dtypes:
+        _fail("%s: dtypes must be a non-empty array" % (path,))
+    dtype_names = []
+    for index, row in enumerate(dtypes):
+        where = "%s: dtypes[%d]" % (path, index)
+        _fields(row, DTYPE_KEYS, where)
+        name = _text(row["name"], where + ".name")
+        size = _positive_int(row["bytes"], where + ".bytes")
+        fmt = _text(row["struct"], where + ".struct")
+        _text(row["numpy"], where + ".numpy")
+        if len(fmt) != 1:
+            _fail("%s.struct must be one struct format character" % (where,))
+        try:
+            actual = struct.calcsize("<" + fmt)
+        except struct.error as exc:
+            _fail("%s.struct is not a struct format: %s" % (where, exc))
+        if actual != size:
+            _fail("%s.bytes is %d but struct %r is %d bytes" % (where, size, fmt, actual))
+        dtype_names.append(name)
+    _sorted_by(dtypes, "name", "%s: dtypes" % (path,))
+    dtype_set = set(dtype_names)
+
+    order = data["hash_section_order"]
+    if not isinstance(order, list) or not order:
+        _fail("%s: hash_section_order must be a non-empty array" % (path,))
+    seen = set()
+    for name in order:
+        _text(name, "%s: hash_section_order entry" % (path,))
+        if name in seen:
+            _fail("%s: hash_section_order repeats %r" % (path, name))
+        seen.add(name)
+
+    attributes = data["attribute_types"]
+    if not isinstance(attributes, list) or not attributes:
+        _fail("%s: attribute_types must be a non-empty array" % (path,))
+    for index, row in enumerate(attributes):
+        where = "%s: attribute_types[%d]" % (path, index)
+        _fields(row, ATTRIBUTE_KEYS, where)
+        _text(row["type"], where + ".type")
+        if row["dtype"] not in dtype_set:
+            _fail("%s.dtype %r is not a declared dtype" % (where, row["dtype"]))
+        _positive_int(row["components"], where + ".components")
+        _text(row["label"], where + ".label")
+    _sorted_by(attributes, "type", "%s: attribute_types" % (path,))
+
+    warnings = data["warning_codes"]
+    if not isinstance(warnings, list) or not warnings:
+        _fail("%s: warning_codes must be a non-empty array" % (path,))
+    warning_names = []
+    warning_values = []
+    for index, row in enumerate(warnings):
+        where = "%s: warning_codes[%d]" % (path, index)
+        _fields(row, WARNING_KEYS, where)
+        name = _text(row["name"], where + ".name")
+        if not name.isidentifier():
+            _fail("%s.name must be a C# identifier" % (where,))
+        value = _text(row["value"], where + ".value")
+        warning_names.append(name)
+        warning_values.append(value)
+    _sorted_by(warnings, "name", "%s: warning_codes" % (path,))
+    if len(warning_values) != len(set(warning_values)):
+        _fail("%s: warning_codes repeats a value" % (path,))
+
+    codes = data["codec_error_codes"]
+    if not isinstance(codes, list) or not codes:
+        _fail("%s: codec_error_codes must be a non-empty array" % (path,))
+    code_set = set()
+    for code in codes:
+        _text(code, "%s: codec_error_codes entry" % (path,))
+        if code in code_set:
+            _fail("%s: codec_error_codes repeats %r" % (path, code))
+        code_set.add(code)
+
+    fixtures = data["fixtures"]
+    if not isinstance(fixtures, list) or not fixtures:
+        _fail("%s: fixtures must be a non-empty array" % (path,))
+    for index, row in enumerate(fixtures):
+        where = "%s: fixtures[%d]" % (path, index)
+        _fields(row, FIXTURE_KEYS, where)
+        name = _text(row["name"], where + ".name")
+        if "/" in name or "\\" in name or name in (".", ".."):
+            _fail("%s.name must be one directory name" % (where,))
+        _text(row["covers"], where + ".covers")
+    _sorted_by(fixtures, "name", "%s: fixtures" % (path,))
+
+    return data
+
+
+def validate_fixtures(data, fixture_root):
+    """The directory list must match the source inventory exactly."""
+    if not fixture_root.is_dir():
+        _fail("missing fixture root %s" % (fixture_root,))
+    try:
+        directories = sorted(path.name for path in fixture_root.iterdir() if path.is_dir())
+    except OSError as exc:
+        _fail("cannot list %s: %s" % (fixture_root, exc))
+    names = [row["name"] for row in data["fixtures"]]
+    missing = sorted(set(names) - set(directories))
+    extra = sorted(set(directories) - set(names))
+    if missing:
+        _fail("fixture source names missing directories: " + ", ".join(missing))
+    if extra:
+        _fail("fixture directories missing from the source: " + ", ".join(extra))
+    for name in names:
+        folder = fixture_root / name
+        for required in ("frame.bin", "expect.json"):
+            if not (folder / required).is_file():
+                _fail("fixture %s is missing %s" % (name, required))
+
+
+def _py_string(value):
+    return json.dumps(value, ensure_ascii=True)
+
+
+def _cs_string(value):
+    return json.dumps(value, ensure_ascii=True)
+
+
+def render_python(data):
+    """Render the checked-in Python protocol table."""
+    lines = [
+        "# Generated by scripts/generate-protocol-tables from protocol/sections.json.",
+        "# Do not edit; change the source and regenerate.",
+        "",
+        "PROTOCOL_VERSION = %d" % (data["version"],),
+        "",
+        "# dtype -> (struct format character, bytes per element)",
+        "DTYPE_FORMATS = {",
+    ]
+    for row in data["dtypes"]:
+        lines.append(
+            "    %s: (%s, %d)," % (_py_string(row["name"]), _py_string(row["struct"]), row["bytes"])
+        )
+    lines.extend(
+        [
+            "}",
+            "",
+            "# Little-endian numpy dtype used when an array carries its own buffer.",
+            "NUMPY_DTYPES = {",
+        ]
+    )
+    for row in data["dtypes"]:
+        lines.append("    %s: %s," % (_py_string(row["name"]), _py_string(row["numpy"])))
+    lines.extend(
+        [
+            "}",
+            "",
+            "# Fixed geometry-hash order (protocol §6.1).",
+            "HASH_SECTION_ORDER = (",
+        ]
+    )
+    for name in data["hash_section_order"]:
+        lines.append("    %s," % (_py_string(name),))
+    lines.extend(
+        [
+            ")",
+            "",
+            "# Blender attribute type -> (wire dtype, components per element).",
+            "WIRE_TYPES = {",
+        ]
+    )
+    for row in data["attribute_types"]:
+        lines.append(
+            "    %s: (%s, %d),"
+            % (_py_string(row["type"]), _py_string(row["dtype"]), row["components"])
+        )
+    lines.extend(
+        [
+            "}",
+            "",
+            "# Error codes the codec itself can raise (protocol §4.6).",
+            "CODEC_CODES = (",
+        ]
+    )
+    for code in data["codec_error_codes"]:
+        lines.append("    %s," % (_py_string(code),))
+    lines.extend([")", ""])
+    return "\n".join(lines)
+
+
+def render_csharp(data):
+    """Render the checked-in C# protocol table (C# 5 compatible)."""
+    lines = [
+        "// Generated by scripts/generate-protocol-tables from protocol/sections.json.",
+        "// Do not edit; change the source and regenerate.",
+        "",
+        "using System;",
+        "using System.Collections.Generic;",
+        "",
+        "namespace Stageloom.Core",
+        "{",
+        "    /// <summary>One generated attribute-type row (protocol §5.1).</summary>",
+        "    public sealed class ProtocolAttributeType",
+        "    {",
+        "        public readonly string Id;",
+        "        public readonly string Dtype;",
+        "        public readonly int Components;",
+        "        public readonly string Label;",
+        "",
+        "        public ProtocolAttributeType(string id, string dtype, int components, string label)",
+        "        {",
+        "            Id = id;",
+        "            Dtype = dtype;",
+        "            Components = components;",
+        "            Label = label;",
+        "        }",
+        "    }",
+        "",
+        "    /// <summary>The protocol vocabulary shared by both codecs.</summary>",
+        "    public static class ProtocolTables",
+        "    {",
+        "        public const int ProtocolVersion = %d;" % (data["version"],),
+        "",
+        "        public static readonly string[] HashSectionOrder = new string[]",
+        "        {",
+    ]
+    for name in data["hash_section_order"]:
+        lines.append("            %s," % (_cs_string(name),))
+    lines.extend(
+        [
+            "        };",
+            "",
+            "        public static readonly ProtocolAttributeType[] AttributeTypes =",
+            "            new ProtocolAttributeType[]",
+            "        {",
+        ]
+    )
+    for row in data["attribute_types"]:
+        lines.append(
+            "            new ProtocolAttributeType(%s, %s, %d, %s),"
+            % (
+                _cs_string(row["type"]),
+                _cs_string(row["dtype"]),
+                row["components"],
+                _cs_string(row["label"]),
+            )
+        )
+    lines.extend(
+        [
+            "        };",
+            "",
+            "        private static readonly Dictionary<string, int> DtypeSizes = CreateDtypeSizes();",
+            "",
+            "        private static Dictionary<string, int> CreateDtypeSizes()",
+            "        {",
+            "            var sizes = new Dictionary<string, int>(StringComparer.Ordinal);",
+        ]
+    )
+    for row in data["dtypes"]:
+        lines.append("            sizes[%s] = %d;" % (_cs_string(row["name"]), row["bytes"]))
+    lines.extend(
+        [
+            "            return sizes;",
+            "        }",
+            "",
+            "        public static bool IsKnownDtype(string dtype)",
+            "        {",
+            "            return dtype != null && DtypeSizes.ContainsKey(dtype);",
+            "        }",
+            "",
+            "        public static int ItemSize(string dtype)",
+            "        {",
+            "            int size;",
+            "            return dtype != null && DtypeSizes.TryGetValue(dtype, out size) ? size : 0;",
+            "        }",
+            "    }",
+            "",
+            "    public static partial class WarningCodes",
+            "    {",
+        ]
+    )
+    for row in data["warning_codes"]:
+        lines.append(
+            "        public const string %s = %s;" % (row["name"], _cs_string(row["value"]))
+        )
+    lines.extend(["    }", "}", ""])
+    return "\n".join(lines)
+
+
+def _outputs(data):
+    return (
+        (PYTHON_OUT, render_python(data)),
+        (CSHARP_OUT, render_csharp(data)),
+    )
+
+
+def check_tree(root, data):
+    """Compare both checked-in tables with what the source renders."""
+    problems = []
+    for relative, rendered in _outputs(data):
+        path = root / relative
+        expected = rendered.encode("utf-8")
+        try:
+            actual = path.read_bytes()
+        except OSError as exc:
+            problems.append("%s: cannot read: %s" % (relative, exc))
+            continue
+        if actual != expected:
+            problems.append(
+                "%s: generated table is stale; run scripts/generate-protocol-tables"
+                % (relative,)
+            )
+    return problems
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="scripts/generate-protocol-tables")
+    parser.add_argument(
+        "--root",
+        default=str(Path(__file__).resolve().parent.parent),
+        help="repository root (default: this checkout)",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="fail if either generated table or the fixture inventory is stale",
+    )
+    args = parser.parse_args()
+    root = Path(args.root).resolve()
+
+    try:
+        data = load_source(root / SOURCE)
+        validate_fixtures(data, root / FIXTURE_ROOT)
+    except SourceError as exc:
+        print("generate-protocol-tables: %s" % (exc,), file=sys.stderr)
+        return 1
+
+    if args.check:
+        problems = check_tree(root, data)
+        if problems:
+            for problem in problems:
+                print("check-protocol-tables: %s" % (problem,), file=sys.stderr)
+            return 1
+        print(
+            "check-protocol-tables: ok (source, %d dtypes, %d attribute types, "
+            "%d warning codes, %d fixtures)"
+            % (
+                len(data["dtypes"]),
+                len(data["attribute_types"]),
+                len(data["warning_codes"]),
+                len(data["fixtures"]),
+            )
+        )
+        return 0
+
+    for relative, rendered in _outputs(data):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(rendered.encode("utf-8"))
+        print("wrote %s" % (relative,))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
