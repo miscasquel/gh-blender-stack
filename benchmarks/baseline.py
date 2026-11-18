@@ -11,8 +11,10 @@ Blender.
 
 The gate is exactly the plan's: a gated metric more than 5% slower than the
 stored baseline fails. A delta of exactly 5% passes. The baseline is
-machine-specific; a report from another processor, platform, Blender or Python
-is reported as not comparable instead of silently passing or failing.
+machine-specific; a report from another processor, OS/architecture, Blender or
+Python is reported as not comparable instead of silently passing or failing.
+A kernel/platform patch string is informational, not identity: Linux 7.3.4 and
+7.3.5 on the same CPU/architecture are the same benchmark machine.
 
 Gated metrics are the ones the hot path actually pays for. The full list and
 the reason for each ungated diagnostic is in ``METRICS`` below, and is copied
@@ -32,7 +34,9 @@ from pathlib import Path
 FORMAT = "stageloom-bench-baseline/1"
 THRESHOLD_PCT = 5.0
 DEFAULT_BASELINE = "benchmarks/results/2026-11-17-linux.json"
-MACHINE_FIELDS = ("processor", "platform", "blender", "python")
+MACHINE_FIELDS = ("processor", "os", "arch", "blender", "python")
+# Informational fields printed with the identity; not part of the comparison.
+MACHINE_INFO_FIELDS = ("processor", "os", "arch", "platform", "blender", "python")
 # The comparison treats values within this relative distance of the limit as
 # exactly at it, so a mathematically exact +5% does not fail on binary rounding
 # (105.0 / 100.0 - 1 is 5.000000000000004 in IEEE 754).
@@ -307,8 +311,17 @@ def _machine_of(report, label):
     if not isinstance(meta, dict):
         raise BaselineError("%s has no meta object" % label)
     machine = {}
+    platform_value = meta.get("platform")
     for field in MACHINE_FIELDS:
         value = meta.get(field)
+        # Old reports carried only the full platform string. Derive the
+        # stable OS/architecture fields so an existing run remains auditable;
+        # new reports write them explicitly.
+        if field in ("os", "arch") and not value and isinstance(platform_value, str):
+            if field == "os":
+                value = platform_value.split("-", 1)[0] or None
+            else:
+                value = "x86_64" if "x86_64" in platform_value else None
         if not isinstance(value, str) or not value:
             raise BaselineError("%s meta has no %s" % (label, field))
         machine[field] = value
@@ -573,7 +586,9 @@ def compare_report(report, baseline_document):
 
 
 def format_machine(machine):
-    return ", ".join("%s=%s" % (field, machine.get(field, "?")) for field in MACHINE_FIELDS)
+    return ", ".join(
+        "%s=%s" % (field, machine.get(field, "?")) for field in MACHINE_INFO_FIELDS
+    )
 
 
 def format_table(comparison):

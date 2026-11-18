@@ -5,6 +5,8 @@
   "aggregate": "best run",
   "machine": {
     "processor": "AMD Ryzen 7 7700X 8-Core Processor",
+    "os": "Linux",
+    "arch": "x86_64",
     "platform": "Linux-7.3.4-1-cachyos-x86_64-with-glibc2.44",
     "blender": "5.3.0",
     "python": "3.13.13"

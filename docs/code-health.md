@@ -561,7 +561,7 @@ Source-derived counts; this is not a claim about how many tests a run executed. 
 | C# console | grasshopper/tests/console/MiniWsTests.cs | 57 | Check(...) calls |
 | C# console | grasshopper/tests/console/Program.cs | 0 | Check(...) calls |
 | C# console | grasshopper/tests/console/StageTests.cs | 2 | Check(...) calls |
-| core | blender/tests/core/test_bench_baseline.py | 15 | test_* functions |
+| core | blender/tests/core/test_bench_baseline.py | 16 | test_* functions |
 | core | blender/tests/core/test_codec_boundaries.py | 61 | test_* functions |
 | core | blender/tests/core/test_core.py | 35 | test_* functions |
 | core | blender/tests/core/test_core_is_pure.py | 2 | test_* functions |

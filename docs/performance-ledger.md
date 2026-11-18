@@ -47,9 +47,11 @@ The 0.8.0 rule is exactly the handoff's:
 The threshold is not widened for any metric. Exactly +5% passes; anything above
 fails. Metrics are the gated set in `benchmarks/baseline.py`; the exclusions and
 why they are not measurable within 5% are recorded in `benchmarks/README.md`.
-The baseline is machine-specific: another processor, platform, Blender or Python
-prints “NOT COMPARABLE” and is not a green claim (`--require-baseline` makes it
-an error on the reference machine).
+The baseline is machine-specific: another processor, OS, architecture, Blender or
+Python prints “NOT COMPARABLE” and is not a green claim (`--require-baseline`
+makes it an error on the reference machine). The full kernel/platform string is
+recorded for context but is not identity; a kernel patch on the same CPU does
+not invalidate the baseline.
 
 ## T1 baseline and task ledger
 
@@ -81,7 +83,7 @@ flaked on unrelated timer noise; its 2 ms hard budget remains in `bench.py`.
 | T6 | `GhLink` split: no Blender hot-path change | 4.9433 / 5.1213; 4.4018 / 5.2993; 2.1453 / 2.1708; 21.6598 / 21.7428; 2.4608 / 2.5706; 12.8405 / 13.3398 | 4.8043 / 5.0086; 4.1689 / 5.1180; 2.1427 / 2.1572; 21.4043 / 21.4556; 2.4520 / 2.4903; 12.9308 / 13.2672 | -2.81% / -2.20%; -5.29% / -3.42%; -0.13% / -0.62%; -1.18% / -1.32%; -0.36% / -3.13%; +0.70% / -0.54% | production 24,719 / 19,714 (−19 physical, +338 code), 63 files; `GhLink` type 2,489 → 173 code lines; 454 Blender + 685 C# checks | accepted: 26/26 in 173.1 s; worst positive p50 +1.49% (`total_ms`), p95 +1.14% (`total_ms`); no >5% metric |
 | T7 | `Instances` split/table-driven conversion: no Blender hot-path change | 4.9433 / 5.1213; 4.4018 / 5.2993; 2.1453 / 2.1708; 11.8275 / 12.0514; 21.6598 / 21.7428; 2.4608 / 2.5706; 12.8405 / 13.3398; 116.8278 / 119.6174; 91.0217 / 92.1573 | 4.8727 / 4.9639; 4.4787 / 5.2800; 2.1583 / 2.1921; 12.1295 / 12.4563; 21.7090 / 21.8571; 2.4619 / 2.5358; 12.8257 / 13.2868; 116.8876 / 119.4850; 90.9955 / 91.4284 | -1.43% / -3.07%; +1.75% / -0.36%; +0.60% / +0.98%; +2.55% / +3.36%; +0.23% / +0.53%; +0.04% / -1.36%; -0.12% / -0.40%; +0.05% / -0.11%; -0.03% / -0.79% | production 24,711 / 19,800 (−8 physical, +86 code), 69 files; former 2,135-line `Instances` type gone, largest instance type `InstanceEmit` 450 and `DefinitionBuilder` 940 → 424; 454 Blender + 685 C# checks; native Mesh/Curve/Point emit/build probe | accepted: 26/26 in 176.1 s; worst positive p50 +2.55% (`total_ms`), p95 +3.36%; no >5% metric; intermediate p95-only runs recorded below |
 | T8 | performance: 100k fresh apply, in-place, 1M in-place, playback, all gated | see the T8 verification table | see the T8 verification table | fresh apply **-88.51% / -89.55%**; all other p50/p95 within +3.93% | production 24,918 / 19,945 (+207 physical, +145 code), 69 files; C# `frame_decode` p50 **0.4556 → 0.0050 ms** and `frame_mesh_arrays` **0.9210 → 0.4434 ms**; 455 Blender + 687 C# checks; publication heartbeat skips a clean rebuild | accepted: full gate 26/26 in 159.7 s; worst positive p50 +1.81% (`total_ms`), p95 +3.93% (`apply_inplace_ms`); offsetting gain: fresh apply −88.51%/−89.55% and C# `frame_decode` −98.9%; no metric exceeds +5% |
-| T9 | docs/build/CI/protocol tables (T9a/T9b done; T11 pending) | — | — | — | no production hot-path change and no benchmark run; T9a touches docs, scripts and CI only; T9b replaces hand-written protocol tables with generated ones (25,040 / 20,035 production lines, 71 files) | not applicable |
+| T9 | docs/build/CI/protocol tables (T9a/T9b done; T11 pending) | — | — | — | full gate 26/26 in **177.7 s**, baseline enforced; worst positive p50 +2.23% / p95 +3.31% (`total_ms`), no >5% metric; 132 core + 455 Blender + 689 C# checks; production 25,040 / 20,035 (71 files); artifacts reproduce (zip d12b6f50…, `.gha` 18c629e3…) | accepted |
 | T10 | pending | — | — | — | — | pending |
 | T11 | pending | — | — | — | — | pending |
 
@@ -94,7 +96,7 @@ not a sum of independently warmed phase timings. The idle pass is amortized over
 - The T1 baseline was rebuilt from the same three source runs with
   `aggregate: median run`; T5 later replaced it with the 2026-11-17 best-of-three
   baseline after host-state drift was measured.
-- The pure `benchmarks/baseline.py` gate and its 15 unit tests cover identical,
+- The pure `benchmarks/baseline.py` gate and its 16 unit tests cover identical,
   +4%, exactly +5%, +6%, p95-only +6%, one-outlier rejection, systematic
   regression, missing/extra metrics, malformed baselines, machine mismatch and a
   widened threshold.

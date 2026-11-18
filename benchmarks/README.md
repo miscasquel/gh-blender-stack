@@ -198,7 +198,8 @@ rejects a single background-load/CPU-state spike but cannot remove sustained
 load: run the gate without another gate or benchmark, and only on a quiet
 machine. If the host
 is loaded, stop and defer. The gate compares
-`processor`, `platform`, `blender` and `python`. On another machine it prints
+`processor`, OS (`os`), architecture (`arch`), `blender` and `python`. The full kernel/platform
+string is printed for context but is not identity: a Linux kernel patch on the same CPU is not a different benchmark machine. On another machine it prints
 `[baseline] SKIP: NOT COMPARABLE on this machine` and exits 0; the check-all
 summary records “baseline skipped (machine differs)”. `--require-baseline` turns
 that into exit 2, which is the mode for the reference machine. CI invokes the

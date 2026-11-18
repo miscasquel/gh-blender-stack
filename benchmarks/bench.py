@@ -1045,6 +1045,8 @@ def main():
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "blender": bpy.app.version_string,
             "python": platform.python_version(),
+            "os": platform.system(),
+            "arch": platform.machine(),
             "platform": platform.platform(),
             "processor": cpu_model(),
             "data_root": DATA_ROOT,

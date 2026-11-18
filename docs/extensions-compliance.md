@@ -106,7 +106,7 @@ on the current tree and records those hashes below:
 **0.8.0 T9b verification (2026-11-18).** The generated protocol tables add
 `_protocol_tables.py` and `ProtocolTables.generated.cs` and edit the Python/C#
 core. Production is **25,040 physical / 20,035 code lines across 71 files**;
-the tree has **131 core**, **455 Blender headless** and **689 C#** checks. No
+the tree has **132 core**, **455 Blender headless** and **689 C#** checks. No
 wire, fixture or `out_hash` byte changed. The T9a hashes above are historical;
 the T9b working tree reproduced:
 
@@ -114,8 +114,13 @@ the T9b working tree reproduced:
 scripts/test-reproducible      two builds PASS; zip sha256 d12b6f504196d24ceaeb8c3896f162f48dbdef36346dd7112100b8e539b79b88
 scripts/test-reproducible-gha  three builds PASS; .gha sha256 18c629e3fba03d30b6605ea53b2dd77221533f3f469e9b10a3ff1c57ee8ceafb
 scripts/test-extension         installed-extension round trip PASS
-scripts/check-all --quick      PASS (docs, protocol tables, core, ruff)
+scripts/check-all              PASS 177.7 s; 26/26 baseline enforced
 ```
+
+The full gate's worst gated movement was `pipeline.100k.total_ms` p50 +2.23% /
+p95 +3.31%, within the 5% rule; the baseline identity now compares processor,
+OS, architecture, Blender and Python rather than the kernel patch (7.3.4 →
+7.3.5 is not a different benchmark machine).
 
 The hashes differ from T9a because the zip now ships `core/_protocol_tables.py`
 and the edited core modules, and the `.gha` ships

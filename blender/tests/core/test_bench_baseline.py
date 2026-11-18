@@ -21,6 +21,8 @@ import baseline  # noqa: E402
 
 MACHINE = {
     "processor": "Test CPU 8-Core",
+    "os": "Linux",
+    "arch": "x86_64",
     "platform": "Linux-test-x86_64",
     "blender": "5.3.0",
     "python": "3.13.13",
@@ -283,6 +285,13 @@ class BaselineGateTests(unittest.TestCase):
         self.assertEqual(result.exit_code(require_baseline=True), 2)
         self.assertIn("NOT COMPARABLE", baseline.format_table(result))
         self.assertIn("Some Other CPU", baseline.format_table(result))
+
+    def test_kernel_patch_is_not_machine_identity(self):
+        report = make_report()
+        report["meta"]["platform"] = "Linux-test-9.99-x86_64-with-glibc2.99"
+        result = baseline.compare_report(report, self.baseline)
+        self.assertTrue(result.comparable)
+        self.assertEqual(result.failed, [])
 
     def test_threshold_cannot_be_widened(self):
         document = copy.deepcopy(self.baseline)

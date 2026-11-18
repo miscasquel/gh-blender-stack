@@ -1049,8 +1049,13 @@ tables without changing a wire byte, fixture, `out_hash` or runtime algorithm
   71 files** (+122 / +90 against T8's 24,918 / 19,945 / 69). The two generated
   files are 184 physical / 156 code lines; the hand-written diff is
   +59/−121 physical (net −62) and −66 code lines, so the duplicate literals are
-  gone and the checked-in generated tables are the net addition. No benchmark or
-  full gate was run, per the task's correctness-only constraint.
+  gone and the checked-in generated tables are the net addition. The full
+  `scripts/check-all` gate then ran alone in **177.7 s** with the 2026-11-17
+  baseline enforced (26/26 checks; worst p50 +2.23% and p95 +3.31% on
+  `pipeline.100k.total_ms`; 132 core, 455 Blender and 689 C# checks; both
+  artifacts reproduced). The baseline identity now compares processor, OS,
+  architecture, Blender and Python, not the kernel patch; the host moved from
+  Linux 7.3.4 to 7.3.5 without invalidating the reference.
 - **Artifacts.** T9b adds generated files to the shipped add-on and plugin, so
   the T9a artifact hashes no longer describe this tree. On the T9b working tree,
   `scripts/test-reproducible` built the extension twice and reproduced
@@ -1064,7 +1069,7 @@ tables without changing a wire byte, fixture, `out_hash` or runtime algorithm
   contains `ProtocolTables.generated.cs` plus the edited `Frame.cs`,
   `Attributes.cs` and `Conversion.cs`; the version and build toolchain are
   unchanged. T11 records the final release-tree hashes.
-- **Verification.** `scripts/test-core` passed **131 tests** (123 before; +8
+- **Verification.** `scripts/test-core` passed **132 tests** (123 before; +9
   protocol-table tests); `scripts/test-gha` passed **689 checks** including the
   fourteen fixture checks across the eight console suites (687 before; +2
   generated-table checks, the attribute-store label conformance included);

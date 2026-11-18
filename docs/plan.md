@@ -9,7 +9,7 @@ animation and playback, live stages, and renderable native bakes.
 
 **0.8.0 status (2026-11-18).** T1–T9 are complete; T10 (verification) and T11
 (release) remain. Production is 25,040 physical / 20,035 code lines across 71
-files, with 131 core, 455 Blender headless and 689 C# checks. The release version
+files, with 132 core, 455 Blender headless and 689 C# checks. The release version
 stays **0.7.0** until T11. Native Windows/Rhino acceptance is deferred until
 after 0.8.0; 0.8.0 makes no native-parity claim. The `.NET` framework migration
 is a recorded no-go through 1.0 ([ADR 0019](decisions/0019-keep-csharp5-mono.md));
