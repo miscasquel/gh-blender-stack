@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Prove the extension zip is reproducible: build twice, compare the bytes.
+#
+#     scripts/test-reproducible
+#
+# scripts/build-extension normalizes sorted entries, timestamps and attributes
+# before validation. This check runs the whole build twice and fails if the two
+# archives differ. It is a correctness/build check, not a benchmark.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO"
+VERSION="$("$REPO/scripts/version")"
+ZIP="$REPO/dist/stageloom-$VERSION.zip"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/stageloom-reproducible.XXXXXX")"
+trap 'rm -rf "$TMP"' EXIT
+
+hash_of() {
+  sha256sum "$1" | cut -d' ' -f1
+}
+
+# A second build in the same checkout would reuse the same source mtimes, so
+# compare bytes *and* assert the normalized metadata that makes a build
+# independent of checkout mtimes/ordering.
+check_metadata() {
+  python3 - "$1" <<'PY'
+import sys
+import zipfile
+
+path = sys.argv[1]
+with zipfile.ZipFile(path) as archive:
+    names = archive.namelist()
+    if names != sorted(names):
+        raise SystemExit("reproducible: entries are not sorted by name")
+    for info in archive.infolist():
+        if info.date_time != (1980, 1, 1, 0, 0, 0):
+            raise SystemExit("reproducible: %s has timestamp %r" % (info.filename, info.date_time))
+        mode = info.external_attr >> 16
+        if mode not in (0o100644, 0o40755, 0o120777):
+            raise SystemExit("reproducible: %s has mode %o" % (info.filename, mode))
+        if info.create_system != 3 or info.extra or info.comment:
+            raise SystemExit("reproducible: %s has unstable metadata" % info.filename)
+PY
+}
+
+echo "reproducible: build 1/2"
+"$REPO/scripts/build-extension" >"$TMP/build1.log" 2>&1
+cp "$ZIP" "$TMP/first.zip"
+FIRST="$(hash_of "$TMP/first.zip")"
+check_metadata "$TMP/first.zip"
+echo "reproducible: build 1 sha256 $FIRST"
+
+echo "reproducible: build 2/2"
+"$REPO/scripts/build-extension" >"$TMP/build2.log" 2>&1
+SECOND="$(hash_of "$ZIP")"
+echo "reproducible: build 2 sha256 $SECOND"
+
+if [ "$FIRST" != "$SECOND" ] || ! cmp -s "$TMP/first.zip" "$ZIP"; then
+  echo "reproducible: FAIL — the two builds differ" >&2
+  echo "reproducible: build 1 log:" >&2
+  tail -n 20 "$TMP/build1.log" >&2 || true
+  echo "reproducible: build 2 log:" >&2
+  tail -n 20 "$TMP/build2.log" >&2 || true
+  exit 1
+fi
+
+echo "reproducible: PASS — byte-identical zip, sha256 $SECOND"

@@ -8,8 +8,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-MANIFEST="$REPO/blender/stageloom/blender_manifest.toml"
-VERSION="$(grep -E '^version' "$MANIFEST" | head -1 | cut -d'"' -f2)"
+VERSION="$("$REPO/scripts/version")"
 
 ZIP="${1:-$REPO/dist/stageloom-$VERSION.zip}"
 if [ ! -f "$ZIP" ]; then

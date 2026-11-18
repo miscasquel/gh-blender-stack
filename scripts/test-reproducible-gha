@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Prove Stageloom.gha is reproducible: build twice, then build a copy of the
+# tree at another absolute path and compare all three bytes.
+#
+#     scripts/test-reproducible-gha
+#
+# grasshopper/build/build-gha.sh passes Mono csc /deterministic, which fixes the
+# assembly timestamp, module version GUID and MVID. The build emits no debug
+# info, so source paths do not leak; the copied-tree build proves that. If a
+# future build enables /debug, add a stable /pathmap from $REPO before claiming
+# this again.
+#
+# This needs wine with Mono's csc and Rhino 8's managed assemblies. It is a
+# local/release check; it is skipped by scripts/check-all --ci. The original
+# grasshopper/build/out/Stageloom.gha is restored on exit (including failure),
+# so scripts/check-deployed still compares the same built/deployed state.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+BUILD="$REPO/grasshopper/build/build-gha.sh"
+OUT="$REPO/grasshopper/build/out/Stageloom.gha"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/stageloom-gha-reproducible.XXXXXX")"
+ORIGINAL="$TMP/Stageloom.gha.original"
+HAD_ORIGINAL=0
+
+if [ -f "$OUT" ]; then
+  cp -p "$OUT" "$ORIGINAL"
+  HAD_ORIGINAL=1
+fi
+
+restore() {
+  if [ "$HAD_ORIGINAL" -eq 1 ]; then
+    cp -p "$ORIGINAL" "$OUT"
+  else
+    rm -f "$OUT"
+  fi
+  rm -rf "$TMP"
+}
+trap restore EXIT
+
+hash_of() {
+  sha256sum "$1" | cut -d' ' -f1
+}
+
+build_once() {
+  local target="$1" log="$2"
+  "$BUILD" >"$log" 2>&1
+  cp -p "$OUT" "$target"
+}
+
+echo "reproducible-gha: build 1/3 (this tree)"
+build_once "$TMP/first.gha" "$TMP/build1.log"
+FIRST="$(hash_of "$TMP/first.gha")"
+echo "reproducible-gha: build 1 sha256 $FIRST"
+
+echo "reproducible-gha: build 2/3 (this tree)"
+build_once "$TMP/second.gha" "$TMP/build2.log"
+SECOND="$(hash_of "$TMP/second.gha")"
+echo "reproducible-gha: build 2 sha256 $SECOND"
+
+# A different absolute source path must not change the assembly. This is the
+# /pathmap question: with no /debug, /deterministic alone is sufficient.
+COPY="$TMP/copied-tree"
+mkdir -p "$COPY/grasshopper"
+tar -C "$REPO/grasshopper" -cf - src build | tar -C "$COPY/grasshopper" -xf -
+echo "reproducible-gha: build 3/3 (copied tree at $COPY)"
+( cd "$COPY" && grasshopper/build/build-gha.sh >"$TMP/build3.log" 2>&1 )
+cp -p "$COPY/grasshopper/build/out/Stageloom.gha" "$TMP/copied.gha"
+COPIED="$(hash_of "$TMP/copied.gha")"
+echo "reproducible-gha: build 3 sha256 $COPIED"
+
+if [ "$FIRST" != "$SECOND" ] || ! cmp -s "$TMP/first.gha" "$TMP/second.gha"; then
+  echo "reproducible-gha: FAIL — the two same-tree builds differ" >&2
+  exit 1
+fi
+if [ "$FIRST" != "$COPIED" ] || ! cmp -s "$TMP/first.gha" "$TMP/copied.gha"; then
+  echo "reproducible-gha: FAIL — the copied-tree build differs; inspect /pathmap" >&2
+  exit 1
+fi
+
+echo "reproducible-gha: PASS — byte-identical .gha, sha256 $FIRST"

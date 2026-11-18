@@ -1,8 +1,9 @@
 schema_version = "1.0.0"
 
 id = "stageloom"
-# The single source for the add-on version: the development install
-# (scripts/install-addon) generates bl_info from this manifest.
+# The single source for the add-on version: scripts/version reads this line,
+# the development install (scripts/install-addon) generates bl_info from this
+# manifest, and scripts/check-docs keeps the checked C# hello string in sync.
 version = "0.7.0"
 name = "Stageloom"
 tagline = "Grasshopper definitions as stackable modifiers in Blender"

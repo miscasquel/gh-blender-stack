@@ -9,8 +9,10 @@ That is the v1 goal. **v0.7.0 is the current release**: geometry (meshes,
 curves, points, SubD cages) driven by a real Grasshopper definition, with named
 attributes and Grasshopper blocks (instances, including nested and multi-part
 definitions) travelling both ways, parameters you can edit and keyframe in
-Blender, packaged as a Blender extension.
-[DEMO.md](DEMO.md) walks through the loop.
+Blender, packaged as a Blender extension. 0.8.0 is in progress on `main`
+(T1–T8 and T9c/T9a done; T9b/T10/T11 remain); the manifest and shipped version
+stay **0.7.0** until the T11 release bump. [DEMO.md](DEMO.md) walks through the
+loop.
 
 ```
 Blender                                          Rhino / Grasshopper (wine)
@@ -95,15 +97,18 @@ Blender                                          Rhino / Grasshopper (wine)
   stages this bake froze (upstream or downstream); another stage's bake and a
   manual freeze are untouched. A packed bake is kept when the `.blend` is saved.
 - **Tests.** `scripts/check-all` is the local gate: docs, core, Blender headless
-  (plus the offline gate), benchmarks, the installed extension round trip and
-  the C# suites, with per-step timing. The current tree is checked by 123
-  core tests, 455 Blender headless tests, fourteen golden fixtures and the C#
-  suites (687 passing checks; the native Rhino halves skip under wine). `scripts/test-core` (standard library only),
+  (plus the offline gate), benchmarks, the installed extension round trip, the
+  reproducible-zip and `.gha` checks and the C# suites, with per-step timing.
+  The current tree is checked by 123 core tests, 455 Blender headless tests,
+  fourteen golden fixtures and the C# suites (687 passing checks; the native
+  Rhino halves skip under wine). `scripts/test-core` (standard library only),
   `scripts/test-blender` (Blender headless against `tools/fake_gh`),
   `scripts/test-gha` (the C# codec against the golden fixtures, plus the
   conversion, attribute, instance, transport, link, component and stage
-  suites, under wine) and `scripts/test-extension` (installed extension round
-  trip) are its steps.
+  suites, under wine), `scripts/test-extension` (installed extension round
+  trip), `scripts/test-reproducible` (two-build extension zip comparison) and
+  `scripts/test-reproducible-gha` (two-build plus copied-tree `.gha`
+  comparison) are its steps.
 
 ## What is deliberately not here yet
 
@@ -138,7 +143,10 @@ The authoritative roadmap and scope are in [docs/plan.md](docs/plan.md).
   Mono's `csc.exe` (ships with wine) builds the C# 5 plugin; a
   `net48`/`net7.0-windows` migration is a recorded no-go through 1.0
   ([ADR 0019](docs/decisions/0019-keep-csharp5-mono.md)), revisited only after
-  native Windows/Rhino acceptance (1.0 or later).
+  native Windows/Rhino acceptance. **Native Windows/Rhino acceptance is
+  deferred until after 0.8.0**; this release makes no native-parity claim and
+  the C# suite remains a local gate (a stock CI runner has neither wine with
+  Mono's `csc` nor Rhino 8's managed assemblies).
 
 The Grasshopper half is built from this same repository (`grasshopper/`,
 GPL-3.0-or-later), so no closed component is required. **Without Rhino** the
@@ -178,20 +186,31 @@ Download the add-on zip and the Grasshopper `.gha` from the
 The commands below are the build path.
 
 Release path: the add-on ships as a Blender extension with the official
-pure-Python `websockets` wheel.
+pure-Python `websockets` wheel. `blender_manifest.toml` is the only version
+source (`scripts/version` prints it), and the build normalizes the zip
+(sorted entries, fixed `1980-01-01` timestamps and modes), validates the
+rewritten artifact and prints/writes its SHA-256. `scripts/test-reproducible`
+builds twice and asserts the fixed metadata as well as comparing bytes.
+`grasshopper/build/build-gha.sh` passes Mono `csc` `/deterministic`; two builds
+in the tree and one from a copy at a different absolute path are byte-identical
+(same toolchain and tree; no `/pathmap` is needed because the build emits no
+debug info). `scripts/test-reproducible-gha` checks that locally.
 
 ```
 scripts/build-extension          # builds dist/stageloom-<version>.zip
 scripts/install-extension        # installs and enables it in Blender
 
 grasshopper/build/build-gha.sh   # build Stageloom.gha (Rhino 8)
+grasshopper/deploy/deploy.sh --dry-run  # print the resolved wine user and path
 grasshopper/deploy/deploy.sh     # copy it into the Grasshopper Libraries
 ```
 
 `scripts/check-deployed` says whether the copy Grasshopper will load is the one
 you last built. A `.gha` is scanned only when Rhino starts, so a build is not
 live until the copy *and* the restart have both happened; `scripts/test-gha`
-prints the same warning when the deployed plugin is stale.
+prints the same warning when the deployed plugin is stale. `deploy.sh` finds
+the Windows user under the prefix; if the prefix has more than one, set
+`STAGELOOM_WINE_USER` to the Rhino 8 user.
 
 Development path: `scripts/install-addon` symlinks the working tree into
 Blender's user scripts and unpacks the same declared `websockets` wheel beside
@@ -230,14 +249,17 @@ pointed at a remote machine.
 ## Working on it
 
 ```
-scripts/check-all          # the gate: docs, core, Blender, bench, extension, C#
+scripts/check-all          # the gate: docs, core, Blender, bench, extension, reproducibility, .gha, C#
 scripts/check-all --quick  # inner loop: docs, core and ruff only
 scripts/test-core        # layer A: pure Python core, no Blender needed
 scripts/test-blender     # layer B: Blender headless, against tools/fake_gh
 scripts/test-gha         # layer C: the C# codec and conversion suites under wine
 scripts/test-extension   # layer D-lite: builds, installs into a throwaway config, round trip
+scripts/test-reproducible # builds the extension zip twice and compares the bytes
+scripts/test-reproducible-gha # builds the .gha twice plus a copied-tree build and compares
+scripts/version          # prints the version from blender_manifest.toml
 scripts/bench            # reference performance matrix and its budgets (not a test layer)
-scripts/bench-baseline   # 3 sequential runs, median p50/p95 vs the stored 0.8 baseline
+scripts/bench-baseline   # 3 sequential runs, best p50/p95 vs the stored 2026-11-17 baseline
 scripts/bench-gha        # C# parameter/schema microbenchmark (wine/Mono)
 scripts/code-health      # regenerate docs/code-health.md (not a gate)
 
@@ -245,15 +267,17 @@ python3 scripts/make-fixtures   # regenerate protocol/fixtures after a protocol 
 ```
 
 CI runs the core layer on Python 3.13 and 3.14. A second job installs Blender
-5.3 on Ubuntu and runs `scripts/check-all --ci`: docs, core, Blender headless
-with the offline gate, benchmarks and the installed-extension round trip. The
-bench step runs the same three-run baseline comparison against the stored
-2026-11-16 quiet-machine baseline; because a stock runner is not the reference
-machine, it prints “NOT COMPARABLE” and the summary records the baseline as
-skipped rather than claiming a green number CI cannot measure.
-That job names and skips the C# step because a stock runner has no wine prefix
-with Rhino 8; the C# suites run on the development machine here, and a
-stock-runner codec job remains future CI work rather than a claim.
+5.3 on Ubuntu and runs `scripts/check-all --ci`: docs, ruff, core, Blender
+headless with the offline gate, the installed-extension round trip, the
+baseline-gate self-test and the two-build extension-zip reproducibility check.
+The timing benchmark is **not** run in CI: the stored 2026-11-17 best-of-three
+baseline is reference-machine-specific, so `scripts/bench-baseline` is a
+local/release check and CI makes no performance claim. That job names and skips
+the C# and `.gha` reproduction steps because a stock runner has no
+wine/wine-mono and no Rhino 8 managed assemblies; the C# suite and
+`scripts/test-reproducible-gha` are local gates (C# 5/Mono,
+[ADR 0019](docs/decisions/0019-keep-csharp5-mono.md)). No stock-runner codec job
+is claimed. Native Windows/Rhino acceptance is deferred until after 0.8.0.
 
 ## Support
 

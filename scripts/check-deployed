@@ -22,6 +22,9 @@ if [ ! -f "$BUILT" ]; then
 fi
 BUILT_SHA="$(sha256sum "$BUILT" | cut -d' ' -f1)"
 
+# Scan every Windows user in the prefix. The deploy script resolves one user,
+# but a stale copy under another account is still a live-session hazard; never
+# narrow this to a hardcoded user or path.
 DEPLOYED=()
 while IFS= read -r -d '' f; do DEPLOYED+=("$f"); done < <(
   find "$PREFIX/drive_c/users" -type f -name 'Stageloom.gha' \

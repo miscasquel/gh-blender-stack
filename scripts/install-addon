@@ -17,7 +17,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 PKG="$REPO/blender/stageloom"
 MANIFEST="$PKG/blender_manifest.toml"
-VERSION_RAW="$(grep -E '^version' "$MANIFEST" | head -1 | cut -d'"' -f2)"
+VERSION_RAW="$("$REPO/scripts/version")"
 
 BLENDER_VERSION="$(blender --version | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)"
 ADDONS="${BLENDER_USER_SCRIPTS:-$HOME/.config/blender/$BLENDER_VERSION/scripts}/addons"

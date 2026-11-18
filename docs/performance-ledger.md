@@ -1,12 +1,12 @@
 # Performance ledger
 
-**Status: T1–T8 accepted.** The gate reference is the **2026-11-17 best-of-three
-baseline**: three clean solo runs, with the fastest per-run p50/p95 stored for
-each metric. It replaces the 2026-11-16 median baseline after host CPU
-power/core-state drift was measured and confirmed not to be a T5 regression; the
-T1–T4 rows below remain historical against the old reference. The idle-pass
-diagnostic was ungated in T2: at ~3 µs its p95 is below the timer noise floor,
-and the 2 ms hard budget still applies.
+**Status: T1–T8 accepted; T9a has no performance change.** The gate reference is
+the **2026-11-17 best-of-three baseline**: three clean solo runs, with the
+fastest per-run p50/p95 stored for each metric. It replaces the 2026-11-16
+median baseline after host CPU power/core-state drift was measured and confirmed
+not to be a T5 regression; the T1–T4 rows below remain historical against the
+old reference. The idle-pass diagnostic was ungated in T2: at ~3 µs its p95 is
+below the timer noise floor, and the 2 ms hard budget still applies.
 
 T8 is the performance follow-through: it fixed the bulk mesh rebuild
 (`pipeline.100k.apply_fresh_ms` −88.6% p50), removed the decoded-frame payload
@@ -81,7 +81,7 @@ flaked on unrelated timer noise; its 2 ms hard budget remains in `bench.py`.
 | T6 | `GhLink` split: no Blender hot-path change | 4.9433 / 5.1213; 4.4018 / 5.2993; 2.1453 / 2.1708; 21.6598 / 21.7428; 2.4608 / 2.5706; 12.8405 / 13.3398 | 4.8043 / 5.0086; 4.1689 / 5.1180; 2.1427 / 2.1572; 21.4043 / 21.4556; 2.4520 / 2.4903; 12.9308 / 13.2672 | -2.81% / -2.20%; -5.29% / -3.42%; -0.13% / -0.62%; -1.18% / -1.32%; -0.36% / -3.13%; +0.70% / -0.54% | production 24,719 / 19,714 (−19 physical, +338 code), 63 files; `GhLink` type 2,489 → 173 code lines; 454 Blender + 685 C# checks | accepted: 26/26 in 173.1 s; worst positive p50 +1.49% (`total_ms`), p95 +1.14% (`total_ms`); no >5% metric |
 | T7 | `Instances` split/table-driven conversion: no Blender hot-path change | 4.9433 / 5.1213; 4.4018 / 5.2993; 2.1453 / 2.1708; 11.8275 / 12.0514; 21.6598 / 21.7428; 2.4608 / 2.5706; 12.8405 / 13.3398; 116.8278 / 119.6174; 91.0217 / 92.1573 | 4.8727 / 4.9639; 4.4787 / 5.2800; 2.1583 / 2.1921; 12.1295 / 12.4563; 21.7090 / 21.8571; 2.4619 / 2.5358; 12.8257 / 13.2868; 116.8876 / 119.4850; 90.9955 / 91.4284 | -1.43% / -3.07%; +1.75% / -0.36%; +0.60% / +0.98%; +2.55% / +3.36%; +0.23% / +0.53%; +0.04% / -1.36%; -0.12% / -0.40%; +0.05% / -0.11%; -0.03% / -0.79% | production 24,711 / 19,800 (−8 physical, +86 code), 69 files; former 2,135-line `Instances` type gone, largest instance type `InstanceEmit` 450 and `DefinitionBuilder` 940 → 424; 454 Blender + 685 C# checks; native Mesh/Curve/Point emit/build probe | accepted: 26/26 in 176.1 s; worst positive p50 +2.55% (`total_ms`), p95 +3.36%; no >5% metric; intermediate p95-only runs recorded below |
 | T8 | performance: 100k fresh apply, in-place, 1M in-place, playback, all gated | see the T8 verification table | see the T8 verification table | fresh apply **-88.51% / -89.55%**; all other p50/p95 within +3.93% | production 24,918 / 19,945 (+207 physical, +145 code), 69 files; C# `frame_decode` p50 **0.4556 → 0.0050 ms** and `frame_mesh_arrays` **0.9210 → 0.4434 ms**; 455 Blender + 687 C# checks; publication heartbeat skips a clean rebuild | accepted: full gate 26/26 in 159.7 s; worst positive p50 +1.81% (`total_ms`), p95 +3.93% (`apply_inplace_ms`); offsetting gain: fresh apply −88.51%/−89.55% and C# `frame_decode` −98.9%; no metric exceeds +5% |
-| T9 | pending | — | — | — | — | pending |
+| T9 | docs/build/CI (T9a done; T9b/T11 pending) | — | — | — | no production hot-path change and no benchmark run; T9a touches docs, scripts and CI only | not applicable |
 | T10 | pending | — | — | — | — | pending |
 | T11 | pending | — | — | — | — | pending |
 

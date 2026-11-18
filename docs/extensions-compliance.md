@@ -1,10 +1,11 @@
 # Stageloom compliance record
 
 **Status:** v0.7.0 is the released compliance baseline; the 0.8.0 quality work
-is in progress (T1 and T2 complete; see
-[`plan-quality-0.7-0.8.md`](plan-quality-0.7-0.8.md)). **1.0 planning** continues
-in [`plan.md`](plan.md). The extensions.blender.org upload is deferred. Release
-history is in [`../CHANGELOG.md`](../CHANGELOG.md) and the GitHub releases.
+is in progress (T1–T8 and T9c/T9a complete; T9b/T10/T11 remain; see
+[`plan-quality-0.7-0.8.md`](plan-quality-0.7-0.8.md)). The release version stays
+`0.7.0` until T11. **1.0 planning** continues in [`plan.md`](plan.md). The
+extensions.blender.org upload is deferred. Release history is in
+[`../CHANGELOG.md`](../CHANGELOG.md) and the GitHub releases.
 
 ## Current audit
 
@@ -23,12 +24,15 @@ history is in [`../CHANGELOG.md`](../CHANGELOG.md) and the GitHub releases.
 | S7 dead stubs | **Closed** | none left |
 | S8 wheel integrity | **Closed** | the official wheel is the only `websockets` source; its SHA-256 is pinned and verified in `scripts/build-extension` and `scripts/check-docs` |
 | S9 data root | **Closed** | `bpy.utils.extension_path_user(...)`; dev fallback; override retained |
-| Manifest version | **Closed** | `blender_manifest.toml` declares `0.7.0`; the build, install and validation paths read that one value |
-| Packaging truthfulness | **Closed** | build/install/test fail on validator/build/install error; version-specific `dist/stageloom-0.7.0.zip` |
+| Manifest version | **Closed** | `blender_manifest.toml` declares `0.7.0`; `scripts/version` is the single extractor used by build/install/test, and `scripts/check-docs` checks the C# hello string and protocol example |
+| Packaging truthfulness | **Closed** | build/install/test fail on validator/build/install error; version-specific `dist/stageloom-0.7.0.zip`; the normalized zip is validated after rewriting |
+| Reproducible artifact | **Closed** | extension zip: sorted entries, fixed `1980-01-01` timestamps/modes, preserved compression; `.gha`: Mono `csc` `/deterministic`; both SHA-256 and two-build checks (`scripts/test-reproducible`, `scripts/test-reproducible-gha`) |
+| Wine deploy path | **Closed** | `grasshopper/deploy/deploy.sh` derives the user under `$WINEPREFIX/drive_c/users` (`STAGELOOM_WINE_USER` override, `Public` skipped, zero/multiple users fail); no hardcoded user |
 | Listing assets/support | **Deferred** | icon in `docs/listing/`; screenshots pending for a later upload; support URL is listing metadata |
 | Platform upload | **Deferred** | v0.7.0 ships on GitHub first; the 1.0 plan owns the platform decision |
-| Windows-native acceptance | **Open for 1.0** | tracked in [`plan.md`](plan.md) §5B |
-| CI release gate | **Open for 1.0** | tracked in [`plan.md`](plan.md) §5F |
+| Windows-native acceptance | **Deferred after 0.8.0** | no native-parity claim; tracked in [`plan.md`](plan.md) §5B |
+| .NET framework migration | **No-go through 1.0** | C# 5/Mono and MiniWs/Json stay; [ADR 0019](decisions/0019-keep-csharp5-mono.md) |
+| CI release gate | **Open for 1.0** | tracked in [`plan.md`](plan.md) §5F; CI runs core/Blender/extension/zip reproducibility, not the reference-machine benchmark, local-only C# or the local `.gha` check |
 
 **Notes.** Manifest schema 1.0.0 has no `support` field; the support URL belongs
 in the listing and README. S9 is the extension-user data directory, not the old
@@ -62,6 +66,40 @@ installed-extension round trip). Current measurements are in
 [`performance-ledger.md`](performance-ledger.md) and
 [`plan-quality-0.7-0.8.md`](plan-quality-0.7-0.8.md); this record does not
 duplicate them.
+
+**0.8.0 T8/T9a verification (2026-11-18).** Production is **24,918 physical /
+19,945 code lines across 69 files**; the tree has **123 core**, **455 Blender
+headless** and **687 C#** checks. T8 changed no wire, fixture or `out_hash`
+byte and passed 26/26 gated metrics (worst positive p50 +1.81%). T9a makes the
+compliance claims true without touching production:
+
+- one version source: `blender_manifest.toml` + `scripts/version`; the build,
+  install and test scripts use it, and `scripts/check-docs` checks the C# hello
+  string and protocol example (`Publication.cs` and `docs/protocol.md` stay
+  `Stageloom 0.7.0` until T11);
+- reproducible extension zip: `scripts/build-extension` normalizes sorted
+  entries, fixed `1980-01-01` timestamps/modes and preserved compression, then
+  Blender validates the rewritten zip. Two builds produced SHA-256
+  `bfb250609feb188a458541c020be8c96049dab53ffb627e7d56a2f128882eb80`;
+  `scripts/test-reproducible` is the check. The manifest, wheel digest and
+  extracted contents were compared with the source and are unchanged;
+- reproducible `.gha`: `grasshopper/build/build-gha.sh` passes Mono `csc`
+  `/deterministic` (timestamp, module version GUID and MVID). No `/pathmap` is
+  needed because the build emits no debug info, and a copied-tree build
+  matched. Three builds produced SHA-256
+  `05c904d5bf5cd2012347aa9680edc3d8ade7f3854cc526e19a4cd77879d5efe4`;
+  `scripts/test-reproducible-gha` is the local/release check and restores the
+  original built `.gha`. The claim is same tree/toolchain, not a different
+  Mono/`csc` or Rhino/Grasshopper assembly set;
+- deploy: `grasshopper/deploy/deploy.sh` derives the wine user (current prefix:
+  `miquel`), and `scripts/check-deployed` still scans every user. No live
+  redeploy was performed;
+- native Windows/Rhino acceptance is deferred until after 0.8.0; the `.NET`
+  migration is a no-go through 1.0 ([ADR 0019](decisions/0019-keep-csharp5-mono.md));
+- CI runs docs, ruff, core, Blender headless + offline, extension round trip,
+  baseline-gate self-test and the two-build extension-zip reproducibility check.
+  It skips the reference-machine benchmark and the local-only C# suite and
+  `.gha` check explicitly and claims neither.
 
 The 1.0 workstreams, platform matrix and release gates are in
 [`plan.md`](plan.md). A new listing packet is prepared from the 1.0 release

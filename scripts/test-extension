@@ -7,7 +7,7 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 TESTDIR="${EXTENSION_TEST_DIR:-/tmp/opencode/bl-extension-test}"
-VERSION="$(grep -E '^version' "$REPO/blender/stageloom/blender_manifest.toml" | head -1 | cut -d'"' -f2)"
+VERSION="$("$REPO/scripts/version")"
 ZIP="$REPO/dist/stageloom-$VERSION.zip"
 
 "$REPO/scripts/build-extension" >/dev/null

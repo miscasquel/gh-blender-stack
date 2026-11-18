@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Print the add-on version from blender_manifest.toml.
+
+    scripts/version                  # this checkout's manifest
+    scripts/version PATH             # another manifest
+    unzip -p ZIP blender_manifest.toml | scripts/version -
+
+`blender_manifest.toml` is the single release version source. The build,
+install and test scripts call this helper instead of each carrying a grep/cut
+copy; ``scripts/check-docs`` still reads the manifest directly because it also
+validates the source and checks the version claims around it.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+import tomllib
+from pathlib import Path
+
+DEFAULT_MANIFEST = (
+    Path(__file__).resolve().parent.parent
+    / "blender"
+    / "stageloom"
+    / "blender_manifest.toml"
+)
+
+
+def read_manifest(path: str) -> dict:
+    label = "stdin" if path == "-" else path
+    try:
+        if path == "-":
+            return tomllib.load(sys.stdin.buffer)
+        with open(path, "rb") as handle:
+            return tomllib.load(handle)
+    except OSError as exc:
+        raise SystemExit(f"scripts/version: cannot read {label}: {exc}") from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise SystemExit(f"scripts/version: invalid TOML in {label}: {exc}") from exc
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="scripts/version",
+        description="Print the add-on version from blender_manifest.toml.",
+    )
+    parser.add_argument(
+        "manifest",
+        nargs="?",
+        default=str(DEFAULT_MANIFEST),
+        help="manifest path, or - for stdin (default: this checkout)",
+    )
+    args = parser.parse_args()
+
+    manifest = read_manifest(args.manifest)
+    version = manifest.get("version")
+    if not isinstance(version, str) or not version.strip():
+        label = "stdin" if args.manifest == "-" else args.manifest
+        raise SystemExit(
+            f'scripts/version: {label} has no top-level version = "<version>"'
+        )
+
+    print(version.strip())
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -2,9 +2,10 @@
 
 **Status:** 0.7.0 complete, 2026-11-16. 0.8.0 is in progress: T1 (baseline,
 performance gate, code health) through T8 (performance follow-through) are
-complete and recorded below. W7's `geometry_io`, engine-object, `GhLink` and
-`Instances` splits are done; W8 (performance, T8) is done, with the remaining
-W9/W10 items.
+complete; T9c (the .NET no-go) and T9a (build/CI/docs truth) are complete;
+T9b (protocol single-source tables), T10 and T11 remain. W7's `geometry_io`,
+engine-object, `GhLink` and `Instances` splits are done; W8 (performance, T8)
+is done, with the remaining W9/W10 items.
 **Baseline:** v0.6.0 plus the 2026-11-15 audit (seven module reviews), plus the
 post-audit bake/upstream work (`102f9c8..254d796`). That was the starting point:
 305 Blender headless tests in ~86 s, 57 core tests, C# and extension suites
@@ -89,6 +90,17 @@ passed 26/26 in **159.7 s**; the worst positive p50 is **+1.81%**
 the stored 12.8405/13.3398: the handoff's +7–9% does not reproduce. The 455 Blender tests
 (+1 n-gon rebuild) and **687** C# checks (+2) pass; the wine harness still
 prints its native skips. See the T8 verification below and the ledger.
+
+T9c then recorded the framework decision as a **no-go**: C# 5/Mono and the
+hand-written `MiniWsClient`/`Json.cs` stay through 1.0, revisitable only after
+native Windows/Rhino acceptance ([ADR 0019](decisions/0019-keep-csharp5-mono.md)).
+T9a then made the build/CI/docs claims true without touching production: the
+manifest is the only version source (`scripts/version`), the extension zip and
+`.gha` are reproducible (`scripts/test-reproducible`,
+`scripts/test-reproducible-gha`), the deploy script derives the wine user
+instead of hardcoding one, and CI explicitly skips the reference-machine
+benchmark and the local-only C# suite and `.gha` check. T9b (protocol tables)
+and T10/T11 remain; T9 is not complete. See the T9a verification below.
 
 **0.7.0 completion record (2026-11-16).** Q1–Q19 are complete; Q5 was merged
 into Q4 (the cache and the `Live` toggle were one removal). The release was
@@ -236,7 +248,8 @@ architecture, not a new framework:
 - the **official wheel** is the only `websockets` source (0.8.0 T2 deleted the
   21k-line vendored tree; the dev install extracts the same wheel; ADR 0018);
 - validate the manifest and the built zip in CI;
-- 0.8.0 build artifact reproducible and traceable to a tag.
+- 0.8.0 extension zip and `.gha` reproducible for the same tree/toolchain and
+  traceable to a tag.
 
 **Grasshopper plugin — one section is worth a framework spike, nothing else.**
 The current C# 5/Mono build forces a hand-rolled WebSocket (`MiniWsClient`) and
@@ -700,7 +713,8 @@ accepted offsetting gain; no unbounded growth in a 10k-touch/1k-frame soak;
   Grasshopper 2 plan and the 2026-11-13 handoff are removed; the history stays in
   git and in `CHANGELOG.md`, not in the current tree.
 - **Build:** reproducible extension zip (fixed mtimes, sorted entries, recorded
-  SHA-256); deploy script derives the wine user; install-addon stops deleting a
+  SHA-256) and reproducible `.gha` (Mono `csc` `/deterministic`; copied-tree
+  check); deploy script derives the wine user; install-addon stops deleting a
   shared package; `test-gha --require-all` fails on skipped suites; version
   extracted in one helper.
 - **Extension/wheel (done in T2):** the official wheel is the only `websockets`
@@ -709,13 +723,15 @@ accepted offsetting gain; no unbounded growth in a 10k-touch/1k-frame soak;
 - **Framework spike (D7):** run the `net48`/`net7.0-windows` spike; adopt
   transport/JSON migration only with a documented go decision; otherwise record
   the no-go and harden C# 5.
-- **CI:** core, Blender, codec, bench baseline, docs, extension build; timeouts,
-  least privilege, tag/release workflow, artifact validation. Name the
-  codec-only job honestly instead of silently skipping.
+- **CI:** core, Blender, docs, extension and reproducible-zip checks; timeouts,
+  least privilege, caching, artifact validation. The reference-machine
+  benchmark, the local-only C# suite and the local `.gha` reproduction check
+  are explicit skips, not silent gaps; no stock-runner codec job is claimed
+  because its install was not verified.
 
 **Exit:** no dead code; every shim has a policy; docs match reality; root
-contains only current material; artifacts reproducible; framework decision
-recorded.
+contains only current material; extension zip and `.gha` reproducible for the
+same tree/toolchain; framework decision recorded.
 
 ---
 
@@ -786,7 +802,8 @@ Includes W7, W8, W9 and completes W10:
 - Performance baseline gate green; scale tests documented; no >5% regression
   without a quantified offsetting gain.
 - Docs/ADR/CI factually consistent; spikes and stale planning archived.
-- Reproducible artifacts and a tag-triggered release workflow.
+- Reproducible extension zip and `.gha` for the same tree/toolchain, with a
+  tag-triggered release workflow.
 - A fresh audit against the same rubric finds no critical or major findings.
 
 ---
@@ -866,7 +883,7 @@ acceptance criteria, then committed before the next starts.
 | T6 | `GhLink` split | registry/connection/scheduler/protocol/publication/slots split; document isolation and threading preserved | Done 2026-11-17; 685 C# checks, 26/26 in 173.1 s |
 | T7 | `Instances` split and table-driven conversion | single-part/multi-part/nested/attribute round trips unchanged; production LOC down or flat | Done 2026-11-17; 685 C# checks, 26/26 in 176.1 s; native probe green |
 | T8 | Performance follow-through | playback resolved or traded; p50/p95 within 5%; each fixed path measured | Done 2026-11-17; 26/26 in 159.7 s, worst p50 +1.81%; fresh apply −88.5%, C# decode −98.9% |
-| T9 | Lean/docs/CI/build/framework | protocol tables generated; docs/ADR truth pass; reproducible artifacts; framework go/no-go | T9c no-go recorded 2026-11-18 ([ADR 0019](decisions/0019-keep-csharp5-mono.md)); T9a/T9b pending |
+| T9 | Lean/docs/CI/build/framework | protocol tables generated; docs/ADR truth pass; reproducible extension zip and `.gha`; framework go/no-go | T9c no-go 2026-11-18 ([ADR 0019](decisions/0019-keep-csharp5-mono.md)); T9a done 2026-11-18 (one version source, reproducible zip and `.gha`, derived wine user, honest CI); T9b pending |
 | T10 | Verification | fuzz, coverage, scale and 1-hour soak green | Pending |
 | T11 | 0.8.0 release | version/changelog/artifacts match the tagged commit | Pending |
 
@@ -926,9 +943,67 @@ the only development/test path, no `dotnet` SDK or native Mono coverage tooling,
 native Windows/Rhino acceptance deferred until after 0.8.0, and the second
 runtime/platform or replacement dev-loop cost of `net7.0-windows`/`net48`. The
 spike is closed in [ADR 0019](decisions/0019-keep-csharp5-mono.md) and revisits
-only after native Windows acceptance (post-0.8 / 1.0). **T9a and T9b remain
-pending, along with the rest of the T9 scope (protocol tables, docs/CI/build
-truth and reproducible artifacts); T9 is not complete.**
+only after native Windows acceptance (post-0.8 / 1.0). **T9a is complete
+(2026-11-18); T9b (protocol tables) and T10/T11 remain, so T9 is not complete.**
+
+### T9a verification (build/CI/docs truth)
+
+**2026-11-18.** T9a changes no production, protocol, fixture or `out_hash`
+byte, and runs no benchmark. It makes the surrounding claims true
+([ADR 0020](decisions/0020-version-source-and-reproducible-artifacts.md)):
+
+- **One version source.** `blender_manifest.toml` is the only release version
+  literal. `scripts/version` reads it (default checkout path, a path argument,
+  or `-` for stdin); `scripts/build-extension`, `install-extension`,
+  `test-extension` and `install-addon` call it instead of carrying a grep/cut
+  copy. `scripts/check-docs` keeps its direct manifest read (it validates the
+  source) and now compares the C# `hello` string in `Publication.cs` and the
+  protocol example to the manifest. The version stays **0.7.0** until T11.
+- **Reproducible extension zip.** `scripts/build-extension` normalizes the
+  Blender-built archive before validation: entries sorted by name, timestamp
+  `1980-01-01 00:00:00`, fixed Unix file modes, preserved per-entry compression
+  (the wheel stays stored), then Blender validates the rewritten zip. It prints
+  and writes `dist/stageloom-<version>.zip.sha256`. Two independent builds from
+  the same tree produced the same archive:
+  `bfb250609feb188a458541c020be8c96049dab53ffb627e7d56a2f128882eb80`;
+  `scripts/test-reproducible` proves it and is part of the full gate.
+  The manifest, wheel digest and extracted contents were compared with the
+  source: unchanged.
+- **Reproducible `.gha`.** `grasshopper/build/build-gha.sh` passes Mono `csc`
+  `/deterministic`, which fixes the assembly timestamp, module version GUID and
+  MVID. No `/pathmap` is used: the build emits no debug info, and a build from
+  a copy of the tree at another absolute path matched. Three builds (two in the
+  tree, one copied tree) produced SHA-256
+  `05c904d5bf5cd2012347aa9680edc3d8ade7f3854cc526e19a4cd77879d5efe4`;
+  `scripts/test-reproducible-gha` proves it and restores the original built
+  `.gha` on exit. Same tree + same Mono/`csc` and referenced Rhino/Grasshopper
+  assemblies is the claim; a different toolchain can differ.
+- **Deploy user.** `grasshopper/deploy/deploy.sh` resolves the Windows user
+  under `$WINEPREFIX/drive_c/users` rather than hardcoding one; it prefers
+  `STAGELOOM_WINE_USER`, skips `Public`, and fails with the candidates when
+  there are zero or multiple users. `--dry-run` prints the result without
+  copying. On the current prefix it resolves user `miquel` and the existing
+  Libraries path; no redeploy was performed. `scripts/check-deployed` already
+  scanned every user and was left with an explicit comment not to narrow it.
+- **CI truth.** The quality job still runs docs, ruff, core, Blender headless
+  plus offline gate, the installed-extension round trip, the baseline-gate
+  self-test and the two-build extension-zip reproducibility check. It no longer
+  runs the timing benchmark: the stored 2026-11-17 best-of-three baseline is
+  reference-machine-only. C# and the `.gha` reproduction check remain
+  local-only: a stock Ubuntu runner has no wine/wine-mono and no
+  RhinoCommon/Grasshopper. `scripts/test-gha --codec-only` passed locally
+  against a fresh `WINEPREFIX` with system wine (no Rhino assemblies), but a
+  stock-runner install was not verified, so no codec-only CI job was added and
+  the workflow claims no C# coverage. Native Windows/Rhino acceptance is
+  deferred until after 0.8.0; no native-parity or framework migration is
+  claimed ([ADR 0019](decisions/0019-keep-csharp5-mono.md)).
+- **Deferred in this session.** The full gate was not run: it is the end-of-0.8
+  gate and the user was using the machine. `scripts/test-blender` was also
+  blocked because the live Blender session holds `127.0.0.1:59130`; the same
+  three `EngineUpdateTests` errors reproduce on a clean `git archive HEAD`
+  tree, so they are environmental/test isolation, not a T9a regression. Core,
+  extension, extension-reproducibility, `.gha` reproducibility, docs, ruff and
+  codec-only checks passed.
 
 **Commit rule:** a task is committed only after its acceptance tests plus
 `scripts/test-core` and the relevant Blender/C# suite pass, and the audit finds
@@ -944,13 +1019,13 @@ invariant it strengthens.
 | Removing the cache regresses scrub/playback UX | Freeze/Bake are the documented offline path; measure live scrub; the simulation-zone cache is deferred until a later R&D decision; release notes explain the change. |
 | Downstream bake dependents become complex or slow | One `engine/bake.py` owner; dependency closure with cycle guard; trigger-and-freeze one dependent at a time; rollback on failure; ADR 0015; tests for every branch. |
 | Multi-part protocol change breaks a saved workflow | Single-part frames stay byte-identical; `caps` negotiation; fixtures; both halves ship together; fallback with warning. |
-| .NET spike breaks the wine dev loop | Time-boxed; test both `net48` and `net7.0-windows`; adopt only on Windows + wine; otherwise record no-go and keep C# 5. |
+| .NET spike breaks the wine dev loop | No-go recorded (T9c, ADR 0019); C# 5/Mono stays. Revisit only after native Windows/Rhino acceptance. |
 | Simulation-zone cache duplicates the Bake node | Deferred to later R&D; the criteria remain documented, and no second cache ships in 0.7/0.8. |
 | Refactor changes behavior | Characterization tests before moves; refactor commits contain no behavior changes; extract one module at a time. |
-| CI cannot run Rhino | Explicit codec-only job; full layers on the dev machine and release checklist; do not claim coverage that does not exist. |
+| CI cannot run Rhino | CI skips C# and the `.gha` reproduction check explicitly and claims neither; `scripts/test-gha --codec-only` is verified locally with a fresh prefix, and the full suite plus `.gha` check are local/release gates. |
 | Performance work destabilizes correctness | Gate first, then zero-copy; no optimization without a failing measurement. |
 | Scope creep into features | Any new feature request is deferred post-1.0; this plan changes behavior only for the recorded simplifications and bug fixes. |
-| Single-platform blind spots | Windows acceptance run for 0.8.0; record Blender/macOS results in release notes. |
+| Single-platform blind spots | Native Windows/Rhino acceptance is deferred until after 0.8.0; 0.8 makes no native-parity claim and records the manual results when they exist. |
 
 ---
 
@@ -1019,9 +1094,9 @@ invariant it strengthens.
 | H35 | Publication O(components × stages) per solve | major | W8 |
 | H36 | Stage In rebuilds all geometry for refs | major | W8 |
 | H40–H44 | Lifecycle/instances/param/MiniWs/attribute tests absent | major | W10 |
-| T1 | Deploy script hardcodes a user | major | W9 |
+| T1 | Deploy script hardcodes a user | major | W9 — resolved T9a |
 | T2 | Install-addon deletes a shared package | major | W9 |
-| T4 | Extension zip not reproducible | major | W9 |
+| T4 | Extension zip and `.gha` not reproducible | major | W9 — resolved T9a |
 | T11 | Bench budgets 3–300× loose, no baseline | major | W8/W10 |
 | T18 | Test modules depend on import order | major | W0/W10 |
 | T24 | README claims Python 3.14 (Blender uses 3.13) | major | W9 |

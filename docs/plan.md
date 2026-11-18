@@ -1,10 +1,20 @@
 # Stageloom — 1.0 plan
 
-**Status:** planning, 2026-11-16. Baseline: **v0.7.0**.
+**Status:** 1.0 planning, 2026-11-16; 0.8.0 in progress, 2026-11-18. Baseline:
+**v0.7.0**.
 **Target:** Blender 5.3. **Compatibility floor:** Blender 5.2.
 **Goal:** ship a stable 1.0 for the declared v1 scope: Grasshopper definitions as
 stackable Blender modifiers, with geometry and parameters flowing both ways,
 animation and playback, live stages, and renderable native bakes.
+
+**0.8.0 status (2026-11-18).** T1–T8 and T9c/T9a are complete; T9b (protocol
+single-source tables), T10 (verification) and T11 (release) remain. Production
+is 24,918 physical / 19,945 code lines across 69 files, with 123 core, 455
+Blender headless and 687 C# checks. The release version stays **0.7.0** until
+T11. Native Windows/Rhino acceptance is deferred until after 0.8.0; 0.8.0 makes
+no native-parity claim. The `.NET` framework migration is a recorded no-go
+through 1.0 ([ADR 0019](decisions/0019-keep-csharp5-mono.md)); C# 5/Mono and
+the hand-written MiniWs/JSON transport stay.
 
 **Authority:** this document is the roadmap for 1.0. The wire contract is
 [`protocol.md`](protocol.md); architecture decisions are in
@@ -26,8 +36,8 @@ when all of the following are true:
 - The supported platforms have been exercised end to end, not only under wine.
 - The wire protocol and component identities are frozen as a compatibility
   contract.
-- Release artifacts are reproducible from a tagged commit, validated, and
-  installable by the supported routes.
+- The extension zip and `.gha` are reproducible from a tagged tree for the same
+  toolchain, validated, and installable by the supported routes.
 - The release test matrix passes on every supported platform.
 
 No new user-facing feature is required for 1.0 unless it is needed to close one
@@ -70,10 +80,10 @@ target; preview off is within noise. See
 
 | Gap | Why it blocks 1.0 |
 |---|---|
-| No native Windows Rhino acceptance run | Wine is a development environment, not the target user platform. |
+| No native Windows Rhino acceptance run | Wine is a development environment, not the target user platform. Native acceptance is deferred until after 0.8.0; 0.8.0 makes no native-parity claim. |
 | No GH component migration | Old documents keep old parameter/output lists and never gain newer capabilities. |
 | No chain-level Windows/Rhino playback/bake proof | Bake stage freezes the upstream chain and triggers plus freezes downstream dependents (ADR 0015); the 0.7.0 acceptance is headless, so a Windows/Rhino chain render is still missing. |
-| Release verification is manual and single-machine | A 1.0 needs a reproducible, tag-triggered, multi-platform gate. |
+| Release verification is manual and single-machine | The extension zip and `.gha` are reproducible for the same tree/toolchain and checked, but the C# suite, `.gha` check and full platform matrix remain a local/release gate rather than a stock-runner CI claim. |
 
 ---
 
@@ -266,10 +276,12 @@ state, and Clear Bake restores live behavior without restarting Blender.
 
 **Work**
 
-- CI: layer A and the Blender quality gate (headless against `fake_gh`, offline
-  gate, benchmarks and extension round trip) already run on pull requests; the
-  C# suites run in the local full gate. Add a stock-runner codec job and a
-  self-hosted Rhino smoke job for the live half.
+- CI: layer A, the Blender quality gate (headless against `fake_gh`, offline
+  gate, extension round trip, baseline-gate self-test and the reproducible-zip
+  check) run on pull requests. Benchmarks are reference-machine-only and C#
+  (including the reproducible `.gha` check) is local-only (ADR 0019); a
+  stock-runner C# codec job and a self-hosted Rhino smoke job remain future
+  work, and neither is claimed by the current workflow.
 - Add tag-triggered build and validation for `stageloom-<version>.zip` and
   `Stageloom.gha`; fail on a version mismatch or a validator error.
 - Build both artifacts from the tagged commit; record their SHA-256 hashes.
@@ -295,7 +307,7 @@ after 0.8 except fixes required by a gate.
 |---|---|---|
 | **0.6** | Performance harness and instance fix; units matrix; plugin endpoint; bake undo safety | Shipped 2026-11-14 |
 | **0.7** | Quality release: live-only stages, nested/multi-part blocks, bake dependents, codec/geometry hardening, lifecycle/UI/state; custom cache and `Live` removed | Shipped 2026-11-16; full gate green, no known blocker or major from the 2026-11-15 audit |
-| **0.8** | Architecture seams (W7), performance gates (W8), lean/docs/CI (W9), verification (W10), tag-triggered distribution; native Windows/Rhino acceptance deferred beyond 0.8; .NET migration recorded as a no-go ([ADR 0019](decisions/0019-keep-csharp5-mono.md)) | Every module ≥ 8.5; baseline gate green; docs/CI true; reproducible artifacts from a tag; no native-parity or framework-migration claim |
+| **0.8** | Architecture seams (W7), performance gates (W8), lean/docs/CI (W9), verification (W10), tag-triggered distribution; native Windows/Rhino acceptance deferred beyond 0.8; .NET migration recorded as a no-go ([ADR 0019](decisions/0019-keep-csharp5-mono.md)) | Every module ≥ 8.5; baseline gate green; docs/CI true; reproducible extension zip and `.gha` from a tag for the same tree/toolchain; no native-parity or framework-migration claim |
 | **0.9** | Release candidate; soak; freeze protocol v2 and file formats; full acceptance on supported platforms | No open release-blocking defect; all gates below pass |
 | **1.0** | Release | Artifacts, notes and hashes published; support matrix signed off |
 
@@ -338,7 +350,8 @@ The old A1–A10 remain the functional core. Add the release gates that the
 - **A14 Units and Breps.** Non-metre Rhino documents round-trip correctly; the
   lossy Brep path is covered and warned.
 - **A15 Release.** Tagged artifacts are built from a clean tree, validated,
-  hashed, installable by the supported routes, and reproducible in CI.
+  hashed, installable by the supported routes, and reproducible for the same
+  toolchain (extension zip in CI, `.gha` in the local/release gate).
 
 **1.0 is blocked by any failing A-gate or any known silent data-loss path.**
 

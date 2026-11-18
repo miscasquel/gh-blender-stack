@@ -8,9 +8,10 @@ No Blender, no network, and only the Python standard library: the checks are
 deterministic and run anywhere.
 
 The contract is intentionally narrow: current claims that have drifted before
-(version, Python runtime, transport, fixture inventory, the wheel pin) and the
-stale paths that must not return to the current docs. Historical ADR bodies and
-CHANGELOG release notes are excluded; they describe the past on purpose.
+(version, the C# hello client string, Python runtime, transport, fixture
+inventory, the wheel pin) and the stale paths that must not return to the
+current docs. Historical ADR bodies and CHANGELOG release notes are excluded;
+they describe the past on purpose.
 """
 
 from __future__ import annotations
@@ -122,6 +123,37 @@ def check_versions(check: Checker) -> None:
             latest_line,
             f"latest heading is [{latest}], manifest is {version}",
         )
+
+    check_client_version(check, version)
+
+
+def check_client_version(check: Checker, version: str) -> None:
+    """The C# hello string and the protocol example are checked claims.
+
+    They are the only version literals outside the manifest and the changelog.
+    T11 must bump them with the manifest; this check is what makes forgetting
+    one a failure instead of a silent drift.
+    """
+    sources = (
+        (
+            "grasshopper/src/gh/Publication.cs",
+            r'hello\["client"\]\s*=\s*"Stageloom ([^"]+)"',
+        ),
+        ("docs/protocol.md", r'"client":"Stageloom ([^"]+)"'),
+    )
+    for rel, pattern in sources:
+        found = False
+        for number, _line, match in check.find(rel, pattern):
+            found = True
+            claimed = match.group(1)
+            if claimed != version:
+                check.fail(
+                    rel,
+                    number,
+                    f"client string is Stageloom {claimed}, manifest is {version}",
+                )
+        if not found:
+            check.fail(rel, 1, "no Stageloom <version> client string found")
 
 
 def check_python_claim(check: Checker) -> None:
@@ -319,8 +351,8 @@ def main() -> int:
         return 1
 
     print(
-        "check-docs: ok (version, Python runtime, transport, fixtures, wheel pin, "
-        "ruff scope, stale paths)"
+        "check-docs: ok (version, client string, Python runtime, transport, "
+        "fixtures, wheel pin, ruff scope, stale paths)"
     )
     return 0
 

@@ -10,9 +10,9 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SOURCE="$REPO/blender/stageloom"
-MANIFEST="$SOURCE/blender_manifest.toml"
 OUT="$REPO/dist"
-VERSION="$(grep -E '^version' "$MANIFEST" | head -1 | cut -d'"' -f2)"
+# One version source: blender_manifest.toml, read by scripts/version.
+VERSION="$("$REPO/scripts/version")"
 ZIP="$OUT/stageloom-$VERSION.zip"
 
 # Run Blender with its output filtered for the noisy DEBUG lines, but keep the
@@ -70,9 +70,15 @@ if [ ! -f "$ZIP" ]; then
   exit 1
 fi
 
+# Normalize the archive metadata before anything validates or uploads it:
+# sorted entries, fixed timestamps/attributes and a fixed compression level.
+# This changes no payload, manifest or wheel byte; scripts/test-reproducible
+# builds twice and compares the resulting hashes.
+python3 "$REPO/scripts/normalize-zip" "$ZIP"
+
 # A build that silently produced another version must not be uploaded as this
 # one. The manifest is the source of truth.
-BUILT_VERSION="$(unzip -p "$ZIP" blender_manifest.toml | grep -E '^version' | head -1 | cut -d'"' -f2)"
+BUILT_VERSION="$(unzip -p "$ZIP" blender_manifest.toml | "$REPO/scripts/version" -)"
 if [ "$BUILT_VERSION" != "$VERSION" ]; then
   echo "built version $BUILT_VERSION does not match manifest $VERSION" >&2
   exit 1
@@ -91,4 +97,9 @@ if [ -n "$BAD" ]; then
   exit 1
 fi
 
+SHA="$(sha256sum "$ZIP" | cut -d' ' -f1)"
+printf '%s  %s\n' "$SHA" "$(basename "$ZIP")" > "$ZIP.sha256"
+
 echo "built $ZIP ($(stat -c%s "$ZIP") bytes)"
+echo "sha256 $SHA"
+echo "wrote $ZIP.sha256"

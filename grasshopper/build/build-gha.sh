@@ -31,8 +31,12 @@ for png in "$REPO"/grasshopper/src/gh/icons/*.png; do
   RESOURCES+=("/resource:$(win_path "$png"),Stageloom.icons.$name.png")
 done
 
+# /deterministic makes the assembly timestamp, module version GUID and MVID
+# stable for the same inputs. Source paths are not emitted because the build
+# does not pass /debug; if a future build enables debug info, add a stable
+# /pathmap from $REPO before claiming byte reproducibility.
 run_csc \
-  /nologo /target:library \
+  /nologo /deterministic /target:library \
   /out:"$(win_path "$OUT")" \
   /r:"$(win_path "$GH_DLL")" /r:"$(win_path "$GHIO_DLL")" /r:"$(win_path "$RC_DLL")" \
   /r:System.Drawing.dll /r:System.Numerics.dll \

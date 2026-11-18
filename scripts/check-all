@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# One local quality gate: docs, lint, core, Blender, benchmarks, extension, C#.
+# One local quality gate: docs, lint, core, Blender, benchmarks, extension,
+# extension/.gha reproducibility, C#.
 #
 #     scripts/check-all          # the full gate
 #     scripts/check-all --quick  # inner loop: docs, core, ruff only
-#     scripts/check-all --ci     # full gate, with the C# step explicitly skipped
+#     scripts/check-all --ci     # full gate, with benchmark and C# steps skipped
 #
 # The bench step runs three sequential benchmarks and compares the fastest
-# p50/p95 of each gated metric against the stored baseline. On the reference
-# machine a >5% regression fails; on another machine (CI) it prints
-# "NOT COMPARABLE" and the summary says the baseline was skipped.
+# p50/p95 of each gated metric against the stored 2026-11-17 best-of-three
+# baseline. That baseline is reference-machine-only; another processor,
+# platform, Blender or Python prints "NOT COMPARABLE". CI skips the timing run,
+# C# and the `.gha` reproduction check explicitly because a stock runner cannot
+# make those claims; the baseline gate's own correctness test still runs.
 #
 # Every step is the existing script (or command) for that layer; this file owns
 # the order, the timeout, the per-step timing and the summary, not the test
@@ -29,9 +32,9 @@ for arg in "$@"; do
       cat <<'EOF'
 usage: scripts/check-all [--quick|--ci]
 
-  (default)  full gate: docs, lint, core, Blender, bench, extension, C#
+  (default)  full gate: docs, lint, core, Blender, bench, extension, repro, .gha repro, C#
   --quick    inner loop: docs, core, ruff
-  --ci       full gate with the C# step explicitly skipped (no Rhino on CI)
+  --ci       full gate with the reference-machine bench and C# steps skipped
 EOF
       exit 0
       ;;
@@ -57,6 +60,8 @@ CAP_BLENDER="${STAGELOOM_TEST_BLENDER_TIMEOUT:-900}"
 CAP_BENCH="${STAGELOOM_BENCH_TIMEOUT:-600}"
 CAP_BASELINE="${STAGELOOM_BASELINE_TIMEOUT:-120}"
 CAP_EXTENSION="${STAGELOOM_EXTENSION_TIMEOUT:-300}"
+CAP_REPRO="${STAGELOOM_REPRO_TIMEOUT:-300}"
+CAP_GHA_REPRO="${STAGELOOM_GHA_REPRO_TIMEOUT:-300}"
 CAP_GHA="${STAGELOOM_GHA_TIMEOUT:-300}"
 
 LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/stageloom-check-all.XXXXXX")" || {
@@ -185,7 +190,7 @@ fi
 GATE_START="$(now_ms)"
 
 if [ "$MODE" = "quick" ]; then
-  echo "check-all: quick gate (docs, core, ruff); full gate adds Blender, bench, extension, C#"
+  echo "check-all: quick gate (docs, core, ruff); full gate adds Blender, bench, extension, reproducibility, .gha reproducibility, C#"
   run_step "check-docs" "$CAP_DOCS" scripts/check-docs
   run_step "test-core" "$CAP_CORE" scripts/test-core
   run_step "ruff" "$CAP_RUFF" "${RUFF[@]}" check --output-format=concise .
@@ -194,19 +199,33 @@ else
   run_step "check-docs" "$CAP_DOCS" scripts/check-docs
   run_step "ruff" "$CAP_RUFF" "${RUFF[@]}" check --output-format=concise .
   run_step "test-core" "$CAP_CORE" scripts/test-core
-  # Measure before the long Blender suite: the stored baseline was taken on a
-  # quiet machine, and a hot/loaded machine after 85 s of tests moves the p95
-  # tail.
-  run_step "bench" "$CAP_BENCH" scripts/bench-baseline
+  if [ "$CI" -eq 1 ]; then
+    skip_step \
+      "bench" \
+      "performance: the stored 2026-11-17 best-of-three baseline is reference-machine-specific. A stock runner is not that machine, so CI skips the 3-run timing gate and makes no performance claim. scripts/bench-baseline is a local/release check."
+  else
+    # Measure before the long Blender suite: the stored baseline was taken on a
+    # quiet machine, and a hot/loaded machine after 85 s of tests moves the p95
+    # tail.
+    run_step "bench" "$CAP_BENCH" scripts/bench-baseline
+  fi
+  # The gate's own correctness proof is deterministic and machine-independent:
+  # it runs synthetic reports against a temporary baseline and checks +5%/+6%/
+  # machine-mismatch exit codes. It is not a timing run.
   run_step "bench-baseline" "$CAP_BASELINE" scripts/test-bench-baseline
   run_step "test-blender" "$CAP_BLENDER" scripts/test-blender
   run_step "test-extension" "$CAP_EXTENSION" scripts/test-extension
+  run_step "reproducible" "$CAP_REPRO" scripts/test-reproducible
   if [ "$CI" -eq 1 ]; then
     skip_step \
       "test-gha" \
-      "csharp: local gate (no Rhino in CI) — skipped scripts/test-gha. It needs wine with Mono's csc, and its conversion/attribute/link/component halves need Rhino 8's managed assemblies; a stock GitHub runner has neither. This gate does not claim C# coverage. The full local gate covers it. A stock-runner codec job is owned by the C# tasks (Q7/Q8)."
+      "csharp: local-only gate (C# 5/Mono, ADR 0019) — skipped scripts/test-gha. It needs wine with Mono's csc; its conversion/attribute/link/component halves also need Rhino 8's managed assemblies. A stock GitHub Ubuntu runner has neither wine/wine-mono nor RhinoCommon/Grasshopper, and a stock-runner codec-only install was not verified, so this workflow does not claim C# coverage. scripts/test-gha --codec-only is verified locally with a fresh WINEPREFIX; the full local gate covers the rest."
+    skip_step \
+      "reproducible-gha" \
+      "csharp: .gha reproducibility is local-only — skipped scripts/test-reproducible-gha. It needs wine with Mono's csc, Rhino 8's managed assemblies and a second build in a copied tree. A stock runner has none of those; the check is in the full local/release gate and is not claimed in CI."
   else
     run_step "test-gha" "$CAP_GHA" scripts/test-gha
+    run_step "reproducible-gha" "$CAP_GHA_REPRO" scripts/test-reproducible-gha
   fi
 fi
 
