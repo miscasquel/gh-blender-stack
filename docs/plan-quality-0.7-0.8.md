@@ -1006,11 +1006,12 @@ byte, and runs no benchmark. It makes the surrounding claims true
   the workflow claims no C# coverage. Native Windows/Rhino acceptance is
   deferred until after 0.8.0; no native-parity or framework migration is
   claimed ([ADR 0019](decisions/0019-keep-csharp5-mono.md)).
-- **Deferred in this session.** The full gate was not run: it is the end-of-0.8
-  gate and the user was using the machine. `scripts/test-blender` was also
-  blocked because the live Blender session holds `127.0.0.1:59130`; the same
+- **Deferred in T9a, later completed in T9b.** The full gate was not run during
+  T9a because the user was using the machine. `scripts/test-blender` was also
+  blocked because the live Blender session held `127.0.0.1:59130`; the same
   three `EngineUpdateTests` errors reproduce on a clean `git archive HEAD`
-  tree, so they are environmental/test isolation, not a T9a regression. Core,
+  tree, so they are environmental/test isolation, not a T9a regression. T9b
+  later ran the full gate alone: **177.7 s, 26/26, baseline enforced**; core,
   extension, extension-reproducibility, `.gha` reproducibility, docs, ruff and
   codec-only checks passed.
 
