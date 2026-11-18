@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+# Coverage floors for Stageloom (0.8.0 W10/T10b).
+#
+#     scripts/coverage core      pure Python core, floor 90%
+#     scripts/coverage engine    Blender engine + geometry_io, floor 80%
+#     scripts/coverage all       both Python floors (the default)
+#     scripts/coverage csharp    pure C# core, floor 80% (local Mono only)
+#
+# These are additional measurements, not replacements for the test commands.
+# The core run uses coverage.py from an installed `coverage`, `uvx`, or the
+# interpreter module. The engine run installs the same pinned wheel into a
+# private target with Blender's bundled Python and runs the existing headless
+# suite through scripts/coverage-blender.py; the shipped add-on is untouched.
+# The C# run needs a Linux Mono toolchain and is local-only (see
+# scripts/coverage-csharp.py and ADR 0019).
+#
+# There are no Python omit patterns: the source roots are the shipped packages
+# and their tests live outside them. `_protocol_tables.py` is generated and
+# shipped, so it is measured. Set STAGELOOM_COVERAGE_TARGET to reuse a prepared
+# Blender coverage target, or BLENDER to choose the executable.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+COVERAGE_VERSION="${STAGELOOM_COVERAGE_VERSION:-7.17.3}"
+CORE_MIN=90
+ENGINE_MIN=80
+
+usage() {
+  cat <<'EOF'
+usage: scripts/coverage [core|engine|csharp|all]
+
+  core    pure Python core (blender/stageloom/core), floor 90%
+  engine  Blender engine + geometry_io, floor 80% (full headless suite)
+  csharp  pure C# core (grasshopper/src/core), floor 80%; local Mono only
+  all     core + engine (default); C# is separate because it needs Mono
+
+Environment:
+  STAGELOOM_COVERAGE_VERSION  pinned coverage.py version (default: 7.17.3)
+  STAGELOOM_COVERAGE_TARGET   directory with Blender's coverage package
+  BLENDER                     Blender executable (default: blender)
+  MONO_HOME / MONO / MCS      Mono toolchain for `csharp` (see the help there)
+EOF
+}
+
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/stageloom-coverage.XXXXXX")" || {
+  echo "coverage: cannot create a temporary directory" >&2
+  exit 1
+}
+trap 'rm -rf "$WORK"' EXIT
+
+COVERAGE=()
+resolve_coverage() {
+  if [ "${#COVERAGE[@]}" -ne 0 ]; then
+    return
+  fi
+  if command -v coverage >/dev/null 2>&1; then
+    COVERAGE=(coverage)
+  elif command -v uvx >/dev/null 2>&1; then
+    COVERAGE=(uvx "coverage@${COVERAGE_VERSION}")
+  elif python3 -m coverage --version >/dev/null 2>&1; then
+    COVERAGE=(python3 -m coverage)
+  else
+    echo "coverage: coverage.py ${COVERAGE_VERSION} not found." >&2
+    echo "coverage: install it (python3 -m pip install coverage==${COVERAGE_VERSION})," >&2
+    echo "coverage: or install uv so the pinned uvx fallback can run it." >&2
+    exit 1
+  fi
+  echo "coverage: using ${COVERAGE[*]}"
+}
+
+run_core() {
+  resolve_coverage
+  local data="$WORK/core.coverage"
+  echo
+  echo "== core coverage (floor ${CORE_MIN}%) =="
+  PYTHONPATH="$PWD" COVERAGE_FILE="$data" "${COVERAGE[@]}" run \
+    --source=blender/stageloom/core \
+    -m unittest discover -s blender/tests/core -t blender/tests/core
+  COVERAGE_FILE="$data" "${COVERAGE[@]}" report \
+    --fail-under="$CORE_MIN" --precision=2 --show-missing \
+    --include='blender/stageloom/core/*'
+}
+
+BLENDER_PYTHON=""
+blender_python() {
+  if [ -n "$BLENDER_PYTHON" ]; then
+    return
+  fi
+  BLENDER_PYTHON="$(
+    "$1" -b --factory-startup \
+      --python-expr 'import sys; print("STAGELOOM_BLPY=" + sys.executable)' \
+      2>/dev/null | sed -n 's/^STAGELOOM_BLPY=//p' | tail -n 1
+  )"
+  if [ -z "$BLENDER_PYTHON" ] || [ ! -x "$BLENDER_PYTHON" ]; then
+    echo "coverage: cannot determine Blender's Python executable" >&2
+    exit 1
+  fi
+}
+
+install_blender_coverage() {
+  local target="$1" blender="$2"
+  blender_python "$blender"
+  if [ -f "$target/coverage/__init__.py" ]; then
+    return
+  fi
+  echo "coverage: installing coverage ${COVERAGE_VERSION} into ${target}"
+  echo "coverage: using ${BLENDER_PYTHON}"
+  if ! "$BLENDER_PYTHON" -m pip install --disable-pip-version-check --quiet \
+    --target "$target" "coverage==${COVERAGE_VERSION}"; then
+    echo "coverage: Blender's bundled pip could not install coverage." >&2
+    echo "coverage: the exact pip error is above. No Blender coverage number" >&2
+    echo "coverage: is reported when the tool cannot be installed." >&2
+    exit 1
+  fi
+}
+
+run_engine() {
+  local blender="${BLENDER:-blender}"
+  local target="${STAGELOOM_COVERAGE_TARGET:-$HOME/.cache/stageloom/coverage-$COVERAGE_VERSION}"
+  local data="$WORK/engine.coverage"
+  local log="$WORK/engine.log"
+  local cap="${STAGELOOM_TEST_BLENDER_TIMEOUT:-900}"
+  local code
+
+  if ! command -v "$blender" >/dev/null 2>&1; then
+    echo "coverage: Blender executable not found: $blender" >&2
+    exit 1
+  fi
+  install_blender_coverage "$target" "$blender"
+
+  echo
+  echo "== engine/geometry coverage (floor ${ENGINE_MIN}%) =="
+  set +e
+  if command -v timeout >/dev/null 2>&1; then
+    STAGELOOM_COVERAGE_PATH="$target" \
+    STAGELOOM_COVERAGE_DATA="$data" \
+    STAGELOOM_REPO="$PWD" \
+      timeout --signal=TERM --kill-after=30 "$cap" \
+      "$blender" -b --factory-startup --online-mode --python-exit-code 1 \
+      --python scripts/coverage-blender.py >"$log" 2>&1
+  else
+    STAGELOOM_COVERAGE_PATH="$target" \
+    STAGELOOM_COVERAGE_DATA="$data" \
+    STAGELOOM_REPO="$PWD" \
+      "$blender" -b --factory-startup --online-mode --python-exit-code 1 \
+      --python scripts/coverage-blender.py >"$log" 2>&1
+  fi
+  code=$?
+  set -e
+
+  grep -E '^Ran [0-9]+ tests|^OK$|^FAILED|TIMEOUT:' "$log" || true
+  if [ "$code" -ne 0 ]; then
+    if [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; then
+      echo "coverage: the Blender coverage suite exceeded ${cap}s" >&2
+    else
+      echo "coverage: the Blender coverage suite failed (exit ${code})" >&2
+    fi
+    tail -n 40 "$log" >&2 || true
+    exit "$code"
+  fi
+  if [ ! -f "$data" ]; then
+    echo "coverage: the Blender wrapper saved no coverage data" >&2
+    exit 1
+  fi
+  PYTHONPATH="$target${PYTHONPATH:+:$PYTHONPATH}" COVERAGE_FILE="$data" \
+    "$BLENDER_PYTHON" -m coverage report \
+    --fail-under="$ENGINE_MIN" --precision=2 --show-missing \
+    --include='blender/stageloom/blender/engine/*,blender/stageloom/blender/geometry_io/*'
+}
+
+MODE="${1:-all}"
+case "$MODE" in
+  core)
+    run_core
+    ;;
+  engine)
+    run_engine
+    ;;
+  csharp)
+    shift
+    exec python3 scripts/coverage-csharp.py "$@"
+    ;;
+  all)
+    run_core
+    run_engine
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    echo "coverage: unknown mode: $MODE" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

@@ -1,8 +1,9 @@
 # Stageloom compliance record
 
 **Status:** v0.7.0 is the released compliance baseline; the 0.8.0 quality work
-is in progress (T1–T9 and T10a complete; T10b coverage/scale/soak and T11
-remain; see [`plan-quality-0.7-0.8.md`](plan-quality-0.7-0.8.md)). The release version stays
+is in progress (T1–T9, T10a and the T10b coverage floors complete; T10b
+scale/1-hour soak and T11 remain; see
+[`plan-quality-0.7-0.8.md`](plan-quality-0.7-0.8.md)). The release version stays
 `0.7.0` until T11. **1.0 planning** continues in [`plan.md`](plan.md). The
 extensions.blender.org upload is deferred. Release history is in
 [`../CHANGELOG.md`](../CHANGELOG.md) and the GitHub releases.
@@ -134,7 +135,19 @@ frame fuzz campaigns. `scripts/test-core` passed in 0.38 s,
 `scripts/test-blender` passed 468 tests in 86.9 s plus the offline gate, and
 `scripts/test-gha` passed the fixture runner and all eight console suites in
 25.5 s. No benchmark or full
-`check-all` was run; T10b owns coverage, scale and the 1-hour soak.
+`check-all` was run. T10b then added the coverage floors (below); scale and the
+1-hour soak remain.
+
+**0.8.0 T10b coverage verification (2026-11-18).** Tooling/docs only; shipped
+code and the release artifacts are unchanged. `scripts/coverage core` measured
+**93.50%** (90% floor); `scripts/coverage engine` measured **89.43%** of the
+engine/geometry roots (80% floor) by rerunning the 468-test headless suite
+inside Blender's bundled Python 3.13 with a private coverage.py 7.17.3 target.
+The shipped add-on still has no `sys.path` manipulation. The pure C# core was
+measured at **93.36%** (80% floor) with Linux Mono's built-in coverage profiler;
+`Attributes.cs` and `Conversion.cs` are excluded because they reference
+RhinoCommon and are exercised by the wine suites. No Windows/.NET dependency
+was added, and C# coverage stays local-only. Scale and the 1-hour soak remain.
 
 The 1.0 workstreams, platform matrix and release gates are in
 [`plan.md`](plan.md). A new listing packet is prepared from the 1.0 release

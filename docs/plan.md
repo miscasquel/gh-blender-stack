@@ -7,11 +7,13 @@
 stackable Blender modifiers, with geometry and parameters flowing both ways,
 animation and playback, live stages, and renderable native bakes.
 
-**0.8.0 status (2026-11-18).** T1–T9 and T10a (fuzz/invariants) are complete;
-the T10b coverage/scale/soak work and T11 (release) remain. Production is 25,040
-physical / 20,035 code lines across 71 files, with 133 core, 468 Blender headless
-and 689 C# checks plus the fixed-seed 10,000-case Python and C# frame fuzz
-campaigns. The release version
+**0.8.0 status (2026-11-18).** T1–T9, T10a (fuzz/invariants) and the T10b
+coverage floors are complete; T10b scale/1-hour soak and T11 (release) remain.
+Production is 25,040 physical / 20,035 code lines across 71 files, with 133
+core, 468 Blender headless and 689 C# checks plus the fixed-seed 10,000-case
+Python and C# frame fuzz campaigns. Coverage is measured at **93.50%** core
+(90% floor), **89.43%** engine/geometry (80%) and **93.36%** of the pure C# core
+(80%; the two RhinoCommon files are named exclusions). The release version
 stays **0.7.0** until T11. Native Windows/Rhino acceptance is deferred until
 after 0.8.0; 0.8.0 makes no native-parity claim. The `.NET` framework migration
 is a recorded no-go through 1.0 ([ADR 0019](decisions/0019-keep-csharp5-mono.md));

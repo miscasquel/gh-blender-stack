@@ -10,8 +10,9 @@ curves, points, SubD cages) driven by a real Grasshopper definition, with named
 attributes and Grasshopper blocks (instances, including nested and multi-part
 definitions) travelling both ways, parameters you can edit and keyframe in
 Blender, packaged as a Blender extension. 0.8.0 is in progress on `main`
-(T1–T9 and T10a done; the T10b coverage/scale/soak and T11 release remain); the
-manifest and shipped version stay **0.7.0** until the T11 release bump.
+(T1–T9, T10a and the T10b coverage floors done; T10b scale/1-hour soak and the
+T11 release remain); the manifest and shipped version stay **0.7.0** until the
+T11 release bump.
 [DEMO.md](DEMO.md) walks through the loop.
 
 ```
@@ -262,6 +263,9 @@ scripts/check-protocol-tables # generated tables and fixture inventory are curre
 scripts/test-core        # layer A: pure Python core, no Blender needed
 scripts/test-blender     # layer B: Blender headless, against tools/fake_gh
 scripts/test-gha         # layer C: the C# codec and conversion suites under wine
+scripts/coverage core    # 90% core floor (coverage.py; additional to the tests)
+scripts/coverage engine  # 80% engine/geometry floor inside Blender's Python 3.13
+scripts/coverage csharp  # 80% pure C# core floor; local Linux Mono only
 scripts/test-extension   # layer D-lite: builds, installs into a throwaway config, round trip
 scripts/test-reproducible # builds the extension zip twice and compares the bytes
 scripts/test-reproducible-gha # builds the .gha twice plus a copied-tree build and compares
@@ -275,11 +279,14 @@ python3 scripts/make-fixtures   # regenerate protocol/fixtures after a protocol 
 ```
 
 CI runs the core layer on Python 3.13 and 3.14, including the protocol-table and
-fixture-inventory drift check. A second job installs Blender
+fixture-inventory drift check; the 3.13 leg also enforces the 90% core coverage
+floor. A second job installs Blender
 5.3 on Ubuntu and runs `scripts/check-all --ci`: docs, protocol-table drift,
 ruff, core, Blender headless with the offline gate, the installed-extension
 round trip, the baseline-gate self-test and the two-build extension-zip
-reproducibility check.
+reproducibility check, then the 80% engine/geometry coverage floor. Coverage is
+an additional measurement, not a replacement for the tests; the pure C# core is
+measured locally at 93.36% (80% floor, RhinoCommon files named as exclusions).
 The timing benchmark is **not** run in CI: the stored 2026-11-17 best-of-three
 baseline is reference-machine-specific, so `scripts/bench-baseline` is a
 local/release check and CI makes no performance claim. That job names and skips

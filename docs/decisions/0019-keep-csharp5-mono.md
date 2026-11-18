@@ -21,8 +21,11 @@ available here:
 
 - the C# 5 + `csc.exe`/wine loop (with the headless Blender and C# suites) is
   the only verified development and test loop;
-- no `dotnet` SDK or native Mono coverage tooling is installed, so a trial
-  target could not be built, measured or kept green;
+- no `dotnet` SDK is installed and no native Windows/Rhino trial target is
+  available, so a `net48`/`net7.0-windows` build could not be loaded, measured
+  or kept green (T10b later measured pure-core C# line coverage with Linux
+  Mono's built-in profiler, but that is a local measurement of the existing
+  C# 5 code, not a trial target and not a framework decision);
 - native Windows/Rhino acceptance is deferred until after 0.8.0, so loading in
   Rhino 8 on Windows cannot be demonstrated inside this release;
 - `net7.0-windows` would add a second runtime/platform to build and test;

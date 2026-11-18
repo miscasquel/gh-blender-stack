@@ -3,8 +3,8 @@
 **Status:** 0.7.0 complete, 2026-11-16. 0.8.0 is in progress: T1 (baseline,
 performance gate, code health) through T8 (performance follow-through) are
 complete; T9c (the .NET no-go), T9a/T9b (build/CI/docs truth and the protocol
-single-source tables) and T10a (fuzz/invariants) are complete; T10b
-(coverage/scale/1-hour soak) and T11 (release) remain. W7's `geometry_io`,
+single-source tables), T10a (fuzz/invariants) and the T10b coverage floors are
+complete; T10b scale/1-hour soak and T11 (release) remain. W7's `geometry_io`,
 engine-object, `GhLink` and `Instances` splits are done; W8 (performance, T8) is
 done, with the remaining W9/W10 items.
 **Baseline:** v0.6.0 plus the 2026-11-15 audit (seven module reviews), plus the
@@ -108,8 +108,11 @@ and `scripts/check-docs` checks the fixture source and README together. T9 is
 complete; T10a (fuzz/invariants) then added the deterministic frame campaigns
 (10,000 fixed-seed cases per language), randomized mesh/attribute/instance
 round trips and malformed bake-marker recovery without a production change.
-T10b (coverage/scale/1-hour soak) and T11 (release) remain. See the T9a, T9b and
-T10a verification below.
+T10b coverage then enforced the floors with tooling-only changes: core 93.50%
+(90% floor), engine/geometry 89.43% (80%) and pure C# core 93.36% (80%, with
+the two RhinoCommon files excluded by name and reason). T10b scale/1-hour soak
+and T11 (release) remain. See the T9a, T9b, T10a and T10b coverage verification
+below.
 
 **0.7.0 completion record (2026-11-16).** Q1–Q19 are complete; Q5 was merged
 into Q4 (the cache and the `Live` toggle were one removal). The release was
@@ -753,8 +756,12 @@ same tree/toolchain; framework decision recorded.
   trips; malformed bake-marker state.
 - **Conformance corpus:** Python↔C# frames, number formatting, hashes,
   attributes, empty geometry, multi-part/nested blocks; both suites consume it.
-- **Coverage:** core 90%, engine/geometry 80%, GH core 80%; explicit exclude
-  list for bpy glue.
+- **Coverage (T10b, done 2026-11-18):** core 90%, engine/geometry 80%, GH core
+  80%; explicit exclude list for bpy glue and RhinoCommon-only C# files.
+  `scripts/coverage` enforces the Python floors; measured 93.50% core and
+  89.43% engine/geometry. `scripts/coverage csharp` measured 93.36% of the pure
+  C# core with Linux Mono; `Attributes.cs` and `Conversion.cs` are the named
+  RhinoCommon exclusions.
 - **Scale/soak:** 200 stages, 100k triangles, 10k instances, 1-hour churn,
   bake/cascade churn.
 - **Docs checks:** links, version/port/path consistency, ADR status, fixture
@@ -894,7 +901,7 @@ acceptance criteria, then committed before the next starts.
 | T7 | `Instances` split and table-driven conversion | single-part/multi-part/nested/attribute round trips unchanged; production LOC down or flat | Done 2026-11-17; 685 C# checks, 26/26 in 176.1 s; native probe green |
 | T8 | Performance follow-through | playback resolved or traded; p50/p95 within 5%; each fixed path measured | Done 2026-11-17; 26/26 in 159.7 s, worst p50 +1.81%; fresh apply −88.5%, C# decode −98.9% |
 | T9 | Lean/docs/CI/build/framework | protocol tables generated; docs/ADR truth pass; reproducible extension zip and `.gha`; framework go/no-go | T9c no-go 2026-11-18 ([ADR 0019](decisions/0019-keep-csharp5-mono.md)); T9a done 2026-11-18 (one version source, reproducible zip and `.gha`, derived wine user, honest CI); T9b done 2026-11-18 (`protocol/sections.json`, generated Python/C# tables, drift and fixture checks; [ADR 0021](decisions/0021-generated-protocol-tables.md)); T9 complete |
-| T10 | Verification | fuzz, coverage, scale and 1-hour soak green | T10a done 2026-11-18: 10,000 fixed-seed Python and C# frame mutations, geometry/attribute/instance round-trip fuzz, malformed bake markers; 133 core, 468 Blender and 689 C# checks. T10b (coverage/scale/1-hour soak) pending |
+| T10 | Verification | fuzz, coverage, scale and 1-hour soak green | T10a done 2026-11-18: 10,000 fixed-seed Python and C# frame mutations, geometry/attribute/instance round-trip fuzz, malformed bake markers; 133 core, 468 Blender and 689 C# checks. T10b coverage done 2026-11-18: core **93.50%** (floor 90%), engine/geometry **89.43%** (80%), pure C# core **93.36%** (80%; RhinoCommon files excluded); scale/1-hour soak remain |
 | T11 | 0.8.0 release | version/changelog/artifacts match the tagged commit | Pending |
 
 ### T8 verification (performance follow-through)
@@ -949,13 +956,15 @@ complete p50/p95 table is in the
 **2026-11-18.** The `net48`/`net7.0-windows` spike is a **no-go for 0.8.0**.
 C# 5/Mono and the hand-written `MiniWsClient`/`Json.cs` stay; no transport or
 JSON migration is added now. The reasons are the verified `csc.exe`/wine loop as
-the only development/test path, no `dotnet` SDK or native Mono coverage tooling,
-native Windows/Rhino acceptance deferred until after 0.8.0, and the second
-runtime/platform or replacement dev-loop cost of `net7.0-windows`/`net48`. The
-spike is closed in [ADR 0019](decisions/0019-keep-csharp5-mono.md) and revisits
-only after native Windows acceptance (post-0.8 / 1.0). **T9a and T9b are
-complete (2026-11-18); T10a later completed the fuzz/invariant half, and
-T10b/T11 remain, so T9 is complete.**
+the only development/test path, no `dotnet` SDK (T9c had no host Mono coverage
+tool; T10b later measured the existing C# 5 code with a local Linux Mono
+profiler, which is not a trial target), native Windows/Rhino acceptance
+deferred until after 0.8.0, and the second runtime/platform or replacement
+dev-loop cost of `net7.0-windows`/`net48`. The spike is closed in
+[ADR 0019](decisions/0019-keep-csharp5-mono.md) and revisits only after native
+Windows acceptance (post-0.8 / 1.0). **T9a and T9b are complete (2026-11-18);
+T10a later completed the fuzz/invariant half and T10b added the coverage
+floors; T10b scale/soak and T11 remain, so T9 is complete.**
 
 ### T9a verification (build/CI/docs truth)
 
@@ -1132,8 +1141,65 @@ campaign is bounded.
   `scripts/test-gha` passed the fixture runner and all eight console suites
   (**689 checks**, 14 fixtures, **10,000** fuzz cases) in 25.5 s. Per the task
   constraints, the reference benchmark, `scripts/bench-baseline`, the full
-  `scripts/check-all` and the 1-hour soak were not run; T10b owns coverage,
-  scale and soak.
+  `scripts/check-all` and the 1-hour soak were not run. T10b later added the
+  coverage floors (below); scale and the 1-hour soak remain.
+
+### T10b verification (coverage floors)
+
+**2026-11-18.** Tooling/tests only: no production source changed, no benchmark
+or full gate was run, and the version stays 0.7.0. Coverage is an additional
+measurement; `scripts/test-core`, `scripts/test-blender` and `scripts/test-gha`
+keep working without a coverage package.
+
+- **Core (floor 90%).** `scripts/coverage core` runs the 133-test core suite
+  under coverage.py 7.17.3 (pinned; this run used `uvx coverage@7.17.3`) with
+  source `blender/stageloom/core`. There are **no omit patterns**: the source
+  root is the shipped package, tests live outside it, and the generated
+  `_protocol_tables.py` is measured (100%). Result **93.50%** (374/400
+  statements; 26 missed), PASS in 1.0 s. The remaining misses are
+  `attributes.py` 67,69, `codec.py` error/edge branches, `hashing.py` 60 and
+  `params.py` cast branches.
+- **Engine/geometry (floor 80%).** `scripts/coverage engine` installs the same
+  pinned coverage.py into a private target with Blender 5.3's bundled Python
+  3.13 pip (no shipped `sys.path` change), then runs the existing headless suite
+  through `scripts/coverage-blender.py` with source
+  `blender/stageloom/blender/engine` and
+  `blender/stageloom/blender/geometry_io`. No omit patterns. Result **89.43%**
+  (3,594/4,019 statements; 425 missed), PASS. All 468 tests passed in 89.2 s
+  (90.2 s including Blender startup). A preceding run measured 89.45%
+  (3,595/4,019) because one timer-dependent `bake.py` branch flipped, so the
+  number is stable to one statement, not exact to the byte. The lowest files
+  are `playback.py` 84.05%, `instances.py` 84.80% and `messages.py` 86.15%; no
+  file is below the floor.
+- **C# Option A — measured, not an exception (floor 80%).** The machine has
+  no system `mono`/`mcs`/`monocov`/`dotnet` and no `sudo`; wine-mono supplies
+  the compiler/runtime inside wine but no host executable or coverage tool. A
+  Linux Mono 6.12.0.206-2 package (Arch `extra`, fetched from a mirror and
+  unpacked to a temporary prefix for this run; not committed and not a
+  shipped/CI dependency) provided `mono`, `mcs` and Mono's built-in
+  `--profile=coverage` profiler; the separate `monocov` GUI was not needed
+  because the profiler emits per-line statement counts. Reproduce with
+  `MONO_HOME=<mono-prefix> scripts/coverage csharp`. The core
+  and fuzz suites were rebuilt from the same `grasshopper/src/core` sources with
+  `mcs -debug` (no Rhino types) and run under the profiler. The union of
+  `StageloomCoreTests.exe` (14 fixtures) and `StageloomFuzzTests.exe` (10,000
+  frame + 1,000 JSON cases) covers **93.36%** (1,209/1,295 statement lines) of
+  the pure core, PASS in 2.0 s: `Frame.cs` 91.98%, `Json.cs` 94.59%,
+  `ParamValues.cs` 91.45%, `Endpoint.cs` 96.43%, generated
+  `ProtocolTables.generated.cs` 100%. **Excluded by name and reason**:
+  `Attributes.cs` (RhinoCommon `ArchivableDictionary`; exercised by
+  `StageloomAttrTests.exe`, 43 checks under wine) and `Conversion.cs`
+  (RhinoCommon Mesh/Curve/Point; exercised by `StageloomConversionTests.exe`,
+  37 checks under wine). `scripts/coverage-csharp.py` fails if any other
+  `src/core` file is neither measured nor excluded. No `dotnet`, Rhino or
+  Windows dependency was added; the C# measurement is local-only
+  (ADR 0019/CI).
+- **CI.** The Python 3.13 core job installs coverage 7.17.3 and runs
+  `scripts/coverage core`; the Blender quality job runs
+  `scripts/coverage engine` after `scripts/check-all --ci`. C# coverage is not
+  a CI job because a stock runner has no Mono/Rhino toolchain.
+- **Not run.** Benchmarks, `scripts/bench-baseline`, full `scripts/check-all`,
+  the scale run and the 1-hour soak; T10b scale/soak remains.
 
 **Commit rule:** a task is committed only after its acceptance tests plus
 `scripts/test-core` and the relevant Blender/C# suite pass, and the audit finds

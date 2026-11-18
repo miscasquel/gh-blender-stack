@@ -1,11 +1,14 @@
 # What actually runs here:
 #   core     pure Python 3.13 and 3.14: ruff 0.17.2, protocol-table drift and
-#            scripts/test-core
+#            scripts/test-core; Python 3.13 also enforces the 90% core coverage
+#            floor through scripts/coverage core
 #   quality  Blender 5.3.0 on Ubuntu: scripts/check-all --ci, which runs docs,
 #            protocol-table drift, ruff, core, the Blender headless + offline
 #            gate, the installed-extension round trip, the deterministic
 #            baseline-gate self-test and the two-build extension-zip
-#            reproducibility check.
+#            reproducibility check; then scripts/coverage engine enforces the
+#            80% engine/geometry floor by rerunning the headless suite under
+#            coverage inside Blender's Python 3.13.
 #
 # Benchmarks are deliberately not run here. The stored 2026-11-17 best-of-three
 # p50/p95 baseline is reference-machine-specific; a stock runner has a
@@ -62,6 +65,12 @@ jobs:
         run: scripts/check-protocol-tables
       - name: Core tests
         run: scripts/test-core
+      - name: Install pinned coverage
+        if: matrix.python-version == '3.13'
+        run: python -m pip install --quiet coverage==7.17.3
+      - name: Core coverage (90% floor)
+        if: matrix.python-version == '3.13'
+        run: scripts/coverage core
 
   quality:
     name: quality gate (Blender 5.3.0)
@@ -105,3 +114,7 @@ jobs:
         run: python -m pip install --quiet ruff==0.17.2
       - name: Run the quality gate (bench and C# skipped explicitly)
         run: scripts/check-all --ci
+      - name: Engine/geometry coverage (80% floor)
+        env:
+          STAGELOOM_COVERAGE_TARGET: ${{ runner.temp }}/stageloom-coverage
+        run: scripts/coverage engine
