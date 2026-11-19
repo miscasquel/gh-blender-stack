@@ -366,7 +366,7 @@ blender -b --factory-startup --online-mode \
   --out /tmp/opencode/stageloom-live --kind both
 
 # Measure one scene through a live Grasshopper connection. Run it with the
-# installed 0.7.0 extension and an enabled Online Access preference.
+# installed 0.8.0 extension and an enabled Online Access preference.
 blender -b /tmp/opencode/stageloom-live/instances-13.blend --online-mode \
   --python benchmarks/live_client.py -- \
   --out /tmp/opencode/stageloom-live/instances-preview-on.json \

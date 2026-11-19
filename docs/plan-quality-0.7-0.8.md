@@ -1,13 +1,15 @@
 # Stageloom 0.7.0 / 0.8.0 — quality plan (rev. 2)
 
-**Status:** 0.7.0 complete, 2026-11-16. 0.8.0 is in progress: T1 (baseline,
-performance gate, code health) through T8 (performance follow-through) are
-complete; T9c (the .NET no-go), T9a/T9b (build/CI/docs truth and the protocol
-single-source tables), T10a (fuzz/invariants), the T10b coverage floors, the
-T10c scale run and the T10d 1-hour soak are complete; T11 (release) remains.
-W7's `geometry_io`, engine-object, `GhLink` and `Instances` splits are done; W8
-(performance, T8) is done, including the 200-stage/100k-triangle/10k-instance
-scale evidence; the W9/W10 items are closed and only T11 (release) remains.
+**Status:** 0.7.0 complete, 2026-11-16. 0.8.0 complete and released
+2026-11-19: T1 (baseline, performance gate, code health) through T8
+(performance follow-through) are complete; T9c (the .NET no-go), T9a/T9b
+(build/CI/docs truth and the protocol single-source tables), T10a
+(fuzz/invariants), the T10b coverage floors, the T10c scale run, the T10d
+1-hour soak and T11 (release) are complete. W7's `geometry_io`, engine-object,
+`GhLink` and `Instances` splits are done; W8 (performance, T8) is done,
+including the 200-stage/100k-triangle/10k-instance scale evidence; the W9/W10
+items are closed and the 0.8.0 release assets are built, verified and
+reproducible.
 **Baseline:** v0.6.0 plus the 2026-11-15 audit (seven module reviews), plus the
 post-audit bake/upstream work (`102f9c8..254d796`). That was the starting point:
 305 Blender headless tests in ~86 s, 57 core tests, C# and extension suites
@@ -118,8 +120,10 @@ recorded; it adds no timing gate. T10d then ran the 1-hour churn soak: 10,238
 cycles, 0 invariant failures, 0 unclassified exceptions, 30/30 native bake
 cycles, 15 reconnects and a clean final teardown. It also exposed and fixed a
 whole-object deletion leak in the engine's per-stage session state (regression
-test added). T11 (release) remains. See the T9a, T9b, T10a, T10b coverage,
-T10c scale and T10d soak verification below.
+test added). T11 then moved the single version source to 0.8.0, rebuilt,
+installed and deployed the release artifacts, recorded their hashes and passed
+the full gate with the baseline enforced. See the T9a, T9b, T10a, T10b
+coverage, T10c scale, T10d soak and T11 release verification below.
 
 **0.7.0 completion record (2026-11-16).** Q1–Q19 are complete; Q5 was merged
 into Q4 (the cache and the `Live` toggle were one removal). The release was
@@ -920,7 +924,7 @@ acceptance criteria, then committed before the next starts.
 | T8 | Performance follow-through | playback resolved or traded; p50/p95 within 5%; each fixed path measured | Done 2026-11-17; 26/26 in 159.7 s, worst p50 +1.81%; fresh apply −88.5%, C# decode −98.9% |
 | T9 | Lean/docs/CI/build/framework | protocol tables generated; docs/ADR truth pass; reproducible extension zip and `.gha`; framework go/no-go | T9c no-go 2026-11-18 ([ADR 0019](decisions/0019-keep-csharp5-mono.md)); T9a done 2026-11-18 (one version source, reproducible zip and `.gha`, derived wine user, honest CI); T9b done 2026-11-18 (`protocol/sections.json`, generated Python/C# tables, drift and fixture checks; [ADR 0021](decisions/0021-generated-protocol-tables.md)); T9 complete |
 | T10 | Verification | fuzz, coverage, scale and 1-hour soak green | T10a done 2026-11-18: 10,000 fixed-seed Python and C# frame mutations, geometry/attribute/instance round-trip fuzz, malformed bake markers; 133 core, 468 Blender and 689 C# checks. T10b coverage done 2026-11-18: core **93.50%** (floor 90%), engine/geometry **89.43%** (80%), pure C# core **93.36%** (80%; RhinoCommon files excluded). T10c scale done 2026-11-19: `scripts/scale` records 200 stages / exactly 100,000 triangles / 10,000 instances with 38/38 structural checks, 4.58 s and 524.0 MiB peak RSS. T10d soak done 2026-11-19: `scripts/soak` completed **10,238 cycles** in 3,600.2 s churn with **0 invariant failures**, 0 unclassified exceptions, 30/30 native bakes and 15 reconnects; the soak exposed and fixed a whole-object deletion session-state leak, raising the Blender count to **472** and production to 25,083 / 20,072. The post-fix full gate passed **26/26 in 181.7 s** (worst +0.31% p50 / +1.47% p95; no >5%; zip `fdbf973e…`, `.gha` `18c629e3…`). Native Windows/Rhino acceptance remains explicitly deferred after 0.8.0; no native-parity claim |
-| T11 | 0.8.0 release | version/changelog/artifacts match the tagged commit | Pending |
+| T11 | 0.8.0 release | version/changelog/artifacts match the tagged commit | Done 2026-11-19: version **0.8.0** from the one manifest source; changelog and README/plan/handoff/compliance/ledger updated with the post-T10d measurements; `dist/stageloom-0.8.0.zip` and `Stageloom.gha` rebuilt, installed/deployed and reproducible (two zip builds; two in-tree plus one copied-tree `.gha` build); release-tree full gate **26/26 in 181.1 s** (post-T10d reference 181.7 s), worst +0.49% p50 / +2.39% p95; hashes in the T11 verification |
 
 ### T8 verification (performance follow-through)
 
@@ -982,8 +986,8 @@ dev-loop cost of `net7.0-windows`/`net48`. The spike is closed in
 [ADR 0019](decisions/0019-keep-csharp5-mono.md) and revisits only after native
 Windows acceptance (post-0.8 / 1.0). **T9a and T9b are complete (2026-11-18);
 T10a later completed the fuzz/invariant half, T10b added the coverage floors,
-T10c added the scale run and T10d completed the soak; T11 remains, so T9 is
-complete.**
+T10c added the scale run, T10d completed the soak and T11 completed the
+release; T9 is complete.**
 
 ### T9a verification (build/CI/docs truth)
 
@@ -1340,6 +1344,61 @@ scripts/soak --duration 3600 --out benchmarks/results/2026-11-19-soak.json
   `18c629e3fba03d30b6605ea53b2dd77221533f3f469e9b10a3ff1c57ee8ceafb`.
   T11 owns the version bump, tag, release notes and final release-tree
   hashes.
+
+### T11 verification (0.8.0 release)
+
+**2026-11-19.** Release metadata and artifacts only: no production behavior
+change beyond the version literal, no protocol/fixture/`out_hash` change and no
+baseline rebuild.
+
+- **Version.** `blender/stageloom/blender_manifest.toml` is the one version
+  source and now reads **0.8.0**. The checked copies moved with it: the C# hello
+  string (`grasshopper/src/gh/Publication.cs`, the `LinkTests` assertion) and
+  the protocol example in `docs/protocol.md`. `scripts/version` prints `0.8.0`;
+  `scripts/check-docs` passes.
+- **Changelog.** `CHANGELOG.md` has the 0.8.0 section written for the upgrader,
+  with the rebuild/redeploy/restart steps, the in-place `.blend` guarantee and
+  the explicit no-native-parity statement. There is no duplicate release-notes
+  file.
+- **Artifacts.** `dist/stageloom-0.8.0.zip` SHA-256
+  `3f745f38be84e52b16a6c53a75199f606c58d643c4fcd8727677088471425780`;
+  `grasshopper/build/out/Stageloom.gha` SHA-256
+  `14dfef3fc3c6f8329d7cd64bd8c347ecdc3142fbc429cf30ae72847cc4abc14c`.
+  Both hashes differ from the T10d values only because the release version
+  bytes changed: the zip ships the bumped `blender_manifest.toml`, and the
+  `.gha` embeds the bumped hello client string. No other shipped source changed
+  in T11.
+- **Reproducibility.** `scripts/test-reproducible` built the zip twice and got
+  byte-identical archives. `scripts/test-reproducible-gha` built twice in the
+  tree and once from a copied tree at another absolute path; all three were
+  byte-identical. The full gate reruns both checks.
+- **Install/deploy.** `scripts/install-extension` installed and enabled 0.8.0
+  into Blender 5.3's `user_default` repository (the installed manifest reads
+  `version = "0.8.0"`); `scripts/test-extension` passed the installed-extension
+  round trip. `grasshopper/deploy/deploy.sh` copied the rebuilt plugin into the
+  wine Grasshopper `Libraries` folder and `scripts/check-deployed` reports the
+  deployed copy current at the `.gha` hash above.
+- **Full gate.** `scripts/check-all` ran alone on the release tree and passed
+  **26/26** with the 2026-11-17 baseline enforced (not rebuilt). Step timings
+  were: docs/protocol/ruff/core 0.4 s, bench 44.5 s, baseline self-test 1.5 s,
+  Blender 91.0 s, extension 2.7 s, zip reproducibility 2.0 s, C# 29.2 s, `.gha`
+  reproducibility 9.7 s; total **181.1 s**. It ran **133 core**, **472 Blender**
+  and **689 C#** checks. The worst positive delta was **+0.49% p50**
+  (`playback.frame_ms`) and **+2.39% p95**
+  (`pipeline.100k.apply_inplace_ms`); every other metric was within noise or
+  improved, and no metric exceeded +5%.
+  The previously recorded post-T10d gate remains the reference measurement:
+  **26/26 in 181.7 s**, worst positive +0.31% p50 / +1.47% p95.
+- **Residual note.** One earlier gate attempt hit three transient
+  `test_instances.EngineUpdateTests` ordering failures (no captured frame) while
+  the same module passed alone; `scripts/test-blender` passed on the immediate
+  rerun and the accepted full gate above passed on the next run. The defect is
+  in test isolation, not in a shipped path; it is recorded here rather than
+  hidden.
+- **Scope.** No commit, tag, push or GitHub release was made by the T11
+  subagent; `v0.7.0` is untouched and the orchestrator owns publication. Native
+  Windows/Rhino acceptance remains deferred after 0.8.0; no native-parity claim
+  is made.
 
 **Commit rule:** a task is committed only after its acceptance tests plus
 `scripts/test-core` and the relevant Blender/C# suite pass, and the audit finds

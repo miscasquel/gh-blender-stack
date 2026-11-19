@@ -1,19 +1,18 @@
 # Stageloom — 1.0 plan
 
-**Status:** 1.0 planning, 2026-11-16; 0.8.0 in progress, 2026-11-18. Baseline:
+**Status:** 1.0 planning, 2026-11-16; 0.8.0 released 2026-11-19. Baseline:
 **v0.7.0**.
 **Target:** Blender 5.3. **Compatibility floor:** Blender 5.2.
 **Goal:** ship a stable 1.0 for the declared v1 scope: Grasshopper definitions as
 stackable Blender modifiers, with geometry and parameters flowing both ways,
 animation and playback, live stages, and renderable native bakes.
 
-**0.8.0 status (2026-11-19).** T1–T9, T10a (fuzz/invariants), the T10b
-coverage floors, the T10c scale run and the T10d 1-hour soak are complete; T11
-(release) remains.
+**0.8.0 status (2026-11-19).** T1–T11 are complete and 0.8.0 is released:
+<https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.8.0>.
 Production is 25,083 physical / 20,072 code lines across 71 files, with 133
 core, **472** Blender headless and 689 C# checks plus the fixed-seed 10,000-case
 Python and C# frame fuzz campaigns. Coverage is measured at **93.50%** core
-(90% floor), **89.43%** engine/geometry (80%) and **93.36%** of the pure C# core
+(90% floor), **89.46%** engine/geometry (80%) and **93.36%** of the pure C# core
 (80%; the two RhinoCommon files are named exclusions). The T10c scale runner
 (`scripts/scale`) records a 200-stage stack, exactly 100,000 triangles and
 10,000 instance rows with 38/38 structural checks, 4.58 s and 524.0 MiB peak
@@ -26,8 +25,9 @@ reconnect churn with **0 invariant failures** and 0 unclassified exceptions,
 and fixed a whole-object deletion session-state leak, which is why production
 is +43 / +37 over T9b. The post-fix full gate passed **26/26 in 181.7 s**
 with the baseline enforced, worst positive +0.31% p50 / +1.47% p95 and no
-metric above +5%; the zip rebuilt to `fdbf973e…` and the `.gha` still
-reproduces at `18c629e3…`. The release version stays **0.7.0** until T11. Native
+metric above +5%. T11 then moved the single version source to **0.8.0**,
+rebuilt, installed and deployed the release artifacts, recorded their SHA-256
+hashes and passed the full gate again with the baseline enforced. Native
 Windows/Rhino acceptance is deferred until after 0.8.0; 0.8.0 makes no
 native-parity claim, and the soak's native bake is Blender's headless Geometry
 Nodes bake, not native Rhino acceptance. The `.NET` framework migration is a
@@ -327,7 +327,7 @@ after 0.8 except fixes required by a gate.
 |---|---|---|
 | **0.6** | Performance harness and instance fix; units matrix; plugin endpoint; bake undo safety | Shipped 2026-11-14 |
 | **0.7** | Quality release: live-only stages, nested/multi-part blocks, bake dependents, codec/geometry hardening, lifecycle/UI/state; custom cache and `Live` removed | Shipped 2026-11-16; full gate green, no known blocker or major from the 2026-11-15 audit |
-| **0.8** | Architecture seams (W7), performance gates (W8), lean/docs/CI (W9), verification (W10), tag-triggered distribution; native Windows/Rhino acceptance deferred beyond 0.8; .NET migration recorded as a no-go ([ADR 0019](decisions/0019-keep-csharp5-mono.md)) | Every module ≥ 8.5; baseline gate green; docs/CI true; reproducible extension zip and `.gha` from a tag for the same tree/toolchain; no native-parity or framework-migration claim |
+| **0.8** | Architecture seams (W7), performance gates (W8), lean/docs/CI (W9), verification (W10), tag-triggered distribution; native Windows/Rhino acceptance deferred beyond 0.8; .NET migration recorded as a no-go ([ADR 0019](decisions/0019-keep-csharp5-mono.md)) | **Shipped 2026-11-19**; every module ≥ 8.5; full gate 26/26 in 181.1 s with the baseline enforced; docs/CI true; reproducible extension zip and `.gha` for the same tree/toolchain; no native-parity or framework-migration claim |
 | **0.9** | Release candidate; soak; freeze protocol v2 and file formats; full acceptance on supported platforms | No open release-blocking defect; all gates below pass |
 | **1.0** | Release | Artifacts, notes and hashes published; support matrix signed off |
 

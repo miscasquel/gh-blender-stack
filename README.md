@@ -5,14 +5,17 @@ native Geometry Nodes modifiers, in one visible object per stack. Geometry and
 parameters can flow through the stack, so parameters can be keyframed, driven,
 and played back.
 
-That is the v1 goal. **v0.7.0 is the current release**: geometry (meshes,
+That is the v1 goal. **v0.8.0 is the current release**: geometry (meshes,
 curves, points, SubD cages) driven by a real Grasshopper definition, with named
 attributes and Grasshopper blocks (instances, including nested and multi-part
 definitions) travelling both ways, parameters you can edit and keyframe in
-Blender, packaged as a Blender extension. 0.8.0 is in progress on `main`
-(T1–T9, T10a, the T10b coverage floors, the T10c scale run and the T10d 1-hour
-soak done; the T11 release remains); the manifest and shipped version stay
-**0.7.0** until the T11 release bump.
+Blender, packaged as a Blender extension. 0.8.0 is the architecture, speed and
+truth release: the modules behind that feature set now have one owner each, the
+performance gate is measured against a stored p50/p95 baseline, and the
+extension zip and `.gha` are reproducible from one version source. It adds no
+user-facing feature; the wire protocol and existing `.blend` files are
+unchanged. Native Windows/Rhino acceptance is deferred until after 0.8.0 and is
+not claimed.
 [DEMO.md](DEMO.md) walks through the loop.
 
 ```
@@ -195,7 +198,7 @@ The add-on's logs live in its per-user extension data directory by default; the
 ## Install
 
 Download the add-on zip and the Grasshopper `.gha` from the
-[v0.7.0 release](https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.7.0).
+[v0.8.0 release](https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.8.0).
 The commands below are the build path.
 
 Release path: the add-on ships as a Blender extension with the official

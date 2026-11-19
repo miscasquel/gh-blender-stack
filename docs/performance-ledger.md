@@ -1,9 +1,10 @@
 # Performance ledger
 
-**Status: T1–T9 accepted; T10a/T10b coverage, the T10c scale run and the T10d
-1-hour soak are accepted; T11 (release) remains.** T9a/T9b have no performance
-change, and T10a/T10b/T10c/T10d add tests, tooling and recorded verification
-evidence; T10d also carries the one minimal cleanup fix the soak exposed. The
+**Status: T1–T10 accepted; T11 (release) complete 2026-11-19.** T9a/T9b have
+no performance change, and T10a/T10b/T10c/T10d add tests, tooling and recorded
+verification evidence; T10d also carries the one minimal cleanup fix the soak
+exposed. T11 moves the version literal to 0.8.0, rebuilds the release artifacts
+and reruns the full gate; it changes no benchmark baseline or hot path. The
 gate reference is
 the **2026-11-17 best-of-three baseline**: three clean solo runs, with the
 fastest per-run p50/p95 stored for each metric. It replaces the 2026-11-16
@@ -87,12 +88,12 @@ flaked on unrelated timer noise; its 2 ms hard budget remains in `bench.py`.
 | T6 | `GhLink` split: no Blender hot-path change | 4.9433 / 5.1213; 4.4018 / 5.2993; 2.1453 / 2.1708; 21.6598 / 21.7428; 2.4608 / 2.5706; 12.8405 / 13.3398 | 4.8043 / 5.0086; 4.1689 / 5.1180; 2.1427 / 2.1572; 21.4043 / 21.4556; 2.4520 / 2.4903; 12.9308 / 13.2672 | -2.81% / -2.20%; -5.29% / -3.42%; -0.13% / -0.62%; -1.18% / -1.32%; -0.36% / -3.13%; +0.70% / -0.54% | production 24,719 / 19,714 (−19 physical, +338 code), 63 files; `GhLink` type 2,489 → 173 code lines; 454 Blender + 685 C# checks | accepted: 26/26 in 173.1 s; worst positive p50 +1.49% (`total_ms`), p95 +1.14% (`total_ms`); no >5% metric |
 | T7 | `Instances` split/table-driven conversion: no Blender hot-path change | 4.9433 / 5.1213; 4.4018 / 5.2993; 2.1453 / 2.1708; 11.8275 / 12.0514; 21.6598 / 21.7428; 2.4608 / 2.5706; 12.8405 / 13.3398; 116.8278 / 119.6174; 91.0217 / 92.1573 | 4.8727 / 4.9639; 4.4787 / 5.2800; 2.1583 / 2.1921; 12.1295 / 12.4563; 21.7090 / 21.8571; 2.4619 / 2.5358; 12.8257 / 13.2868; 116.8876 / 119.4850; 90.9955 / 91.4284 | -1.43% / -3.07%; +1.75% / -0.36%; +0.60% / +0.98%; +2.55% / +3.36%; +0.23% / +0.53%; +0.04% / -1.36%; -0.12% / -0.40%; +0.05% / -0.11%; -0.03% / -0.79% | production 24,711 / 19,800 (−8 physical, +86 code), 69 files; former 2,135-line `Instances` type gone, largest instance type `InstanceEmit` 450 and `DefinitionBuilder` 940 → 424; 454 Blender + 685 C# checks; native Mesh/Curve/Point emit/build probe | accepted: 26/26 in 176.1 s; worst positive p50 +2.55% (`total_ms`), p95 +3.36%; no >5% metric; intermediate p95-only runs recorded below |
 | T8 | performance: 100k fresh apply, in-place, 1M in-place, playback, all gated | see the T8 verification table | see the T8 verification table | fresh apply **-88.51% / -89.55%**; all other p50/p95 within +3.93% | production 24,918 / 19,945 (+207 physical, +145 code), 69 files; C# `frame_decode` p50 **0.4556 → 0.0050 ms** and `frame_mesh_arrays` **0.9210 → 0.4434 ms**; 455 Blender + 687 C# checks; publication heartbeat skips a clean rebuild | accepted: full gate 26/26 in 159.7 s; worst positive p50 +1.81% (`total_ms`), p95 +3.93% (`apply_inplace_ms`); offsetting gain: fresh apply −88.51%/−89.55% and C# `frame_decode` −98.9%; no metric exceeds +5% |
-| T9 | docs/build/CI/protocol tables (T9a/T9b done; T11 pending) | — | — | — | full gate 26/26 in **177.7 s**, baseline enforced; worst positive p50 +2.23% / p95 +3.31% (`total_ms`), no >5% metric; 132 core + 455 Blender + 689 C# checks; production 25,040 / 20,035 (71 files); artifacts reproduce (zip d12b6f50…, `.gha` 18c629e3…) | accepted |
+| T9 | docs/build/CI/protocol tables (T9a/T9b done; T11 later completed the release) | — | — | — | full gate 26/26 in **177.7 s**, baseline enforced; worst positive p50 +2.23% / p95 +3.31% (`total_ms`), no >5% metric; 132 core + 455 Blender + 689 C# checks; production 25,040 / 20,035 (71 files); artifacts reproduce (zip d12b6f50…, `.gha` 18c629e3…) | accepted |
 | T10a | fuzz/invariants: tests only | — | — | — | no benchmark run and no performance claim; 10,000 fixed-seed frame cases per language plus geometry/attribute/instance and bake-marker fuzz; 133 core + 468 Blender + 689 C# checks | accepted; soak closed by T10d |
 | T10b (coverage) | coverage floors: tooling/docs only | — | — | — | no benchmark run and no performance claim; core **93.50%** (90% floor), engine/geometry **89.43%** (80%), pure C# core **93.36%** (80%; `Attributes.cs`/`Conversion.cs` excluded by name and reason); 133 core + 468 Blender + 689 C# checks; CI runs core and engine/geometry coverage | accepted; scale closed by T10c and soak by T10d |
 | T10c (scale) | 200 stages / 100k triangles / 10k instances: runner/tests/docs only | — | 200 stages: panel 9.69/9.78 ms, no-client pass 34.64/34.66 ms; 100k: read 4.93/4.95, fresh 8.97/9.05, in-place 2.17/2.22 ms; 10k instances: prefix 13.63/13.99, first apply 84.30, repeat 81.88/91.93 ms | — | no new timing gate and no baseline run; 38/38 structural checks, 4.58 s, peak RSS 524.0 MiB; 471 Blender headless tests; existing 100k in-place and 13x instance gates unchanged; 200-stage/10k-row shapes are diagnostic and not in the default matrix | accepted; soak closed by T10d |
 | T10d (soak) | 1-hour churn: runner/tooling/docs plus one minimal cleanup fix | — | — | — | **PASS** **10,238 cycles** in **3,600.4 s wall** (3,600.2 s churn), **0 invariant failures** and **0 unclassified exceptions**; **10,253** stale-answer and **15** reconnect recoveries; RSS **368.6 → 399.0 MiB** (peak 399.0); **30/30** native bake cycles and 15 reconnects; final 3 stack objects / 4 stages / 12 helpers / 4 groups, teardown all zero; 472 Blender tests; production 25,083 / 20,072 (71 files); coverage rechecked core 93.50 / engine 89.46 / C# 93.36%; **post-fix full gate 26/26 in 181.7 s**, baseline enforced (not rebuilt), worst positive p50 +0.31% (`playback.frame_ms`) / p95 +1.47% (`pipeline.100k.apply_inplace_ms`), no >5% metric; artifacts reproduce (zip `fdbf973e…`, `.gha` `18c629e3…`) | accepted; native Windows/Rhino acceptance deferred after 0.8.0 |
-| T11 | pending | — | — | — | — | pending |
+| T11 | 0.8.0 release: version literal, docs/changelog and artifact rebuild | — | — | — | release-tree full gate **26/26 in 181.1 s** (post-T10d reference **181.7 s**), baseline enforced and not rebuilt; worst positive +0.49% p50 / +2.39% p95; 133 core + 472 Blender + 689 C# checks; zip and `.gha` rebuilt, installed/deployed and reproduced byte-for-byte; no hot-path or protocol change | accepted; hashes and step timings in the T11 verification |
 
 `pipeline.100k.total_ms` is one timed read+hash+encode+decode+apply operation,
 not a sum of independently warmed phase timings. The idle pass is amortized over
@@ -543,6 +544,46 @@ Windows/Rhino proof. Blender's real undo history cannot run in `-b`, so the
 runner exercises the engine handlers a real history step runs (global undo is
 disabled to keep the harness from accumulating steps). The fake client is not a
 live Rhino solve.
+
+### T11 verification (0.8.0 release)
+
+**2026-11-19.** T11 changes the release version literal and release metadata
+only; no hot path, baseline or gate threshold changed. The accepted full gate
+ran alone on the release tree and passed **26/26** with the 2026-11-17
+best-of-three baseline enforced (not rebuilt): **181.1 s** total, with `bench`
+44.5 s, the Blender suite 91.0 s, the extension round trip 2.7 s, zip
+reproducibility 2.0 s, C# 29.2 s and `.gha` reproducibility 9.7 s. It ran
+**133 core**, **472 Blender** and **689 C#** checks. The post-T10d accepted gate
+remains the reference measurement: **26/26 in 181.7 s**, worst positive
+**+0.31% p50 / +1.47% p95**.
+
+Release-tree gated deltas, worst positive first:
+
+| Metric | Stat | Baseline | T11 | Delta |
+|---|---|---:|---:|---:|
+| `pipeline.100k.apply_inplace_ms` | p95 | 2.1708 ms | 2.2226 ms | **+2.39%** |
+| `playback.frame_ms` | p50 | 12.8405 ms | 12.9032 ms | **+0.49%** |
+| `pipeline.100k.apply_inplace_ms` | p50 | 2.1453 ms | 2.1557 ms | +0.48% |
+| `playback.frame_ms` | p95 | 13.3398 ms | 13.2681 ms | -0.54% |
+| `pipeline.100k.apply_fresh_ms` | p50 / p95 | 77.9507 / 87.1304 ms | 8.7737 / 9.1956 ms | -88.74% / -89.45% |
+
+Every other gated metric improved or stayed within noise; no metric exceeded
++5%. The threshold was not widened and no metric was excluded.
+
+**Artifacts.** `dist/stageloom-0.8.0.zip` SHA-256
+`3f745f38be84e52b16a6c53a75199f606c58d643c4fcd8727677088471425780`;
+`grasshopper/build/out/Stageloom.gha` SHA-256
+`14dfef3fc3c6f8329d7cd64bd8c347ecdc3142fbc429cf30ae72847cc4abc14c`.
+Both differ from the T10d values only because the release version bytes changed
+(manifest in the zip, hello client string in the `.gha`); no other shipped
+source changed in T11. Two zip builds were byte-identical, and the `.gha` was
+byte-identical across two in-tree builds and one copied-tree build. The zip was
+installed and enabled in Blender 5.3, the extension round trip passed, the
+plugin was deployed to the wine Grasshopper `Libraries` folder and
+`scripts/check-deployed` reports it current.
+
+Native Windows/Rhino acceptance remains deferred after 0.8.0; no native or
+native-parity claim is attached to these numbers.
 
 ## C# parameter/schema baseline (ungated)
 

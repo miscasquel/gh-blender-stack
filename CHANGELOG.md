@@ -10,6 +10,100 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-11-19
+
+This is the architecture, speed and truth release. There are no new user-facing
+features: the same stages, geometry, blocks, parameters and playback work the
+same way, but the large modules behind them now have one owner each, the hot
+paths are measured by a real regression gate, and the release artifacts are
+reproducible from one version source. Correctness is pinned by fuzzing,
+coverage floors, a 200-stage/100k-triangle/10k-instance scale run and a one-hour
+churn soak rather than by happy-path tests alone.
+
+**Upgrade:** rebuild and redeploy `Stageloom.gha`, then restart Rhino
+(Grasshopper scans `Libraries` only on load). The Blender add-on upgrades in
+place; existing `.blend` stages, parameters, keyframes, helpers and animation
+are preserved. The wire protocol is unchanged: protocol v2, the same frames,
+fixtures and `out_hash`, and no `.blend` migration. Nothing needs to be
+re-baked or re-frozen for the upgrade.
+
+**No native-parity claim.** Native Windows/Rhino acceptance is deferred until
+after 0.8.0 and was not run for this release. The local gate runs Blender
+headlessly on Linux and the C# suites under wine; the soak's native bake is
+Blender's Geometry Nodes bake, not a native Rhino acceptance run.
+
+### Changed
+
+- **The core modules each have one owner.** The Blender engine is an explicit
+  `Engine` object with per-stage `StageRuntime` records instead of a
+  package-global hub; geometry I/O is split by kind behind one facade; the
+  Grasshopper link is split into registry, connection, scheduler, protocol,
+  publication and slot owners; and instance build/emit/definition handling is
+  split from the table grammar. The behavior and public surfaces are unchanged,
+  but cross-talk between lifecycle, request and geometry state now has a single
+  place to be correct.
+- **Geometry and codec behavior is pinned, not rewritten.** The wire bytes,
+  fourteen golden fixtures, `out_hash` and the topology token are unchanged.
+  The codecs still reject malformed headers, section tables, dtypes, UTF-8 and
+  non-finite numbers as typed errors; geometry round trips cover meshes, SubDs,
+  curves, points, attributes and instances, and the fixed-seed 10,000-case frame
+  fuzz in each language produced only classified failures.
+- **The hot paths are faster.** On the reference machine a fresh 100k-triangle
+  mesh apply fell from **77.95/87.13 ms to 8.96/9.10 ms p50/p95** (−88.5%), and
+  a 1M-triangle fresh apply fell from about **833 ms to about 85 ms**. The C#
+  frame decode of a 100k-triangle frame fell from **0.4556/0.5167 ms to
+  0.0050/0.0055 ms** (−98.9%), and decode plus typed mesh arrays fell by about
+  **52%**. Playback remains within noise of the stored baseline; a clean
+  publication now skips rebuilding an unchanged snapshot and schema.
+- **Performance is a gate, not a smoke test.** `scripts/check-all` compares the
+  best of three runs against the stored p50/p95 baseline and fails on any metric
+  more than 5% slower. The release gate passed **26/26** checks in **181.1 s**
+  with the baseline enforced.
+- **There is one release version source.** `blender/blender_manifest.toml` is
+  the only version literal; the build, install and test scripts read it through
+  `scripts/version`, and `scripts/check-docs` keeps the C# hello string and the
+  protocol example in sync. A second copy of the release version can no longer
+  drift.
+- **The release artifacts are reproducible.** The extension zip is normalized
+  (sorted entries, fixed timestamps and modes, preserved compression) and
+  validated after rewriting; the `.gha` is built with Mono `csc`
+  `/deterministic`. Two builds in place and a third from a copied tree at a
+  different absolute path are byte-identical for the same tree and toolchain.
+- **Protocol tables are generated from one source.** The dtype, hash-order,
+  attribute, warning, codec-error and fixture tables in both codecs now come
+  from `protocol/sections.json`, and `scripts/check-protocol-tables` fails on
+  drift. The protocol version itself is unchanged.
+
+### Fixed
+
+- **Deleting a whole stack object no longer leaks session state.** The object
+  path removed the stage records and helpers but left the stage runtime, its
+  verify request, its prefix memo entry and its playback report behind. The
+  engine now prunes state for keys that no longer have a live claim, with a
+  regression test; the modifier-deletion path was already clean. Long sessions
+  that add and delete whole stacks no longer grow that bookkeeping.
+
+### Tests
+
+- **133 core**, **472 Blender headless** tests plus the offline gate, fourteen
+  golden fixtures, and **689 C# checks** across the codec fixture runner and
+  eight console suites, including a fixed-seed 10,000-case frame fuzz campaign
+  in each language and deterministic geometry, attribute, instance and
+  bake-marker round trips.
+- **Coverage floors:** core **93.50%** (90% floor), engine/geometry **89.46%**
+  (80%) and pure C# core **93.36%** (80%, with the two RhinoCommon files named
+  as exclusions).
+- **Scale:** `scripts/scale` builds 200 stages, exactly 100,000 triangles and
+  10,000 instance rows, passes **38/38** structural checks in **4.58 s** with a
+  **524.0 MiB** peak RSS. It is diagnostic and adds no timing gate.
+- **One-hour soak:** **10,238 cycles** in **3,600.2 s** of stage/object/
+  request/playback/bake/reconnect churn with **0 invariant failures**, **0
+  unclassified exceptions**, **30/30** native Geometry Nodes bakes, **15**
+  reconnects and RSS **368.6 → 399.0 MiB**, ending in a clean teardown.
+- **Full gate:** `scripts/check-all` passed **26/26** in **181.1 s** alone with
+  the baseline enforced; the worst positive delta was **+0.49% p50** and
+  **+2.39% p95**, and no metric exceeded +5%.
+
 ## [0.7.0] — 2026-11-16
 
 This release is about correctness rather than new features. Every stage is live,

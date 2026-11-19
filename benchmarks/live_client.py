@@ -1,6 +1,6 @@
 """Measure one live Grasshopper stage from the installed Blender extension.
 
-Run inside Blender with a reference `.blend` and the 0.7.0 extension enabled:
+Run inside Blender with a reference `.blend` and the 0.8.0 extension enabled:
 
     blender -b /tmp/opencode/stageloom-live/instances-13.blend --online-mode \
         --python benchmarks/live_client.py -- \
