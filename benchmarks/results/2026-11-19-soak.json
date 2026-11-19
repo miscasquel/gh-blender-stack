@@ -1,0 +1,654 @@
+{
+  "format": "stageloom-soak-report/1",
+  "meta": {
+    "timestamp": "2026-11-19T09:54:19",
+    "blender": "5.3.0",
+    "python": "3.13.13",
+    "os": "Linux",
+    "arch": "x86_64",
+    "platform": "Linux-7.3.5-1-cachyos-x86_64-with-glibc2.44",
+    "processor": "AMD Ryzen 7 7700X 8-Core Processor",
+    "quick": false,
+    "duration_requested": 3600,
+    "command": "blender -b --factory-startup --online-mode --python-exit-code 1 --python benchmarks/soak.py -- --duration 3600 --out benchmarks/results/2026-11-19-soak.json",
+    "data_root": "/tmp/stageloom-soak-pe7hxc3v",
+    "undo_operator": "probed after setup",
+    "native_bake": "Blender Geometry Nodes bake (headless)",
+    "native_windows_rhino": "deferred until after 0.8.0; not run"
+  },
+  "ok": true,
+  "cycles": 10238,
+  "loop_seconds": 3600.154467340999,
+  "operations": {
+    "bookkeeping_checks": 30716,
+    "stage_add": 10238,
+    "request_full": 10238,
+    "request_ref": 10238,
+    "stage_rename": 10238,
+    "object_rename": 10238,
+    "undo_handlers": 10238,
+    "redo_handlers": 10238,
+    "playback_frames": 30714,
+    "playback_cycles": 10238,
+    "disabled_cycles": 10238,
+    "freeze_cycles": 10238,
+    "definition_seeds": 10238,
+    "stage_delete": 10238,
+    "object_delete_cycles": 2047,
+    "native_bake_cycles": 30,
+    "clear_bake_cycles": 30,
+    "reconnects": 15
+  },
+  "recoveries": {
+    "stale-answer": 10253,
+    "reconnect": 15
+  },
+  "recovery_samples": [
+    {
+      "cycle": 1,
+      "kind": "stale-answer",
+      "detail": "undo stale answer"
+    },
+    {
+      "cycle": 2,
+      "kind": "stale-answer",
+      "detail": "undo stale answer"
+    },
+    {
+      "cycle": 3,
+      "kind": "stale-answer",
+      "detail": "undo stale answer"
+    },
+    {
+      "cycle": 4,
+      "kind": "stale-answer",
+      "detail": "undo stale answer"
+    },
+    {
+      "cycle": 5,
+      "kind": "stale-answer",
+      "detail": "undo stale answer"
+    },
+    {
+      "cycle": 6,
+      "kind": "stale-answer",
+      "detail": "undo stale answer"
+    },
+    {
+      "cycle": 7,
+      "kind": "stale-answer",
+      "detail": "undo stale answer"
+    },
+    {
+      "cycle": 8,
+      "kind": "stale-answer",
+      "detail": "undo stale answer"
+    },
+    {
+      "cycle": 9,
+      "kind": "stale-answer",
+      "detail": "undo stale answer"
+    },
+    {
+      "cycle": 10,
+      "kind": "stale-answer",
+      "detail": "undo stale answer"
+    },
+    {
+      "cycle": 11,
+      "kind": "stale-answer",
+      "detail": "undo stale answer"
+    },
+    {
+      "cycle": 12,
+      "kind": "stale-answer",
+      "detail": "undo stale answer"
+    },
+    {
+      "cycle": 13,
+      "kind": "stale-answer",
+      "detail": "undo stale answer"
+    },
+    {
+      "cycle": 14,
+      "kind": "stale-answer",
+      "detail": "undo stale answer"
+    },
+    {
+      "cycle": 15,
+      "kind": "stale-answer",
+      "detail": "undo stale answer"
+    },
+    {
+      "cycle": 16,
+      "kind": "stale-answer",
+      "detail": "undo stale answer"
+    },
+    {
+      "cycle": 17,
+      "kind": "stale-answer",
+      "detail": "undo stale answer"
+    },
+    {
+      "cycle": 18,
+      "kind": "stale-answer",
+      "detail": "undo stale answer"
+    },
+    {
+      "cycle": 19,
+      "kind": "stale-answer",
+      "detail": "undo stale answer"
+    },
+    {
+      "cycle": 20,
+      "kind": "stale-answer",
+      "detail": "undo stale answer"
+    }
+  ],
+  "checks": [
+    {
+      "name": "bake: clear finished",
+      "runs": 30,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "bake: clear released the chain",
+      "runs": 30,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "bake: file is saved",
+      "runs": 30,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "bake: frame 1 scale",
+      "runs": 30,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "bake: frame 2 scale",
+      "runs": 30,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "bake: frame 3 scale",
+      "runs": 30,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "bake: frozen chain sends nothing on a scrub",
+      "runs": 90,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "bake: native entry present",
+      "runs": 30,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "bake: operator finished",
+      "runs": 30,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "bake: packed target",
+      "runs": 30,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "bake: stage modifier exists",
+      "runs": 30,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "bake: three distinct per-frame outputs",
+      "runs": 30,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "bake: token and markers",
+      "runs": 30,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "bridge: no unexpected error at rest",
+      "runs": 30716,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "delete: helper/definition/cloud names removed",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "delete: modifier exists",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "delete: node group removed",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "delete: playback report removed",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "delete: runtime and pending removed",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "delete: stage parameters removed",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "delete: verify removed",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "disable: disabled stage sends nothing",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "disable: enabling asks again",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "disable: modifier exists",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "engine: dirty empty at rest",
+      "runs": 30716,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "engine: flags and escrow clear at rest",
+      "runs": 30716,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "engine: no pending at rest",
+      "runs": 30716,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "engine: no playback reports at rest",
+      "runs": 30716,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "engine: prefix memo bounded",
+      "runs": 30716,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "engine: runtimes describe live stages only",
+      "runs": 30716,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "engine: sent rows are live and well shaped",
+      "runs": 30716,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "engine: trace ring bounded",
+      "runs": 30716,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "engine: verify empty at rest",
+      "runs": 30716,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "freeze: flag state is frozen",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "freeze: frozen stage sends nothing",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "helpers: every kind exists",
+      "runs": 133102,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "mode: object mode at rest",
+      "runs": 30716,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "object delete: helper plumbing swept",
+      "runs": 2047,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "object delete: node group swept",
+      "runs": 2047,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "object delete: parameter namespace removed with the object",
+      "runs": 2047,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "object delete: session state pruned",
+      "runs": 2047,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "object delete: stack removed from the registry",
+      "runs": 2047,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "playback: every frame synced",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "playback: frame 1 applied",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "playback: frame 1 ready",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "playback: frame 2 applied",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "playback: frame 2 ready",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "playback: frame 3 applied",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "playback: frame 3 ready",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "playback: stage settled after stop",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "plumbing: no orphan helper/definition/cloud",
+      "runs": 30716,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "plumbing: no orphan stage group",
+      "runs": 30716,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "reconnect stale answer: stale answer dropped",
+      "runs": 15,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "reconnect: clients stopped",
+      "runs": 15,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "reconnect: every stage asked again",
+      "runs": 60,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "reconnect: every stage is ok",
+      "runs": 60,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "reconnect: pending waits dropped",
+      "runs": 15,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "reconnect: stages become disconnected",
+      "runs": 15,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "registry: every key has one owner",
+      "runs": 30716,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "registry: no conflicts",
+      "runs": 30716,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "registry: stack objects match the scene",
+      "runs": 30716,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "registry: stage keys match the scene",
+      "runs": 30716,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "rename: no old-name plumbing",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "rename: object keeps its helper set",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "rename: stage keeps its helper and group",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "request: schema published a float param",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "teardown: engine dormant",
+      "runs": 1,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "teardown: no helper plumbing or groups",
+      "runs": 1,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "teardown: registry empty",
+      "runs": 1,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "teardown: session state empty",
+      "runs": 1,
+      "failures": 0,
+      "last_detail": ""
+    },
+    {
+      "name": "undo stale answer: stale answer dropped",
+      "runs": 10238,
+      "failures": 0,
+      "last_detail": ""
+    }
+  ],
+  "failed_checks": [],
+  "bake": {
+    "native_operator": true,
+    "native_attempts": 30,
+    "native_successes": 30,
+    "marker_fallback_runs": 0,
+    "limitation": ""
+  },
+  "undo": {
+    "operator_available": false,
+    "operator_error": "poll returned False in background mode",
+    "engine_handler_cycles": 10238,
+    "global_undo_disabled": true,
+    "limitation": "bpy.ops.ed.undo()/redo() poll fails in background mode; the engine's undo/redo handlers (the code a real history step runs) are exercised instead"
+  },
+  "rss_mb_start": 368.6484375,
+  "rss_mb_end": 399.015625,
+  "rss_mb_peak": 399.01171875,
+  "rss_mb_max_cycle": 399.015625,
+  "cycle_seconds_max": 0.6401073529996211,
+  "cycle_limit_seconds": 60.0,
+  "final": {
+    "stack_objects": 3,
+    "stages": 4,
+    "stage_index_keys": 4,
+    "stage_owners": 4,
+    "stage_claims": 4,
+    "stage_conflicts": 0,
+    "runtimes": 4,
+    "pending_stages": 0,
+    "dirty": 0,
+    "verify": 0,
+    "prefix_memo": 4,
+    "playback_reports": 0,
+    "helper_objects": 12,
+    "definition_collections": 0,
+    "instance_clouds": 0,
+    "nested_clouds": 0,
+    "node_groups": 4,
+    "orphan_plumbing": 0,
+    "orphan_groups": 0,
+    "bpy_objects": 15,
+    "bpy_meshes": 7,
+    "bpy_curves": 4,
+    "bpy_pointclouds": 4,
+    "bpy_collections": 1,
+    "bpy_node_groups": 4
+  },
+  "after_teardown": {
+    "stack_objects": 0,
+    "stages": 0,
+    "stage_index_keys": 0,
+    "stage_owners": 0,
+    "stage_claims": 0,
+    "stage_conflicts": 0,
+    "runtimes": 0,
+    "pending_stages": 0,
+    "dirty": 0,
+    "verify": 0,
+    "prefix_memo": 0,
+    "playback_reports": 0,
+    "helper_objects": 0,
+    "definition_collections": 0,
+    "instance_clouds": 0,
+    "nested_clouds": 0,
+    "node_groups": 0,
+    "orphan_plumbing": 0,
+    "orphan_groups": 0,
+    "bpy_objects": 0,
+    "bpy_meshes": 0,
+    "bpy_curves": 0,
+    "bpy_pointclouds": 0,
+    "bpy_collections": 1,
+    "bpy_node_groups": 0
+  },
+  "failures": [],
+  "unclassified_exceptions": [],
+  "wall_seconds": 3600.3914368820006
+}

@@ -189,6 +189,32 @@ class Engine:
         """Drop every per-stage session record."""
         self._runtimes.clear()
 
+    def prune_session_state(self, live_keys, live_pointers):
+        """Retire per-stage state whose stage or stack object no longer exists.
+
+        A deleted stack object cannot run its own removal cleanup: its stage
+        records leave the scene with it, so the full index rebuild is the only
+        place that can see the new truth. ``live_keys`` are the current
+        ``(stack_id, stage_key)`` claims and ``live_pointers`` the current
+        ``(object pointer, stage_key)`` prefixes. A live stage keeps its
+        record, including an in-flight request; only keys absent from those
+        sets are dropped.
+        """
+        for key in list(self._runtimes):
+            if key not in live_keys:
+                del self._runtimes[key]
+        self.verify.intersection_update(live_keys)
+        for key in list(self.prefix_memo):
+            if key not in live_pointers:
+                del self.prefix_memo[key]
+        stage_keys = {stage_key for _stack_id, stage_key in live_keys}
+        for key in list(self.playback_reports):
+            if key not in stage_keys:
+                del self.playback_reports[key]
+        self.dirty.intersection_update(
+            {obj.name for obj in bpy.data.objects}
+        )
+
     def clear_pull(self, stack_id, stage_key=None):
         """Drop one Pull permit and its deadline together."""
         if stage_key is None:

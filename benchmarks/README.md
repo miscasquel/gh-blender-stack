@@ -15,6 +15,9 @@ scripts/bench-baseline            # gate: 3 sequential runs, best p50/p95 vs bas
 scripts/bench --check-baseline     # one-run comparison against the stored baseline
 scripts/bench --require-baseline   # reference-machine mode: fail when not comparable
 scripts/bench --check-baseline-only --report /tmp/bench.json  # compare an existing report
+scripts/scale --out /tmp/scale.json  # T10c structural scale run
+scripts/soak --out /tmp/soak.json    # T10d 1-hour churn soak
+scripts/soak --quick                 # 20 s soak smoke
 ```
 
 The harness runs inside `blender -b --factory-startup --online-mode` and uses
@@ -125,6 +128,45 @@ The JSON result is
 [`results/2026-11-19-scale.json`](results/2026-11-19-scale.json); the same
 shapes are asserted without timing in
 `blender/tests/headless/test_scale_shapes.py` (part of `scripts/test-blender`).
+
+## Churn soak (T10d)
+
+`scripts/soak` is the dedicated 1-hour soak. It is not one of the scenarios
+above, is not in `scripts/check-all`, and makes no timing claim; it proves
+churn invariants, not latency.
+
+```bash
+scripts/soak --duration 3600 \
+  --out benchmarks/results/2026-11-19-soak.json
+scripts/soak --quick        # 20 s smoke with the same invariants
+```
+
+Each cycle adds a stage and a `fake_gh` client, sends a full and a
+parameter-only request, renames the stage and the stack object, runs the
+engine's undo/redo handler, disables/enables, freezes/unfreezes, seeds a
+two-part definition plus both row-cloud families, and deletes the stage while
+asserting that every helper, definition, cloud, parameter, runtime, verify,
+prefix-memo and playback-report entry is gone. Every fifth cycle adds and
+deletes a whole stack object. Every cycle runs three keyed playback frames;
+scheduled work covers a native Geometry Nodes bake over three frames with an
+offline output check and Clear Bake, and a full client stop/start reconnect with
+a stale answer from the old client. The runner checks the stage registry,
+owners/claims/conflicts, pending/sent/dirty/verify/memo maps, helpers and stage
+groups, and exits non-zero on an invariant failure, an engine trace error, a
+hang past the 60 s per-cycle deadline or the hard wall-clock guard.
+
+**2026-11-19 reference run** (`AMD Ryzen 7 7700X`, Blender 5.3.0, Python
+3.13.13; **10,238 cycles**, **3,600.2 s** churn, **0 invariant failures**,
+**0 unclassified exceptions**, **30/30** native bakes, **15** reconnects, RSS
+**368.6 → 399.0 MiB** peak 399.0, slowest cycle 0.64 s). The final live scene
+had 3 stack objects, 4 stages, 12 helpers and 4 groups; teardown zeroed every
+registry/helper/session count. The run exposed and fixed a whole-object
+deletion session-state leak; see
+[`../docs/performance-ledger.md`](../docs/performance-ledger.md) T10d and
+[`results/2026-11-19-soak.json`](results/2026-11-19-soak.json). Blender's real
+undo operator cannot run in `-b`; the engine's undo/redo handlers are
+exercised. Native Windows/Rhino acceptance is deferred after 0.8.0 and is not
+claimed.
 
 ## Stored baseline gate
 

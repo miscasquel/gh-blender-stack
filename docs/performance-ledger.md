@@ -1,9 +1,10 @@
 # Performance ledger
 
-**Status: T1–T9 accepted; T10a/T10b coverage and the T10c scale run are
-accepted; the T10d 1-hour soak remains.** T9a/T9b have no performance change,
-and T10a/T10b/T10c add tests, tooling and recorded scale evidence without
-changing production. The gate reference is
+**Status: T1–T9 accepted; T10a/T10b coverage, the T10c scale run and the T10d
+1-hour soak are accepted; T11 (release) remains.** T9a/T9b have no performance
+change, and T10a/T10b/T10c/T10d add tests, tooling and recorded verification
+evidence; T10d also carries the one minimal cleanup fix the soak exposed. The
+gate reference is
 the **2026-11-17 best-of-three baseline**: three clean solo runs, with the
 fastest per-run p50/p95 stored for each metric. It replaces the 2026-11-16
 median baseline after host CPU power/core-state drift was measured and confirmed
@@ -87,9 +88,10 @@ flaked on unrelated timer noise; its 2 ms hard budget remains in `bench.py`.
 | T7 | `Instances` split/table-driven conversion: no Blender hot-path change | 4.9433 / 5.1213; 4.4018 / 5.2993; 2.1453 / 2.1708; 11.8275 / 12.0514; 21.6598 / 21.7428; 2.4608 / 2.5706; 12.8405 / 13.3398; 116.8278 / 119.6174; 91.0217 / 92.1573 | 4.8727 / 4.9639; 4.4787 / 5.2800; 2.1583 / 2.1921; 12.1295 / 12.4563; 21.7090 / 21.8571; 2.4619 / 2.5358; 12.8257 / 13.2868; 116.8876 / 119.4850; 90.9955 / 91.4284 | -1.43% / -3.07%; +1.75% / -0.36%; +0.60% / +0.98%; +2.55% / +3.36%; +0.23% / +0.53%; +0.04% / -1.36%; -0.12% / -0.40%; +0.05% / -0.11%; -0.03% / -0.79% | production 24,711 / 19,800 (−8 physical, +86 code), 69 files; former 2,135-line `Instances` type gone, largest instance type `InstanceEmit` 450 and `DefinitionBuilder` 940 → 424; 454 Blender + 685 C# checks; native Mesh/Curve/Point emit/build probe | accepted: 26/26 in 176.1 s; worst positive p50 +2.55% (`total_ms`), p95 +3.36%; no >5% metric; intermediate p95-only runs recorded below |
 | T8 | performance: 100k fresh apply, in-place, 1M in-place, playback, all gated | see the T8 verification table | see the T8 verification table | fresh apply **-88.51% / -89.55%**; all other p50/p95 within +3.93% | production 24,918 / 19,945 (+207 physical, +145 code), 69 files; C# `frame_decode` p50 **0.4556 → 0.0050 ms** and `frame_mesh_arrays` **0.9210 → 0.4434 ms**; 455 Blender + 687 C# checks; publication heartbeat skips a clean rebuild | accepted: full gate 26/26 in 159.7 s; worst positive p50 +1.81% (`total_ms`), p95 +3.93% (`apply_inplace_ms`); offsetting gain: fresh apply −88.51%/−89.55% and C# `frame_decode` −98.9%; no metric exceeds +5% |
 | T9 | docs/build/CI/protocol tables (T9a/T9b done; T11 pending) | — | — | — | full gate 26/26 in **177.7 s**, baseline enforced; worst positive p50 +2.23% / p95 +3.31% (`total_ms`), no >5% metric; 132 core + 455 Blender + 689 C# checks; production 25,040 / 20,035 (71 files); artifacts reproduce (zip d12b6f50…, `.gha` 18c629e3…) | accepted |
-| T10a | fuzz/invariants: tests only | — | — | — | no benchmark run and no performance claim; 10,000 fixed-seed frame cases per language plus geometry/attribute/instance and bake-marker fuzz; 133 core + 468 Blender + 689 C# checks | accepted (coverage/scale done; 1-hour soak pending) |
-| T10b (coverage) | coverage floors: tooling/docs only | — | — | — | no benchmark run and no performance claim; core **93.50%** (90% floor), engine/geometry **89.43%** (80%), pure C# core **93.36%** (80%; `Attributes.cs`/`Conversion.cs` excluded by name and reason); 133 core + 468 Blender + 689 C# checks; CI runs core and engine/geometry coverage | accepted; scale closed by T10c; 1-hour soak remains |
-| T10c (scale) | 200 stages / 100k triangles / 10k instances: runner/tests/docs only | — | 200 stages: panel 9.69/9.78 ms, no-client pass 34.64/34.66 ms; 100k: read 4.93/4.95, fresh 8.97/9.05, in-place 2.17/2.22 ms; 10k instances: prefix 13.63/13.99, first apply 84.30, repeat 81.88/91.93 ms | — | no new timing gate and no baseline run; 38/38 structural checks, 4.58 s, peak RSS 524.0 MiB; 471 Blender headless tests; existing 100k in-place and 13x instance gates unchanged; 200-stage/10k-row shapes are diagnostic and not in the default matrix | accepted; T10d 1-hour soak remains |
+| T10a | fuzz/invariants: tests only | — | — | — | no benchmark run and no performance claim; 10,000 fixed-seed frame cases per language plus geometry/attribute/instance and bake-marker fuzz; 133 core + 468 Blender + 689 C# checks | accepted; soak closed by T10d |
+| T10b (coverage) | coverage floors: tooling/docs only | — | — | — | no benchmark run and no performance claim; core **93.50%** (90% floor), engine/geometry **89.43%** (80%), pure C# core **93.36%** (80%; `Attributes.cs`/`Conversion.cs` excluded by name and reason); 133 core + 468 Blender + 689 C# checks; CI runs core and engine/geometry coverage | accepted; scale closed by T10c and soak by T10d |
+| T10c (scale) | 200 stages / 100k triangles / 10k instances: runner/tests/docs only | — | 200 stages: panel 9.69/9.78 ms, no-client pass 34.64/34.66 ms; 100k: read 4.93/4.95, fresh 8.97/9.05, in-place 2.17/2.22 ms; 10k instances: prefix 13.63/13.99, first apply 84.30, repeat 81.88/91.93 ms | — | no new timing gate and no baseline run; 38/38 structural checks, 4.58 s, peak RSS 524.0 MiB; 471 Blender headless tests; existing 100k in-place and 13x instance gates unchanged; 200-stage/10k-row shapes are diagnostic and not in the default matrix | accepted; soak closed by T10d |
+| T10d (soak) | 1-hour churn: runner/tooling/docs plus one minimal cleanup fix | — | — | — | **PASS** **10,238 cycles** in **3,600.4 s wall** (3,600.2 s churn), **0 invariant failures** and **0 unclassified exceptions**; **10,253** stale-answer and **15** reconnect recoveries; RSS **368.6 → 399.0 MiB** (peak 399.0); **30/30** native bake cycles and 15 reconnects; final 3 stack objects / 4 stages / 12 helpers / 4 groups, teardown all zero; 472 Blender tests; production 25,083 / 20,072 (71 files); coverage rechecked core 93.50 / engine 89.46 / C# 93.36%; no benchmark or baseline run | accepted; native Windows/Rhino acceptance deferred after 0.8.0 |
 | T11 | pending | — | — | — | — | pending |
 
 `pipeline.100k.total_ms` is one timed read+hash+encode+decode+apply operation,
@@ -471,8 +473,76 @@ pass has no Grasshopper client or solve; the instance shape is one definition
 with one row cloud; and RSS is the process peak, not per-scenario allocation.
 The focused `blender/tests/headless/test_scale_shapes.py` asserts the same
 shapes without timing in `scripts/test-blender`. The full `scripts/check-all`,
-the reference benchmark and the 1-hour soak were not run for T10c; the soak
-remains T10d.
+the reference benchmark and the 1-hour soak were not run for T10c; T10d later
+ran the soak and its own focused correctness checks.
+
+### T10d verification (1-hour churn soak)
+
+**2026-11-19.** T10d adds `benchmarks/soak.py` + `scripts/soak` and records the
+0.8.0 soak. It is not in `scripts/check-all` or the benchmark matrix; the full
+run is a local/release check. The runner uses `blender -b --factory-startup
+--online-mode` from the working tree, one real WebSocket server and real
+`tools/fake_gh` clients. It is separate from the scale runner and makes no
+timing claim.
+
+```bash
+scripts/soak --duration 3600 --out benchmarks/results/2026-11-19-soak.json
+```
+
+Each cycle: add a stage and start its fake; send a full and a parameter-only
+request; rename the stage label and the stack object; run the engine's
+undo/redo handler (forced fresh nonce for a stale-answer check); disable/enable;
+freeze/unfreeze; seed a two-part definition plus instance and nested clouds;
+delete the stage and assert every helper, definition, cloud, parameter, runtime,
+verify, prefix-memo and playback-report entry is gone. Every fifth cycle adds
+and deletes a whole stack object. Every cycle also runs three keyed playback
+frames. Scheduled work: a native Geometry Nodes bake over three frames with an
+offline output check and Clear Bake, and a full client stop/start reconnect with
+a stale answer from the old client. A 60 s per-cycle deadline, a hard wall-clock
+guard and an outer `timeout(1)` cover a wedged operation.
+
+**Result: PASS.** The reference run completed **10,238 cycles** in **3,600.2 s**
+of churn (**3,600.4 s** wall), with **0 invariant failures**, **0 unclassified
+exceptions** and **0 engine errors**. It made 10,238 stage adds, full requests,
+ref requests, stage/object renames, undo/redo handler passes, disable/enable
+cycles, freeze/unfreeze cycles, definition seeds and stage deletes; 10,238
+playback cycles (**30,714 frames**); 2,047 whole object delete cycles; **30/30**
+native bake cycles with 0 marker-fallback runs; and **15** reconnects. There were **10,253 classified stale-answer recoveries**
+(one per churn cycle plus reconnect) and 15 reconnect recoveries. RSS was
+**368.6 MiB start / 399.0 MiB end / 399.0 MiB peak**; the slowest cycle was
+**0.64 s**. The final live scene had 3 stack objects, 4 stages, 4 registry
+keys/owners, 12 helper objects, 4 stage groups and 0 pending/dirty/verify/
+playback-report entries; after teardown every registry, helper, definition,
+cloud and session count was zero. All 71 named invariant groups passed (the
+JSON lists each one with its run count).
+
+**Exposed defect and fix.** The soak exposed a real leak: deleting a whole stack
+object removed its stage records and helpers but left the `StageRuntime`,
+verify request, prefix-memo entry and playback report behind forever. The
+modifier-deletion path already cleaned these; the object-deletion path had no
+owner for it. `Engine.prune_session_state`, called from the authoritative
+`_rebuild_index`, now retires keys absent from the live claims (and dirty names
+absent from the scene); `_drop_removed_stages` also drops the stage's playback
+report. Regression coverage is
+`test_lifecycle.py::test_07_object_delete_drops_only_the_dead_session_state`
+plus the existing stage-control deletion test. Production is **25,083 physical
+/ 20,072 code lines across 71 files** (+43 / +37 for the fix); `scripts/test-core`
+passes 133 tests and `scripts/test-blender` passes **472** tests in 89.8 s plus
+the offline gate.
+
+**Gaps and deferrals.** The soak ran Blender's native Geometry Nodes bake
+headlessly, not native Windows/Rhino acceptance. Native Windows/Rhino
+acceptance is **deferred until after 0.8.0** by owner decision; no native
+Windows run was attempted and no native-parity claim is made. The chain
+evidence remains the 2026-11-15 live chain-bake under wine (real Grasshopper,
+three Stage In/Out pairs; bake, upstream freeze, offline evaluation/render,
+save/reload, Clear Bake and live resume) plus the headless
+`test_chain_bake.py` and `test_chain_playback.py` suites; T10d additionally
+exercised the native bake operator on every bake cycle. The wine result is not a
+Windows/Rhino proof. Blender's real undo history cannot run in `-b`, so the
+runner exercises the engine handlers a real history step runs (global undo is
+disabled to keep the harness from accumulating steps). The fake client is not a
+live Rhino solve.
 
 ## C# parameter/schema baseline (ungated)
 

@@ -243,6 +243,74 @@ class LifecycleTests(unittest.TestCase):
         for name in part_names:
             self.assertIsNone(bpy.data.objects.get(name))
 
+    def test_07_object_delete_drops_only_the_dead_session_state(self):
+        dead_obj, dead_stage = self._make_stack("Dead Root")
+        live_obj, live_stage = self._make_stack("Live Root")
+        dead_record = self.stack_mod.stack_of(dead_obj)
+        live_record = self.stack_mod.stack_of(live_obj)
+        dead_stage_key = dead_stage.key
+        live_stage_key = live_stage.key
+        dead_key = (dead_record.stack_id, dead_stage_key)
+        live_key = (live_record.stack_id, live_stage_key)
+        dead_pointer = (dead_obj.as_pointer(), dead_stage_key)
+        live_pointer = (live_obj.as_pointer(), live_stage_key)
+        dead_name = dead_obj.name
+
+        for key in (dead_key, live_key):
+            ENGINE.runtime(*key).pending = {"sha256:probe": 1.0}
+            ENGINE.verify.add(key)
+        for pointer in (dead_pointer, live_pointer):
+            ENGINE.prefix_memo[pointer] = {"revision": (1, 1)}
+        ENGINE.playback_reports[dead_stage_key] = "dead playback failure"
+        ENGINE.playback_reports[live_stage_key] = "live playback failure"
+        ENGINE.dirty.add(dead_obj.name)
+        ENGINE.dirty.add(live_obj.name)
+
+        bpy.data.objects.remove(dead_obj, do_unlink=True)
+        engine_lifecycle._rebuild_index()
+
+        self.assertIsNone(
+            ENGINE.peek_runtime(*dead_key),
+            "deleting the object kept its runtime record",
+        )
+        self.assertNotIn(
+            dead_key, ENGINE.verify, "deleting the object kept a verify request"
+        )
+        self.assertNotIn(
+            dead_pointer,
+            ENGINE.prefix_memo,
+            "deleting the object kept a memoized prefix",
+        )
+        self.assertNotIn(
+            dead_stage_key,
+            ENGINE.playback_reports,
+            "deleting the object kept a playback report",
+        )
+        self.assertNotIn(
+            dead_name,
+            ENGINE.dirty,
+            "deleting the object kept a dirty name",
+        )
+
+        self.assertIsNotNone(
+            ENGINE.peek_runtime(*live_key),
+            "the rebuild dropped a live stage's runtime record",
+        )
+        self.assertIn(
+            live_key, ENGINE.verify, "the rebuild dropped a live verify request"
+        )
+        self.assertIn(
+            live_pointer, ENGINE.prefix_memo, "the rebuild dropped a live prefix"
+        )
+        self.assertIn(
+            live_stage_key,
+            ENGINE.playback_reports,
+            "the rebuild dropped a live playback report",
+        )
+        self.assertIn(
+            live_obj.name, ENGINE.dirty, "the rebuild dropped a live dirty name"
+        )
+
 
 class LegacyFileMigrationTests(unittest.TestCase):
     """A 0.6/early-0.7 file saved with object-name plumbing keeps its output

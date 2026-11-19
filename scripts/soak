@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# T10d churn soak: stage/object add-delete-rename, requests, playback, native
+# bake/Clear Bake, reconnect and stale-answer churn, with registry/helper checks.
+#
+#     scripts/soak --duration 3600 \
+#       --out benchmarks/results/2026-11-19-soak.json
+#     scripts/soak --quick
+#
+# This is the dedicated soak runner. It is not part of the default benchmark
+# matrix and not part of scripts/check-all; the 1-hour run is a local/release
+# check. It exits non-zero on an invariant failure, an engine error, a hang or
+# the wall-clock guard.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+DURATION=3600
+QUICK=0
+HAVE_DURATION=0
+PREV=""
+for ARG in "$@"; do
+  case "$ARG" in
+    --quick) QUICK=1 ;;
+    --duration=*)
+      DURATION="${ARG#--duration=}"
+      HAVE_DURATION=1
+      ;;
+  esac
+  if [ "$PREV" = "--duration" ]; then
+    DURATION="$ARG"
+    HAVE_DURATION=1
+  fi
+  PREV="$ARG"
+done
+if [ "$QUICK" -eq 1 ] && [ "$HAVE_DURATION" -eq 0 ]; then
+  DURATION=20
+fi
+# The runner has its own cycle and hard-wall guards; this outer cap also covers
+# a Blender process stuck in C. Four minutes of setup/teardown/grace covers the
+# one-hour run; STAGELOOM_SOAK_TIMEOUT overrides it for a different duration.
+CAP="${STAGELOOM_SOAK_TIMEOUT:-$((DURATION + 240))}"
+
+LOG="$(mktemp)"
+set +e
+if command -v timeout >/dev/null 2>&1; then
+  timeout --signal=TERM --kill-after=60 "$CAP" \
+    blender -b --factory-startup --online-mode --python-exit-code 1 \
+    --python benchmarks/soak.py -- "$@" >"$LOG" 2>&1
+  CODE=$?
+else
+  echo "soak: timeout(1) not found; the runner's --duration guard is the only backstop" >&2
+  blender -b --factory-startup --online-mode --python-exit-code 1 \
+    --python benchmarks/soak.py -- "$@" >"$LOG" 2>&1
+  CODE=$?
+fi
+set -e
+
+grep -vE '^Blender [0-9]|^Read prefs|^Info: Added stage|^Info: Saved as|^$' "$LOG" || true
+rm -f "$LOG"
+exit "$CODE"

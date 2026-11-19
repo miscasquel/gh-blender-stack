@@ -193,6 +193,7 @@ class StageControlTests(unittest.TestCase):
         # than leave stale bookkeeping behind.
         ENGINE.runtime(*key).state_since = 0.0
         ENGINE.runtime(*key).timings = {"prefix_ms": 1.0}
+        ENGINE.playback_reports[self.stage.key] = "stale playback failure"
         modifier = self.nodes.modifier_of(self.obj, self.stage)
         helper_name = helpers.helper_name(self.obj, self.stage.key)
         self.obj.modifiers.remove(modifier)
@@ -209,6 +210,11 @@ class StageControlTests(unittest.TestCase):
         )
         self.assertFalse(ENGINE.runtime(*key).state_since is not None, "the wait stamp survived removal")
         self.assertFalse(bool(ENGINE.runtime(*key).timings), "the timings survived removal")
+        self.assertNotIn(
+            self.stage.key,
+            ENGINE.playback_reports,
+            "the playback report survived removal",
+        )
         self.assertFalse(ENGINE.active, "the last stage left the engine active")
         self.assertFalse(
             bpy.app.timers.is_registered(engine_triggers._timer),

@@ -1,8 +1,8 @@
 # Stageloom compliance record
 
 **Status:** v0.7.0 is the released compliance baseline; the 0.8.0 quality work
-is in progress (T1–T9, T10a, the T10b coverage floors and the T10c scale run
-complete; the T10d 1-hour soak and T11 remain; see
+is in progress (T1–T9, T10a, the T10b coverage floors, the T10c scale run and
+the T10d 1-hour soak complete; T11 remains; see
 [`plan-quality-0.7-0.8.md`](plan-quality-0.7-0.8.md)). The release version stays
 `0.7.0` until T11. **1.0 planning** continues in [`plan.md`](plan.md). The
 extensions.blender.org upload is deferred. Release history is in
@@ -135,8 +135,8 @@ frame fuzz campaigns. `scripts/test-core` passed in 0.38 s,
 `scripts/test-blender` passed 468 tests in 86.9 s plus the offline gate, and
 `scripts/test-gha` passed the fixture runner and all eight console suites in
 25.5 s. No benchmark or full
-`check-all` was run. T10b then added the coverage floors (below); T10c later
-added the scale run, and the 1-hour soak remains.
+`check-all` was run. T10b then added the coverage floors (below), T10c added the
+scale run and T10d ran the 1-hour soak.
 
 **0.8.0 T10b coverage verification (2026-11-18).** Tooling/docs only; shipped
 code and the release artifacts are unchanged. `scripts/coverage core` measured
@@ -160,8 +160,29 @@ timing and raises the headless count from 468 to **471**. No new timing gate
 was added; the 100k in-place and 13-row instance hot paths remain in the
 existing benchmark gate, and the 200-stage/10k-row shapes are diagnostic. The
 result is
-[`../benchmarks/results/2026-11-19-scale.json`](../benchmarks/results/2026-11-19-scale.json);
-the 1-hour soak remains T10d.
+[`../benchmarks/results/2026-11-19-scale.json`](../benchmarks/results/2026-11-19-scale.json).
+T10d later ran the soak separately.
+
+**0.8.0 T10d soak verification (2026-11-19).** Runner/tooling/docs plus one
+minimal cleanup fix; shipped artifacts, wire, fixtures and `out_hash` are
+unchanged. `scripts/soak` completed **10,238 cycles** in **3,600.2 s** of
+stage/object/request/playback/bake/reconnect churn with **0 invariant
+failures**, **0 unclassified exceptions**, **30/30** native Geometry Nodes bake
+cycles, **15** client reconnects and RSS **368.6 → 399.0 MiB**; the final
+teardown zeroed every registry, helper and session count. The soak exposed a
+whole-object deletion session-state leak (runtime/verify/prefix-memo/playback
+report entries survived); `Engine.prune_session_state` in `_rebuild_index`
+fixes it, with a regression test. Production is **25,083 physical / 20,072 code
+lines across 71 files**; `scripts/test-core` passes 133 tests and
+`scripts/test-blender` passes **472** tests in 89.8 s plus the offline gate. The
+coverage floors were rechecked after the cleanup fix: core **93.50%**, engine/
+geometry **89.46%**, pure C# core **93.36%**, all above their floors. The
+result is
+[`../benchmarks/results/2026-11-19-soak.json`](../benchmarks/results/2026-11-19-soak.json).
+The native bake is Blender's headless Geometry Nodes bake, not native
+Windows/Rhino acceptance; that acceptance remains **deferred after 0.8.0** and
+no native-parity claim is made. Chain evidence remains the 2026-11-15 live
+chain-bake under wine and the headless chain bake/playback suites.
 
 The 1.0 workstreams, platform matrix and release gates are in
 [`plan.md`](plan.md). A new listing packet is prepared from the 1.0 release

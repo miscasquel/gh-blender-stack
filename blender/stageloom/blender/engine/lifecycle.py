@@ -194,6 +194,22 @@ def _rebuild_index():
     ENGINE.stage_conflicts.update(conflicts)
     ENGINE.index_dirty = False
     ENGINE.stats()["index_rebuilds"] += 1
+    # A stack object cannot run the cleanup its stage records would: the
+    # records and their modifier anchors leave the scene together. This full
+    # scan is what notices the dead keys, so it retires their session state
+    # with the same authority the helper sweep below uses for datablocks.
+    ENGINE.prune_session_state(
+        {
+            (record.stack_id, stage.key)
+            for _obj, record, stage in all_claims
+            if record.stack_id and stage.key
+        },
+        {
+            (obj.as_pointer(), stage.key)
+            for obj, _record, stage in all_claims
+            if stage.key
+        },
+    )
     for key in old_conflicts - conflicts:
         _clear_key_conflict(key)
     for key in conflicts:
@@ -640,6 +656,7 @@ def _drop_removed_stages(obj, record):
         key = (record.stack_id, stage.key)
         ENGINE.discard_runtime(*key)
         ENGINE.verify.discard(key)
+        ENGINE.playback_reports.pop(stage.key, None)
         _forget_prefix(obj, stage.key)
         helpers.remove_helper(obj, stage.key)
         for definition in list(helpers.definition_collections(obj, stage.key)):
