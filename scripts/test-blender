@@ -27,6 +27,9 @@ run_blender() {
 }
 
 LOG="$(mktemp)"
+# Blender writes this on a native crash. Remove a stale one first so a normal
+# failure never reports an older crash as this run's.
+rm -f /tmp/blender.crash.txt
 set +e
 # --online-mode: the add-on's `network` permission contract gates the server on
 # bpy.app.online_access, which a factory startup reports as off (no user
@@ -36,6 +39,11 @@ run_blender -b --factory-startup --online-mode --python-exit-code 1 \
 CODE=$?
 if [ "$CODE" -eq 124 ] || [ "$CODE" -eq 137 ]; then
   echo "test-blender: the headless suite exceeded ${CAP}s" >>"$LOG"
+fi
+if [ "$CODE" -ne 0 ] && [ -f /tmp/blender.crash.txt ]; then
+  echo "--- Blender crash log ---" >>"$LOG"
+  cat /tmp/blender.crash.txt >>"$LOG"
+  echo "--- end Blender crash log ---" >>"$LOG"
 fi
 # The offline gate needs a process that starts with online access off, so it
 # cannot live in the suite above (which runs with --online-mode).
