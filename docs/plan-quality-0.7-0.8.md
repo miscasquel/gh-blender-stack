@@ -1,8 +1,9 @@
 # Stageloom 0.7.0 / 0.8.0 — quality plan (rev. 2)
 
 **Status:** 0.7.0 complete, 2026-11-16. 0.8.0 complete and released
-2026-11-19: T1 (baseline, performance gate, code health) through T8
-(performance follow-through) are complete; T9c (the .NET no-go), T9a/T9b
+2026-11-19; 0.8.1 is released (2026-11-19). T1
+(baseline, performance gate, code health) through T8 (performance
+follow-through) are complete; T9c (the .NET no-go), T9a/T9b
 (build/CI/docs truth and the protocol single-source tables), T10a
 (fuzz/invariants), the T10b coverage floors, the T10c scale run, the T10d
 1-hour soak and T11 (release) are complete. W7's `geometry_io`, engine-object,
@@ -122,8 +123,18 @@ cycles, 15 reconnects and a clean final teardown. It also exposed and fixed a
 whole-object deletion leak in the engine's per-stage session state (regression
 test added). T11 then moved the single version source to 0.8.0, rebuilt,
 installed and deployed the release artifacts, recorded their hashes and passed
-the full gate with the baseline enforced. See the T9a, T9b, T10a, T10b
-coverage, T10c scale, T10d soak and T11 release verification below.
+the full gate with the baseline enforced. **0.8.1** is a patch on that tree:
+The fix commits `b923398` (Blender's native crash log in
+the headless runner) and `e2cafed` (snapshot bake-token matches before
+unfreezing, atomically write the fake-GH report); CI is green on `e2cafed` for
+three consecutive runs. The release tree passed **26/26 in 184.6 s** with the
+stored baseline enforced (not rebuilt), worst positive +3.31% p50 / +3.41% p95;
+it shipped `dist/stageloom-0.8.1.zip`
+(`8cf1e5700eabde268f5720ba93812193eb42a72e47b817a4f32db7315fce1a8f`) and
+`Stageloom.gha`
+(`f19aa1830dc191723d98f95dccb3bc2d9a9f2d2b8b303f01418b101028c03c30`), installed,
+deployed and reproducible. See the T9a, T9b, T10a, T10b coverage, T10c scale,
+T10d soak, T11 release and T11.1 patch verification below.
 
 **0.7.0 completion record (2026-11-16).** Q1–Q19 are complete; Q5 was merged
 into Q4 (the cache and the `Live` toggle were one removal). The release was
@@ -925,6 +936,7 @@ acceptance criteria, then committed before the next starts.
 | T9 | Lean/docs/CI/build/framework | protocol tables generated; docs/ADR truth pass; reproducible extension zip and `.gha`; framework go/no-go | T9c no-go 2026-11-18 ([ADR 0019](decisions/0019-keep-csharp5-mono.md)); T9a done 2026-11-18 (one version source, reproducible zip and `.gha`, derived wine user, honest CI); T9b done 2026-11-18 (`protocol/sections.json`, generated Python/C# tables, drift and fixture checks; [ADR 0021](decisions/0021-generated-protocol-tables.md)); T9 complete |
 | T10 | Verification | fuzz, coverage, scale and 1-hour soak green | T10a done 2026-11-18: 10,000 fixed-seed Python and C# frame mutations, geometry/attribute/instance round-trip fuzz, malformed bake markers; 133 core, 468 Blender and 689 C# checks. T10b coverage done 2026-11-18: core **93.50%** (floor 90%), engine/geometry **89.43%** (80%), pure C# core **93.36%** (80%; RhinoCommon files excluded). T10c scale done 2026-11-19: `scripts/scale` records 200 stages / exactly 100,000 triangles / 10,000 instances with 38/38 structural checks, 4.58 s and 524.0 MiB peak RSS. T10d soak done 2026-11-19: `scripts/soak` completed **10,238 cycles** in 3,600.2 s churn with **0 invariant failures**, 0 unclassified exceptions, 30/30 native bakes and 15 reconnects; the soak exposed and fixed a whole-object deletion session-state leak, raising the Blender count to **472** and production to 25,083 / 20,072. The post-fix full gate passed **26/26 in 181.7 s** (worst +0.31% p50 / +1.47% p95; no >5%; zip `fdbf973e…`, `.gha` `18c629e3…`). Native Windows/Rhino acceptance remains explicitly deferred after 0.8.0; no native-parity claim |
 | T11 | 0.8.0 release | version/changelog/artifacts match the tagged commit | Done 2026-11-19: version **0.8.0** from the one manifest source; changelog and README/plan/handoff/compliance/ledger updated with the post-T10d measurements; `dist/stageloom-0.8.0.zip` and `Stageloom.gha` rebuilt, installed/deployed and reproducible (two zip builds; two in-tree plus one copied-tree `.gha` build); release-tree full gate **26/26 in 181.1 s** (post-T10d reference 181.7 s), worst +0.49% p50 / +2.39% p95; hashes in the T11 verification |
+| T11.1 | 0.8.1 patch release | version/changelog/docs/artifacts match the tagged commit; only the committed crash fix and version literal | Done 2026-11-19: version **0.8.1**; the patch contains `b923398` and `e2cafed`; CI green three consecutive runs; release tree gate **26/26 in 184.6 s**, baseline enforced, worst +3.31% p50 / +3.41% p95; zip `8cf1e570…`, `.gha` `f19aa183…`; installed/deployed and reproducible; see the T11.1 verification |
 
 ### T8 verification (performance follow-through)
 
@@ -1399,6 +1411,61 @@ baseline rebuild.
   subagent; `v0.7.0` is untouched and the orchestrator owns publication. Native
   Windows/Rhino acceptance remains deferred after 0.8.0; no native-parity claim
   is made.
+
+### T11.1 verification (0.8.1 patch release)
+
+**2026-11-19.** Patch release metadata, docs and artifacts only. The patch
+contains the already-committed CI crash fix and the crash-log harness change
+in `b923398`; no new production behavior beyond those
+commits and the version literal, no protocol/fixture/`out_hash` change, no
+baseline rebuild and no native acceptance claim.
+
+- **Fix commits and CI.** `b923398` makes `scripts/test-blender` print Blender's
+  native crash log when the headless suite dies on a signal. `e2cafed` snapshots
+  the bake-token matches before unfreezing (unfreeze can rebuild the engine index
+  and sweep helpers after a stack deletion) and writes the fake-GH report
+  atomically. CI is green on `e2cafed` for **three consecutive runs**.
+- **Version.** `blender_manifest.toml` is the single version source and reads
+  **0.8.1**; the C# hello string (`Publication.cs`), the `LinkTests`
+  assertion, the protocol example, and the installed-version examples in
+  `benchmarks/README.md` and `benchmarks/live_client.py` moved with it.
+  `scripts/version` prints `0.8.1`; `scripts/check-docs` passes.
+- **Changelog.** `CHANGELOG.md` has the 0.8.1 section written for the upgrader:
+  the Clear Bake fix, the atomic fake-GH report, the crash log, the
+  rebuild/redeploy/restart steps, the unchanged wire/fixtures/`.blend` guarantee
+  and the explicit no-native-parity statement.
+- **Artifacts.** `dist/stageloom-0.8.1.zip` SHA-256
+  `8cf1e5700eabde268f5720ba93812193eb42a72e47b817a4f32db7315fce1a8f`;
+  `grasshopper/build/out/Stageloom.gha` SHA-256
+  `f19aa1830dc191723d98f95dccb3bc2d9a9f2d2b8b303f01418b101028c03c30`.
+  The zip manifest reads `0.8.1`.
+- **Reproducibility.** `scripts/test-reproducible` built the zip twice
+  byte-identically; `scripts/test-reproducible-gha` built twice in the tree and
+  once from a copied tree at another absolute path, all three identical.
+- **Install/deploy.** `scripts/install-extension` installed and enabled 0.8.1 in
+  Blender 5.3; `scripts/test-extension` passed the round trip;
+  `grasshopper/deploy/deploy.sh` deployed the rebuilt plugin and
+  `scripts/check-deployed` reports it current at the `.gha` hash above.
+- **Full gate.** `scripts/check-all` ran alone and passed **26/26 in 184.6 s**
+  with the 2026-11-17 baseline enforced (not rebuilt). Step timings:
+  docs/protocol/ruff/core 0.4 s, bench 46.2 s, baseline self-test 1.6 s, Blender
+  91.1 s, extension 2.8 s, zip reproducibility 2.0 s, C# 30.3 s, `.gha`
+  reproducibility 10.1 s. It ran **133 core**, **472 Blender** and **689 C#**
+  checks, fourteen golden fixtures and the fixed-seed 10,000-case frame fuzz.
+  The worst positive delta was **+3.31% p50** (`pipeline.100k.total_ms`) and
+  **+3.41% p95** (`pipeline.100k.apply_inplace_ms`); no metric exceeded +5%.
+- **Host note.** The development host carried unrelated desktop CPU/cache load
+  during the first attempts; the accepted gate ran alone with the unrelated
+  editor process paused for the measurement, on the `performance` power profile,
+  and restored the process and the `balanced` profile immediately afterwards.
+  No Stageloom benchmark, soak or scale run was concurrent, and the stored
+  baseline was not changed.
+- **Scope.** The 0.8.1 prep subagent made no commit, tag or push; the
+  orchestrator published the audited tree. `v0.8.0` (at `e6ea18e`) is untouched.
+  0.8.1 is published at
+  <https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.8.1>.
+  Native Windows/Rhino acceptance remains deferred; 0.8.1 makes no
+  native-parity claim.
 
 **Commit rule:** a task is committed only after its acceptance tests plus
 `scripts/test-core` and the relevant Blender/C# suite pass, and the audit finds

@@ -1,7 +1,7 @@
 # Stageloom — 1.0 plan
 
-**Status:** 1.0 planning, 2026-11-16; 0.8.0 released 2026-11-19. Baseline:
-**v0.7.0**.
+**Status:** 1.0 planning, 2026-11-16; 0.8.0 released 2026-11-19; 0.8.1 patch
+released 2026-11-19. Baseline: **v0.7.0**.
 **Target:** Blender 5.3. **Compatibility floor:** Blender 5.2.
 **Goal:** ship a stable 1.0 for the declared v1 scope: Grasshopper definitions as
 stackable Blender modifiers, with geometry and parameters flowing both ways,
@@ -35,6 +35,29 @@ recorded no-go through 1.0 ([ADR 0019](decisions/0019-keep-csharp5-mono.md));
 C# 5/Mono and the hand-written MiniWs/JSON transport stay. The protocol tables
 are generated from `protocol/sections.json` and drift-checked in CI
 ([ADR 0021](decisions/0021-generated-protocol-tables.md)).
+
+**0.8.1 status (2026-11-19).** 0.8.1 is a patch on the 0.8.0 tree, released
+at <https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.8.1>. The
+fix commits are `b923398` (print Blender's native crash log from the headless
+runner) and `e2cafed` (snapshot the bake-token matches before unfreezing, so
+Clear Bake survives a deleted stack object; write the fake-GH report
+atomically). CI is green on the fixed commit for three consecutive runs. The
+release tree passed `scripts/check-all` **26/26 in 184.6 s** with the
+2026-11-17 baseline enforced (not rebuilt): the worst positive delta was
+**+3.31% p50** (`pipeline.100k.total_ms`) and **+3.41% p95**
+(`pipeline.100k.apply_inplace_ms`), and no metric exceeded +5%. It ran **133 core**,
+**472 Blender** and **689 C#** checks plus the fourteen golden fixtures and the
+fixed-seed 10,000-case frame fuzz in each language. Production is 25,091
+physical / 20,076 code lines across 71 files (+8 / +4 for the bake-token
+snapshot). The release assets are `dist/stageloom-0.8.1.zip` (SHA-256
+`8cf1e5700eabde268f5720ba93812193eb42a72e47b817a4f32db7315fce1a8f`) and
+`grasshopper/build/out/Stageloom.gha` (SHA-256
+`f19aa1830dc191723d98f95dccb3bc2d9a9f2d2b8b303f01418b101028c03c30`); both
+reproduced byte-for-byte, the extension was installed and enabled with the
+round trip passing, and `scripts/check-deployed` reports the deployed plugin
+current. The wire protocol, the fourteen fixtures and `out_hash` are unchanged;
+there is no `.blend` migration. Native Windows/Rhino acceptance remains
+deferred, and 0.8.1 makes no native-parity claim.
 
 **Authority:** this document is the roadmap for 1.0. The wire contract is
 [`protocol.md`](protocol.md); architecture decisions are in
@@ -100,7 +123,7 @@ target; preview off is within noise. See
 
 | Gap | Why it blocks 1.0 |
 |---|---|
-| No native Windows Rhino acceptance run | Wine is a development environment, not the target user platform. Native acceptance is deferred until after 0.8.0; 0.8.0 makes no native-parity claim. |
+| No native Windows Rhino acceptance run | Wine is a development environment, not the target user platform. Native acceptance is deferred beyond the 0.8 series; neither 0.8.0 nor 0.8.1 makes a native-parity claim. |
 | No GH component migration | Old documents keep old parameter/output lists and never gain newer capabilities. |
 | No chain-level Windows/Rhino playback/bake proof | Bake stage freezes the upstream chain and triggers plus freezes downstream dependents (ADR 0015); the 0.7.0 acceptance is headless, so a Windows/Rhino chain render is still missing. |
 | Release verification is manual and single-machine | The extension zip and `.gha` are reproducible for the same tree/toolchain and checked, but the C# suite, `.gha` check and full platform matrix remain a local/release gate rather than a stock-runner CI claim. |

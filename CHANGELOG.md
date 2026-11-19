@@ -10,6 +10,33 @@ Notable changes to this project, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] — 2026-11-19
+
+This is a patch release: the only user-facing change is a fix for **Clear
+Bake** after a stack object was deleted. Everything else is release
+engineering and test-harness hardening; there is no new feature.
+
+**Upgrade:** rebuild and redeploy `Stageloom.gha`, then restart Rhino
+(Grasshopper scans `Libraries` only on load). The Blender add-on upgrades in
+place. The wire protocol, the golden fixtures and existing `.blend` files are
+unchanged: no re-bake, re-freeze or migration is needed. Native Windows/Rhino
+acceptance remains deferred, and 0.8.1 makes no native-parity claim.
+
+### Fixed
+
+- **Clear Bake no longer crashes after a stack object was deleted.** The bake
+  marker's matching stages were enumerated lazily while unfreezing; unfreezing
+  can rebuild the stage index and sweep helper objects, which invalidated that
+  walk once a whole stack had been removed. The matches are now snapshotted
+  before anything is unfrozen, so Clear Bake releases exactly the stages the
+  bake froze and the deleted stack's helpers are swept cleanly. A regression
+  test covers the deleted-stack case.
+- **The test harness no longer loses its evidence.** The fake Grasshopper used
+  by the headless suite writes its report atomically, so a concurrent poll can
+  no longer read a half-written document and mistake it for "no requests"; and
+  `scripts/test-blender` now prints Blender's native crash log when the suite
+  dies on a signal, so a crash is diagnosable instead of silent.
+
 ## [0.8.0] — 2026-11-19
 
 This is the architecture, speed and truth release. There are no new user-facing

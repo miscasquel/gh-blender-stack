@@ -1,7 +1,8 @@
 # Stageloom compliance record
 
-**Status:** v0.8.0 is the released compliance baseline (2026-11-19); the 0.8.0
-quality work T1–T11 is complete (see
+**Status:** v0.8.1 is the current release and compliance baseline
+(2026-11-19); v0.8.0 is the previous released baseline. The 0.8.0 quality work
+T1–T11 and the 0.8.1 patch are complete (see
 [`plan-quality-0.7-0.8.md`](plan-quality-0.7-0.8.md)). **1.0 planning**
 continues in [`plan.md`](plan.md). Release history is in
 [`../CHANGELOG.md`](../CHANGELOG.md) and the GitHub releases.
@@ -23,13 +24,13 @@ continues in [`plan.md`](plan.md). Release history is in
 | S7 dead stubs | **Closed** | none left |
 | S8 wheel integrity | **Closed** | the official wheel is the only `websockets` source; its SHA-256 is pinned and verified in `scripts/build-extension` and `scripts/check-docs` |
 | S9 data root | **Closed** | `bpy.utils.extension_path_user(...)`; dev fallback; override retained |
-| Manifest version | **Closed** | `blender_manifest.toml` declares `0.8.0`; `scripts/version` is the single extractor used by build/install/test, and `scripts/check-docs` checks the C# hello string and protocol example |
-| Packaging truthfulness | **Closed** | build/install/test fail on validator/build/install error; version-specific `dist/stageloom-0.8.0.zip`; the normalized zip is validated after rewriting |
+| Manifest version | **Closed** | `blender_manifest.toml` declares `0.8.1`; `scripts/version` is the single extractor used by build/install/test, and `scripts/check-docs` checks the C# hello string and protocol example |
+| Packaging truthfulness | **Closed** | build/install/test fail on validator/build/install error; version-specific `dist/stageloom-0.8.1.zip`; the normalized zip is validated after rewriting |
 | Reproducible artifact | **Closed** | extension zip: sorted entries, fixed `1980-01-01` timestamps/modes, preserved compression; `.gha`: Mono `csc` `/deterministic`; both SHA-256 and two-build checks (`scripts/test-reproducible`, `scripts/test-reproducible-gha`) |
 | Wine deploy path | **Closed** | `grasshopper/deploy/deploy.sh` derives the user under `$WINEPREFIX/drive_c/users` (`STAGELOOM_WINE_USER` override, `Public` skipped, zero/multiple users fail); no hardcoded user |
 | Listing assets/support | **Deferred** | icon in `docs/listing/`; screenshots pending for a later upload; support URL is listing metadata |
-| Platform upload | **Deferred** | v0.8.0 ships on GitHub first; the 1.0 plan owns the platform decision |
-| Windows-native acceptance | **Deferred after 0.8.0** | no native-parity claim for 0.8.0; tracked in [`plan.md`](plan.md) §5B |
+| Platform upload | **Deferred** | v0.8.1 ships on GitHub first; the 1.0 plan owns the platform decision |
+| Windows-native acceptance | **Deferred beyond 0.8** | no native-parity claim for 0.8.1; tracked in [`plan.md`](plan.md) §5B |
 | .NET framework migration | **No-go through 1.0** | C# 5/Mono and MiniWs/Json stay; [ADR 0019](decisions/0019-keep-csharp5-mono.md) |
 | CI release gate | **Open for 1.0** | tracked in [`plan.md`](plan.md) §5F; CI runs core/Blender/extension/zip reproducibility, not the reference-machine benchmark, local-only C# or the local `.gha` check |
 
@@ -212,6 +213,46 @@ builds and the copied-tree `.gha` build were byte-identical. Native
 Windows/Rhino acceptance remains **deferred after 0.8.0**; 0.8.0 makes no
 native-parity claim. The T11 subagent made no commit, tag, push or GitHub
 release; publication follows the orchestrator's audit.
+
+**0.8.1 T11.1 patch verification (2026-11-19).** Release metadata, docs and
+artifacts only. The patch contains the already-committed fix commits
+`b923398` (print Blender's native crash log from the headless runner) and
+`e2cafed` (snapshot bake-token matches before unfreezing, so Clear Bake survives
+a deleted stack object; write the fake-GH report atomically). CI is green on
+`e2cafed` for **three consecutive runs**. `blender_manifest.toml` is the single
+version source and declares **0.8.1**; the C# hello string, the `LinkTests`
+assertion, the protocol example, and the installed-version examples in
+`benchmarks/README.md` and `benchmarks/live_client.py` moved with it.
+`scripts/check-docs` passes. There is no protocol, fixture or `out_hash` change.
+
+```text
+scripts/version                       0.8.1
+scripts/build-extension               dist/stageloom-0.8.1.zip built and validated
+scripts/test-reproducible             two builds PASS; zip sha256 8cf1e5700eabde268f5720ba93812193eb42a72e47b817a4f32db7315fce1a8f
+scripts/test-reproducible-gha         three builds PASS; .gha sha256 f19aa1830dc191723d98f95dccb3bc2d9a9f2d2b8b303f01418b101028c03c30
+scripts/install-extension             installed and enabled 0.8.1 in Blender 5.3
+scripts/test-extension                installed-extension round trip PASS
+grasshopper/deploy/deploy.sh          deployed to the wine Grasshopper Libraries folder
+scripts/check-deployed                deployed plugin matches the build
+scripts/check-all                     PASS 26/26 in 184.6 s; baseline enforced; 133 core + 472 Blender + 689 C# checks
+```
+
+The worst positive gated delta was **+3.31% p50**
+(`pipeline.100k.total_ms`) and **+3.41% p95** (`pipeline.100k.apply_inplace_ms`); no
+metric exceeded +5%. The release tree gate ran alone with the 2026-11-17
+baseline enforced (not rebuilt); the development host carried unrelated desktop
+load for the first attempts, so the accepted run paused the unrelated editor
+process for the measurement, on the `performance` power profile, and restored
+the process and the `balanced` profile immediately afterwards. No Stageloom
+benchmark, soak or scale run was concurrent. Production is 25,091
+physical / 20,076 code lines across 71 files (+8 / +4 for the bake-token
+snapshot).
+
+0.8.1 is published at
+<https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.8.1>. Native
+Windows/Rhino acceptance remains **deferred**, and 0.8.1 makes no native-parity
+claim. The prep subagent made no commit, tag or push; the orchestrator published
+the audited tree. `v0.8.0` at `e6ea18e` is untouched.
 
 The 1.0 workstreams, platform matrix and release gates are in
 [`plan.md`](plan.md). A new listing packet is prepared from the 1.0 release

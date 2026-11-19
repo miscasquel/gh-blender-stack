@@ -5,18 +5,33 @@ native Geometry Nodes modifiers, in one visible object per stack. Geometry and
 parameters can flow through the stack, so parameters can be keyframed, driven,
 and played back.
 
-That is the v1 goal. **v0.8.0 is the current release**: geometry (meshes,
+That is the v1 goal. **v0.8.1 is the current release**: geometry (meshes,
 curves, points, SubD cages) driven by a real Grasshopper definition, with named
 attributes and Grasshopper blocks (instances, including nested and multi-part
 definitions) travelling both ways, parameters you can edit and keyframe in
-Blender, packaged as a Blender extension. 0.8.0 is the architecture, speed and
-truth release: the modules behind that feature set now have one owner each, the
+Blender, packaged as a Blender extension. 0.8.0 was the architecture, speed and
+truth release: the modules behind that feature set have one owner each, the
 performance gate is measured against a stored p50/p95 baseline, and the
-extension zip and `.gha` are reproducible from one version source. It adds no
-user-facing feature; the wire protocol and existing `.blend` files are
-unchanged. Native Windows/Rhino acceptance is deferred until after 0.8.0 and is
-not claimed.
+extension zip and `.gha` are reproducible from one version source. 0.8.1 is a
+patch on top of it: it fixes a **Clear Bake** crash after a stack object was
+deleted, with no protocol, fixture or `.blend` change. Native Windows/Rhino
+acceptance remains deferred, and neither 0.8.0 nor this patch makes a
+native-parity claim.
 [DEMO.md](DEMO.md) walks through the loop.
+
+**0.8.1 release (2026-11-19).** The patch fix commits `b923398` (print
+Blender's native crash log from the headless runner) and `e2cafed` (snapshot
+bake-token matches before unfreezing, so Clear Bake survives a deleted stack
+object; write the fake-GH report atomically) are in this release, and CI is
+green on them for three consecutive runs. The release tree passed
+`scripts/check-all` **26/26 in 184.6 s** alone with the 2026-11-17 baseline
+enforced (not rebuilt); the worst positive delta was +3.31% p50 and +3.41% p95,
+with no metric above +5%. The artifacts are `dist/stageloom-0.8.1.zip`
+(SHA-256 `8cf1e570…`) and `grasshopper/build/out/Stageloom.gha` (SHA-256
+`f19aa183…`); both reproduce byte-for-byte, the extension was installed and
+enabled with its round trip passing, and `scripts/check-deployed` reports the
+deployed plugin current. Release:
+[v0.8.1](https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.8.1).
 
 ```
 Blender                                          Rhino / Grasshopper (wine)
@@ -159,8 +174,8 @@ The authoritative roadmap and scope are in [docs/plan.md](docs/plan.md).
   Mono's `csc.exe` (ships with wine) builds the C# 5 plugin; a
   `net48`/`net7.0-windows` migration is a recorded no-go through 1.0
   ([ADR 0019](docs/decisions/0019-keep-csharp5-mono.md)), revisited only after
-  native Windows/Rhino acceptance. **Native Windows/Rhino acceptance is
-  deferred until after 0.8.0**; this release makes no native-parity claim and
+  native Windows/Rhino acceptance. **Native Windows/Rhino acceptance remains
+  deferred**; 0.8.1 makes no native-parity claim and
   the C# suite remains a local gate (a stock CI runner has neither wine with
   Mono's `csc` nor Rhino 8's managed assemblies).
 
@@ -198,7 +213,7 @@ The add-on's logs live in its per-user extension data directory by default; the
 ## Install
 
 Download the add-on zip and the Grasshopper `.gha` from the
-[v0.8.0 release](https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.8.0).
+[v0.8.1 release](https://github.com/miscasquel/gh-blender-stack/releases/tag/v0.8.1).
 The commands below are the build path.
 
 Release path: the add-on ships as a Blender extension with the official
@@ -305,7 +320,7 @@ wine/wine-mono and no Rhino 8 managed assemblies; the C# suite and
 `scripts/test-reproducible-gha` are local gates (C# 5/Mono,
 [ADR 0019](docs/decisions/0019-keep-csharp5-mono.md)). No stock-runner codec job
 is claimed. The 1-hour soak and the scale run are local/release checks, not CI
-jobs. Native Windows/Rhino acceptance is deferred until after 0.8.0.
+jobs. Native Windows/Rhino acceptance remains deferred.
 
 ## Support
 

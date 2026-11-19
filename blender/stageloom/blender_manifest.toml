@@ -4,7 +4,7 @@ id = "stageloom"
 # The single source for the add-on version: scripts/version reads this line,
 # the development install (scripts/install-addon) generates bl_info from this
 # manifest, and scripts/check-docs keeps the checked C# hello string in sync.
-version = "0.8.0"
+version = "0.8.1"
 name = "Stageloom"
 tagline = "Grasshopper definitions as stackable modifiers in Blender"
 maintainer = "Miquel Oller <miqueloc14@gmail.com>"

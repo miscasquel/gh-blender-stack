@@ -1,11 +1,13 @@
 # Performance ledger
 
-**Status: T1–T10 accepted; T11 (release) complete 2026-11-19.** T9a/T9b have
+**Status: T1–T10 accepted; T11 (0.8.0 release) and T11.1 (0.8.1 patch)
+complete 2026-11-19.** T9a/T9b have
 no performance change, and T10a/T10b/T10c/T10d add tests, tooling and recorded
 verification evidence; T10d also carries the one minimal cleanup fix the soak
-exposed. T11 moves the version literal to 0.8.0, rebuilds the release artifacts
-and reruns the full gate; it changes no benchmark baseline or hot path. The
-gate reference is
+exposed. T11 moved the version literal to 0.8.0, rebuilt the release artifacts
+and reran the full gate; T11.1 moves the version to 0.8.1, carries the committed
+bake-token crash fix and reruns the gate; neither changes a benchmark baseline or
+hot path. The gate reference is
 the **2026-11-17 best-of-three baseline**: three clean solo runs, with the
 fastest per-run p50/p95 stored for each metric. It replaces the 2026-11-16
 median baseline after host CPU power/core-state drift was measured and confirmed
@@ -94,6 +96,7 @@ flaked on unrelated timer noise; its 2 ms hard budget remains in `bench.py`.
 | T10c (scale) | 200 stages / 100k triangles / 10k instances: runner/tests/docs only | — | 200 stages: panel 9.69/9.78 ms, no-client pass 34.64/34.66 ms; 100k: read 4.93/4.95, fresh 8.97/9.05, in-place 2.17/2.22 ms; 10k instances: prefix 13.63/13.99, first apply 84.30, repeat 81.88/91.93 ms | — | no new timing gate and no baseline run; 38/38 structural checks, 4.58 s, peak RSS 524.0 MiB; 471 Blender headless tests; existing 100k in-place and 13x instance gates unchanged; 200-stage/10k-row shapes are diagnostic and not in the default matrix | accepted; soak closed by T10d |
 | T10d (soak) | 1-hour churn: runner/tooling/docs plus one minimal cleanup fix | — | — | — | **PASS** **10,238 cycles** in **3,600.4 s wall** (3,600.2 s churn), **0 invariant failures** and **0 unclassified exceptions**; **10,253** stale-answer and **15** reconnect recoveries; RSS **368.6 → 399.0 MiB** (peak 399.0); **30/30** native bake cycles and 15 reconnects; final 3 stack objects / 4 stages / 12 helpers / 4 groups, teardown all zero; 472 Blender tests; production 25,083 / 20,072 (71 files); coverage rechecked core 93.50 / engine 89.46 / C# 93.36%; **post-fix full gate 26/26 in 181.7 s**, baseline enforced (not rebuilt), worst positive p50 +0.31% (`playback.frame_ms`) / p95 +1.47% (`pipeline.100k.apply_inplace_ms`), no >5% metric; artifacts reproduce (zip `fdbf973e…`, `.gha` `18c629e3…`) | accepted; native Windows/Rhino acceptance deferred after 0.8.0 |
 | T11 | 0.8.0 release: version literal, docs/changelog and artifact rebuild | — | — | — | release-tree full gate **26/26 in 181.1 s** (post-T10d reference **181.7 s**), baseline enforced and not rebuilt; worst positive +0.49% p50 / +2.39% p95; 133 core + 472 Blender + 689 C# checks; zip and `.gha` rebuilt, installed/deployed and reproduced byte-for-byte; no hot-path or protocol change | accepted; hashes and step timings in the T11 verification |
+| T11.1 | 0.8.1 patch: version literal, docs/changelog, artifact rebuild; committed bake-token crash fix | — | — | — | release-tree full gate **26/26 in 184.6 s**, baseline enforced and not rebuilt; worst positive +3.31% p50 (`pipeline.100k.total_ms`) / +3.41% p95 (`pipeline.100k.apply_inplace_ms`), no >5% metric; 133 core + 472 Blender + 689 C# checks; zip `8cf1e570…` and `.gha` `f19aa183…` rebuilt, installed/deployed and reproduced byte-for-byte; no protocol, fixture or `out_hash` change | accepted; native acceptance deferred, no native-parity claim |
 
 `pipeline.100k.total_ms` is one timed read+hash+encode+decode+apply operation,
 not a sum of independently warmed phase timings. The idle pass is amortized over
@@ -584,6 +587,59 @@ plugin was deployed to the wine Grasshopper `Libraries` folder and
 
 Native Windows/Rhino acceptance remains deferred after 0.8.0; no native or
 native-parity claim is attached to these numbers.
+
+### T11.1 verification (0.8.1 patch release)
+
+**2026-11-19.** T11.1 changes the release version literal, release metadata and
+artifacts and carries the already-committed `e2cafed` bake-token crash fix; it
+does not edit a hot path, the benchmark matrix, a threshold or the stored
+baseline. The accepted full gate ran alone on the release tree and passed
+**26/26** with the 2026-11-17 best-of-three baseline enforced (not rebuilt):
+**184.6 s** total, with `bench` 46.2 s, the Blender suite 91.1 s, the extension
+round trip 2.8 s, zip reproducibility 2.0 s, C# 30.3 s and `.gha`
+reproducibility 10.1 s. It ran **133 core**, **472 Blender** and **689 C#**
+checks plus the fourteen fixtures and the two fixed-seed 10,000-case frame
+campaigns.
+
+Release-tree gated deltas, worst positive first:
+
+| Metric | Stat | Baseline | T11.1 | Delta |
+|---|---|---:|---:|---:|
+| `pipeline.100k.apply_inplace_ms` | p95 | 2.1708 ms | 2.2447 ms | **+3.41%** |
+| `pipeline.100k.total_ms` | p95 | 12.0514 ms | 12.4555 ms | +3.35% |
+| `pipeline.100k.total_ms` | p50 | 11.8275 ms | 12.2195 ms | **+3.31%** |
+| `multistage.settle_ms` | p95 | 79.0489 ms | 81.4034 ms | +2.98% |
+| `pipeline.100k.decode_ms` | p50 | 4.4018 ms | 4.5285 ms | +2.88% |
+| `multistage.dirty_pass_ms` | p95 | 6.8452 ms | 7.0308 ms | +2.71% |
+| `multistage.settle_ms` | p50 | 76.8907 ms | 78.9391 ms | +2.66% |
+| `pipeline.1m.apply_inplace_ms` | p95 | 21.7428 ms | 22.3052 ms | +2.59% |
+| `instances.13x.prefix_ms` | p95 | 10.2337 ms | 10.4678 ms | +2.29% |
+| `multistage.dirty_pass_ms` | p50 | 6.7115 ms | 6.8578 ms | +2.18% |
+| `pipeline.100k.apply_fresh_ms` | p50 / p95 | 77.9507 / 87.1304 ms | 8.8163 / 9.1315 ms | -88.69% / -89.52% |
+
+Every other gated metric stayed within noise or improved; no metric exceeded
++5%. The threshold was not widened and no metric was excluded. The development
+host carried unrelated desktop CPU/cache load during the first attempts, so the
+accepted gate ran alone with the unrelated editor process paused for the
+measurement, on the `performance` power profile, and restored the process and
+the `balanced` profile immediately afterwards; no Stageloom benchmark, soak or
+scale run was concurrent. This is a host-state control, not a baseline change.
+
+**Artifacts.** `dist/stageloom-0.8.1.zip` SHA-256
+`8cf1e5700eabde268f5720ba93812193eb42a72e47b817a4f32db7315fce1a8f`;
+`grasshopper/build/out/Stageloom.gha` SHA-256
+`f19aa1830dc191723d98f95dccb3bc2d9a9f2d2b8b303f01418b101028c03c30`.
+Both differ from the 0.8.0 values only because the release version bytes changed
+(the bumped manifest in the zip and the bumped hello client string in the
+`.gha`), plus the committed `e2cafed` bake-token bytes in the zip. Two zip builds
+were byte-identical; the `.gha` was byte-identical across two in-tree builds and
+one copied-tree build. The zip was installed and enabled in Blender 5.3, the
+extension round trip passed, the plugin was deployed to the wine Grasshopper
+`Libraries` folder and `scripts/check-deployed` reports it current. The wire
+protocol, fourteen fixtures and `out_hash` are unchanged.
+
+Native Windows/Rhino acceptance remains deferred; 0.8.1 makes no native or
+native-parity claim.
 
 ## C# parameter/schema baseline (ungated)
 
