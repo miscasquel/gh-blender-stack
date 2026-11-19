@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# T10c scale verification: 200 stages, 100k triangles, 10k instances.
+#
+#     scripts/scale
+#     scripts/scale --quick
+#     scripts/scale --out benchmarks/results/2026-11-19-scale.json
+#
+# This is the dedicated scale runner, not part of the default benchmark
+# matrix and not part of scripts/check-all. It builds the shapes through the
+# real add-on, asserts their structure, records wall times and peak RSS, and
+# exits non-zero on a structural failure, exception or timeout. The timing
+# numbers are diagnostic; no new performance gate is added here (the 100k
+# in-place apply and 13x instance repeat stay in scripts/bench-baseline).
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+CAP="${STAGELOOM_SCALE_TIMEOUT:-600}"
+LOG="$(mktemp)"
+set +e
+if command -v timeout >/dev/null 2>&1; then
+  timeout --signal=TERM --kill-after=30 "$CAP" \
+    blender -b --factory-startup --online-mode --python-exit-code 1 \
+    --python benchmarks/scale.py -- "$@" >"$LOG" 2>&1
+  CODE=$?
+else
+  echo "scale: timeout(1) not found; the runner's --timeout guard is the only backstop" >&2
+  blender -b --factory-startup --online-mode --python-exit-code 1 \
+    --python benchmarks/scale.py -- "$@" >"$LOG" 2>&1
+  CODE=$?
+fi
+set -e
+
+grep -vE '^Blender [0-9]|^Read prefs|^Info: Added stage|^$' "$LOG" || true
+rm -f "$LOG"
+exit "$CODE"

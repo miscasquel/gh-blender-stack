@@ -1,8 +1,8 @@
 # Stageloom compliance record
 
 **Status:** v0.7.0 is the released compliance baseline; the 0.8.0 quality work
-is in progress (T1–T9, T10a and the T10b coverage floors complete; T10b
-scale/1-hour soak and T11 remain; see
+is in progress (T1–T9, T10a, the T10b coverage floors and the T10c scale run
+complete; the T10d 1-hour soak and T11 remain; see
 [`plan-quality-0.7-0.8.md`](plan-quality-0.7-0.8.md)). The release version stays
 `0.7.0` until T11. **1.0 planning** continues in [`plan.md`](plan.md). The
 extensions.blender.org upload is deferred. Release history is in
@@ -135,8 +135,8 @@ frame fuzz campaigns. `scripts/test-core` passed in 0.38 s,
 `scripts/test-blender` passed 468 tests in 86.9 s plus the offline gate, and
 `scripts/test-gha` passed the fixture runner and all eight console suites in
 25.5 s. No benchmark or full
-`check-all` was run. T10b then added the coverage floors (below); scale and the
-1-hour soak remain.
+`check-all` was run. T10b then added the coverage floors (below); T10c later
+added the scale run, and the 1-hour soak remains.
 
 **0.8.0 T10b coverage verification (2026-11-18).** Tooling/docs only; shipped
 code and the release artifacts are unchanged. `scripts/coverage core` measured
@@ -147,7 +147,21 @@ The shipped add-on still has no `sys.path` manipulation. The pure C# core was
 measured at **93.36%** (80% floor) with Linux Mono's built-in coverage profiler;
 `Attributes.cs` and `Conversion.cs` are excluded because they reference
 RhinoCommon and are exercised by the wine suites. No Windows/.NET dependency
-was added, and C# coverage stays local-only. Scale and the 1-hour soak remain.
+was added, and C# coverage stays local-only.
+
+**0.8.0 T10c scale verification (2026-11-19).** Runner/tests/docs only; shipped
+code and the release artifacts are unchanged. `scripts/scale` built and
+measured **200 stages** (one object with 200 stage records), exactly **100,000
+triangles** (250 × 200 quads) and **10,000 instances** (one 2-triangle
+definition on a 10,000-point cloud), passed **38/38** structural checks in
+**4.58 s** and recorded **524.0 MiB** peak RSS. The focused headless test
+`blender/tests/headless/test_scale_shapes.py` asserts the same shapes without
+timing and raises the headless count from 468 to **471**. No new timing gate
+was added; the 100k in-place and 13-row instance hot paths remain in the
+existing benchmark gate, and the 200-stage/10k-row shapes are diagnostic. The
+result is
+[`../benchmarks/results/2026-11-19-scale.json`](../benchmarks/results/2026-11-19-scale.json);
+the 1-hour soak remains T10d.
 
 The 1.0 workstreams, platform matrix and release gates are in
 [`plan.md`](plan.md). A new listing packet is prepared from the 1.0 release

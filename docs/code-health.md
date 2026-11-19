@@ -258,7 +258,7 @@ Top-level public Python names and public C# type declarations with no reference 
 | Python | blender/stageloom/blender/stack.py | notify_param_changed | function | 0 | 4 | 0 | non-production consumers |
 | Python | blender/stageloom/blender/stack.py | stage_of | function | 0 | 0 | 0 | unreferenced |
 | Python | blender/stageloom/blender/ui.py | STAGELOOM_PT_diagnostics | class | 0 | 0 | 0 | unreferenced |
-| Python | blender/stageloom/blender/ui.py | STAGELOOM_PT_panel | class | 0 | 6 | 0 | non-production consumers |
+| Python | blender/stageloom/blender/ui.py | STAGELOOM_PT_panel | class | 0 | 7 | 1 | non-production consumers |
 | Python | blender/stageloom/core/codec.py | HeaderError | class | 0 | 33 | 0 | non-production consumers |
 | Python | blender/stageloom/core/codec.py | INT64_MAX | constant | 0 | 8 | 0 | non-production consumers |
 | Python | blender/stageloom/core/codec.py | INT64_MIN | constant | 0 | 4 | 0 | non-production consumers |
@@ -545,6 +545,7 @@ Source-derived counts; this is not a claim about how many tests a run executed. 
 | Blender headless | blender/tests/headless/test_reload.py | 6 | test_* functions |
 | Blender headless | blender/tests/headless/test_request_lifecycle.py | 21 | test_* functions |
 | Blender headless | blender/tests/headless/test_runner_timeout.py | 3 | test_* functions |
+| Blender headless | blender/tests/headless/test_scale_shapes.py | 3 | test_* functions |
 | Blender headless | blender/tests/headless/test_scenes.py | 4 | test_* functions |
 | Blender headless | blender/tests/headless/test_stage_addressing.py | 11 | test_* functions |
 | Blender headless | blender/tests/headless/test_stage_controls.py | 9 | test_* functions |

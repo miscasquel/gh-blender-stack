@@ -1,6 +1,9 @@
 # Performance ledger
 
-**Status: T1–T9 accepted; T9a/T9b have no performance change.** The gate reference is
+**Status: T1–T9 accepted; T10a/T10b coverage and the T10c scale run are
+accepted; the T10d 1-hour soak remains.** T9a/T9b have no performance change,
+and T10a/T10b/T10c add tests, tooling and recorded scale evidence without
+changing production. The gate reference is
 the **2026-11-17 best-of-three baseline**: three clean solo runs, with the
 fastest per-run p50/p95 stored for each metric. It replaces the 2026-11-16
 median baseline after host CPU power/core-state drift was measured and confirmed
@@ -84,8 +87,9 @@ flaked on unrelated timer noise; its 2 ms hard budget remains in `bench.py`.
 | T7 | `Instances` split/table-driven conversion: no Blender hot-path change | 4.9433 / 5.1213; 4.4018 / 5.2993; 2.1453 / 2.1708; 11.8275 / 12.0514; 21.6598 / 21.7428; 2.4608 / 2.5706; 12.8405 / 13.3398; 116.8278 / 119.6174; 91.0217 / 92.1573 | 4.8727 / 4.9639; 4.4787 / 5.2800; 2.1583 / 2.1921; 12.1295 / 12.4563; 21.7090 / 21.8571; 2.4619 / 2.5358; 12.8257 / 13.2868; 116.8876 / 119.4850; 90.9955 / 91.4284 | -1.43% / -3.07%; +1.75% / -0.36%; +0.60% / +0.98%; +2.55% / +3.36%; +0.23% / +0.53%; +0.04% / -1.36%; -0.12% / -0.40%; +0.05% / -0.11%; -0.03% / -0.79% | production 24,711 / 19,800 (−8 physical, +86 code), 69 files; former 2,135-line `Instances` type gone, largest instance type `InstanceEmit` 450 and `DefinitionBuilder` 940 → 424; 454 Blender + 685 C# checks; native Mesh/Curve/Point emit/build probe | accepted: 26/26 in 176.1 s; worst positive p50 +2.55% (`total_ms`), p95 +3.36%; no >5% metric; intermediate p95-only runs recorded below |
 | T8 | performance: 100k fresh apply, in-place, 1M in-place, playback, all gated | see the T8 verification table | see the T8 verification table | fresh apply **-88.51% / -89.55%**; all other p50/p95 within +3.93% | production 24,918 / 19,945 (+207 physical, +145 code), 69 files; C# `frame_decode` p50 **0.4556 → 0.0050 ms** and `frame_mesh_arrays` **0.9210 → 0.4434 ms**; 455 Blender + 687 C# checks; publication heartbeat skips a clean rebuild | accepted: full gate 26/26 in 159.7 s; worst positive p50 +1.81% (`total_ms`), p95 +3.93% (`apply_inplace_ms`); offsetting gain: fresh apply −88.51%/−89.55% and C# `frame_decode` −98.9%; no metric exceeds +5% |
 | T9 | docs/build/CI/protocol tables (T9a/T9b done; T11 pending) | — | — | — | full gate 26/26 in **177.7 s**, baseline enforced; worst positive p50 +2.23% / p95 +3.31% (`total_ms`), no >5% metric; 132 core + 455 Blender + 689 C# checks; production 25,040 / 20,035 (71 files); artifacts reproduce (zip d12b6f50…, `.gha` 18c629e3…) | accepted |
-| T10a | fuzz/invariants: tests only | — | — | — | no benchmark run and no performance claim; 10,000 fixed-seed frame cases per language plus geometry/attribute/instance and bake-marker fuzz; 133 core + 468 Blender + 689 C# checks | accepted (T10b coverage done; scale/soak pending) |
-| T10b (coverage) | coverage floors: tooling/docs only | — | — | — | no benchmark run and no performance claim; core **93.50%** (90% floor), engine/geometry **89.43%** (80%), pure C# core **93.36%** (80%; `Attributes.cs`/`Conversion.cs` excluded by name and reason); 133 core + 468 Blender + 689 C# checks; CI runs core and engine/geometry coverage | accepted; T10b scale and 1-hour soak remain |
+| T10a | fuzz/invariants: tests only | — | — | — | no benchmark run and no performance claim; 10,000 fixed-seed frame cases per language plus geometry/attribute/instance and bake-marker fuzz; 133 core + 468 Blender + 689 C# checks | accepted (coverage/scale done; 1-hour soak pending) |
+| T10b (coverage) | coverage floors: tooling/docs only | — | — | — | no benchmark run and no performance claim; core **93.50%** (90% floor), engine/geometry **89.43%** (80%), pure C# core **93.36%** (80%; `Attributes.cs`/`Conversion.cs` excluded by name and reason); 133 core + 468 Blender + 689 C# checks; CI runs core and engine/geometry coverage | accepted; scale closed by T10c; 1-hour soak remains |
+| T10c (scale) | 200 stages / 100k triangles / 10k instances: runner/tests/docs only | — | 200 stages: panel 9.69/9.78 ms, no-client pass 34.64/34.66 ms; 100k: read 4.93/4.95, fresh 8.97/9.05, in-place 2.17/2.22 ms; 10k instances: prefix 13.63/13.99, first apply 84.30, repeat 81.88/91.93 ms | — | no new timing gate and no baseline run; 38/38 structural checks, 4.58 s, peak RSS 524.0 MiB; 471 Blender headless tests; existing 100k in-place and 13x instance gates unchanged; 200-stage/10k-row shapes are diagnostic and not in the default matrix | accepted; T10d 1-hour soak remains |
 | T11 | pending | — | — | — | — | pending |
 
 `pipeline.100k.total_ms` is one timed read+hash+encode+decode+apply operation,
@@ -406,6 +410,69 @@ An independent audit run on the same tree also passed **26/26** in **159.5 s**
 with the baseline enforced; its worst delta was **+2.67%**
 (`pipeline.100k.extract_ms` p95), and every other metric was within +1.61% or
 improved.
+
+### T10c verification (scale)
+
+**2026-11-19.** T10c adds a dedicated scale runner, a focused headless test and
+the recorded result; production source is unchanged and no benchmark baseline
+was rebuilt or compared. The T10c shapes are:
+
+- **200 stages:** one mesh object with 200 stage records (one stack), built
+  through the real `stageloom.add_stage` operator. The runner asserts 200 labels
+  in creation order, 200 unique keys, 200 modifiers, a forced index rebuild with
+  200 keys / 200 owners / one stack object / no conflicts, `ordered_stages` in
+  record order, a real N-panel draw of all 200 rows with no draw failure and no
+  index rebuild, and a no-client engine pass with zero prefix clones.
+- **100k triangles:** exactly 100,000 triangles as a 250 × 200 quad grid
+  (50,000 quads, 50,451 vertices). The source, fresh apply and in-place target
+  each report 100,000 loop triangles; the read keeps every face and loop index;
+  the in-place call runs with `_topology_matches` patched to raise, so a
+  topology re-read fails the run.
+- **10k instances:** one 2-triangle definition on a 10,000-point cloud. The
+  runner asserts one definition, 10,000 `inst.ref_def` rows all pointing at
+  definition 0, 10,000 4×4 transforms, one 10,000-point row cloud, one
+  definition collection, 10,000 evaluated instances, one instance reference and
+  node-group reuse on the repeated apply.
+
+Command and evidence:
+
+```bash
+scripts/scale --out benchmarks/results/2026-11-19-scale.json
+```
+
+The reference run took **4.58 s**, passed **38/38** structural checks and
+recorded a **524.0 MiB** process peak RSS (`VmHWM`). Measurement p50 / p95:
+
+| Shape | Measurement | p50 / p95 |
+|---|---|---:|
+| 200 stages | build, 200 real `add_stage` calls | 2,957 ms (one sample) |
+| 200 stages | forced 200-key index rebuild | 1.13 / 1.17 ms |
+| 200 stages | `ordered_stages` over 200 stages/modifiers | 7.55 / 7.56 ms |
+| 200 stages | real N-panel draw (200 stage rows) | 9.69 / 9.78 ms |
+| 200 stages | no-client engine pass over 200 stages | 34.64 / 34.66 ms |
+| 100k triangles | read (`mesh_to_sections`) | 4.93 / 4.95 ms |
+| 100k triangles | fresh apply (`sections_to_mesh`) | 8.97 / 9.05 ms |
+| 100k triangles | in-place apply (same topology token) | 2.17 / 2.22 ms |
+| 10k instances | cold prefix | 13.63 / 13.99 ms |
+| 10k instances | first apply (helpers + definition built) | 84.30 ms (one sample) |
+| 10k instances | repeated apply (10k rows move, group reused) | 81.88 / 91.93 ms |
+
+The numbers are recorded diagnostics, not a new gate. The 100k in-place path is
+already covered by the gated `pipeline.100k.apply_inplace_ms` metric (4 ms
+budget) and the repeated instance apply at 13 rows by
+`instances.13x.apply_repeat_ms`; neither metric changed. The 200-stage index,
+panel and no-client pass and the 10,000-row instance apply are **not** in the
+default benchmark matrix, so this task adds no 5% threshold and makes no
+baseline-relative claim. The 10k repeated apply writes 160,000 transform values
+per call; it is not the 13-row gated case and its time is not compared to it.
+
+**Gaps:** the panel draw uses a recording layout, not a live UI; the no-client
+pass has no Grasshopper client or solve; the instance shape is one definition
+with one row cloud; and RSS is the process peak, not per-scenario allocation.
+The focused `blender/tests/headless/test_scale_shapes.py` asserts the same
+shapes without timing in `scripts/test-blender`. The full `scripts/check-all`,
+the reference benchmark and the 1-hour soak were not run for T10c; the soak
+remains T10d.
 
 ## C# parameter/schema baseline (ungated)
 

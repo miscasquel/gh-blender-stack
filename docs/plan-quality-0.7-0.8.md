@@ -3,10 +3,11 @@
 **Status:** 0.7.0 complete, 2026-11-16. 0.8.0 is in progress: T1 (baseline,
 performance gate, code health) through T8 (performance follow-through) are
 complete; T9c (the .NET no-go), T9a/T9b (build/CI/docs truth and the protocol
-single-source tables), T10a (fuzz/invariants) and the T10b coverage floors are
-complete; T10b scale/1-hour soak and T11 (release) remain. W7's `geometry_io`,
-engine-object, `GhLink` and `Instances` splits are done; W8 (performance, T8) is
-done, with the remaining W9/W10 items.
+single-source tables), T10a (fuzz/invariants), the T10b coverage floors and the
+T10c scale run are complete; the T10d 1-hour soak and T11 (release) remain.
+W7's `geometry_io`, engine-object, `GhLink` and `Instances` splits are done; W8
+(performance, T8) is done, including the 200-stage/100k-triangle/10k-instance
+scale evidence, with the remaining W9/W10 items.
 **Baseline:** v0.6.0 plus the 2026-11-15 audit (seven module reviews), plus the
 post-audit bake/upstream work (`102f9c8..254d796`). That was the starting point:
 305 Blender headless tests in ~86 s, 57 core tests, C# and extension suites
@@ -110,8 +111,11 @@ complete; T10a (fuzz/invariants) then added the deterministic frame campaigns
 round trips and malformed bake-marker recovery without a production change.
 T10b coverage then enforced the floors with tooling-only changes: core 93.50%
 (90% floor), engine/geometry 89.43% (80%) and pure C# core 93.36% (80%, with
-the two RhinoCommon files excluded by name and reason). T10b scale/1-hour soak
-and T11 (release) remain. See the T9a, T9b, T10a and T10b coverage verification
+the two RhinoCommon files excluded by name and reason). T10c then added the
+scale runner and the focused scale-shape test: a 200-stage stack, exactly
+100,000 triangles and 10,000 instance rows, all structurally asserted and
+recorded; it adds no timing gate. The T10d 1-hour soak and T11 (release)
+remain. See the T9a, T9b, T10a, T10b coverage and T10c scale verification
 below.
 
 **0.7.0 completion record (2026-11-16).** Q1–Q19 are complete; Q5 was merged
@@ -702,6 +706,12 @@ direct tests; behavior unchanged except documented fixes.
 accepted offsetting gain; no unbounded growth in a 10k-touch/1k-frame soak;
 200-stage panel draw and 100k-triangle apply measured.
 
+**T10c scale evidence (2026-11-19):** the 200-stage panel draw measured
+9.69/9.78 ms p50/p95, the exactly-100k-triangle in-place apply 2.17/2.22 ms,
+and the 10k-instance repeated apply 81.88/91.93 ms; the runner records
+structural assertions and RSS rather than adding a new timing gate. See the
+T10c verification below and [`performance-ledger.md`](performance-ledger.md).
+
 ---
 
 ### W9 — Lean, legacy, docs, CI, framework (0.8.0)
@@ -762,8 +772,9 @@ same tree/toolchain; framework decision recorded.
   89.43% engine/geometry. `scripts/coverage csharp` measured 93.36% of the pure
   C# core with Linux Mono; `Attributes.cs` and `Conversion.cs` are the named
   RhinoCommon exclusions.
-- **Scale/soak:** 200 stages, 100k triangles, 10k instances, 1-hour churn,
-  bake/cascade churn.
+- **Scale/soak:** 200 stages, 100k triangles and 10k instances measured by
+  `scripts/scale` with structural assertions (T10c, done 2026-11-19); the
+  1-hour churn and bake/cascade soak remains T10d.
 - **Docs checks:** links, version/port/path consistency, ADR status, fixture
   count.
 - **Test hygiene:** delete vacuous tests; bind real panel methods; no shared
@@ -901,7 +912,7 @@ acceptance criteria, then committed before the next starts.
 | T7 | `Instances` split and table-driven conversion | single-part/multi-part/nested/attribute round trips unchanged; production LOC down or flat | Done 2026-11-17; 685 C# checks, 26/26 in 176.1 s; native probe green |
 | T8 | Performance follow-through | playback resolved or traded; p50/p95 within 5%; each fixed path measured | Done 2026-11-17; 26/26 in 159.7 s, worst p50 +1.81%; fresh apply −88.5%, C# decode −98.9% |
 | T9 | Lean/docs/CI/build/framework | protocol tables generated; docs/ADR truth pass; reproducible extension zip and `.gha`; framework go/no-go | T9c no-go 2026-11-18 ([ADR 0019](decisions/0019-keep-csharp5-mono.md)); T9a done 2026-11-18 (one version source, reproducible zip and `.gha`, derived wine user, honest CI); T9b done 2026-11-18 (`protocol/sections.json`, generated Python/C# tables, drift and fixture checks; [ADR 0021](decisions/0021-generated-protocol-tables.md)); T9 complete |
-| T10 | Verification | fuzz, coverage, scale and 1-hour soak green | T10a done 2026-11-18: 10,000 fixed-seed Python and C# frame mutations, geometry/attribute/instance round-trip fuzz, malformed bake markers; 133 core, 468 Blender and 689 C# checks. T10b coverage done 2026-11-18: core **93.50%** (floor 90%), engine/geometry **89.43%** (80%), pure C# core **93.36%** (80%; RhinoCommon files excluded); scale/1-hour soak remain |
+| T10 | Verification | fuzz, coverage, scale and 1-hour soak green | T10a done 2026-11-18: 10,000 fixed-seed Python and C# frame mutations, geometry/attribute/instance round-trip fuzz, malformed bake markers; 133 core, 468 Blender and 689 C# checks. T10b coverage done 2026-11-18: core **93.50%** (floor 90%), engine/geometry **89.43%** (80%), pure C# core **93.36%** (80%; RhinoCommon files excluded). T10c scale done 2026-11-19: `scripts/scale` records 200 stages / exactly 100,000 triangles / 10,000 instances with 38/38 structural checks, 4.58 s and 524.0 MiB peak RSS; the focused headless test makes 471 Blender tests. The T10d 1-hour soak and native records remain |
 | T11 | 0.8.0 release | version/changelog/artifacts match the tagged commit | Pending |
 
 ### T8 verification (performance follow-through)
@@ -963,8 +974,9 @@ deferred until after 0.8.0, and the second runtime/platform or replacement
 dev-loop cost of `net7.0-windows`/`net48`. The spike is closed in
 [ADR 0019](decisions/0019-keep-csharp5-mono.md) and revisits only after native
 Windows acceptance (post-0.8 / 1.0). **T9a and T9b are complete (2026-11-18);
-T10a later completed the fuzz/invariant half and T10b added the coverage
-floors; T10b scale/soak and T11 remain, so T9 is complete.**
+T10a later completed the fuzz/invariant half, T10b added the coverage floors
+and T10c added the scale run; the T10d soak and T11 remain, so T9 is
+complete.**
 
 ### T9a verification (build/CI/docs truth)
 
@@ -1142,7 +1154,8 @@ campaign is bounded.
   (**689 checks**, 14 fixtures, **10,000** fuzz cases) in 25.5 s. Per the task
   constraints, the reference benchmark, `scripts/bench-baseline`, the full
   `scripts/check-all` and the 1-hour soak were not run. T10b later added the
-  coverage floors (below); scale and the 1-hour soak remain.
+  coverage floors (below), and T10c added the scale run; the 1-hour soak
+  remains.
 
 ### T10b verification (coverage floors)
 
@@ -1198,8 +1211,57 @@ keep working without a coverage package.
   `scripts/coverage core`; the Blender quality job runs
   `scripts/coverage engine` after `scripts/check-all --ci`. C# coverage is not
   a CI job because a stock runner has no Mono/Rhino toolchain.
-- **Not run.** Benchmarks, `scripts/bench-baseline`, full `scripts/check-all`,
-  the scale run and the 1-hour soak; T10b scale/soak remains.
+- **Not run.** Benchmarks, `scripts/bench-baseline`, full `scripts/check-all`
+  and the 1-hour soak; the T10c scale run is recorded separately below.
+
+### T10c verification (scale)
+
+**2026-11-19.** Runner/tests/docs only; production source is unchanged and no
+benchmark baseline was rebuilt or compared. The dedicated runner is
+`benchmarks/scale.py` + `scripts/scale`; it runs from the working tree under
+`blender -b --factory-startup --online-mode` and is not part of the default
+benchmark matrix or `scripts/check-all`.
+
+- **Shapes and assertions.** **200 stages** are one mesh object with 200 stage
+  records, built through the real `stageloom.add_stage` operator: 200 labels in
+  creation order, 200 unique keys, 200 modifiers, a forced index rebuild with
+  200 keys / 200 owners / one stack object / zero conflicts, `ordered_stages` in
+  record order, a real N-panel draw of all 200 rows with one Pull per stage and
+  no index rebuild, and a no-client engine pass with zero prefix clones.
+  **100k triangles** are exactly 100,000 triangles as a 250 × 200 quad grid
+  (50,000 quads, 50,451 vertices): the source, fresh apply and in-place target
+  each report 100,000 loop triangles, and the in-place call runs with
+  `_topology_matches` patched to raise so a topology re-read fails. **10k
+  instances** are one 2-triangle definition on a 10,000-point cloud: one
+  definition, 10,000 `inst.ref_def` rows all pointing at definition 0, 10,000
+  4×4 transforms, one 10,000-point row cloud, one definition collection, 10,000
+  evaluated instances, one instance reference and group reuse on the repeated
+  apply.
+- **Run.** `scripts/scale --out benchmarks/results/2026-11-19-scale.json` passed
+  **38/38** structural checks in **4.58 s** with **524.0 MiB** process peak RSS
+  (`VmHWM`). p50 / p95: 200-stage index rebuild 1.13 / 1.17 ms, ordered stages
+  7.55 / 7.56 ms, panel draw 9.69 / 9.78 ms, no-client engine pass 34.64 /
+  34.66 ms (200-stage build 2,957 ms, one sample); 100k-triangle read
+  4.93 / 4.95 ms, fresh apply 8.97 / 9.05 ms, in-place apply 2.17 / 2.22 ms;
+  10k-instance cold prefix 13.63 / 13.99 ms, first apply 84.30 ms (one sample),
+  repeated apply 81.88 / 91.93 ms. The table and caveats are in
+  [`performance-ledger.md`](performance-ledger.md) and
+  [`../benchmarks/README.md`](../benchmarks/README.md).
+- **Gate policy.** No new timing gate: the 100k in-place path is already gated
+  by `pipeline.100k.apply_inplace_ms` (4 ms budget) and the repeated instance
+  apply at 13 rows by `instances.13x.apply_repeat_ms`; neither metric changed.
+  The 200-stage index/panel/no-client pass and the 10,000-row apply are not in
+  the default matrix, so their times are diagnostic and no baseline-relative
+  claim is made.
+- **Tests.** `blender/tests/headless/test_scale_shapes.py` asserts the same
+  three shapes without timing; the focused module passed 3 tests in 3.3 s. The
+  full `scripts/test-blender` suite passed **471 tests** in 90.0 s plus the
+  offline gate, up from 468. `scripts/test-core` is unchanged at 133 tests; the
+  C# checks are unchanged at 689.
+- **Not run.** The reference benchmark, `scripts/bench-baseline`, full
+  `scripts/check-all`, the T10d 1-hour soak and native Windows/Rhino
+  acceptance. Production changed nowhere; the scale paths are measured, not
+  modified.
 
 **Commit rule:** a task is committed only after its acceptance tests plus
 `scripts/test-core` and the relevant Blender/C# suite pass, and the audit finds

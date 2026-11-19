@@ -10,9 +10,9 @@ curves, points, SubD cages) driven by a real Grasshopper definition, with named
 attributes and Grasshopper blocks (instances, including nested and multi-part
 definitions) travelling both ways, parameters you can edit and keyframe in
 Blender, packaged as a Blender extension. 0.8.0 is in progress on `main`
-(T1–T9, T10a and the T10b coverage floors done; T10b scale/1-hour soak and the
-T11 release remain); the manifest and shipped version stay **0.7.0** until the
-T11 release bump.
+(T1–T9, T10a, the T10b coverage floors and the T10c scale run done; the T10d
+1-hour soak and the T11 release remain); the manifest and shipped version stay
+**0.7.0** until the T11 release bump.
 [DEMO.md](DEMO.md) walks through the loop.
 
 ```
@@ -102,11 +102,14 @@ Blender                                          Rhino / Grasshopper (wine)
   core, Blender headless (plus the offline gate), benchmarks, the installed
   extension round trip, the reproducible-zip and `.gha` checks and the C#
   suites, with per-step timing. The current tree is checked by 133 core tests,
-  468 Blender headless tests, fourteen golden fixtures and the C# suites (689
+  471 Blender headless tests, fourteen golden fixtures and the C# suites (689
   passing checks across the codec fixture runner and eight console suites, plus
   a fixed-seed 10,000-case frame fuzz; the native Rhino halves skip under
   wine). The Blender headless suite also runs deterministic randomized
-  geometry, attribute, instance and bake-marker round trips.
+  geometry, attribute, instance and bake-marker round trips, and the 200-stage,
+  100k-triangle and 10k-instance scale shapes. The dedicated scale run
+  (`scripts/scale`) records their timings and peak RSS; it is a local/release
+  check, not part of `scripts/check-all`.
   `scripts/check-protocol-tables` (generated tables and fixture inventory),
   `scripts/test-core` (standard library only),
   `scripts/test-blender` (Blender headless against `tools/fake_gh`),
@@ -273,6 +276,7 @@ scripts/version          # prints the version from blender_manifest.toml
 scripts/bench            # reference performance matrix and its budgets (not a test layer)
 scripts/bench-baseline   # 3 sequential runs, best p50/p95 vs the stored 2026-11-17 baseline
 scripts/bench-gha        # C# parameter/schema microbenchmark (wine/Mono)
+scripts/scale            # T10c: 200 stages / 100k triangles / 10k instances, structural checks
 scripts/code-health      # regenerate docs/code-health.md (not a gate)
 
 python3 scripts/make-fixtures   # regenerate protocol/fixtures after a protocol change

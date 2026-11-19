@@ -72,6 +72,60 @@ the plan asks that it evaluate without a crash or an unbounded memory increase.
 The report records timings, frame size and RSS before/after; compare those
 across runs.
 
+## Scale verification (T10c)
+
+`scripts/scale` is the dedicated T10c scale runner. It is not one of the
+scenarios above, is not in `scripts/check-all`, and is not part of the stored
+baseline matrix; it is a local/release check with structural assertions.
+
+| Shape | Construction | Structural assertions |
+|---|---|---|
+| 200 stages | one mesh object with **200 stage records** (one stack, not 200 objects) | 200 record labels in creation order, 200 unique keys, 200 modifiers, a forced index rebuild with 200 keys / 200 owners / no conflicts, `ordered_stages` in record order, a 200-row panel draw with one Pull per stage and no index rebuild, and a no-client engine pass with zero prefix clones |
+| 100k triangles | one **exactly 100,000-triangle** mesh (250 × 200 quads = 50,000 quads, 50,451 vertices) | the source, fresh apply and in-place target all report 100,000 loop triangles; read keeps 50,000 faces and 200,000 loop indices; the in-place call runs with `_topology_matches` patched to raise and moves positions without changing the faces |
+| 10k instances | one 2-triangle definition on a **10,000-point cloud** | one definition, 10,000 `inst.ref_def` rows all referencing definition 0, 10,000 4×4 transforms with the point translations, one 10,000-point row cloud, one definition collection, 10,000 evaluated instances, one instance reference, and group reuse on the repeated apply |
+
+```bash
+scripts/scale --out benchmarks/results/2026-11-19-scale.json
+scripts/scale --quick        # 20 stages / 10k triangles / 100 instances smoke
+```
+
+The runner runs under `blender -b --factory-startup --online-mode` from the
+working tree, records wall times and `VmHWM` RSS where available, and exits
+non-zero on a structural failure, exception, crash or its wall-clock guard.
+`--quick` is a fast local smoke, not the scale claim.
+
+**2026-11-19 reference run** (`AMD Ryzen 7 7700X`, Blender 5.3.0, Python
+3.13.13; 4.58 s total, peak RSS 524.0 MiB, 38/38 structural checks):
+
+| Shape | Measurement | p50 / p95 |
+|---|---|---|
+| 200 stages | full scene build (200 real `add_stage` calls) | 2,957 ms (one sample) |
+| 200 stages | forced 200-key index rebuild | 1.13 / 1.17 ms |
+| 200 stages | `ordered_stages` over 200 stages/modifiers | 7.55 / 7.56 ms |
+| 200 stages | real N-panel draw, 200 stage rows | 9.69 / 9.78 ms |
+| 200 stages | no-client engine pass over 200 stages | 34.64 / 34.66 ms |
+| 100k triangles | read (`mesh_to_sections`) | 4.93 / 4.95 ms |
+| 100k triangles | fresh apply (`sections_to_mesh`) | 8.97 / 9.05 ms |
+| 100k triangles | in-place apply (same topology token) | 2.17 / 2.22 ms |
+| 10k instances | cold prefix | 13.63 / 13.99 ms |
+| 10k instances | first apply (helpers + definition built) | 84.30 ms (one sample) |
+| 10k instances | repeated apply (rows move, group reused) | 81.88 / 91.93 ms |
+
+The timing rows are recorded diagnostics, not a new gate. **Existing baseline
+coverage:** `pipeline.100k.apply_inplace_ms` gates the 100k in-place path
+(4 ms budget), and `instances.13x.apply_repeat_ms` gates the repeated instance
+apply at 13 rows. **Not in the default matrix:** the 200-stage index, panel and
+no-client pass, and the 10,000-row instance apply. They are scale evidence; no
+5% claim is made against the stored baseline, and this task adds no timing
+threshold. The 200-stage no-client pass writes no client prefix (it reports
+`prefix_clones` delta 0) and the panel draw is the real `STAGELOOM_PT_panel`
+against a recording layout, not a live UI.
+
+The JSON result is
+[`results/2026-11-19-scale.json`](results/2026-11-19-scale.json); the same
+shapes are asserted without timing in
+`blender/tests/headless/test_scale_shapes.py` (part of `scripts/test-blender`).
+
 ## Stored baseline gate
 
 The 0.8.0 reference baseline is `results/2026-11-17-linux.json`, built from

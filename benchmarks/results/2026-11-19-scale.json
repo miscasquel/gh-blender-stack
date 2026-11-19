@@ -1,0 +1,638 @@
+{
+  "format": "stageloom-scale-report/1",
+  "meta": {
+    "timestamp": "2026-11-19T07:46:52",
+    "blender": "5.3.0",
+    "python": "3.13.13",
+    "os": "Linux",
+    "arch": "x86_64",
+    "platform": "Linux-7.3.5-1-cachyos-x86_64-with-glibc2.44",
+    "processor": "AMD Ryzen 7 7700X 8-Core Processor",
+    "quick": false,
+    "args": {
+      "out": "benchmarks/results/2026-11-19-scale.json",
+      "quick": false,
+      "timeout": 600.0
+    }
+  },
+  "shapes": {
+    "stages": 200,
+    "triangles": 100000,
+    "instances": 10000
+  },
+  "ok": true,
+  "stages": {
+    "stage_count": 200,
+    "object_count": 1,
+    "modifier_count": 200,
+    "label_order": [
+      "Scale 001",
+      "Scale 002",
+      "Scale 003",
+      "Scale 004",
+      "Scale 005",
+      "Scale 006",
+      "Scale 007",
+      "Scale 008",
+      "Scale 009",
+      "Scale 010",
+      "Scale 011",
+      "Scale 012",
+      "Scale 013",
+      "Scale 014",
+      "Scale 015",
+      "Scale 016",
+      "Scale 017",
+      "Scale 018",
+      "Scale 019",
+      "Scale 020",
+      "Scale 021",
+      "Scale 022",
+      "Scale 023",
+      "Scale 024",
+      "Scale 025",
+      "Scale 026",
+      "Scale 027",
+      "Scale 028",
+      "Scale 029",
+      "Scale 030",
+      "Scale 031",
+      "Scale 032",
+      "Scale 033",
+      "Scale 034",
+      "Scale 035",
+      "Scale 036",
+      "Scale 037",
+      "Scale 038",
+      "Scale 039",
+      "Scale 040",
+      "Scale 041",
+      "Scale 042",
+      "Scale 043",
+      "Scale 044",
+      "Scale 045",
+      "Scale 046",
+      "Scale 047",
+      "Scale 048",
+      "Scale 049",
+      "Scale 050",
+      "Scale 051",
+      "Scale 052",
+      "Scale 053",
+      "Scale 054",
+      "Scale 055",
+      "Scale 056",
+      "Scale 057",
+      "Scale 058",
+      "Scale 059",
+      "Scale 060",
+      "Scale 061",
+      "Scale 062",
+      "Scale 063",
+      "Scale 064",
+      "Scale 065",
+      "Scale 066",
+      "Scale 067",
+      "Scale 068",
+      "Scale 069",
+      "Scale 070",
+      "Scale 071",
+      "Scale 072",
+      "Scale 073",
+      "Scale 074",
+      "Scale 075",
+      "Scale 076",
+      "Scale 077",
+      "Scale 078",
+      "Scale 079",
+      "Scale 080",
+      "Scale 081",
+      "Scale 082",
+      "Scale 083",
+      "Scale 084",
+      "Scale 085",
+      "Scale 086",
+      "Scale 087",
+      "Scale 088",
+      "Scale 089",
+      "Scale 090",
+      "Scale 091",
+      "Scale 092",
+      "Scale 093",
+      "Scale 094",
+      "Scale 095",
+      "Scale 096",
+      "Scale 097",
+      "Scale 098",
+      "Scale 099",
+      "Scale 100",
+      "Scale 101",
+      "Scale 102",
+      "Scale 103",
+      "Scale 104",
+      "Scale 105",
+      "Scale 106",
+      "Scale 107",
+      "Scale 108",
+      "Scale 109",
+      "Scale 110",
+      "Scale 111",
+      "Scale 112",
+      "Scale 113",
+      "Scale 114",
+      "Scale 115",
+      "Scale 116",
+      "Scale 117",
+      "Scale 118",
+      "Scale 119",
+      "Scale 120",
+      "Scale 121",
+      "Scale 122",
+      "Scale 123",
+      "Scale 124",
+      "Scale 125",
+      "Scale 126",
+      "Scale 127",
+      "Scale 128",
+      "Scale 129",
+      "Scale 130",
+      "Scale 131",
+      "Scale 132",
+      "Scale 133",
+      "Scale 134",
+      "Scale 135",
+      "Scale 136",
+      "Scale 137",
+      "Scale 138",
+      "Scale 139",
+      "Scale 140",
+      "Scale 141",
+      "Scale 142",
+      "Scale 143",
+      "Scale 144",
+      "Scale 145",
+      "Scale 146",
+      "Scale 147",
+      "Scale 148",
+      "Scale 149",
+      "Scale 150",
+      "Scale 151",
+      "Scale 152",
+      "Scale 153",
+      "Scale 154",
+      "Scale 155",
+      "Scale 156",
+      "Scale 157",
+      "Scale 158",
+      "Scale 159",
+      "Scale 160",
+      "Scale 161",
+      "Scale 162",
+      "Scale 163",
+      "Scale 164",
+      "Scale 165",
+      "Scale 166",
+      "Scale 167",
+      "Scale 168",
+      "Scale 169",
+      "Scale 170",
+      "Scale 171",
+      "Scale 172",
+      "Scale 173",
+      "Scale 174",
+      "Scale 175",
+      "Scale 176",
+      "Scale 177",
+      "Scale 178",
+      "Scale 179",
+      "Scale 180",
+      "Scale 181",
+      "Scale 182",
+      "Scale 183",
+      "Scale 184",
+      "Scale 185",
+      "Scale 186",
+      "Scale 187",
+      "Scale 188",
+      "Scale 189",
+      "Scale 190",
+      "Scale 191",
+      "Scale 192",
+      "Scale 193",
+      "Scale 194",
+      "Scale 195",
+      "Scale 196",
+      "Scale 197",
+      "Scale 198",
+      "Scale 199",
+      "Scale 200"
+    ],
+    "build_ms": 2957.0252260000416,
+    "index_rebuild_ms": {
+      "min": 1.1156300001857744,
+      "p50": 1.1342810000769532,
+      "median": 1.1342810000769532,
+      "p95": 1.1649181999018765,
+      "max": 1.1671099998693535,
+      "samples": [
+        1.1224299998957576,
+        1.1156300001857744,
+        1.1342810000769532,
+        1.1671099998693535,
+        1.1561510000319686
+      ]
+    },
+    "ordered_stages_ms": {
+      "min": 7.481701999950019,
+      "p50": 7.54826200000025,
+      "median": 7.54826200000025,
+      "p95": 7.557806000022538,
+      "max": 7.559612000022753,
+      "samples": [
+        7.520361999922898,
+        7.481701999950019,
+        7.550582000021677,
+        7.54826200000025,
+        7.559612000022753
+      ]
+    },
+    "panel_draw_ms": {
+      "min": 9.637783000016498,
+      "p50": 9.69335200011301,
+      "median": 9.69335200011301,
+      "p95": 9.775202800028637,
+      "max": 9.779663000017536,
+      "samples": [
+        9.757362000073044,
+        9.646772999985842,
+        9.69335200011301,
+        9.779663000017536,
+        9.637783000016498
+      ]
+    },
+    "engine_pass_ms": {
+      "min": 34.59761899989644,
+      "p50": 34.63813999997001,
+      "median": 34.63813999997001,
+      "p95": 34.66393779999635,
+      "max": 34.66542000001027,
+      "samples": [
+        34.65800899994065,
+        34.66542000001027,
+        34.623888999931296,
+        34.63813999997001,
+        34.59761899989644
+      ]
+    },
+    "engine_pass_first_ms": 35.087079000049926,
+    "index": {
+      "keys": 200,
+      "stack_objects": 1,
+      "owners": 200,
+      "claims": 200,
+      "conflicts": 0
+    },
+    "panel": {
+      "labels": 802,
+      "operators": 802,
+      "props": 201,
+      "pull_rows": 200
+    },
+    "engine_pass": {
+      "busy": false,
+      "prefix_clones_delta": 0,
+      "states": [
+        "unbound"
+      ]
+    },
+    "rss_mb_before": 345.578125,
+    "rss_mb_after": 477.7265625
+  },
+  "triangles": {
+    "requested": 100000,
+    "actual": 100000,
+    "vertices": 50451,
+    "polygons": 50000,
+    "loop_triangles": 100000,
+    "sections": [
+      "mesh.verts",
+      "mesh.face_counts",
+      "mesh.face_indices"
+    ],
+    "read_ms": {
+      "min": 4.8630009998760215,
+      "p50": 4.9330620001910575,
+      "median": 4.9330620001910575,
+      "p95": 4.944704999888927,
+      "max": 4.945130999885805,
+      "samples": [
+        4.903882000007798,
+        4.943000999901415,
+        4.9330620001910575,
+        4.8630009998760215,
+        4.945130999885805
+      ]
+    },
+    "apply_fresh_ms": {
+      "min": 8.717842999885761,
+      "p50": 8.967182000105822,
+      "median": 8.967182000105822,
+      "p95": 9.05194020019735,
+      "max": 9.064462000196727,
+      "samples": [
+        8.967182000105822,
+        8.94058199992287,
+        9.001853000199844,
+        8.717842999885761,
+        9.064462000196727
+      ]
+    },
+    "apply_inplace_ms": {
+      "min": 2.16351099993517,
+      "p50": 2.1707609998884436,
+      "median": 2.1707609998884436,
+      "p95": 2.2241150000809284,
+      "max": 2.22555100003774,
+      "samples": [
+        2.1869600000172795,
+        2.176070999894364,
+        2.1707010000682203,
+        2.1856999999272375,
+        2.173571000184893,
+        2.1707609998884436,
+        2.1652900002209208,
+        2.2225309999157616,
+        2.1799900000587513,
+        2.22555100003774,
+        2.165660999935426,
+        2.1666400000412978,
+        2.169460999994044,
+        2.166020999993634,
+        2.163699999982782,
+        2.16351099993517,
+        2.17410999994172,
+        2.22451100012222,
+        2.166439999882641,
+        2.1665909998773714,
+        2.173951000031593,
+        2.178049999884024,
+        2.1721609998621716,
+        2.168330999893442,
+        2.163829999972222
+      ]
+    },
+    "rss_mb_before": 500.8984375,
+    "rss_mb_after": 507.0234375
+  },
+  "instances": {
+    "instances": 10000,
+    "definitions": 1,
+    "definition_name": "scale-definition",
+    "definition_triangles": 2,
+    "sections": [
+      "idef.0.mesh.verts",
+      "idef.0.mesh.face_counts",
+      "idef.0.mesh.face_indices",
+      "inst.ref_def",
+      "inst.transforms"
+    ],
+    "prefix_ms": {
+      "min": 13.336523999896599,
+      "p50": 13.628914000037184,
+      "median": 13.628914000037184,
+      "p95": 13.989355799867553,
+      "max": 14.036403999853064,
+      "samples": [
+        14.036403999853064,
+        13.80116299992551,
+        13.336523999896599,
+        13.563284000156273,
+        13.628914000037184
+      ]
+    },
+    "apply_first_ms": {
+      "min": 84.30345400006445,
+      "p50": 84.30345400006445,
+      "median": 84.30345400006445,
+      "p95": 84.30345400006445,
+      "max": 84.30345400006445,
+      "samples": [
+        84.30345400006445
+      ]
+    },
+    "apply_repeat_ms": {
+      "min": 80.44270300001699,
+      "p50": 81.88128300002973,
+      "median": 81.88128300002973,
+      "p95": 91.92714539999542,
+      "max": 94.42611600002238,
+      "samples": [
+        81.93126299988762,
+        94.42611600002238,
+        80.44270300001699,
+        81.88128300002973,
+        81.02687300015532
+      ]
+    },
+    "group_reused": true,
+    "evaluated_instances": 10000,
+    "evaluated_references": 1,
+    "rss_mb_before": 507.81640625,
+    "rss_mb_after": 520.72265625
+  },
+  "checks": [
+    {
+      "name": "200 stage records",
+      "ok": true,
+      "detail": "found 200"
+    },
+    {
+      "name": "stage labels and creation order",
+      "ok": true,
+      "detail": "record labels differ from the creation order"
+    },
+    {
+      "name": "stage keys are unique",
+      "ok": true,
+      "detail": "200 unique"
+    },
+    {
+      "name": "one modifier per stage",
+      "ok": true,
+      "detail": "200 modifiers"
+    },
+    {
+      "name": "index contains every stage key",
+      "ok": true,
+      "detail": "200 keys"
+    },
+    {
+      "name": "index has only the one stack object",
+      "ok": true,
+      "detail": "1 stack objects"
+    },
+    {
+      "name": "each key has one owner and no conflict",
+      "ok": true,
+      "detail": "200 owners, 200 claims, 0 conflicts"
+    },
+    {
+      "name": "ordered stages follow the modifier/record order",
+      "ok": true,
+      "detail": "ordered order differs from the record order"
+    },
+    {
+      "name": "panel draws every stage key",
+      "ok": true,
+      "detail": "a stage key is missing from the panel labels"
+    },
+    {
+      "name": "panel draws no failure row",
+      "ok": true,
+      "detail": "the panel reported a failed stage"
+    },
+    {
+      "name": "panel emits one Pull row per stage",
+      "ok": true,
+      "detail": "200 Pull rows"
+    },
+    {
+      "name": "panel draw does not rebuild the stage index",
+      "ok": true,
+      "detail": "index rebuilds 209 -> 209"
+    },
+    {
+      "name": "a no-client pass reports no work",
+      "ok": true,
+      "detail": "the pass reported busy"
+    },
+    {
+      "name": "a no-client pass reads no prefix",
+      "ok": true,
+      "detail": "0 prefix clones"
+    },
+    {
+      "name": "a no-client pass leaves every stage unbound/disconnected",
+      "ok": true,
+      "detail": "states ['unbound']"
+    },
+    {
+      "name": "100000 triangles in the source mesh",
+      "ok": true,
+      "detail": "100000 grid triangles, 100000 mesh loop triangles"
+    },
+    {
+      "name": "exact quad grid shape",
+      "ok": true,
+      "detail": "50000 quads, 50451 vertices"
+    },
+    {
+      "name": "mesh read preserves the vertex table",
+      "ok": true,
+      "detail": "(50451, 3)"
+    },
+    {
+      "name": "mesh read preserves every quad",
+      "ok": true,
+      "detail": "50000 faces, 200000 loop indices"
+    },
+    {
+      "name": "fresh apply preserves the 100000-triangle shape",
+      "ok": true,
+      "detail": "50451 vertices, 50000 polygons, 100000 loop triangles"
+    },
+    {
+      "name": "in-place apply reads no topology arrays",
+      "ok": true,
+      "detail": "the guarded call completed"
+    },
+    {
+      "name": "in-place apply moves positions and keeps the faces",
+      "ok": true,
+      "detail": "50000 polygons, 100000 loop triangles, first x 0.500000"
+    },
+    {
+      "name": "definition is a two-triangle mesh",
+      "ok": true,
+      "detail": "2 triangles"
+    },
+    {
+      "name": "one instance definition",
+      "ok": true,
+      "detail": "[{'name': 'scale-definition'}]"
+    },
+    {
+      "name": "10000 instance rows",
+      "ok": true,
+      "detail": "10000 rows"
+    },
+    {
+      "name": "every row references definition 0",
+      "ok": true,
+      "detail": "references [0]"
+    },
+    {
+      "name": "one 4x4 transform per instance row",
+      "ok": true,
+      "detail": "(10000, 16)"
+    },
+    {
+      "name": "row transforms carry the point translations",
+      "ok": true,
+      "detail": "first [0.0, 0.0, 0.0] last [198.0, 198.0, 0.0]"
+    },
+    {
+      "name": "definition sections are present",
+      "ok": true,
+      "detail": "definition mesh sections are missing"
+    },
+    {
+      "name": "single-part definitions have no nested row namespace",
+      "ok": true,
+      "detail": "a nested row namespace appeared"
+    },
+    {
+      "name": "first apply stores the topology token",
+      "ok": true,
+      "detail": "returned 'sha256:0000000000000000000000000000000000000000000000000000000000000000'"
+    },
+    {
+      "name": "apply builds one 10000-point row cloud",
+      "ok": true,
+      "detail": "clouds {0: 10000}"
+    },
+    {
+      "name": "apply builds one definition collection",
+      "ok": true,
+      "detail": "definitions [0]"
+    },
+    {
+      "name": "definition helper keeps the mesh",
+      "ok": true,
+      "detail": "definition helper is missing"
+    },
+    {
+      "name": "repeated apply reuses the node group",
+      "ok": true,
+      "detail": "the node group was rebuilt"
+    },
+    {
+      "name": "repeated apply moves the existing rows",
+      "ok": true,
+      "detail": "first row x is 1.0"
+    },
+    {
+      "name": "evaluation shows 10000 instances",
+      "ok": true,
+      "detail": "10000 points"
+    },
+    {
+      "name": "evaluation shows one instance reference",
+      "ok": true,
+      "detail": "1 references"
+    }
+  ],
+  "failed_checks": [],
+  "elapsed_ms": 4584.231057000125,
+  "peak_rss_mb": 524.03125
+}

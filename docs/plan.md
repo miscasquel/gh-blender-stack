@@ -7,18 +7,23 @@
 stackable Blender modifiers, with geometry and parameters flowing both ways,
 animation and playback, live stages, and renderable native bakes.
 
-**0.8.0 status (2026-11-18).** T1–T9, T10a (fuzz/invariants) and the T10b
-coverage floors are complete; T10b scale/1-hour soak and T11 (release) remain.
+**0.8.0 status (2026-11-19).** T1–T9, T10a (fuzz/invariants), the T10b
+coverage floors and the T10c scale run are complete; the T10d 1-hour soak and
+T11 (release) remain.
 Production is 25,040 physical / 20,035 code lines across 71 files, with 133
-core, 468 Blender headless and 689 C# checks plus the fixed-seed 10,000-case
+core, 471 Blender headless and 689 C# checks plus the fixed-seed 10,000-case
 Python and C# frame fuzz campaigns. Coverage is measured at **93.50%** core
 (90% floor), **89.43%** engine/geometry (80%) and **93.36%** of the pure C# core
-(80%; the two RhinoCommon files are named exclusions). The release version
-stays **0.7.0** until T11. Native Windows/Rhino acceptance is deferred until
-after 0.8.0; 0.8.0 makes no native-parity claim. The `.NET` framework migration
-is a recorded no-go through 1.0 ([ADR 0019](decisions/0019-keep-csharp5-mono.md));
-C# 5/Mono and the hand-written MiniWs/JSON transport stay. The protocol tables
-are generated from `protocol/sections.json` and drift-checked in CI
+(80%; the two RhinoCommon files are named exclusions). The T10c scale runner
+(`scripts/scale`) records a 200-stage stack, exactly 100,000 triangles and
+10,000 instance rows with 38/38 structural checks, 4.58 s and 524.0 MiB peak
+RSS in [`../benchmarks/results/2026-11-19-scale.json`](../benchmarks/results/2026-11-19-scale.json);
+it adds no timing gate. The release version stays **0.7.0** until T11. Native
+Windows/Rhino acceptance is deferred until after 0.8.0; 0.8.0 makes no
+native-parity claim. The `.NET` framework migration is a recorded no-go through
+1.0 ([ADR 0019](decisions/0019-keep-csharp5-mono.md)); C# 5/Mono and the
+hand-written MiniWs/JSON transport stay. The protocol tables are generated from
+`protocol/sections.json` and drift-checked in CI
 ([ADR 0021](decisions/0021-generated-protocol-tables.md)).
 
 **Authority:** this document is the roadmap for 1.0. The wire contract is
