@@ -176,7 +176,12 @@ fixes it, with a regression test. Production is **25,083 physical / 20,072 code
 lines across 71 files**; `scripts/test-core` passes 133 tests and
 `scripts/test-blender` passes **472** tests in 89.8 s plus the offline gate. The
 coverage floors were rechecked after the cleanup fix: core **93.50%**, engine/
-geometry **89.46%**, pure C# core **93.36%**, all above their floors. The
+geometry **89.46%**, pure C# core **93.36%**, all above their floors. After the
+fix the full gate passed **26/26 in 181.7 s** with the baseline enforced (worst
+positive +0.31% p50 / +1.47% p95; no metric above +5%); the zip rebuilt to
+`fdbf973e710c65ceb37c89520827c5a7f992742b44b9ebf0c3519196bccbb98d`
+and the unchanged C# tree still reproduces the `.gha` at
+`18c629e3fba03d30b6605ea53b2dd77221533f3f469e9b10a3ff1c57ee8ceafb`. The
 result is
 [`../benchmarks/results/2026-11-19-soak.json`](../benchmarks/results/2026-11-19-soak.json).
 The native bake is Blender's headless Geometry Nodes bake, not native

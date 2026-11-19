@@ -919,7 +919,7 @@ acceptance criteria, then committed before the next starts.
 | T7 | `Instances` split and table-driven conversion | single-part/multi-part/nested/attribute round trips unchanged; production LOC down or flat | Done 2026-11-17; 685 C# checks, 26/26 in 176.1 s; native probe green |
 | T8 | Performance follow-through | playback resolved or traded; p50/p95 within 5%; each fixed path measured | Done 2026-11-17; 26/26 in 159.7 s, worst p50 +1.81%; fresh apply −88.5%, C# decode −98.9% |
 | T9 | Lean/docs/CI/build/framework | protocol tables generated; docs/ADR truth pass; reproducible extension zip and `.gha`; framework go/no-go | T9c no-go 2026-11-18 ([ADR 0019](decisions/0019-keep-csharp5-mono.md)); T9a done 2026-11-18 (one version source, reproducible zip and `.gha`, derived wine user, honest CI); T9b done 2026-11-18 (`protocol/sections.json`, generated Python/C# tables, drift and fixture checks; [ADR 0021](decisions/0021-generated-protocol-tables.md)); T9 complete |
-| T10 | Verification | fuzz, coverage, scale and 1-hour soak green | T10a done 2026-11-18: 10,000 fixed-seed Python and C# frame mutations, geometry/attribute/instance round-trip fuzz, malformed bake markers; 133 core, 468 Blender and 689 C# checks. T10b coverage done 2026-11-18: core **93.50%** (floor 90%), engine/geometry **89.43%** (80%), pure C# core **93.36%** (80%; RhinoCommon files excluded). T10c scale done 2026-11-19: `scripts/scale` records 200 stages / exactly 100,000 triangles / 10,000 instances with 38/38 structural checks, 4.58 s and 524.0 MiB peak RSS. T10d soak done 2026-11-19: `scripts/soak` completed **10,238 cycles** in 3,600.2 s churn with **0 invariant failures**, 0 unclassified exceptions, 30/30 native bakes and 15 reconnects; the soak exposed and fixed a whole-object deletion session-state leak, raising the Blender count to **472** and production to 25,083 / 20,072. Native Windows/Rhino acceptance remains explicitly deferred after 0.8.0; no native-parity claim |
+| T10 | Verification | fuzz, coverage, scale and 1-hour soak green | T10a done 2026-11-18: 10,000 fixed-seed Python and C# frame mutations, geometry/attribute/instance round-trip fuzz, malformed bake markers; 133 core, 468 Blender and 689 C# checks. T10b coverage done 2026-11-18: core **93.50%** (floor 90%), engine/geometry **89.43%** (80%), pure C# core **93.36%** (80%; RhinoCommon files excluded). T10c scale done 2026-11-19: `scripts/scale` records 200 stages / exactly 100,000 triangles / 10,000 instances with 38/38 structural checks, 4.58 s and 524.0 MiB peak RSS. T10d soak done 2026-11-19: `scripts/soak` completed **10,238 cycles** in 3,600.2 s churn with **0 invariant failures**, 0 unclassified exceptions, 30/30 native bakes and 15 reconnects; the soak exposed and fixed a whole-object deletion session-state leak, raising the Blender count to **472** and production to 25,083 / 20,072. The post-fix full gate passed **26/26 in 181.7 s** (worst +0.31% p50 / +1.47% p95; no >5%; zip `fdbf973e…`, `.gha` `18c629e3…`). Native Windows/Rhino acceptance remains explicitly deferred after 0.8.0; no native-parity claim |
 | T11 | 0.8.0 release | version/changelog/artifacts match the tagged commit | Pending |
 
 ### T8 verification (performance follow-through)
@@ -1328,9 +1328,18 @@ scripts/soak --duration 3600 --out benchmarks/results/2026-11-19-soak.json
   undo history cannot run in `-b`; the engine handlers a real history step runs
   are exercised, with global undo disabled so the harness does not accumulate
   steps.
-- **Not run.** The reference benchmark, `scripts/bench-baseline` and full
-  `scripts/check-all`; no performance claim is made for the soak. T11 owns the
-  final gate, release counts and version bump.
+- **Post-fix gate.** After the cleanup fix, `scripts/check-all` ran alone on a
+  quiet host and passed **26/26 in 181.7 s** with the baseline enforced (no
+  baseline was rebuilt). The worst positive delta was **+0.31% p50**
+  (`playback.frame_ms`) and **+1.47% p95**
+  (`pipeline.100k.apply_inplace_ms`); no metric exceeded +5%. It ran 133 core,
+  472 Blender and 689 C# checks. The extension zip rebuilt to
+  `fdbf973e710c65ceb37c89520827c5a7f992742b44b9ebf0c3519196bccbb98d`
+  because the cleanup fix changed the add-on source; the unchanged C# tree
+  still reproduces the `.gha` at
+  `18c629e3fba03d30b6605ea53b2dd77221533f3f469e9b10a3ff1c57ee8ceafb`.
+  T11 owns the version bump, tag, release notes and final release-tree
+  hashes.
 
 **Commit rule:** a task is committed only after its acceptance tests plus
 `scripts/test-core` and the relevant Blender/C# suite pass, and the audit finds

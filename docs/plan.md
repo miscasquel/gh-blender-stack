@@ -24,7 +24,10 @@ completed **10,238 cycles** in 3,600.2 s of stage/object/request/playback/bake/
 reconnect churn with **0 invariant failures** and 0 unclassified exceptions,
 30/30 native bake cycles, 15 reconnects and RSS 368.6 → 399.0 MiB; it exposed
 and fixed a whole-object deletion session-state leak, which is why production
-is +43 / +37 over T9b. The release version stays **0.7.0** until T11. Native
+is +43 / +37 over T9b. The post-fix full gate passed **26/26 in 181.7 s**
+with the baseline enforced, worst positive +0.31% p50 / +1.47% p95 and no
+metric above +5%; the zip rebuilt to `fdbf973e…` and the `.gha` still
+reproduces at `18c629e3…`. The release version stays **0.7.0** until T11. Native
 Windows/Rhino acceptance is deferred until after 0.8.0; 0.8.0 makes no
 native-parity claim, and the soak's native bake is Blender's headless Geometry
 Nodes bake, not native Rhino acceptance. The `.NET` framework migration is a
