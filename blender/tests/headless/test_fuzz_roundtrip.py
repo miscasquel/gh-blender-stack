@@ -944,12 +944,26 @@ class BakeStateFuzzTests(unittest.TestCase):
         doomed_stage = doomed.gh_stack.stages[0]
         doomed_stage.frozen_by_bake = token
         doomed_stage.frozen = True
+        from stageloom.blender import helpers
+
+        doomed_helpers = {
+            helper.name
+            for kind in helpers.KINDS
+            for helper in (helpers.helper_for(doomed, doomed_stage.key, kind),)
+            if helper is not None
+        }
+        self.assertTrue(doomed_helpers, "the doomed stage created no helpers")
         bpy.data.objects.remove(doomed, do_unlink=True)
 
         released = self.bake.release_token(token)
         self.assertEqual(released, 1)
         self.assertFalse(self.stage.frozen)
         self.assertEqual(self.stage.frozen_by_bake, "")
+        for name in doomed_helpers:
+            self.assertIsNone(
+                bpy.data.objects.get(name),
+                "releasing the live token left orphan helper %s" % name,
+            )
 
     def test_malformed_bake_markers_clear_safely(self):
         self.stage.baked = True

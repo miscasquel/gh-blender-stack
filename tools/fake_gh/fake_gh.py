@@ -149,10 +149,15 @@ async def main():
 
 
 def _write_report(args, state):
-    """Write the counters, refreshed on every response so tests can poll it."""
+    """Write the counters, refreshed on every response so tests can poll it.
+
+    The write is atomic: a poll can run while the fake is refreshing the file,
+    and a half-written JSON document must never look like "no requests yet".
+    """
     if not args.report:
         return
-    with open(args.report, "w") as f:
+    temporary = args.report + ".tmp"
+    with open(temporary, "w") as f:
         json.dump(
             {
                 "full": state.full,
@@ -174,6 +179,7 @@ def _write_report(args, state):
             f,
             indent=2,
         )
+    os.replace(temporary, args.report)
 
 
 def _schema_message(stage, scale_param, suffix=""):

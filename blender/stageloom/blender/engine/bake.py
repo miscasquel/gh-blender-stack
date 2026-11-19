@@ -34,6 +34,10 @@ def token_stages(token):
     The marker is the only proof that a bake froze a stage. A user's manual
     freeze has no marker, so it is never returned here. Objects without a stack
     or stages removed since the bake simply contribute nothing.
+
+    ``release_token`` may call ``unfreeze`` on a match, which can rebuild the
+    index and sweep helper objects. It consumes this generator into a list
+    before mutating, so the walk over ``bpy.data.objects`` is complete first.
     """
     if not token:
         return
@@ -57,8 +61,12 @@ def release_token(token, skip_baked=True):
     (D4 scopes Clear Bake to the selected stage). Its marker is still dropped,
     because the freeze it described now belongs to its own bake.
     """
+    # Unfreezing calls ENGINE.ensure_active(), which rebuilds the index and
+    # sweeps helper objects after a whole stack was deleted. Finish the walk
+    # over bpy.data.objects before any of that mutation starts.
+    matches = list(token_stages(token))
     count = 0
-    for obj, stage in token_stages(token):
+    for obj, stage in matches:
         stage.frozen_by_bake = ""
         if skip_baked and stage.baked:
             continue
